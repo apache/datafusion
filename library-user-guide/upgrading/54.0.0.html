@@ -1140,6 +1140,26 @@ a combined <code class="docutils literal notranslate"><span class="pre">OR</span
 </pre></div>
 </div>
 </section>
+<section id="the-registerfunction-enum-has-a-new-higherorder-variant">
+<h3>The <code class="docutils literal notranslate"><span class="pre">RegisterFunction</span></code> enum has a new <code class="docutils literal notranslate"><span class="pre">HigherOrder</span></code> variant<a class="headerlink" href="#the-registerfunction-enum-has-a-new-higherorder-variant" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">RegisterFunction</span></code> now has a <code class="docutils literal notranslate"><span class="pre">HigherOrder(Arc&lt;dyn</span> <span class="pre">HigherOrderUDF&gt;)</span></code> variant
+so user-defined higher-order functions can be registered</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who match on a <code class="docutils literal notranslate"><span class="pre">RegisterFunction</span></code> without a default branch <code class="docutils literal notranslate"><span class="pre">_</span> <span class="pre">=&gt;</span> <span class="pre">{}</span></code></p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Add the new branch to the match with the logic applicable to the context.</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>match register_function {
+<span class="w"> </span>   RegisterFunction::Scalar(scalar) =&gt; {},
+<span class="w"> </span>   RegisterFunction::Aggregate(aggregate) =&gt; {},
+<span class="w"> </span>   RegisterFunction::Window(window) =&gt; {},
+<span class="gi">+   RegisterFunction::HigherOrder(higher_order) =&gt; {},</span>
+<span class="w"> </span>   RegisterFunction::Table(name, table) =&gt; {},
+}
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -1218,6 +1238,7 @@ a combined <code class="docutils literal notranslate"><span class="pre">OR</span
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default"><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#memorypool-now-requires-static-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">MemoryPool</span></code> now requires <code class="docutils literal notranslate"><span class="pre">'static</span></code> (adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#file-statistics-cache-is-now-memory-limited-and-managed-by-the-cachemanager">File statistics cache is now memory-limited and managed by the <code class="docutils literal notranslate"><span class="pre">CacheManager</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#the-registerfunction-enum-has-a-new-higherorder-variant">The <code class="docutils literal notranslate"><span class="pre">RegisterFunction</span></code> enum has a new <code class="docutils literal notranslate"><span class="pre">HigherOrder</span></code> variant</a></li>
 </ul>
 </li>
 </ul>
