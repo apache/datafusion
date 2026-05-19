@@ -129,6 +129,8 @@
 //! for an example.
 
 pub mod function;
+#[cfg(feature = "parquet")]
+pub mod parquet;
 pub mod planner;
 
 #[cfg(feature = "core")]
