@@ -140,15 +140,12 @@ impl TableSchema {
     /// into [`TableSchema::with_table_partition_cols`] if you have partition columns at construction time
     /// since it avoids re-computing the table schema.
     pub fn with_table_partition_cols(mut self, partition_cols: Vec<FieldRef>) -> Self {
-        if self.table_partition_cols.is_empty() {
-            self.table_partition_cols = Arc::new(partition_cols);
-        } else {
-            // Append to existing partition columns
-            let table_partition_cols = Arc::get_mut(&mut self.table_partition_cols).expect(
-                "Expected to be the sole owner of table_partition_cols since this function accepts mut self",
-            );
-            table_partition_cols.extend(partition_cols);
-        }
+        // Append to existing partition columns. `Arc::make_mut` copies the
+        // inner `Vec` if the `Arc` is shared (e.g. with a clone of this
+        // `TableSchema`) and otherwise mutates in place. The previous
+        // `Arc::get_mut().expect()` panicked whenever the `Arc` was shared:
+        // owning `self` does not imply sole ownership of the inner `Arc`.
+        Arc::make_mut(&mut self.table_partition_cols).extend(partition_cols);
         let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
         builder.extend(self.table_partition_cols.iter().cloned());
         self.table_schema = Arc::new(builder.finish());
@@ -275,5 +272,35 @@ mod tests {
             updated_table_schema.table_schema().as_ref(),
             &expected_schema
         );
+    }
+
+    #[test]
+    fn test_with_table_partition_cols_after_clone_does_not_panic() {
+        // `TableSchema` is cheaply clonable because its partition columns are
+        // stored behind an `Arc`. Appending more partition columns to a clone
+        // must not panic just because the `Arc` is shared, and must not mutate
+        // the other clone (copy-on-write isolation).
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let original = TableSchema::new(
+            file_schema,
+            vec![Arc::new(Field::new("country", DataType::Utf8, false))],
+        );
+
+        let cloned = original.clone();
+        let extended = cloned.with_table_partition_cols(vec![Arc::new(Field::new(
+            "city",
+            DataType::Utf8,
+            false,
+        ))]);
+
+        // The extended schema sees both partition columns...
+        assert_eq!(extended.table_partition_cols().len(), 2);
+        assert_eq!(extended.table_partition_cols()[0].name(), "country");
+        assert_eq!(extended.table_partition_cols()[1].name(), "city");
+
+        // ...while the original clone is left untouched.
+        assert_eq!(original.table_partition_cols().len(), 1);
+        assert_eq!(original.table_partition_cols()[0].name(), "country");
     }
 }
