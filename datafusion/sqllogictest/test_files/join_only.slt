@@ -20,3 +20,56 @@ include ./join.slt.part
 # Config reset
 statement ok
 RESET datafusion.optimizer.repartition_joins;
+
+# expand_join_or_predicate: rows that satisfy multiple OR branches should appear once
+statement ok
+CREATE TABLE IF NOT EXISTS join_or_left(lid INT, lalt INT) AS VALUES
+(1, 10),
+(2, 20),
+(3, NULL);
+
+statement ok
+CREATE TABLE IF NOT EXISTS join_or_right(rid INT, ralt INT) AS VALUES
+(1, 10),
+(4, 20),
+(3, 30);
+
+query IIII rowsort
+SELECT *
+FROM join_or_left
+INNER JOIN join_or_right
+  ON lid = rid OR lalt = ralt;
+----
+1 10 1 10
+2 20 4 20
+3 NULL 3 30
+
+# expand_join_or_predicate: if the previous equality is NULL and the later branch is true,
+# the row must still match
+statement ok
+CREATE TABLE IF NOT EXISTS join_or_null_left(la INT, lb INT) AS VALUES
+(NULL, 1);
+
+statement ok
+CREATE TABLE IF NOT EXISTS join_or_null_right(ra INT, rb INT) AS VALUES
+(NULL, 1);
+
+query IIII rowsort
+SELECT *
+FROM join_or_null_left
+INNER JOIN join_or_null_right
+  ON la = ra OR lb = rb;
+----
+NULL 1 NULL 1
+
+statement ok
+DROP TABLE IF EXISTS join_or_left;
+
+statement ok
+DROP TABLE IF EXISTS join_or_right;
+
+statement ok
+DROP TABLE IF EXISTS join_or_null_left;
+
+statement ok
+DROP TABLE IF EXISTS join_or_null_right;

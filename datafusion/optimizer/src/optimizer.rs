@@ -42,6 +42,7 @@ use crate::eliminate_group_by_constant::EliminateGroupByConstant;
 use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
+use crate::expand_join_or_predicate::ExpandJoinOrPredicate;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::extract_leaf_expressions::{ExtractLeafExpressions, PushDownLeafProjections};
 use crate::filter_null_join_keys::FilterNullJoinKeys;
@@ -289,6 +290,7 @@ impl Optimizer {
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(DecorrelateLateralJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
+            Arc::new(ExpandJoinOrPredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),

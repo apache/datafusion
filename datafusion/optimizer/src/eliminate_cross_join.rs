@@ -310,6 +310,11 @@ fn find_inner_join(
 ) -> Result<LogicalPlan> {
     for (i, right_input) in rights.iter().enumerate() {
         let mut join_keys = vec![];
+        let candidate_join_schema = Arc::new(build_join_schema(
+            left_input.schema(),
+            right_input.schema(),
+            &JoinType::Inner,
+        )?);
 
         for (l, r) in possible_join_keys.iter() {
             let key_pair = find_valid_equijoin_key_pair(
@@ -321,7 +326,7 @@ fn find_inner_join(
 
             // Save join keys
             if let Some((valid_l, valid_r)) = key_pair
-                && can_hash(&valid_l.get_type(left_input.schema())?)
+                && can_hash(&valid_l.get_type(candidate_join_schema.as_ref())?)
             {
                 join_keys.push((valid_l, valid_r));
             }
@@ -331,11 +336,7 @@ fn find_inner_join(
         if !join_keys.is_empty() {
             all_join_keys.insert_all(join_keys.iter());
             let right_input = rights.remove(i);
-            let join_schema = Arc::new(build_join_schema(
-                left_input.schema(),
-                right_input.schema(),
-                &JoinType::Inner,
-            )?);
+            let join_schema = candidate_join_schema;
 
             return Ok(LogicalPlan::Join(Join {
                 left: Arc::new(left_input),
