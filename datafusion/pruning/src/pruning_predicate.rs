@@ -4816,6 +4816,35 @@ mod tests {
         prune_with_expr(expr, &schema, &statistics, expected_ret);
     }
 
+    // `build_like_match()` must honor `\` escapes when scanning the pattern for
+    // wildcards.
+    #[test]
+    fn prune_utf8_like_escaped_underscore() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_utf8(
+                vec![Some("foo_aaa"), Some("bar"), Some("foo")], // min
+                vec![Some("foo_zzz"), Some("baz"), Some("foozzz")], // max
+            ),
+        );
+
+        let expr = col("s1").like(lit("foo\\_%"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["foo_aaa", "foo_zzz"] => every value starts with literal
+            // "foo_" and matches the pattern; must keep.
+            true,
+            // s1 ["bar", "baz"] => no values can start with "foo_"; safe to
+            // prune.
+            false,
+            // s1 ["foo", "foozzz"] => stats don't prove "foo_" is or isn't in
+            // range; must conservatively keep.
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+    }
+
     #[test]
     fn prune_utf8_not_like_one() {
         let (schema, statistics) = utf8_setup();
