@@ -345,9 +345,7 @@ fn hash_string_view_array_inner<
         // all views are inlined, no need to access external buffers
         if !HAS_BUFFERS || view_len <= 12 {
             if REHASH {
-                let mut hasher = seeded_state(*hash).build_hasher();
-                v.hash_write(&mut hasher);
-                *hash = hasher.finish();
+                *hash = combine_hashes(v.hash_one(random_state), *hash);
             } else {
                 *hash = v.hash_one(random_state);
             }
@@ -356,9 +354,7 @@ fn hash_string_view_array_inner<
         // view is not inlined, so we need to hash the bytes as well
         let value = view_bytes(view_len, v);
         if REHASH {
-            let mut hasher = seeded_state(*hash).build_hasher();
-            value.hash_write(&mut hasher);
-            *hash = hasher.finish();
+            *hash = combine_hashes(value.hash_one(random_state), *hash);
         } else {
             *hash = value.hash_one(random_state);
         }
@@ -390,9 +386,7 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
         }
         (false, false, true) => {
             for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                let mut hasher = seeded_state(*hash).build_hasher();
-                view.hash_write(&mut hasher);
-                *hash = hasher.finish();
+                *hash = combine_hashes(view.hash_one(random_state), *hash);
             }
         }
         (false, true, false) => hash_string_view_array_inner::<T, false, true, false>(
