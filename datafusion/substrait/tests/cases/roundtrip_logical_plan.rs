@@ -1575,6 +1575,40 @@ async fn roundtrip_values_duplicate_column_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_preserves_field_nullability() -> Result<()> {
+    use datafusion::arrow::datatypes::Fields;
+
+    // Verify that required and nullable fields, including nested struct fields,
+    // preserve their nullability through a Substrait round-trip.
+    //
+    // List child nullability is intentionally omitted because it is not
+    // preserved today.
+    let ctx = create_context().await?;
+    let df_schema = DFSchema::try_from(Schema::new(vec![
+        Field::new("required_int", DataType::Int32, false),
+        Field::new("nullable_int", DataType::Int32, true),
+        Field::new(
+            "required_struct",
+            DataType::Struct(Fields::from(vec![
+                Field::new("required_inner", DataType::Boolean, false),
+                Field::new("nullable_inner", DataType::Utf8, true),
+            ])),
+            false,
+        ),
+    ]))?;
+    let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: false,
+        schema: DFSchemaRef::new(df_schema),
+    });
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    assert_eq!(plan.schema(), plan2.schema());
+    Ok(())
+}
+
+#[tokio::test]
 async fn duplicate_column() -> Result<()> {
     // Substrait does not keep column names (aliases) in the plan, rather it operates on column indices
     // only. DataFusion however, is strict about not having duplicate column names appear in the plan.

@@ -59,6 +59,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 - [pow](#pow)
 - [power](#power)
 - [radians](#radians)
+- [rand](#rand)
 - [random](#random)
 - [round](#round)
 - [signum](#signum)
@@ -419,7 +420,7 @@ exp(numeric_expression)
 
 ### `factorial`
 
-Factorial. Returns 1 if value is less than 2.
+Factorial of a non-negative integer. Errors if the argument is negative or the result overflows.
 
 ```sql
 factorial(numeric_expression)
@@ -739,6 +740,10 @@ radians(numeric_expression)
 +----------------+
 ```
 
+### `rand`
+
+_Alias of [random](#random)._
+
 ### `random`
 
 Returns a random float value in the range [0, 1).
@@ -758,6 +763,10 @@ random()
 | 0.7389238902938  |
 +------------------+
 ```
+
+#### Aliases
+
+- rand
 
 ### `round`
 

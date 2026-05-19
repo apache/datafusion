@@ -978,6 +978,30 @@ impl SortExec {
         self.fetch
     }
 
+    /// Returns the dynamic filter expression for this sort (TopK), if set.
+    pub fn dynamic_filter_expr(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
+        self.filter.as_ref().map(|f| f.read().expr())
+    }
+
+    /// Replace the dynamic filter expression for this sort.
+    ///
+    ///
+    /// Resets any internal state which may depend on the previous dynamic filter.
+    ///
+    /// Validates that the filter's children reference valid columns in
+    /// the sort's input schema.
+    pub fn with_dynamic_filter_expr(
+        mut self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        let input_schema = self.input.schema();
+        for child in filter.children() {
+            child.data_type(&input_schema)?;
+        }
+        self.filter = Some(Arc::new(RwLock::new(TopKDynamicFilters::new(filter))));
+        Ok(self)
+    }
+
     fn output_partitioning_helper(
         input: &Arc<dyn ExecutionPlan>,
         preserve_partitioning: bool,
@@ -2722,6 +2746,71 @@ mod tests {
         // The reserved memory for the sliced batch should be less than that of the full batch
         assert!(reserved > sliced_reserved);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let sort = SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            }])
+            .unwrap(),
+            child,
+        )
+        .with_fetch(Some(10));
+
+        // SortExec with fetch creates a dynamic filter automatically.
+        let original_id = sort
+            .dynamic_filter_expr()
+            .expect("should have dynamic filter with fetch")
+            .expression_id()
+            .expect("DynamicFilterPhysicalExpr always has an expression_id");
+
+        // with_dynamic_filter replaces it with a new TopKDynamicFilters.
+        let new_df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("a", 0)) as _],
+            lit(true),
+        ));
+        let new_id = new_df
+            .expression_id()
+            .expect("DynamicFilterPhysicalExpr always has an expression_id");
+        let sort = sort.with_dynamic_filter_expr(Arc::clone(&new_df))?;
+        let restored_id = sort
+            .dynamic_filter_expr()
+            .expect("should still have dynamic filter")
+            .expression_id()
+            .expect("DynamicFilterPhysicalExpr always has an expression_id");
+        assert_eq!(restored_id, new_id);
+        assert_ne!(restored_id, original_id);
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter_rejects_invalid_columns() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let sort = SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            }])
+            .unwrap(),
+            child,
+        )
+        .with_fetch(Some(10));
+
+        // Column index 99 is out of bounds for the input schema.
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("bad", 99)) as _],
+            lit(true),
+        ));
+        assert!(sort.with_dynamic_filter_expr(df).is_err());
         Ok(())
     }
 
