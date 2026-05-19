@@ -211,8 +211,8 @@ fn seeded_state(seed: u64) -> foldhash::fast::SeedableRandomState {
 }
 
 /// Builds hash values of PrimitiveArray and writes them into `hashes_buffer`
-/// If `rehash==true` this folds the existing hash into the hasher state
-/// and hashes only the new value (avoiding a separate combine step).
+/// If `rehash==true` this combines the previous hash value in the buffer
+/// with the new hash using `combine_hashes`.
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
@@ -231,9 +231,7 @@ fn hash_array_primitive<T>(
     if array.null_count() == 0 {
         if rehash {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                let mut hasher = seeded_state(*hash).build_hasher();
-                value.hash_write(&mut hasher);
-                *hash = hasher.finish();
+                *hash = combine_hashes(value.hash_one(random_state), *hash);
             }
         } else {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
@@ -243,9 +241,8 @@ fn hash_array_primitive<T>(
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            let mut hasher = seeded_state(hashes_buffer[i]).build_hasher();
-            value.hash_write(&mut hasher);
-            hashes_buffer[i] = hasher.finish();
+            hashes_buffer[i] =
+                combine_hashes(value.hash_one(random_state), hashes_buffer[i]);
         }
     } else {
         for i in array.nulls().unwrap().valid_indices() {
