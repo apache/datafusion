@@ -45,6 +45,7 @@ use std::mem;
 use std::sync::Arc;
 
 use arrow::datatypes::{SchemaRef, TimeUnit};
+#[cfg(feature = "parquet_encryption")]
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, ScalarValue, Statistics, exec_err};
