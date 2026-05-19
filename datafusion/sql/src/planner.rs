@@ -16,7 +16,7 @@
 // under the License.
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::vec;
@@ -30,7 +30,7 @@ use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion_common::{
     DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
-    plan_datafusion_err, schema_err,
+    plan_datafusion_err,
 };
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 pub use datafusion_expr::planner::ContextProvider;
@@ -39,24 +39,6 @@ use datafusion_expr::{Expr, col};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
-
-/// Ensure a logical plan's output schema has no duplicate (unqualified) column
-/// names. `CREATE TABLE` / `CREATE VIEW` / `SELECT INTO` persist only
-/// unqualified names, so a schema with duplicates produces an object that
-/// cannot be selected from (see
-/// <https://github.com/apache/datafusion/issues/22167>,
-/// <https://github.com/apache/datafusion/issues/13487>).
-pub(crate) fn ensure_unique_column_names(schema: &DFSchema) -> Result<()> {
-    let mut seen = HashSet::with_capacity(schema.fields().len());
-    for field in schema.fields() {
-        if !seen.insert(field.name().as_str()) {
-            return schema_err!(SchemaError::DuplicateUnqualifiedField {
-                name: field.name().to_string(),
-            });
-        }
-    }
-    Ok(())
-}
 
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]

@@ -75,10 +75,11 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, NullTreatment, Sort, WindowFunction};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
-    Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
-    ScalarFunctionImplementation, SortExpr, TableType, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition, cast, col, create_udf, exists,
-    in_subquery, lit, out_ref_col, placeholder, scalar_subquery, when, wildcard,
+    CreateMemoryTable, CreateView, DdlStatement, Expr, ExprFunctionExt, ExprSchemable,
+    LogicalPlan, LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, TableType,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, cast, col,
+    create_udf, exists, in_subquery, lit, out_ref_col, placeholder, scalar_subquery,
+    when, wildcard,
 };
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -6747,6 +6748,169 @@ async fn test_copy_to_preserves_order() -> Result<()> {
       DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
+    Ok(())
+}
+
+fn duplicate_unqualified_name_batch() -> Result<RecordBatch> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(vec![
+                "abcDEF",
+                "abc123",
+                "CBAdef",
+                "123AbcDef",
+            ])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+        ],
+    )
+    .map_err(Into::into)
+}
+
+async fn duplicate_unqualified_name_input(
+    ctx: &SessionContext,
+    name: &str,
+) -> Result<LogicalPlan> {
+    ctx.register_batch(name, duplicate_unqualified_name_batch()?)?;
+
+    let left = ctx.table(name).await?;
+    let right = left.clone().alias("t2")?;
+    Ok(left
+        .join(right, JoinType::Inner, &["b"], &["b"], None)?
+        .into_unoptimized_plan())
+}
+
+#[tokio::test]
+async fn execute_logical_plan_rejects_duplicate_unqualified_names_in_create_memory_table()
+-> Result<()> {
+    let ctx = SessionContext::new();
+    let input = duplicate_unqualified_name_input(&ctx, "t1").await?;
+
+    let plan = LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+        name: TableReference::bare("dup_out"),
+        constraints: Constraints::default(),
+        input: Arc::new(input),
+        if_not_exists: false,
+        or_replace: false,
+        temporary: false,
+        column_defaults: vec![],
+    }));
+
+    let err = ctx.execute_logical_plan(plan).await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Schema contains duplicate unqualified field name a"
+    );
+    assert!(ctx.table("dup_out").await.is_err());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_logical_plan_rejects_duplicate_unqualified_names_in_replace_table()
+-> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE dup_out AS VALUES ('seed', 0)")
+        .await?
+        .collect()
+        .await?;
+
+    let input = duplicate_unqualified_name_input(&ctx, "t1").await?;
+    let plan = LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+        name: TableReference::bare("dup_out"),
+        constraints: Constraints::default(),
+        input: Arc::new(input),
+        if_not_exists: false,
+        or_replace: true,
+        temporary: false,
+        column_defaults: vec![],
+    }));
+
+    let err = ctx.execute_logical_plan(plan).await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Schema contains duplicate unqualified field name a"
+    );
+
+    let rows = ctx.sql("SELECT * FROM dup_out").await?.collect().await?;
+    assert_batches_eq!(
+        [
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "| seed    | 0       |",
+            "+---------+---------+",
+        ],
+        &rows
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_logical_plan_rejects_duplicate_unqualified_names_in_create_view()
+-> Result<()> {
+    let ctx = SessionContext::new();
+    let input = duplicate_unqualified_name_input(&ctx, "t1").await?;
+    let plan = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
+        name: TableReference::bare("dup_view"),
+        input: Arc::new(input),
+        or_replace: false,
+        definition: None,
+        temporary: false,
+    }));
+
+    let err = ctx.execute_logical_plan(plan).await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Schema contains duplicate unqualified field name a"
+    );
+    assert!(ctx.table("dup_view").await.is_err());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_logical_plan_rejects_duplicate_unqualified_names_in_replace_view()
+-> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE VIEW dup_view AS SELECT 'seed' AS column1, 0 AS column2")
+        .await?
+        .collect()
+        .await?;
+
+    let input = duplicate_unqualified_name_input(&ctx, "t1").await?;
+    let plan = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
+        name: TableReference::bare("dup_view"),
+        input: Arc::new(input),
+        or_replace: true,
+        definition: None,
+        temporary: false,
+    }));
+
+    let err = ctx.execute_logical_plan(plan).await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Schema contains duplicate unqualified field name a"
+    );
+
+    let rows = ctx.sql("SELECT * FROM dup_view").await?.collect().await?;
+    assert_batches_eq!(
+        [
+            "+---------+---------+",
+            "| column1 | column2 |",
+            "+---------+---------+",
+            "| seed    | 0       |",
+            "+---------+---------+",
+        ],
+        &rows
+    );
+
     Ok(())
 }
 

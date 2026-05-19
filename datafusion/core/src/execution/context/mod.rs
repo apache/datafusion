@@ -67,10 +67,10 @@ use datafusion_catalog::{
 use datafusion_common::config::{ConfigField, ConfigOptions};
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
-    DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
+    DFSchema, DataFusionError, ParamValues, SchemaError, SchemaReference, TableReference,
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    plan_datafusion_err, plan_err, schema_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
 };
 pub use datafusion_execution::TaskContext;
@@ -886,6 +886,7 @@ impl SessionContext {
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
+                Self::ensure_unique_column_names(input.schema())?;
                 self.deregister_table(name.clone())?;
                 let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
@@ -905,6 +906,7 @@ impl SessionContext {
                 exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
             }
             (_, _, Err(_)) => {
+                Self::ensure_unique_column_names(input.schema())?;
                 let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
 
@@ -950,20 +952,37 @@ impl SessionContext {
 
         match (or_replace, view) {
             (true, Ok(_)) => {
-                self.deregister_table(name.clone())?;
                 let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
+                Self::ensure_unique_column_names(input.schema())?;
+                self.deregister_table(name.clone())?;
                 let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
                 let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
+                Self::ensure_unique_column_names(input.schema())?;
                 let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (false, Ok(_)) => exec_err!("Table '{name}' already exists"),
         }
+    }
+
+    fn ensure_unique_column_names(schema: &DFSchema) -> Result<()> {
+        // DFSchema name checks allow duplicate unqualified names as long as their
+        // qualifiers differ. DDL persistence drops qualifiers, so this helper must
+        // enforce uniqueness on the final unqualified names instead.
+        let mut seen = HashSet::with_capacity(schema.fields().len());
+        for field in schema.fields() {
+            if !seen.insert(field.name().as_str()) {
+                return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                    name: field.name().to_string(),
+                });
+            }
+        }
+        Ok(())
     }
 
     async fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {

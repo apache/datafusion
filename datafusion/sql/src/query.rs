@@ -17,9 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::planner::{
-    ContextProvider, PlannerContext, SqlToRel, ensure_unique_column_names,
-};
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use crate::stack::StackGuard;
 use datafusion_common::{Constraints, DFSchema, Result, not_impl_err};
@@ -366,21 +364,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         select_into: Option<SelectInto>,
     ) -> Result<LogicalPlan> {
         match select_into {
-            Some(into) => {
-                ensure_unique_column_names(plan.schema())?;
-
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                    CreateMemoryTable {
-                        name: self.object_name_to_table_reference(into.name)?,
-                        constraints: Constraints::default(),
-                        input: Arc::new(plan),
-                        if_not_exists: false,
-                        or_replace: false,
-                        temporary: false,
-                        column_defaults: vec![],
-                    },
-                )))
-            }
+            Some(into) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                CreateMemoryTable {
+                    name: self.object_name_to_table_reference(into.name)?,
+                    constraints: Constraints::default(),
+                    input: Arc::new(plan),
+                    if_not_exists: false,
+                    or_replace: false,
+                    temporary: false,
+                    column_defaults: vec![],
+                },
+            ))),
             _ => Ok(plan),
         }
     }
