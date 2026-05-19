@@ -23,6 +23,7 @@ use crate::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -146,72 +147,98 @@ impl Display for Partitioning {
 
 /// Physical range partitioning.
 ///
-/// [`RangePartitioning`] describes range bounds over one or more physical
-/// expressions. Each [`RangePartition`] represents one output partition and must
-/// contain exactly one [`RangeInterval`] for each partition expression.
+/// [`RangePartitioning`] describes an ordered key space with split points.
 ///
-/// The source declaring this partitioning is responsible for ensuring that, for
-/// every emitted row, the row belongs to exactly one partition and is emitted by
-/// that partition. The declared ranges do not need to cover values that the plan
-/// cannot emit.
+/// - `sort_exprs` define the partitioning key and ordering.
+/// - `split_points` define the boundaries between adjacent partitions. Each
+///   split point is a tuple with one [`ScalarValue`] per sort expression.
+/// - The declaring source must ensure every emitted row belongs to exactly one
+///   declared partition and is emitted by that partition.
 ///
-/// Each lower and upper bound explicitly records whether it is inclusive.
-/// Unbounded sides are represented with `None`, bound values should be non-null
-/// until null routing semantics are defined.
+/// The sort expressions must be non-empty, and split points must be strictly
+/// ordered according to those sort expressions.
 ///
-/// For example, a scan can declare date and city range partitions as:
+/// For a single range key:
 ///
 /// ```text
-/// exprs = [date, city]
+/// sort_exprs = [date ASC NULLS LAST]
+/// split_points = [
+///   (2022-01-01),
+///   (2023-01-01),
+/// ]
 ///
-/// partition 0:
-///   date in [2021-01-01, 2022-01-01)
-///   city in [Allston, Boston)
+/// partition 0: date before  2022-01-01
+/// partition 1: date between 2022-01-01 and 2023-01-01
+/// partition 2: date at/after 2023-01-01
+/// ```
 ///
-/// partition 1:
-///   date in [2021-01-01, 2022-01-01)
-///   city in [Boston, NYC)
+/// The same model extends to compound keys.
+/// For `sort_exprs = [time ASC, city ASC]`, split points are ordered
+/// lexicographically by `(time, city)`:
+///
+/// ```text
+/// sort_exprs = [time ASC NULLS LAST, city ASC NULLS LAST]
+/// split_points = [
+///   (2022, Allston),
+///   (2023, Allston),
+/// ]
+///
+/// partition 0: keys before  (2022, Allston)
+/// partition 1: keys between (2022, Allston) and (2023, Allston)
+/// partition 2: keys at/after (2023, Allston)
 /// ```
 ///
 /// NOTE: Optimizer and execution behavior for this partitioning is intentionally
-/// not implemented and will be introduced incrementally. This public API keeps
-/// the partition ranges explicit for users. Repartitioning may compile the same
-/// metadata into a more efficient internal router.
+/// not implemented and will be introduced incrementally.
 #[derive(Debug, Clone)]
 pub struct RangePartitioning {
-    partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
-    partitions: Vec<RangePartition>,
+    /// Ordered partitioning key. Sort options are part of the partitioning
+    /// because `ASC`/`DESC` and null ordering decide which side of a split point
+    /// a row belongs to.
+    sort_exprs: Vec<PhysicalSortExpr>,
+    /// Boundaries between adjacent partitions. `N` split points define `N + 1`
+    /// lower-inclusive, upper-exclusive partitions. Values equal to a split
+    /// point belong to the partition after that split point.
+    split_points: Vec<Vec<ScalarValue>>,
 }
 
 impl RangePartitioning {
     /// Creates range partitioning metadata.
     ///
-    /// The caller is responsible for ensuring each partition has one range per
-    /// partition expression and for satisfying the contract documented on
-    /// [`RangePartitioning`].
+    /// The caller is responsible for satisfying the contract documented on
+    /// [`RangePartitioning`]: every split point must have one value per sort
+    /// expression, there must be at least one sort expression, and split points
+    /// must be strictly ordered according to those sort expressions.
     pub fn new(
-        partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
-        partitions: Vec<RangePartition>,
+        sort_exprs: Vec<PhysicalSortExpr>,
+        split_points: Vec<Vec<ScalarValue>>,
     ) -> Self {
         Self {
-            partition_exprs,
-            partitions,
+            sort_exprs,
+            split_points,
         }
     }
 
-    /// Returns the partition expressions.
-    pub fn partition_exprs(&self) -> &[Arc<dyn PhysicalExpr>] {
-        &self.partition_exprs
+    /// Returns the ordered expressions that define the range key.
+    ///
+    /// Sort options are part of the partitioning because `ASC`/`DESC` and null
+    /// ordering decide which side of a split point a row belongs to.
+    pub fn sort_exprs(&self) -> &[PhysicalSortExpr] {
+        &self.sort_exprs
     }
 
-    /// Returns the declared range partitions.
-    pub fn partitions(&self) -> &[RangePartition] {
-        &self.partitions
+    /// Returns the ordered split points between partitions.
+    ///
+    /// `N` split points define `N + 1` lower-inclusive, upper-exclusive
+    /// partitions. Values equal to a split point belong to the partition after
+    /// that split point.
+    pub fn split_points(&self) -> &[Vec<ScalarValue>] {
+        &self.split_points
     }
 
     /// Returns the number of partitions.
     pub fn partition_count(&self) -> usize {
-        self.partitions.len()
+        self.split_points.len() + 1
     }
 
     fn project(
@@ -219,139 +246,64 @@ impl RangePartitioning {
         mapping: &ProjectionMapping,
         input_eq_properties: &EquivalenceProperties,
     ) -> Option<Self> {
-        let partition_exprs = input_eq_properties
-            .project_expressions(&self.partition_exprs, mapping)
+        let exprs = self
+            .sort_exprs
+            .iter()
+            .map(|sort_expr| Arc::clone(&sort_expr.expr))
+            .collect::<Vec<_>>();
+        let projected_exprs = input_eq_properties
+            .project_expressions(&exprs, mapping)
             .collect::<Option<Vec<_>>>()?;
+        let sort_exprs = self
+            .sort_exprs
+            .iter()
+            .zip(projected_exprs)
+            .map(|(sort_expr, expr)| PhysicalSortExpr::new(expr, sort_expr.options))
+            .collect();
 
         Some(Self {
-            partition_exprs,
-            partitions: self.partitions.clone(),
+            sort_exprs,
+            split_points: self.split_points.clone(),
         })
     }
 }
 
 impl Display for RangePartitioning {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let partitions = self
-            .partitions
+        let sort_exprs = self
+            .sort_exprs
             .iter()
-            .map(|partition| format!("{partition}"))
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ");
+        let split_points = format_range_split_points(&self.split_points);
         write!(
             f,
-            "Range({}, [{}], {})",
-            format_physical_expr_list(&self.partition_exprs),
-            partitions,
+            "Range([{sort_exprs}], [{}], {})",
+            split_points,
             self.partition_count()
         )
     }
 }
 
+fn format_range_split_points(split_points: &[Vec<ScalarValue>]) -> String {
+    split_points
+        .iter()
+        .map(|point| {
+            let values = point
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({values})")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl PartialEq for RangePartitioning {
     fn eq(&self, other: &Self) -> bool {
-        physical_exprs_equal(&self.partition_exprs, &other.partition_exprs)
-            && self.partitions == other.partitions
-    }
-}
-
-/// Ranges for one output partition in a [`RangePartitioning`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct RangePartition {
-    ranges: Vec<RangeInterval>,
-}
-
-impl RangePartition {
-    /// Creates a partition from one range per partition expression.
-    pub fn new(ranges: Vec<RangeInterval>) -> Self {
-        Self { ranges }
-    }
-
-    /// Returns the ranges for this partition.
-    pub fn ranges(&self) -> &[RangeInterval] {
-        &self.ranges
-    }
-}
-
-impl Display for RangePartition {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let ranges = self
-            .ranges
-            .iter()
-            .map(|range| format!("{range}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        write!(f, "({ranges})")
-    }
-}
-
-/// A scalar interval in one range partition dimension.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RangeInterval {
-    lower: Option<RangeBound>,
-    upper: Option<RangeBound>,
-}
-
-impl RangeInterval {
-    /// Creates a range interval with optional lower and upper bounds.
-    pub fn new(lower: Option<RangeBound>, upper: Option<RangeBound>) -> Self {
-        Self { lower, upper }
-    }
-
-    /// Returns the lower bound, if any.
-    pub fn lower(&self) -> Option<&RangeBound> {
-        self.lower.as_ref()
-    }
-
-    /// Returns the upper bound, if any.
-    pub fn upper(&self) -> Option<&RangeBound> {
-        self.upper.as_ref()
-    }
-}
-
-impl Display for RangeInterval {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let lower_bracket = match self.lower() {
-            Some(bound) if bound.inclusive() => "[",
-            _ => "(",
-        };
-        let lower = self
-            .lower()
-            .map(|bound| bound.value().to_string())
-            .unwrap_or_else(|| "-inf".to_string());
-        let upper = self
-            .upper()
-            .map(|bound| bound.value().to_string())
-            .unwrap_or_else(|| "+inf".to_string());
-        let upper_bracket = match self.upper() {
-            Some(bound) if bound.inclusive() => "]",
-            _ => ")",
-        };
-        write!(f, "{lower_bracket}{lower}, {upper}{upper_bracket}")
-    }
-}
-
-/// A scalar range bound.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RangeBound {
-    value: ScalarValue,
-    inclusive: bool,
-}
-
-impl RangeBound {
-    /// Creates a scalar range bound.
-    pub fn new(value: ScalarValue, inclusive: bool) -> Self {
-        Self { value, inclusive }
-    }
-
-    /// Returns the bound value.
-    pub fn value(&self) -> &ScalarValue {
-        &self.value
-    }
-
-    /// Returns whether this bound is inclusive.
-    pub fn inclusive(&self) -> bool {
-        self.inclusive
+        self.sort_exprs == other.sort_exprs && self.split_points == other.split_points
     }
 }
 
@@ -582,6 +534,7 @@ mod tests {
     use super::*;
     use crate::expressions::Column;
 
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
 
@@ -1071,19 +1024,11 @@ mod tests {
         Ok(())
     }
 
-    fn int_bound(value: i64, inclusive: bool) -> RangeBound {
-        RangeBound::new(ScalarValue::Int64(Some(value)), inclusive)
-    }
-
-    fn int_interval(lower: Option<i64>, upper: Option<i64>) -> RangeInterval {
-        RangeInterval::new(
-            lower.map(|value| int_bound(value, true)),
-            upper.map(|value| int_bound(value, false)),
-        )
-    }
-
-    fn range_partition(ranges: Vec<RangeInterval>) -> RangePartition {
-        RangePartition::new(ranges)
+    fn int_split_point(values: impl IntoIterator<Item = i64>) -> Vec<ScalarValue> {
+        values
+            .into_iter()
+            .map(|value| ScalarValue::Int64(Some(value)))
+            .collect()
     }
 
     #[test]
@@ -1093,18 +1038,20 @@ mod tests {
             Arc::new(Column::new_with_schema("a", &schema)?);
 
         let range_partitioning = RangePartitioning::new(
-            vec![Arc::clone(&col_a)],
-            vec![
-                range_partition(vec![int_interval(None, Some(10))]),
-                range_partition(vec![int_interval(Some(10), None)]),
-            ],
+            vec![PhysicalSortExpr::new_default(Arc::clone(&col_a))],
+            vec![int_split_point([10]), int_split_point([20])],
+        );
+        assert_eq!(range_partitioning.sort_exprs()[0].to_string(), "a@0 ASC");
+        assert_eq!(
+            range_partitioning.split_points(),
+            &[int_split_point([10]), int_split_point([20])]
         );
         let partitioning = Partitioning::Range(range_partitioning);
 
-        assert_eq!(partitioning.partition_count(), 2);
+        assert_eq!(partitioning.partition_count(), 3);
         assert_eq!(
             partitioning.to_string(),
-            "Range([a@0], [((-inf, 10)), ([10, +inf))], 2)"
+            "Range([a@0 ASC], [(10), (20)], 3)"
         );
 
         Ok(())
@@ -1120,20 +1067,23 @@ mod tests {
             Arc::new(Column::new_with_schema("b", &schema)?);
         let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
         let range_partitioning = Partitioning::Range(RangePartitioning::new(
-            vec![col_b],
-            vec![range_partition(vec![int_interval(None, Some(10))])],
+            vec![PhysicalSortExpr::new(col_b, SortOptions::new(true, false))],
+            vec![int_split_point([10])],
         ));
 
         let keep_b_mapping = ProjectionMapping::from_indices(&[1], &schema)?;
         let projected = range_partitioning.project(&keep_b_mapping, &eq_properties);
-        assert_eq!(projected.to_string(), "Range([b@0], [((-inf, 10))], 1)");
+        assert_eq!(
+            projected.to_string(),
+            "Range([b@0 DESC NULLS LAST], [(10)], 2)"
+        );
 
         let drop_b_mapping = ProjectionMapping::from_indices(&[0], &schema)?;
         let projected = range_partitioning.project(&drop_b_mapping, &eq_properties);
         let Partitioning::UnknownPartitioning(partition_count) = projected else {
             panic!("expected UnknownPartitioning, got {projected:?}");
         };
-        assert_eq!(partition_count, 1);
+        assert_eq!(partition_count, 2);
 
         Ok(())
     }
@@ -1151,17 +1101,11 @@ mod tests {
 
         let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
         let range_partitioning = Partitioning::Range(RangePartitioning::new(
-            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             vec![
-                range_partition(vec![
-                    int_interval(None, Some(10)),
-                    int_interval(None, Some(100)),
-                ]),
-                range_partition(vec![
-                    int_interval(Some(10), None),
-                    int_interval(Some(100), None),
-                ]),
+                PhysicalSortExpr::new_default(Arc::clone(&col_a)),
+                PhysicalSortExpr::new_default(Arc::clone(&col_b)),
             ],
+            vec![int_split_point([10, 100])],
         ));
         let required = Distribution::HashPartitioned(vec![col_a, col_b]);
 

@@ -2016,9 +2016,7 @@ mod tests {
     use datafusion_common_runtime::JoinSet;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_physical_expr::{
-        RangeBound, RangeInterval, RangePartition, RangePartitioning,
-    };
+    use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning};
     use insta::assert_snapshot;
 
     #[test]
@@ -2323,14 +2321,8 @@ mod tests {
         let expr = col("my_awesome_field", &schema)?;
         let input = MockExec::new(vec![Ok(batch)], Arc::clone(&schema));
         let partitioning = Partitioning::Range(RangePartitioning::new(
-            vec![expr],
-            vec![RangePartition::new(vec![RangeInterval::new(
-                Some(RangeBound::new(
-                    ScalarValue::Utf8(Some("foo".to_string())),
-                    true,
-                )),
-                None,
-            )])],
+            vec![PhysicalSortExpr::new_default(expr)],
+            vec![vec![ScalarValue::Utf8(Some("foo".to_string()))]],
         ));
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning)?;
         let output_stream = exec.execute(0, task_ctx)?;

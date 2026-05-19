@@ -1381,22 +1381,12 @@ message PhysicalHashRepartition {
 }
 
 message PhysicalRangePartitioning {
-  repeated PhysicalExprNode partition_expr = 1;
-  repeated PhysicalRangePartition partition = 2;
+  repeated PhysicalSortExprNode sort_expr = 1;
+  repeated PhysicalRangeSplitPoint split_point = 2;
 }
 
-message PhysicalRangePartition {
-  repeated PhysicalRangeInterval range = 1;
-}
-
-message PhysicalRangeInterval {
-  PhysicalRangeBound lower = 1;
-  PhysicalRangeBound upper = 2;
-}
-
-message PhysicalRangeBound {
-  datafusion_common.ScalarValue value = 1;
-  bool inclusive = 2;
+message PhysicalRangeSplitPoint {
+  repeated datafusion_common.ScalarValue value = 1;
 }
 
 message RepartitionExecNode{

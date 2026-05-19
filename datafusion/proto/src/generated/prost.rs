@@ -2044,28 +2044,14 @@ pub struct PhysicalHashRepartition {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalRangePartitioning {
     #[prost(message, repeated, tag = "1")]
-    pub partition_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(message, repeated, tag = "2")]
-    pub partition: ::prost::alloc::vec::Vec<PhysicalRangePartition>,
+    pub split_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PhysicalRangePartition {
+pub struct PhysicalRangeSplitPoint {
     #[prost(message, repeated, tag = "1")]
-    pub range: ::prost::alloc::vec::Vec<PhysicalRangeInterval>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PhysicalRangeInterval {
-    #[prost(message, optional, tag = "1")]
-    pub lower: ::core::option::Option<PhysicalRangeBound>,
-    #[prost(message, optional, tag = "2")]
-    pub upper: ::core::option::Option<PhysicalRangeBound>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PhysicalRangeBound {
-    #[prost(message, optional, tag = "1")]
-    pub value: ::core::option::Option<super::datafusion_common::ScalarValue>,
-    #[prost(bool, tag = "2")]
-    pub inclusive: bool,
+    pub value: ::prost::alloc::vec::Vec<super::datafusion_common::ScalarValue>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RepartitionExecNode {

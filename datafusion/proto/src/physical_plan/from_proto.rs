@@ -51,8 +51,7 @@ use datafusion_physical_plan::expressions::{
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{
-    Partitioning, PhysicalExpr, RangeBound, RangeInterval, RangePartition,
-    RangePartitioning, WindowExpr,
+    Partitioning, PhysicalExpr, RangePartitioning, WindowExpr,
 };
 use datafusion_proto_common::common::proto_error;
 use object_store::ObjectMeta;
@@ -662,63 +661,31 @@ fn parse_protobuf_range_partitioning(
     input_schema: &Schema,
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<Partitioning> {
-    let partition_exprs = parse_physical_exprs(
-        &range_partitioning.partition_expr,
+    let sort_exprs = parse_physical_sort_exprs(
+        &range_partitioning.sort_expr,
         ctx,
         input_schema,
         proto_converter,
     )?;
-    let partitions = range_partitioning
-        .partition
+    let split_points = range_partitioning
+        .split_point
         .iter()
-        .map(parse_protobuf_range_partition)
+        .map(parse_protobuf_range_split_point)
         .collect::<Result<_>>()?;
     Ok(Partitioning::Range(RangePartitioning::new(
-        partition_exprs,
-        partitions,
+        sort_exprs,
+        split_points,
     )))
 }
 
-fn parse_protobuf_range_partition(
-    partition: &protobuf::PhysicalRangePartition,
-) -> Result<RangePartition> {
-    Ok(RangePartition::new(
-        partition
-            .range
-            .iter()
-            .map(parse_protobuf_range_interval)
-            .collect::<Result<_>>()?,
-    ))
-}
-
-fn parse_protobuf_range_interval(
-    interval: &protobuf::PhysicalRangeInterval,
-) -> Result<RangeInterval> {
-    Ok(RangeInterval::new(
-        interval
-            .lower
-            .as_ref()
-            .map(parse_protobuf_range_bound)
-            .transpose()?,
-        interval
-            .upper
-            .as_ref()
-            .map(parse_protobuf_range_bound)
-            .transpose()?,
-    ))
-}
-
-fn parse_protobuf_range_bound(
-    bound: &protobuf::PhysicalRangeBound,
-) -> Result<RangeBound> {
-    let value = bound
+fn parse_protobuf_range_split_point(
+    split_point: &protobuf::PhysicalRangeSplitPoint,
+) -> Result<Vec<ScalarValue>> {
+    split_point
         .value
-        .as_ref()
-        .ok_or_else(|| proto_error("Missing range bound value"))?;
-    Ok(RangeBound::new(
-        ScalarValue::try_from(value)?,
-        bound.inclusive,
-    ))
+        .iter()
+        .map(|value| ScalarValue::try_from(value).map_err(Into::into))
+        .collect()
 }
 
 pub fn parse_protobuf_file_scan_schema(

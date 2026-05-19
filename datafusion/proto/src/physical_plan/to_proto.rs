@@ -44,8 +44,7 @@ use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{
-    Partitioning, PhysicalExpr, RangeBound, RangeInterval, RangePartition,
-    RangePartitioning, WindowExpr,
+    Partitioning, PhysicalExpr, RangePartitioning, WindowExpr,
 };
 
 use super::{
@@ -644,45 +643,31 @@ fn serialize_range_partitioning(
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::PhysicalRangePartitioning> {
     Ok(protobuf::PhysicalRangePartitioning {
-        partition_expr: serialize_physical_exprs(
-            range.partition_exprs(),
+        sort_expr: serialize_physical_sort_exprs(
+            range.sort_exprs().iter().cloned(),
             codec,
             proto_converter,
         )?,
-        partition: range
-            .partitions()
+        split_point: range
+            .split_points()
             .iter()
-            .map(serialize_range_partition)
+            .map(Vec::as_slice)
+            .map(serialize_range_split_point)
             .collect::<Result<_>>()?,
     })
 }
 
-fn serialize_range_partition(
-    partition: &RangePartition,
-) -> Result<protobuf::PhysicalRangePartition> {
-    Ok(protobuf::PhysicalRangePartition {
-        range: partition
-            .ranges()
+fn serialize_range_split_point(
+    split_point: &[datafusion_common::ScalarValue],
+) -> Result<protobuf::PhysicalRangeSplitPoint> {
+    Ok(protobuf::PhysicalRangeSplitPoint {
+        value: split_point
             .iter()
-            .map(serialize_range_interval)
+            .map(|value| {
+                TryInto::<datafusion_proto_common::ScalarValue>::try_into(value)
+                    .map_err(Into::into)
+            })
             .collect::<Result<_>>()?,
-    })
-}
-
-fn serialize_range_interval(
-    interval: &RangeInterval,
-) -> Result<protobuf::PhysicalRangeInterval> {
-    Ok(protobuf::PhysicalRangeInterval {
-        lower: interval.lower().map(serialize_range_bound).transpose()?,
-        upper: interval.upper().map(serialize_range_bound).transpose()?,
-    })
-}
-
-fn serialize_range_bound(bound: &RangeBound) -> Result<protobuf::PhysicalRangeBound> {
-    let value: datafusion_proto_common::ScalarValue = bound.value().try_into()?;
-    Ok(protobuf::PhysicalRangeBound {
-        value: Some(value),
-        inclusive: bound.inclusive(),
     })
 }
 
