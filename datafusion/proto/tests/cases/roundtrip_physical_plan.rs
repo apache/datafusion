@@ -91,7 +91,7 @@ use datafusion::physical_plan::windows::{
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExprPartitioning, InputOrderMode,
     Partitioning, PhysicalExpr, RangePartitioning, SendableRecordBatchStream,
-    Statistics, displayable,
+    SplitPoint, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -1815,7 +1815,7 @@ fn roundtrip_range_partitioning() -> Result<()> {
     let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
     let range_partitioning = Partitioning::Range(RangePartitioning::new(
         vec![PhysicalSortExpr::new_default(col("a", &schema)?)],
-        vec![vec![ScalarValue::Int64(Some(10))]],
+        vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
     ));
     // RepartitionExec is used only to carry the partitioning through proto.
     // Executing range repartitioning is intentionally unsupported.

@@ -150,13 +150,24 @@ impl Display for Partitioning {
 /// [`RangePartitioning`] describes an ordered key space with split points.
 ///
 /// - `sort_exprs` define the partitioning key and ordering.
-/// - `split_points` define the boundaries between adjacent partitions. Each
-///   split point is a tuple with one [`ScalarValue`] per sort expression.
+/// - `split_points` define the boundaries between adjacent partitions.
 /// - The declaring source must ensure every emitted row belongs to exactly one
 ///   declared partition and is emitted by that partition.
 ///
 /// The sort expressions must be non-empty, and split points must be strictly
 /// ordered according to those sort expressions.
+///
+/// `N` split points define `N + 1` partitions:
+///
+/// ```text
+/// partition 0: key < split_points[0]
+/// partition 1: split_points[0] <= key < split_points[1]
+/// ...
+/// partition N: split_points[N - 1] <= key
+/// ```
+///
+/// Values equal to a split point belong to the partition after that split
+/// point.
 ///
 /// For a single range key:
 ///
@@ -167,8 +178,8 @@ impl Display for Partitioning {
 ///   (2023-01-01),
 /// ]
 ///
-/// partition 0: date before  2022-01-01
-/// partition 1: date between 2022-01-01 and 2023-01-01
+/// partition 0: date before 2022-01-01
+/// partition 1: date between 2022-01-01 (inclusive) and 2023-01-01 (exclusive)
 /// partition 2: date at/after 2023-01-01
 /// ```
 ///
@@ -197,9 +208,41 @@ pub struct RangePartitioning {
     /// a row belongs to.
     sort_exprs: Vec<PhysicalSortExpr>,
     /// Boundaries between adjacent partitions. `N` split points define `N + 1`
-    /// lower-inclusive, upper-exclusive partitions. Values equal to a split
-    /// point belong to the partition after that split point.
-    split_points: Vec<Vec<ScalarValue>>,
+    /// partitions as described in [`RangePartitioning`].
+    split_points: Vec<SplitPoint>,
+}
+
+/// A boundary between adjacent range partitions.
+///
+/// A split point is a tuple with one [`ScalarValue`] per sort expression in the
+/// parent [`RangePartitioning`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitPoint {
+    values: Vec<ScalarValue>,
+}
+
+impl SplitPoint {
+    /// Creates a new split point from its tuple values.
+    pub fn new(values: Vec<ScalarValue>) -> Self {
+        Self { values }
+    }
+
+    /// Returns the tuple values for this split point.
+    pub fn values(&self) -> &[ScalarValue] {
+        &self.values
+    }
+}
+
+impl Display for SplitPoint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let values = self
+            .values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(f, "({values})")
+    }
 }
 
 impl RangePartitioning {
@@ -209,10 +252,7 @@ impl RangePartitioning {
     /// [`RangePartitioning`]: every split point must have one value per sort
     /// expression, there must be at least one sort expression, and split points
     /// must be strictly ordered according to those sort expressions.
-    pub fn new(
-        sort_exprs: Vec<PhysicalSortExpr>,
-        split_points: Vec<Vec<ScalarValue>>,
-    ) -> Self {
+    pub fn new(sort_exprs: Vec<PhysicalSortExpr>, split_points: Vec<SplitPoint>) -> Self {
         Self {
             sort_exprs,
             split_points,
@@ -229,10 +269,9 @@ impl RangePartitioning {
 
     /// Returns the ordered split points between partitions.
     ///
-    /// `N` split points define `N + 1` lower-inclusive, upper-exclusive
-    /// partitions. Values equal to a split point belong to the partition after
-    /// that split point.
-    pub fn split_points(&self) -> &[Vec<ScalarValue>] {
+    /// `N` split points define `N + 1` partitions as described in
+    /// [`RangePartitioning`].
+    pub fn split_points(&self) -> &[SplitPoint] {
         &self.split_points
     }
 
@@ -286,17 +325,10 @@ impl Display for RangePartitioning {
     }
 }
 
-fn format_range_split_points(split_points: &[Vec<ScalarValue>]) -> String {
+fn format_range_split_points(split_points: &[SplitPoint]) -> String {
     split_points
         .iter()
-        .map(|point| {
-            let values = point
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("({values})")
-        })
+        .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -1024,11 +1056,13 @@ mod tests {
         Ok(())
     }
 
-    fn int_split_point(values: impl IntoIterator<Item = i64>) -> Vec<ScalarValue> {
-        values
-            .into_iter()
-            .map(|value| ScalarValue::Int64(Some(value)))
-            .collect()
+    fn int_split_point(values: impl IntoIterator<Item = i64>) -> SplitPoint {
+        SplitPoint::new(
+            values
+                .into_iter()
+                .map(|value| ScalarValue::Int64(Some(value)))
+                .collect(),
+        )
     }
 
     #[test]

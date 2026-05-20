@@ -51,7 +51,7 @@ use datafusion_physical_plan::expressions::{
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{
-    Partitioning, PhysicalExpr, RangePartitioning, WindowExpr,
+    Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, WindowExpr,
 };
 use datafusion_proto_common::common::proto_error;
 use object_store::ObjectMeta;
@@ -680,12 +680,13 @@ fn parse_protobuf_range_partitioning(
 
 fn parse_protobuf_range_split_point(
     split_point: &protobuf::PhysicalRangeSplitPoint,
-) -> Result<Vec<ScalarValue>> {
-    split_point
+) -> Result<SplitPoint> {
+    let values = split_point
         .value
         .iter()
         .map(|value| ScalarValue::try_from(value).map_err(Into::into))
-        .collect()
+        .collect::<Result<_>>()?;
+    Ok(SplitPoint::new(values))
 }
 
 pub fn parse_protobuf_file_scan_schema(

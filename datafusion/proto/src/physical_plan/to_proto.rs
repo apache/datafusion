@@ -44,7 +44,7 @@ use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{
-    Partitioning, PhysicalExpr, RangePartitioning, WindowExpr,
+    Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, WindowExpr,
 };
 
 use super::{
@@ -651,17 +651,17 @@ fn serialize_range_partitioning(
         split_point: range
             .split_points()
             .iter()
-            .map(Vec::as_slice)
             .map(serialize_range_split_point)
             .collect::<Result<_>>()?,
     })
 }
 
 fn serialize_range_split_point(
-    split_point: &[datafusion_common::ScalarValue],
+    split_point: &SplitPoint,
 ) -> Result<protobuf::PhysicalRangeSplitPoint> {
     Ok(protobuf::PhysicalRangeSplitPoint {
         value: split_point
+            .values()
             .iter()
             .map(|value| {
                 TryInto::<datafusion_proto_common::ScalarValue>::try_into(value)

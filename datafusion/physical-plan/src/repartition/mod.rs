@@ -1492,10 +1492,15 @@ impl ExecutionPlan for RepartitionExec {
         if !self.maintains_input_order()[0] {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
-        if matches!(self.partitioning(), Partitioning::Range(_)) {
-            return not_impl_err!(
-                "Sort pushdown through RepartitionExec with range partitioning is not implemented"
-            );
+        match self.partitioning() {
+            Partitioning::Range(_) => {
+                return not_impl_err!(
+                    "Sort pushdown through RepartitionExec with range partitioning is not implemented"
+                );
+            }
+            Partitioning::RoundRobinBatch(_)
+            | Partitioning::Hash(_, _)
+            | Partitioning::UnknownPartitioning(_) => {}
         }
 
         // Delegate to the child and wrap with a new RepartitionExec
@@ -2016,7 +2021,7 @@ mod tests {
     use datafusion_common_runtime::JoinSet;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning};
+    use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
     use insta::assert_snapshot;
 
     #[test]
@@ -2322,7 +2327,9 @@ mod tests {
         let input = MockExec::new(vec![Ok(batch)], Arc::clone(&schema));
         let partitioning = Partitioning::Range(RangePartitioning::new(
             vec![PhysicalSortExpr::new_default(expr)],
-            vec![vec![ScalarValue::Utf8(Some("foo".to_string()))]],
+            vec![SplitPoint::new(vec![ScalarValue::Utf8(Some(
+                "foo".to_string(),
+            ))])],
         ));
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning)?;
         let output_stream = exec.execute(0, task_ctx)?;
