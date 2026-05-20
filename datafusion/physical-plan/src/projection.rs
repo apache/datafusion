@@ -1048,9 +1048,6 @@ fn try_collapse_projection_chain(
             break;
         }
 
-        // Compute substituted exprs first, then commit them in place. A
-        // mid-loop bail would otherwise leave `current_exprs` half-updated
-        // and inconsistent with `current_input`.
         let mut new_phys: Vec<Arc<dyn PhysicalExpr>> =
             Vec::with_capacity(current_exprs.len());
         for proj_expr in &current_exprs {
