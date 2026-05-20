@@ -31,8 +31,6 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_physical_plan::aggregates::group_values::GroupValues;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupValuesColumn;
 use datafusion_physical_plan::aggregates::group_values::row::GroupValuesRows;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -45,24 +43,16 @@ fn make_schema(num_cols: usize) -> SchemaRef {
     Arc::new(Schema::new(fields))
 }
 
-#[derive(Clone, Copy)]
-enum DataPattern {
-    Sequential,
-    Random,
-}
-
 fn generate_batches(
     num_cols: usize,
     num_distinct_groups: usize,
     num_rows: usize,
     batch_size: usize,
-    pattern: DataPattern,
 ) -> Vec<Vec<ArrayRef>> {
     let per_col_card = (num_distinct_groups as f64)
         .powf(1.0 / num_cols as f64)
         .ceil() as usize;
 
-    let mut rng = StdRng::seed_from_u64(42);
     let num_batches = num_rows / batch_size;
 
     (0..num_batches)
@@ -71,16 +61,11 @@ fn generate_batches(
             (0..num_cols)
                 .map(|col_idx| {
                     let values: Vec<i32> = (0..batch_size)
-                        .map(|row| match pattern {
-                            DataPattern::Sequential => {
-                                let global_row = batch_start + row;
-                                let group_id = global_row % num_distinct_groups;
-                                let divisor = per_col_card.pow(col_idx as u32);
-                                ((group_id / divisor) % per_col_card) as i32
-                            }
-                            DataPattern::Random => {
-                                rng.random_range(0..per_col_card as i32)
-                            }
+                        .map(|row| {
+                            let global_row = batch_start + row;
+                            let group_id = global_row % num_distinct_groups;
+                            let divisor = per_col_card.pow(col_idx as u32);
+                            ((group_id / divisor) % per_col_card) as i32
                         })
                         .collect();
                     Arc::new(Int32Array::from(values)) as ArrayRef
@@ -121,13 +106,8 @@ fn bench_issue_17850_regression(c: &mut Criterion) {
     let schema = make_schema(num_cols);
 
     for num_rows in [1_000_000, 5_000_000, 10_000_000, 20_000_000, 50_000_000] {
-        let batches = generate_batches(
-            num_cols,
-            num_groups,
-            num_rows,
-            DEFAULT_BATCH_SIZE,
-            DataPattern::Sequential,
-        );
+        let batches =
+            generate_batches(num_cols, num_groups, num_rows, DEFAULT_BATCH_SIZE);
 
         for vectorized in [true, false] {
             let label = if vectorized {
@@ -166,13 +146,8 @@ fn bench_low_cardinality(c: &mut Criterion) {
     {
         let num_groups = per_col_card.pow(num_cols as u32);
         let schema = make_schema(num_cols);
-        let batches = generate_batches(
-            num_cols,
-            num_groups,
-            1_000_000,
-            DEFAULT_BATCH_SIZE,
-            DataPattern::Sequential,
-        );
+        let batches =
+            generate_batches(num_cols, num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
 
         for vectorized in [true, false] {
             let label = if vectorized {
@@ -214,13 +189,7 @@ fn bench_batch_size_sensitivity(c: &mut Criterion) {
     let schema = make_schema(num_cols);
 
     for batch_size in [1024, 4096, 8192, 16384, 32768] {
-        let batches = generate_batches(
-            num_cols,
-            num_groups,
-            1_000_000,
-            batch_size,
-            DataPattern::Sequential,
-        );
+        let batches = generate_batches(num_cols, num_groups, 1_000_000, batch_size);
 
         for vectorized in [true, false] {
             let label = if vectorized {
@@ -259,13 +228,8 @@ fn bench_column_scaling(c: &mut Criterion) {
 
     for &(num_cols, num_groups) in cases {
         let schema = make_schema(num_cols);
-        let batches = generate_batches(
-            num_cols,
-            num_groups,
-            1_000_000,
-            DEFAULT_BATCH_SIZE,
-            DataPattern::Sequential,
-        );
+        let batches =
+            generate_batches(num_cols, num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
 
         for vectorized in [true, false] {
             let label = if vectorized {
@@ -302,13 +266,8 @@ fn bench_high_cardinality_scaling(c: &mut Criterion) {
     for num_cols in [2, 3, 4, 6, 8, 10] {
         let num_groups = 1_000_000;
         let schema = make_schema(num_cols);
-        let batches = generate_batches(
-            num_cols,
-            num_groups,
-            1_000_000,
-            DEFAULT_BATCH_SIZE,
-            DataPattern::Sequential,
-        );
+        let batches =
+            generate_batches(num_cols, num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
 
         for vectorized in [true, false] {
             let label = if vectorized {
@@ -348,13 +307,8 @@ fn bench_group_count_sweep(c: &mut Criterion) {
     for num_groups in [
         16, 64, 256, 1000, 5000, 10_000, 50_000, 100_000, 500_000, 1_000_000,
     ] {
-        let batches = generate_batches(
-            num_cols,
-            num_groups,
-            1_000_000,
-            DEFAULT_BATCH_SIZE,
-            DataPattern::Sequential,
-        );
+        let batches =
+            generate_batches(num_cols, num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
 
         for vectorized in [true, false] {
             let label = if vectorized {
@@ -383,60 +337,6 @@ fn bench_group_count_sweep(c: &mut Criterion) {
     group.finish();
 }
 
-/// Experiment 7: Random vs sequential data pattern.
-fn bench_random_vs_sequential(c: &mut Criterion) {
-    let mut group = c.benchmark_group("random_vs_sequential");
-    group.sample_size(10);
-
-    let num_cols = 3;
-    let num_groups = 64;
-    let schema = make_schema(num_cols);
-
-    for num_rows in [1_000_000, 5_000_000] {
-        for pattern in [DataPattern::Sequential, DataPattern::Random] {
-            let pattern_label = match pattern {
-                DataPattern::Sequential => "sequential",
-                DataPattern::Random => "random",
-            };
-            let batches = generate_batches(
-                num_cols,
-                num_groups,
-                num_rows,
-                DEFAULT_BATCH_SIZE,
-                pattern,
-            );
-
-            for vectorized in [true, false] {
-                let label = if vectorized {
-                    "vectorized"
-                } else {
-                    "row_based"
-                };
-                group.bench_with_input(
-                    BenchmarkId::new(
-                        format!("{label}/{pattern_label}"),
-                        format!("{num_rows}_rows"),
-                    ),
-                    &batches,
-                    |b, batches| {
-                        b.iter_batched_ref(
-                            || {
-                                (
-                                    create_group_values(&schema, vectorized),
-                                    Vec::<usize>::with_capacity(DEFAULT_BATCH_SIZE),
-                                )
-                            },
-                            |(gv, groups)| bench_intern(gv, batches, groups),
-                            criterion::BatchSize::LargeInput,
-                        );
-                    },
-                );
-            }
-        }
-    }
-    group.finish();
-}
-
 criterion_group!(
     benches,
     bench_issue_17850_regression,
@@ -445,6 +345,5 @@ criterion_group!(
     bench_column_scaling,
     bench_high_cardinality_scaling,
     bench_group_count_sweep,
-    bench_random_vs_sequential,
 );
 criterion_main!(benches);
