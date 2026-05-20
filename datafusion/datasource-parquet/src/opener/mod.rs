@@ -1161,7 +1161,7 @@ impl RowGroupsPrunedParquetOpen {
         // single call. Encapsulating it behind `DecoderProjection` keeps the
         // opener's orchestration body focused on filter / decoder / stream
         // wiring.
-        let decoder_projection = DecoderProjection::build(
+        let decoder_projection = DecoderProjection::try_new(
             &prepared.projection,
             &prepared.physical_file_schema,
             reader_metadata.parquet_schema(),

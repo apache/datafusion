@@ -48,9 +48,9 @@ use crate::row_filter::build_projection_read_plan;
 /// parquet decoder run, plus the per-batch transform that maps the decoder's
 /// output onto the scan's `output_schema`.
 ///
-/// Built once per file by the opener via [`Self::build`]; the push-decoder
-/// stream installs [`Self::projection_mask`] on each decoder and calls
-/// [`Self::map`] on every decoded batch.
+/// Built once per file by the opener via [`Self::try_new`]; the
+/// push-decoder stream installs [`Self::projection_mask`] on each decoder
+/// and calls [`Self::map`] on every decoded batch.
 pub(crate) struct DecoderProjection {
     projection_mask: ProjectionMask,
     projector: Projector,
@@ -68,7 +68,7 @@ impl DecoderProjection {
     /// adapted by the per-file expr adapter); `parquet_schema` is the
     /// corresponding parquet [`SchemaDescriptor`]. `output_schema` is what
     /// consumers of the scan stream expect.
-    pub(crate) fn build(
+    pub(crate) fn try_new(
         projection: &ProjectionExprs,
         physical_file_schema: &SchemaRef,
         parquet_schema: &SchemaDescriptor,
