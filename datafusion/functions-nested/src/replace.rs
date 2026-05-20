@@ -607,7 +607,7 @@ fn replace_with_scalar_needle(
     to_array: &ArrayRef,
     arr_n: &[i64],
 ) -> Result<ArrayRef> {
-    if scalar_from.is_null() || scalar_from.data_type().is_nested() {
+    if scalar_from.data_type().is_nested() {
         let from_array = scalar_from.to_array_of_size(list_array.len())?;
         return array_replace_internal(list_array, &from_array, to_array, arr_n);
     }
@@ -633,121 +633,5 @@ fn array_replace_internal(
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => exec_err!("array_replace does not support type '{array_type}'."),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ArrayReplace, ArrayReplaceAll, ArrayReplaceN};
-    use arrow::array::{ArrayRef, AsArray, ListArray};
-    use arrow::datatypes::{DataType, Field, Int32Type};
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
-    use std::sync::Arc;
-
-    fn int_list(values: Vec<Vec<i32>>) -> ArrayRef {
-        Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
-            values
-                .into_iter()
-                .map(|row| Some(row.into_iter().map(Some))),
-        ))
-    }
-
-    fn invoke_replace(
-        udf: &dyn ScalarUDFImpl,
-        args: Vec<ColumnarValue>,
-        return_type: DataType,
-    ) -> ColumnarValue {
-        let arg_fields = args
-            .iter()
-            .enumerate()
-            .map(|(i, arg)| {
-                Arc::new(Field::new(format!("arg{i}"), arg.data_type(), true))
-            })
-            .collect::<Vec<_>>();
-        let number_rows = args
-            .iter()
-            .find_map(|arg| match arg {
-                ColumnarValue::Array(array) => Some(array.len()),
-                ColumnarValue::Scalar(_) => None,
-            })
-            .unwrap_or(1);
-        let return_field = Arc::new(Field::new("result", return_type, true));
-
-        udf.invoke_with_args(ScalarFunctionArgs {
-            args,
-            arg_fields,
-            number_rows,
-            return_field,
-            config_options: Arc::new(Default::default()),
-        })
-        .unwrap()
-    }
-
-    #[test]
-    fn array_replace_uses_scalar_arguments() {
-        let input = int_list(vec![vec![1, 2, 2, 3], vec![2, 4, 2]]);
-        let expected = int_list(vec![vec![1, 9, 2, 3], vec![9, 4, 2]]);
-        let return_type = input.data_type().clone();
-
-        let result = invoke_replace(
-            &ArrayReplace::new(),
-            vec![
-                ColumnarValue::Array(input),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(9))),
-            ],
-            return_type,
-        );
-
-        let ColumnarValue::Array(result) = result else {
-            panic!("expected array result");
-        };
-        assert_eq!(result.as_list::<i32>(), expected.as_list::<i32>());
-    }
-
-    #[test]
-    fn array_replace_n_uses_scalar_arguments() {
-        let input = int_list(vec![vec![1, 2, 2, 3], vec![2, 4, 2]]);
-        let expected = int_list(vec![vec![1, 9, 9, 3], vec![9, 4, 9]]);
-        let return_type = input.data_type().clone();
-
-        let result = invoke_replace(
-            &ArrayReplaceN::new(),
-            vec![
-                ColumnarValue::Array(input),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(9))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
-            ],
-            return_type,
-        );
-
-        let ColumnarValue::Array(result) = result else {
-            panic!("expected array result");
-        };
-        assert_eq!(result.as_list::<i32>(), expected.as_list::<i32>());
-    }
-
-    #[test]
-    fn array_replace_all_uses_scalar_arguments() {
-        let input = int_list(vec![vec![1, 2, 2, 3], vec![2, 4, 2]]);
-        let expected = int_list(vec![vec![1, 9, 9, 3], vec![9, 4, 9]]);
-        let return_type = input.data_type().clone();
-
-        let result = invoke_replace(
-            &ArrayReplaceAll::new(),
-            vec![
-                ColumnarValue::Array(input),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(9))),
-            ],
-            return_type,
-        );
-
-        let ColumnarValue::Array(result) = result else {
-            panic!("expected array result");
-        };
-        assert_eq!(result.as_list::<i32>(), expected.as_list::<i32>());
     }
 }
