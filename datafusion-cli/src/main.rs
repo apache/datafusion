@@ -443,10 +443,7 @@ mod tests {
     use super::*;
     use datafusion::{
         common::test_util::batches_to_string,
-        execution::cache::{
-            DefaultListFilesCache, cache_manager::CacheManagerConfig,
-            cache_unit::DefaultFileStatisticsCache,
-        },
+        execution::cache::{DefaultListFilesCache, cache_manager::CacheManagerConfig},
         prelude::{ParquetReadOptions, col, lit, split_part},
     };
     use insta::assert_snapshot;
@@ -656,8 +653,6 @@ mod tests {
         Ok(())
     }
 
-    /// Shows that the statistics cache is not enabled by default yet
-    /// See https://github.com/apache/datafusion/issues/19217
     #[tokio::test]
     async fn test_statistics_cache_default() -> Result<(), DataFusionError> {
         let ctx = SessionContext::new();
@@ -687,68 +682,17 @@ mod tests {
             .await?;
         }
 
-        // When the cache manager creates a StatisticsCache by default,
-        // the contents will show up here
-        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
+        let sql = "SELECT split_part(path, '/', -1) as filename, table, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
         assert_snapshot!(batches_to_string(&rbs),@r"
-        ++
-        ++
-        ");
-
-        Ok(())
-    }
-
-    // Can be removed when https://github.com/apache/datafusion/issues/19217 is resolved
-    #[tokio::test]
-    async fn test_statistics_cache_override() -> Result<(), DataFusionError> {
-        // Install a specific StatisticsCache implementation
-        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
-        let cache_config = CacheManagerConfig::default()
-            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
-        let runtime = RuntimeEnvBuilder::new()
-            .with_cache_manager(cache_config)
-            .build()?;
-        let config = SessionConfig::new().with_collect_statistics(true);
-        let ctx = SessionContext::new_with_config_rt(config, Arc::new(runtime));
-
-        ctx.register_udtf(
-            "statistics_cache",
-            Arc::new(StatisticsCacheFunc::new(
-                ctx.task_ctx().runtime_env().cache_manager.clone(),
-            )),
-        );
-
-        for filename in [
-            "alltypes_plain",
-            "alltypes_tiny_pages",
-            "lz4_raw_compressed_larger",
-        ] {
-            ctx.sql(
-                format!(
-                    "create external table {filename}
-                    stored as parquet
-                    location '../parquet-testing/data/{filename}.parquet'",
-                )
-                .as_str(),
-            )
-            .await?
-            .collect()
-            .await?;
-        }
-
-        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
-        let df = ctx.sql(sql).await?;
-        let rbs = df.collect().await?;
-        assert_snapshot!(batches_to_string(&rbs),@r"
-        +-----------------------------------+-----------------+--------------+-------------+------------------+
-        | filename                          | file_size_bytes | num_rows     | num_columns | table_size_bytes |
-        +-----------------------------------+-----------------+--------------+-------------+------------------+
-        | alltypes_plain.parquet            | 1851            | Exact(8)     | 11          | Absent           |
-        | alltypes_tiny_pages.parquet       | 454233          | Exact(7300)  | 13          | Absent           |
-        | lz4_raw_compressed_larger.parquet | 380836          | Exact(10000) | 1           | Absent           |
-        +-----------------------------------+-----------------+--------------+-------------+------------------+
+          +-----------------------------------+---------------------------+-----------------+--------------+-------------+------------------+
+          | filename                          | table                     | file_size_bytes | num_rows     | num_columns | table_size_bytes |
+          +-----------------------------------+---------------------------+-----------------+--------------+-------------+------------------+
+          | alltypes_plain.parquet            | alltypes_plain            | 1851            | Exact(8)     | 11          | Absent           |
+          | alltypes_tiny_pages.parquet       | alltypes_tiny_pages       | 454233          | Exact(7300)  | 13          | Absent           |
+          | lz4_raw_compressed_larger.parquet | lz4_raw_compressed_larger | 380836          | Exact(10000) | 1           | Absent           |
+          +-----------------------------------+---------------------------+-----------------+--------------+-------------+------------------+
         ");
 
         Ok(())

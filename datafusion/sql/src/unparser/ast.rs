@@ -358,7 +358,7 @@ impl SelectBuilder {
     }
     pub fn build(&self) -> Result<ast::Select, BuilderError> {
         Ok(ast::Select {
-            optimizer_hint: None,
+            optimizer_hints: vec![],
             distinct: self.distinct.clone(),
             select_modifiers: None,
             top_before_distinct: false,
@@ -477,6 +477,9 @@ pub struct RelationBuilder {
 }
 
 #[derive(Clone)]
+// Boxing variants would penalize the common builder path; this enum is
+// constructed-then-consumed locally rather than stored at scale.
+#[expect(clippy::large_enum_variant)]
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
@@ -794,6 +797,7 @@ impl FlattenRelationBuilder {
             lateral: true,
             name: ast::ObjectName::from(vec![ast::Ident::new("FLATTEN")]),
             args,
+            with_ordinality: false,
             alias: self.alias.clone(),
         })
     }

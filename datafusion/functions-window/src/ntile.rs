@@ -17,9 +17,7 @@
 
 //! `ntile` window function implementation
 
-use crate::utils::{
-    get_scalar_value_from_args, get_signed_integer, get_unsigned_integer,
-};
+use crate::utils::{get_scalar_value_from_args, get_unsigned_integer};
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
@@ -120,6 +118,7 @@ impl WindowUDFImpl for Ntile {
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
+        // check the n value is provided, guard against NTILE()
         let scalar_n =
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 0)?
                 .ok_or_else(|| {
@@ -130,16 +129,17 @@ impl WindowUDFImpl for Ntile {
             return exec_err!("NTILE requires a positive integer, but finds NULL");
         }
 
-        if scalar_n.is_unsigned() {
-            let n = get_unsigned_integer(&scalar_n)?;
-            Ok(Box::new(NtileEvaluator { n }))
-        } else {
-            let n: i64 = get_signed_integer(&scalar_n)?;
-            if n <= 0 {
-                return exec_err!("NTILE requires a positive integer");
-            }
-            Ok(Box::new(NtileEvaluator { n: n as u64 }))
+        // Works for both signed and unsigned inputs: ScalarValue::cast_to uses
+        // safe=false, so negative signed values fail the cast to UInt64, and
+        // routing through UInt64 also accepts values greater than i64::MAX.
+        let n = get_unsigned_integer(&scalar_n)
+            .map_err(|_| exec_datafusion_err!("NTILE requires a positive integer"))?;
+
+        if n == 0 {
+            return exec_err!("NTILE requires a positive integer");
         }
+
+        Ok(Box::new(NtileEvaluator { n }))
     }
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         let nullable = false;
@@ -167,12 +167,27 @@ impl PartitionEvaluator for NtileEvaluator {
         _values: &[ArrayRef],
         num_rows: usize,
     ) -> Result<ArrayRef> {
+        // SQL NTILE distributes rows "as equally as possible": with `base = num_rows / n`
+        // and `remainder = num_rows % n`, the first `remainder` buckets each contain
+        // `base + 1` rows and the rest contain `base` rows. The previous formula
+        // `i * n / num_rows` does not preserve those bucket sizes (e.g. NTILE(4) over
+        // 10 rows yielded sizes 3,2,3,2 instead of 3,3,2,2).
         let num_rows = num_rows as u64;
-        let mut vec: Vec<u64> = Vec::new();
-        let n = u64::min(self.n, num_rows);
+        let n = self.n;
+        let mut vec: Vec<u64> = Vec::with_capacity(num_rows as usize);
+        let base = num_rows / n;
+        let remainder = num_rows % n;
+        let large_bucket_size = base + 1;
+        let large_rows = remainder * large_bucket_size;
         for i in 0..num_rows {
-            let res = i * n / num_rows;
-            vec.push(res + 1)
+            let bucket = if i < large_rows {
+                i / large_bucket_size + 1
+            } else {
+                // base > 0 here: i >= large_rows is only reachable when remainder < n,
+                // which forces base >= 1 (otherwise large_rows would equal num_rows).
+                remainder + (i - large_rows) / base + 1
+            };
+            vec.push(bucket);
         }
         Ok(Arc::new(UInt64Array::from(vec)))
     }

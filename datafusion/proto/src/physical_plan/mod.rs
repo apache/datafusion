@@ -19,7 +19,6 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -58,6 +57,7 @@ use datafusion_functions_table::generate_series::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
@@ -118,6 +118,58 @@ use crate::{convert_required, into_required};
 
 pub mod from_proto;
 pub mod to_proto;
+
+const HUMAN_DISPLAY_ALIAS_PREFIX: &str = "\u{1f}datafusion_human_display_alias_v1:";
+
+fn encode_human_display_alias(human_display: &str, alias: &str) -> String {
+    format!(
+        "{HUMAN_DISPLAY_ALIAS_PREFIX}{}:{alias}{human_display}",
+        alias.len()
+    )
+}
+
+fn split_human_display_alias<'a>(
+    human_display: &'a str,
+    name: &'a str,
+) -> (&'a str, Option<&'a str>) {
+    if let Some(encoded) = human_display.strip_prefix(HUMAN_DISPLAY_ALIAS_PREFIX)
+        && let Some((alias_len, encoded)) = encoded.split_once(':')
+        && let Ok(alias_len) = alias_len.parse::<usize>()
+        && let Some(alias) = encoded.get(..alias_len)
+        && let Some(human_display) = encoded.get(alias_len..)
+        && alias == name
+        && !human_display.is_empty()
+    {
+        return (human_display, Some(alias));
+    }
+
+    (human_display, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_human_display_alias_ignores_mismatched_alias() {
+        let encoded = encode_human_display_alias("sum(value)", "revenue");
+
+        assert_eq!(
+            split_human_display_alias(&encoded, "other"),
+            (encoded.as_str(), None)
+        );
+    }
+
+    #[test]
+    fn split_human_display_alias_keeps_malformed_prefix_literal() {
+        let display = format!("{HUMAN_DISPLAY_ALIAS_PREFIX}not-an-encoding");
+
+        assert_eq!(
+            split_human_display_alias(&display, "agg"),
+            (display.as_str(), None)
+        );
+    }
+}
 
 /// Context threaded through physical-plan deserialization.
 ///
@@ -716,18 +768,23 @@ impl protobuf::PhysicalPlanNode {
             })?;
 
         let filter_selectivity = filter.default_filter_selectivity.try_into();
-        let projection = if !filter.projection.is_empty() {
-            Some(
-                filter
-                    .projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
+        // Preserve the `None` state across proto boundaries. Proto cannot distinguish
+        // between `None` (full projection) and `Some(vec![])` (empty projection) since
+        // both serialize as an empty list. If all columns are included, we reconstruct
+        // `None` to avoid losing this semantic distinction on deserialization.
+        let num_fields = input.schema().fields().len();
+        let mut is_full_projection = filter.projection.len() == num_fields;
+        let mut projection_vec: Vec<usize> = Vec::with_capacity(filter.projection.len());
+        for (i, idx) in filter.projection.iter().enumerate() {
+            let idx = *idx as usize;
+            is_full_projection &= idx == i;
+            projection_vec.push(idx);
+        }
+        let projection = if is_full_projection {
             None
+        } else {
+            Some(projection_vec)
         };
-
         let filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
             .with_batch_size(filter.batch_size as usize)
@@ -1255,15 +1312,28 @@ impl protobuf::PhysicalPlanNode {
                                         )?,
                                     };
 
-                                    AggregateExprBuilder::new(agg_udf, input_phy_expr)
-                                        .schema(Arc::clone(&physical_schema))
-                                        .alias(name)
-                                        .human_display(agg_node.human_display.clone())
-                                        .with_ignore_nulls(agg_node.ignore_nulls)
-                                        .with_distinct(agg_node.distinct)
-                                        .order_by(order_bys)
-                                        .build()
-                                        .map(Arc::new)
+                                    let (human_display, human_display_alias) =
+                                        split_human_display_alias(
+                                            &agg_node.human_display,
+                                            name,
+                                        );
+                                    let builder = AggregateExprBuilder::new(
+                                        agg_udf,
+                                        input_phy_expr,
+                                    )
+                                    .schema(Arc::clone(&physical_schema))
+                                    .alias(name)
+                                    .with_ignore_nulls(agg_node.ignore_nulls)
+                                    .with_distinct(agg_node.distinct)
+                                    .order_by(order_bys)
+                                    .human_display(human_display);
+                                    let builder = if let Some(alias) = human_display_alias
+                                    {
+                                        builder.human_display_alias(alias)
+                                    } else {
+                                        builder
+                                    };
+                                    builder.build().map(Arc::new)
                                 }
                             })
                             .transpose()?
@@ -1278,6 +1348,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let physical_schema_ref = Arc::clone(&physical_schema);
         let agg = AggregateExec::try_new(
             agg_mode,
             PhysicalGroupBy::new(group_expr, null_expr, groups, has_grouping_set),
@@ -1294,6 +1365,24 @@ impl protobuf::PhysicalPlanNode {
                 None => LimitOptions::new(limit),
             };
             agg.with_limit_options(Some(limit_options))
+        } else {
+            agg
+        };
+
+        let agg = if let Some(dynamic_filter_proto) = &hash_agg.dynamic_filter {
+            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
+                dynamic_filter_proto,
+                physical_schema_ref.as_ref(),
+                ctx,
+            )?;
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+                .downcast::<DynamicFilterPhysicalExpr>()
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "AggregateExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            agg.with_dynamic_filter_expr(df)?
         } else {
             agg
         };
@@ -1404,7 +1493,7 @@ impl protobuf::PhysicalPlanNode {
         } else {
             None
         };
-        Ok(Arc::new(HashJoinExec::try_new(
+        let mut hash_join = HashJoinExec::try_new(
             left,
             right,
             on,
@@ -1414,7 +1503,25 @@ impl protobuf::PhysicalPlanNode {
             partition_mode,
             null_equality.into(),
             hashjoin.null_aware,
-        )?))
+        )?;
+
+        if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
+            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
+                dynamic_filter_proto,
+                right_schema.as_ref(),
+                ctx,
+            )?;
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+                .downcast::<DynamicFilterPhysicalExpr>()
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "HashJoinExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            hash_join = hash_join.with_dynamic_filter_expr(df)?;
+        }
+
+        Ok(Arc::new(hash_join))
     }
 
     fn try_into_symmetric_hash_join_physical_plan(
@@ -1651,6 +1758,24 @@ impl protobuf::PhysicalPlanNode {
         let new_sort = SortExec::new(ordering, input)
             .with_fetch(fetch)
             .with_preserve_partitioning(sort.preserve_partitioning);
+
+        let new_sort = if let Some(dynamic_filter_proto) = &sort.dynamic_filter {
+            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
+                dynamic_filter_proto,
+                new_sort.input().schema().as_ref(),
+                ctx,
+            )?;
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+                .downcast::<DynamicFilterPhysicalExpr>()
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            new_sort.with_dynamic_filter_expr(df)?
+        } else {
+            new_sort
+        };
 
         Ok(Arc::new(new_sort))
     }
@@ -2339,9 +2464,12 @@ impl protobuf::PhysicalPlanNode {
                             .physical_expr_to_proto(exec.predicate(), codec)?,
                     ),
                     default_filter_selectivity: exec.default_selectivity() as u32,
-                    projection: exec.projection().as_ref().map_or_else(Vec::new, |v| {
-                        v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                    }),
+                    projection: match exec.projection() {
+                        None => (0..exec.input().schema().fields().len())
+                            .map(|i| i as u32)
+                            .collect(),
+                        Some(v) => v.iter().map(|x| *x as u32).collect(),
+                    },
                     batch_size: exec.batch_size() as u32,
                     fetch: exec.fetch().map(|f| f as u32),
                 },
@@ -2455,6 +2583,15 @@ impl protobuf::PhysicalPlanNode {
             PartitionMode::Auto => protobuf::PartitionMode::Auto,
         };
 
+        let dynamic_filter = exec
+            .dynamic_filter_expr()
+            .map(|df| {
+                let df_expr: Arc<dyn PhysicalExpr> =
+                    Arc::clone(df) as Arc<dyn PhysicalExpr>;
+                proto_converter.physical_expr_to_proto(&df_expr, codec)
+            })
+            .transpose()?;
+
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
                 protobuf::HashJoinExecNode {
@@ -2469,6 +2606,7 @@ impl protobuf::PhysicalPlanNode {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
                     null_aware: exec.null_aware,
+                    dynamic_filter,
                 },
             ))),
         })
@@ -2798,6 +2936,14 @@ impl protobuf::PhysicalPlanNode {
                     groups,
                     limit,
                     has_grouping_set: exec.group_expr().has_grouping_set(),
+                    dynamic_filter: exec
+                        .dynamic_filter_expr()
+                        .map(|df| {
+                            let df_expr: Arc<dyn PhysicalExpr> =
+                                Arc::clone(df) as Arc<dyn PhysicalExpr>;
+                            proto_converter.physical_expr_to_proto(&df_expr, codec)
+                        })
+                        .transpose()?,
                 },
             ))),
         })
@@ -3091,6 +3237,14 @@ impl protobuf::PhysicalPlanNode {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let dynamic_filter = exec
+            .dynamic_filter_expr()
+            .map(|df| {
+                let df_expr: Arc<dyn PhysicalExpr> = df as Arc<dyn PhysicalExpr>;
+                proto_converter.physical_expr_to_proto(&df_expr, codec)
+            })
+            .transpose()?;
+
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Sort(Box::new(
                 protobuf::SortExecNode {
@@ -3101,6 +3255,7 @@ impl protobuf::PhysicalPlanNode {
                         _ => -1,
                     },
                     preserve_partitioning: exec.preserve_partitioning(),
+                    dynamic_filter,
                 },
             ))),
         })
@@ -3880,83 +4035,11 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     }
 }
 
-/// Internal serializer that adds expr_id to expressions.
-/// Created fresh for each serialization operation.
-struct DeduplicatingSerializer {
-    /// Random salt combined with pointer addresses and process ID to create globally unique expr_ids.
-    session_id: u64,
-}
-
-impl DeduplicatingSerializer {
-    fn new() -> Self {
-        Self {
-            session_id: rand::random(),
-        }
-    }
-}
-
-impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
-    fn proto_to_execution_plan(
-        &self,
-        _proto: &protobuf::PhysicalPlanNode,
-        _ctx: &PhysicalPlanDecodeContext<'_>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        internal_err!("DeduplicatingSerializer cannot deserialize execution plans")
-    }
-
-    fn execution_plan_to_proto(
-        &self,
-        plan: &Arc<dyn ExecutionPlan>,
-        codec: &dyn PhysicalExtensionCodec,
-    ) -> Result<protobuf::PhysicalPlanNode>
-    where
-        Self: Sized,
-    {
-        protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            Arc::clone(plan),
-            codec,
-            self,
-        )
-    }
-
-    fn proto_to_physical_expr(
-        &self,
-        _proto: &protobuf::PhysicalExprNode,
-        _input_schema: &Schema,
-        _ctx: &PhysicalPlanDecodeContext<'_>,
-    ) -> Result<Arc<dyn PhysicalExpr>>
-    where
-        Self: Sized,
-    {
-        internal_err!("DeduplicatingSerializer cannot deserialize physical expressions")
-    }
-
-    fn physical_expr_to_proto(
-        &self,
-        expr: &Arc<dyn PhysicalExpr>,
-        codec: &dyn PhysicalExtensionCodec,
-    ) -> Result<protobuf::PhysicalExprNode> {
-        let mut proto = serialize_physical_expr_with_converter(expr, codec, self)?;
-
-        // Hash session_id, pointer address, and process ID together to create expr_id.
-        // - session_id: random per serializer, prevents collisions when merging serializations
-        // - ptr: unique address per Arc within a process
-        // - pid: prevents collisions if serializer is shared across processes
-        let mut hasher = DefaultHasher::new();
-        self.session_id.hash(&mut hasher);
-        (Arc::as_ptr(expr) as *const () as u64).hash(&mut hasher);
-        std::process::id().hash(&mut hasher);
-        proto.expr_id = Some(hasher.finish());
-
-        Ok(proto)
-    }
-}
-
-/// Internal deserializer that caches expressions by expr_id.
-/// Created fresh for each deserialization operation.
+/// Internal deserializer that caches expressions by their `expression_id()` so
+/// multiple occurrences of the same expression are deduped.
 #[derive(Default)]
 struct DeduplicatingDeserializer {
-    /// Cache mapping expr_id to deserialized expressions.
+    /// Cache mapping expression_id to deserialized expressions.
     cache: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
 }
 
@@ -3989,19 +4072,30 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
     where
         Self: Sized,
     {
-        if let Some(expr_id) = proto.expr_id {
-            // Check cache first
-            if let Some(cached) = self.cache.borrow().get(&expr_id) {
-                return Ok(Arc::clone(cached));
-            }
-            // Deserialize and cache
-            let expr =
-                parse_physical_expr_with_converter(proto, input_schema, ctx, self)?;
-            self.cache.borrow_mut().insert(expr_id, Arc::clone(&expr));
-            Ok(expr)
-        } else {
-            parse_physical_expr_with_converter(proto, input_schema, ctx, self)
+        // `expr_id` is the generic identity slot on `PhysicalExprNode`.
+        // The default serializer populates it from `PhysicalExpr::expression_id`.
+        // A missing id means this expression type doesn't participate in deduping.
+        let Some(id) = proto.expr_id else {
+            return parse_physical_expr_with_converter(proto, input_schema, ctx, self);
+        };
+
+        let parsed = parse_physical_expr_with_converter(proto, input_schema, ctx, self)?;
+
+        let mut cache = self.cache.borrow_mut();
+        if let Some(cached) = cache.get(&id) {
+            // Since expressions may manage their own internal state when deriving
+            // expressions via `with_new_children`, we use `with_new_children`
+            // to opt into the same behavior.
+            //
+            // For example, one `DynamicFilterPhysicalExpr` may be derived from
+            // another resulting in shared references. Using `with_new_children`
+            // is meant to preserve those references.
+            let children: Vec<_> = parsed.children().into_iter().cloned().collect();
+            return Arc::clone(cached).with_new_children(children);
         }
+
+        cache.insert(id, Arc::clone(&parsed));
+        Ok(parsed)
     }
 
     fn physical_expr_to_proto(
@@ -4013,19 +4107,12 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
     }
 }
 
-/// A proto converter that adds expression deduplication during serialization
-/// and deserialization.
+/// A proto converter that deduplicates [`PhysicalExpr`] by [`PhysicalExpr::expression_id`].
+/// This helps preserve referential integrity when deserializing [`ExecutionPlan`]s
+/// which may contain multiple occurrences of the same [`PhysicalExpr`] (ex. when
+/// [`DynamicFilterPhysicalExpr`] are pushed down, it is important to preserve
+/// referential integrity).
 ///
-/// During serialization, each expression's Arc pointer address is XORed with a
-/// random session_id to create a salted `expr_id`. This prevents cross-process
-/// collisions when serialized plans are merged.
-///
-/// During deserialization, expressions with the same `expr_id` share the same
-/// Arc, reducing memory usage for plans with duplicate expressions (e.g., large
-/// IN lists) and supporting correctly linking [`DynamicFilterPhysicalExpr`] instances.
-///
-/// This converter is stateless - it creates internal serializers/deserializers
-/// on demand for each operation.
 ///
 /// [`DynamicFilterPhysicalExpr`]: https://docs.rs/datafusion-physical-expr/latest/datafusion_physical_expr/expressions/struct.DynamicFilterPhysicalExpr.html
 #[derive(Debug, Default, Clone, Copy)]
@@ -4049,11 +4136,10 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
     where
         Self: Sized,
     {
-        let serializer = DeduplicatingSerializer::new();
         protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             Arc::clone(plan),
             codec,
-            &serializer,
+            self,
         )
     }
 
@@ -4075,8 +4161,7 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
-        let serializer = DeduplicatingSerializer::new();
-        serializer.physical_expr_to_proto(expr, codec)
+        serialize_physical_expr_with_converter(expr, codec, self)
     }
 }
 

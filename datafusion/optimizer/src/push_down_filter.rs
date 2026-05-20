@@ -66,7 +66,7 @@ use datafusion_expr::ExpressionPlacement;
 ///    Sort (a, b)
 /// ```
 ///
-/// A better plan is to  filter the data *before* the Sort, which sorts fewer
+/// A better plan is to filter the data *before* the Sort, which sorts fewer
 /// rows and therefore does less work overall:
 ///
 /// ```text
@@ -80,7 +80,7 @@ use datafusion_expr::ExpressionPlacement;
 /// different result.
 ///
 /// ```text
-///  Filter (a > 10)   <-- can not move this Filter before the limit
+///  Filter (a > 10)   <-- cannot move this Filter before the limit
 ///    Limit (fetch=3)
 ///      Sort (a, b)
 /// ```
@@ -90,46 +90,46 @@ use datafusion_expr::ExpressionPlacement;
 /// satisfies `filter(op(data)) = op(filter(data))`.
 ///
 /// The filter-commutative property is plan and column-specific. A filter on `a`
-/// can be pushed through a `Aggregate(group_by = [a], agg=[sum(b))`. However, a
-/// filter on  `sum(b)` can not be pushed through the same aggregate.
+/// can be pushed through a `Aggregate(group_by = [a], agg=[sum(b)])`. However, a
+/// filter on `sum(b)` cannot be pushed through the same aggregate.
 ///
 /// # Handling Conjunctions
 ///
-/// It is possible to only push down **part** of a filter expression if is
+/// It is possible to only push down **part** of a filter expression if it is
 /// connected with `AND`s (more formally if it is a "conjunction").
 ///
 /// For example, given the following plan:
 ///
 /// ```text
 /// Filter(a > 10 AND sum(b) < 5)
-///   Aggregate(group_by = [a], agg = [sum(b))
+///   Aggregate(group_by = [a], agg = [sum(b)])
 /// ```
 ///
-/// The `a > 10` is commutative with the `Aggregate` but  `sum(b) < 5` is not.
-/// Therefore it is possible to only push part of the expression, resulting in:
+/// The `a > 10` is commutative with the `Aggregate` but `sum(b) < 5` is not.
+/// Therefore it is possible to only push down part of the expression, resulting in:
 ///
 /// ```text
 /// Filter(sum(b) < 5)
-///   Aggregate(group_by = [a], agg = [sum(b))
+///   Aggregate(group_by = [a], agg = [sum(b)])
 ///     Filter(a > 10)
 /// ```
 ///
 /// # Handling Column Aliases
 ///
-/// This optimizer must sometimes handle re-writing filter expressions when they
-/// pushed, for example if there is a projection that aliases `a+1` to `"b"`:
+/// This optimizer must sometimes handle rewriting filter expressions when they are
+/// pushed. For example, consider a projection that aliases `a+1` to `"b"`:
 ///
 /// ```text
 /// Filter (b > 10)
 ///     Projection: [a+1 AS "b"]  <-- changes the name of `a+1` to `b`
 /// ```
 ///
-/// To apply the filter prior to the `Projection`, all references to `b` must be
+/// To push this filter below the `Projection`, all references to `b` must be
 /// rewritten to `a+1`:
 ///
 /// ```text
-/// Projection: a AS "b"
-///     Filter: (a + 1 > 10)  <--- changed from b to a + 1
+/// Projection: [a+1 AS "b"]
+///     Filter: (a+1 > 10)  <--- changed from b to a+1
 /// ```
 /// # Implementation Notes
 ///
@@ -1248,7 +1248,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut push_predicates = vec![];
                 for (push, expr) in predicate_push_or_keep
                     .into_iter()
-                    .zip(split_conjunction_owned(filter.predicate).into_iter())
+                    .zip(split_conjunction_owned(filter.predicate))
                 {
                     if !push {
                         keep_predicates.push(expr);

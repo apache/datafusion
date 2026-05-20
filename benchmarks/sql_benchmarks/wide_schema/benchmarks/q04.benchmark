@@ -1,0 +1,24 @@
+-- Two low-cardinality string filters + a non-stat-prunable modulo
+-- predicate for tight selectivity (~0.005 % match rate), project two
+-- columns, no LIMIT, no ORDER BY. Runs on both wide and narrow
+-- datasets via BENCH_SUBGROUP.
+
+name Q04
+group wide_schema
+subgroup ${BENCH_SUBGROUP:-wide}
+
+load sql_benchmarks/wide_schema/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from events;
+----
+true
+
+run
+SELECT id, ts
+FROM events
+WHERE category = 'c0'
+  AND flag     = 'f0'
+  AND id % 1000 = 0;
+
+cleanup sql_benchmarks/wide_schema/init/cleanup.sql
