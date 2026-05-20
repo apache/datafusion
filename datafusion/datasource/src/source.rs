@@ -225,6 +225,17 @@ pub trait DataSource: Any + Send + Sync + Debug {
         None
     }
 
+    /// Accept a TopK fetch (K) hint from a surrounding `SortExec`.
+    ///
+    /// See [`ExecutionPlan::with_topk_fetch_hint`] for the high-level
+    /// contract. The default returns `None`. `FileScanConfig` overrides
+    /// this to delegate to the underlying `FileSource`.
+    ///
+    /// [`ExecutionPlan::with_topk_fetch_hint`]: datafusion_physical_plan::ExecutionPlan::with_topk_fetch_hint
+    fn with_topk_fetch_hint(&self, _fetch: usize) -> Option<Arc<dyn DataSource>> {
+        None
+    }
+
     /// Apply a closure to each expression used by this data source.
     ///
     /// This includes filter predicates (which may contain dynamic filters) and any
@@ -540,6 +551,15 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Option<Arc<dyn ExecutionPlan>> {
         self.data_source
             .with_preserve_order(preserve_order)
+            .map(|new_data_source| {
+                Arc::new(self.clone().with_data_source(new_data_source))
+                    as Arc<dyn ExecutionPlan>
+            })
+    }
+
+    fn with_topk_fetch_hint(&self, fetch: usize) -> Option<Arc<dyn ExecutionPlan>> {
+        self.data_source
+            .with_topk_fetch_hint(fetch)
             .map(|new_data_source| {
                 Arc::new(self.clone().with_data_source(new_data_source))
                     as Arc<dyn ExecutionPlan>
