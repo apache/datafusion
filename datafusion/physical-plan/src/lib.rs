@@ -91,6 +91,7 @@ pub mod sorts;
 pub mod spill;
 pub mod stream;
 pub mod streaming;
+pub mod sum_cardinality_check;
 pub mod tree_node;
 pub mod union;
 pub mod unnest;

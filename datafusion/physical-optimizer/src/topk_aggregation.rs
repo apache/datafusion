@@ -128,7 +128,9 @@ impl TopKAggregation {
             } else {
                 // or we continue down through types that don't reduce cardinality
                 match plan.cardinality_effect() {
-                    CardinalityEffect::Equal | CardinalityEffect::GreaterEqual => {}
+                    CardinalityEffect::Equal
+                    | CardinalityEffect::GreaterEqual
+                    | CardinalityEffect::Sum => {}
                     CardinalityEffect::Unknown | CardinalityEffect::LowerEqual => {
                         cardinality_preserved = false;
                     }

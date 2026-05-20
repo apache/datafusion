@@ -706,6 +706,14 @@ config_namespace! {
         ///
         /// Disabled by default, set to a number greater than 0 for enabling it.
         pub hash_join_buffering_capacity: usize, default = 0
+
+        /// When set to true, after executing a plan via `collect()` or
+        /// `collect_partitioned()`, DataFusion verifies that every concat-style
+        /// operator (`UnionExec`, `InterleaveExec`) produced exactly the sum of
+        /// its inputs' output rows. This is a post-execution sanity check
+        /// useful for debugging correctness issues. Disabled by default as it
+        /// adds a small amount of overhead.
+        pub verify_sum_cardinality: bool, default = false
     }
 }
 

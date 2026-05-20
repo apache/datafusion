@@ -234,17 +234,18 @@ fn pushdown_requirement_to_children(
     // forward a LIMIT k to each of its children—i.e. apply “LIMIT k” separately
     // on each branch before merging them together.
     //
-    // However, UnionExec’s `cardinality_effect() == GreaterEqual` (it sums up
-    // all child row counts), so pushing a global TopK/LIMIT through it would
-    // break the semantics of “take the first k rows of the combined result.”
+    // However, UnionExec’s `cardinality_effect() == Sum` (output rows are the
+    // sum of child output rows), so pushing a global TopK/LIMIT through it
+    // would break the semantics of “take the first k rows of the combined
+    // result.”
     //
     // For example, with two branches A and B and k = 3:
     //   — Global LIMIT: take the first 3 rows from (A ∪ B) after merging.
     //   — Pushed down: take 3 from A, 3 from B, then merge → up to 6 rows!
     //
     // That’s why we still block on cardinality: even though UnionExec can
-    // push a LIMIT to its children, its GreaterEqual effect means it cannot
-    // preserve the global TopK semantics.
+    // push a LIMIT to its children, its Sum effect means it cannot preserve
+    // the global TopK semantics.
     if parent_fetch.is_some() {
         match plan.cardinality_effect() {
             CardinalityEffect::Equal => {

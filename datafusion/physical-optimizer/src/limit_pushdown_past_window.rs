@@ -135,6 +135,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                 CardinalityEffect::LowerEqual => return reset(node, &mut ctx),
                 CardinalityEffect::Equal => {}
                 CardinalityEffect::GreaterEqual => {}
+                CardinalityEffect::Sum => {}
             }
 
             Ok(Transformed::no(node))
