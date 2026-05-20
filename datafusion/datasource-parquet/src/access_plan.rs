@@ -625,13 +625,6 @@ impl PreparedAccessPlan {
     /// and would have to be remapped; the no-WHERE TopK gate ensures
     /// `row_selection` is always `None` in the path that calls this
     /// method, so the early-return is just a safety net.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "called by the opener's cumulative-RG-prune step in the next commit"
-        )
-    )]
     pub(crate) fn truncate_row_groups(mut self, count: usize) -> Self {
         if self.row_selection.is_some() {
             debug!("Skipping cumulative RG truncate: row_selection present");

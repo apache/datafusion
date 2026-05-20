@@ -137,6 +137,14 @@ pub(super) struct ParquetMorselizer {
     pub reverse_row_groups: bool,
     /// Optional sort order used to reorder row groups by their min/max statistics.
     pub sort_order_for_reorder: Option<LexOrdering>,
+    /// Optional TopK fetch (K) hint plumbed from the surrounding
+    /// `SortExec(fetch=K)` via [`crate::ParquetSource`]'s
+    /// `with_topk_fetch_hint`. The opener uses it (in combination with
+    /// `sort_order_for_reorder` and a bare-`DynamicFilterPhysicalExpr`
+    /// predicate) to seed the TopK threshold from per-RG statistics
+    /// before `PruningPredicate` build and to truncate
+    /// `row_group_indexes` once cumulative `num_rows` reaches `K`.
+    pub topk_fetch: Option<usize>,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -288,6 +296,8 @@ struct PreparedParquetOpen {
     max_predicate_cache_size: Option<usize>,
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
+    /// See [`ParquetMorselizer::topk_fetch`].
+    topk_fetch: Option<usize>,
     preserve_order: bool,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -658,6 +668,7 @@ impl ParquetMorselizer {
             max_predicate_cache_size: self.max_predicate_cache_size,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
+            topk_fetch: self.topk_fetch,
             preserve_order: self.preserve_order,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
@@ -824,6 +835,37 @@ impl MetadataLoadedParquetOpen {
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
         }
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
+
+        // No-WHERE TopK stats init.
+        //
+        // Gate: sort pushdown fired (`sort_order_for_reorder.is_some()`)
+        // AND the surrounding `SortExec` plumbed K (`topk_fetch.is_some()`)
+        // AND the only predicate is a bare `DynamicFilterPhysicalExpr`.
+        //
+        // Effect: seed the TopK threshold from per-RG min/max statistics
+        // before `PruningPredicate` build, so the pruning predicate
+        // immediately benefits from a tight bound. The threshold is
+        // chosen so at least one row group with `num_rows >= K` can
+        // contain the final K rows — i.e. we don't prune away anything
+        // we'd actually need.
+        if let (Some(predicate), Some(fetch), Some(sort_order)) = (
+            prepared.predicate.as_ref(),
+            prepared.topk_fetch,
+            prepared.sort_order_for_reorder.as_ref(),
+        ) && topk_no_where::predicate_is_pure_dynamic_filter(predicate)
+        {
+            let rg_metadata = reader_metadata.metadata().row_groups();
+            // Best-effort — the helper is fully graceful (logs +
+            // returns Ok on any per-file failure).
+            topk_no_where::try_init_topk_threshold(
+                predicate,
+                fetch,
+                sort_order,
+                rg_metadata,
+                &physical_file_schema,
+                reader_metadata.parquet_schema(),
+            )?;
+        }
 
         // Build predicates for this specific file
         let pruning_predicate = build_pruning_predicates(
@@ -1131,6 +1173,14 @@ impl RowGroupsPrunedParquetOpen {
         // Both inputs come from the sort-pushdown channel —
         // `ParquetSource::try_pushdown_sort` sets `sort_order_for_reorder`
         // and/or `reverse_row_groups`.
+        // Same gate as the stats-init step in `prepare_filters`. The
+        // boolean is hoisted here because the closure captures it.
+        let topk_no_where_active = prepared.topk_fetch.is_some()
+            && prepared.sort_order_for_reorder.is_some()
+            && prepared
+                .predicate
+                .as_ref()
+                .is_some_and(topk_no_where::predicate_is_pure_dynamic_filter);
         let prepare_access_plan =
             |plan: ParquetAccessPlan| -> Result<PreparedAccessPlan> {
                 let mut prepared_plan = plan.prepare(rg_metadata)?;
@@ -1143,6 +1193,28 @@ impl RowGroupsPrunedParquetOpen {
                 }
                 if prepared.reverse_row_groups {
                     prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
+                }
+                // Cumulative RG prune: after reorder + reverse, the
+                // first row group is the "best" one for the request.
+                // Walk forward, accumulate `num_rows`, and truncate
+                // once we have enough to satisfy K. Gated on the
+                // no-WHERE TopK shape and `topk_fetch` being set.
+                if topk_no_where_active
+                    && prepared_plan.row_selection.is_none()
+                    && let Some(fetch) = prepared.topk_fetch
+                {
+                    let mut cumulative_rows: usize = 0;
+                    let mut keep: usize = prepared_plan.row_group_indexes.len();
+                    for (i, &rg_idx) in prepared_plan.row_group_indexes.iter().enumerate()
+                    {
+                        cumulative_rows = cumulative_rows
+                            .saturating_add(rg_metadata[rg_idx].num_rows() as usize);
+                        if cumulative_rows >= fetch {
+                            keep = i + 1;
+                            break;
+                        }
+                    }
+                    prepared_plan = prepared_plan.truncate_row_groups(keep);
                 }
                 Ok(prepared_plan)
             };
@@ -1349,6 +1421,273 @@ fn create_initial_plan(
 
     // default to scanning all row groups
     Ok(ParquetAccessPlan::new_all(row_group_count))
+}
+
+/// Helpers for the no-WHERE TopK path: seed the dynamic filter
+/// from per-row-group min/max statistics, and accumulate `num_rows`
+/// across row groups to truncate at `K`.
+///
+/// All helpers are gated on:
+/// 1. `predicate_is_pure_dynamic_filter` — the only predicate on the
+///    scan is a bare `DynamicFilterPhysicalExpr`. WHERE clauses,
+///    other filters, or any wrapper that adds conjuncts disables
+///    the path.
+/// 2. `topk_fetch.is_some()` — the surrounding `SortExec(fetch=K)`
+///    plumbed `K` through `with_topk_fetch_hint`.
+/// 3. `sort_order_for_reorder.is_some()` — sort pushdown fired,
+///    so the source has a coherent sort direction / column.
+mod topk_no_where {
+    use super::*;
+    use arrow::array::ArrayRef;
+    use arrow::datatypes::Schema;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{
+        BinaryExpr, Column, DynamicFilterPhysicalExpr, lit,
+    };
+    use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+    use parquet::file::metadata::RowGroupMetaData;
+    use parquet::schema::types::SchemaDescriptor;
+
+    /// True iff the top-level predicate downcasts to
+    /// [`DynamicFilterPhysicalExpr`] — i.e. the only filter is a
+    /// dynamic filter (TopK threshold) with no static WHERE-clause
+    /// conjuncts.
+    pub(super) fn predicate_is_pure_dynamic_filter(
+        predicate: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        predicate
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .is_some()
+    }
+
+    /// Walk the predicate tree and return a reference to the first
+    /// [`DynamicFilterPhysicalExpr`] found, so the caller can call
+    /// [`DynamicFilterPhysicalExpr::update`] on it.
+    ///
+    /// For the no-WHERE TopK path the predicate is already a bare
+    /// dynamic filter, but the recursive walk is cheap and keeps
+    /// the helper composable for future shapes.
+    pub(super) fn find_dynamic_filter(
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Option<&DynamicFilterPhysicalExpr> {
+        if let Some(df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
+            return Some(df);
+        }
+        for child in expr.children() {
+            if let Some(found) = find_dynamic_filter(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Unwrap single-child wrappers (e.g. `CastExpr`) to reach a
+    /// plain [`Column`]. Returns `None` for genuinely multi-arg
+    /// expressions like `a + b`.
+    pub(super) fn find_column_in_expr(expr: &Arc<dyn PhysicalExpr>) -> Option<Column> {
+        if let Some(col) = expr.downcast_ref::<Column>() {
+            return Some(col.clone());
+        }
+        let children = expr.children();
+        if children.len() == 1 {
+            return find_column_in_expr(children[0]);
+        }
+        None
+    }
+
+    /// Walk the row groups and compute the tightest *safe* threshold
+    /// for the TopK dynamic filter.
+    ///
+    /// For DESC `... LIMIT K` the dynamic filter is `col > T`, and we
+    /// want the **largest** `T` that is guaranteed `<=` the K-th
+    /// largest value in the file. Any single row group with
+    /// `num_rows >= K` already provides such a bound: all rows in
+    /// that RG are `>= min(RG)`, so the K-th largest value across
+    /// the file is also `>= min(RG)`. The largest such per-RG min
+    /// is the tightest safe `T` → `take_max = true`, `stats =
+    /// row_group_mins`.
+    ///
+    /// For ASC the dual holds: the dynamic filter is `col < T`, and
+    /// the tightest safe `T` is the **smallest** per-RG max over
+    /// RGs with `num_rows >= K` → `take_max = false`, `stats =
+    /// row_group_maxes`.
+    ///
+    /// Row groups smaller than `fetch` are skipped — alone they
+    /// can't guarantee that K qualifying rows live above/below
+    /// their min/max.
+    pub(super) fn compute_best_threshold(
+        stats: &ArrayRef,
+        rg_metadata: &[RowGroupMetaData],
+        fetch: usize,
+        take_max: bool,
+    ) -> Result<Option<ScalarValue>> {
+        debug_assert_eq!(
+            stats.len(),
+            rg_metadata.len(),
+            "stats and rg_metadata must be aligned"
+        );
+
+        let mut best: Option<ScalarValue> = None;
+        for (idx, rg) in rg_metadata.iter().enumerate() {
+            if (rg.num_rows() as usize) < fetch {
+                continue;
+            }
+            if stats.is_null(idx) {
+                continue;
+            }
+            let candidate = ScalarValue::try_from_array(stats, idx)?;
+            best = match best {
+                None => Some(candidate),
+                Some(current) => {
+                    let take_candidate = if take_max {
+                        candidate > current
+                    } else {
+                        candidate < current
+                    };
+                    Some(if take_candidate { candidate } else { current })
+                }
+            };
+        }
+        Ok(best)
+    }
+
+    /// Seed the TopK dynamic filter from per-RG statistics.
+    ///
+    /// Builds `col {op} threshold` (with `op = >` for DESC and
+    /// `op = <` for ASC) and calls [`DynamicFilterPhysicalExpr::update`].
+    /// If anything fails gracefully (sort key isn't a plain column,
+    /// no stats available, threshold can't be computed), the
+    /// function is a no-op — the TopK will simply tighten the
+    /// filter from real data on the first batch as before.
+    pub(super) fn try_init_topk_threshold(
+        predicate: &Arc<dyn PhysicalExpr>,
+        fetch: usize,
+        sort_order: &LexOrdering,
+        rg_metadata: &[RowGroupMetaData],
+        arrow_schema: &Schema,
+        parquet_schema: &SchemaDescriptor,
+    ) -> Result<()> {
+        if rg_metadata.is_empty() {
+            return Ok(());
+        }
+
+        let Some(dynamic_filter) = find_dynamic_filter(predicate) else {
+            return Ok(());
+        };
+
+        let first_sort_expr = sort_order.first();
+        let Some(column) = find_column_in_expr(&first_sort_expr.expr) else {
+            debug!(
+                "Skipping TopK stats init: sort expr is not a column-bearing expression"
+            );
+            return Ok(());
+        };
+        if arrow_schema.field_with_name(column.name()).is_err() {
+            debug!(
+                "Skipping TopK stats init: column `{}` not in file schema",
+                column.name()
+            );
+            return Ok(());
+        }
+
+        let converter = match StatisticsConverter::try_new(
+            column.name(),
+            arrow_schema,
+            parquet_schema,
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                debug!(
+                    "Skipping TopK stats init: stats converter for `{}` failed: {e}",
+                    column.name()
+                );
+                return Ok(());
+            }
+        };
+
+        // For DESC we want a *safe* lower bound on the K-th largest
+        // value → take the largest per-RG `min` over qualifying RGs.
+        // For ASC we want a *safe* upper bound on the K-th smallest
+        // value → take the smallest per-RG `max` over qualifying RGs.
+        // The dynamic filter expression is `col > T` for DESC and
+        // `col < T` for ASC respectively (mirrors TopK's existing
+        // `build_filter_expression`).
+        let is_desc = first_sort_expr.options.descending;
+        let stats = if is_desc {
+            converter.row_group_mins(rg_metadata.iter())
+        } else {
+            converter.row_group_maxes(rg_metadata.iter())
+        };
+        let stats = match stats {
+            Ok(arr) => arr,
+            Err(e) => {
+                debug!(
+                    "Skipping TopK stats init: cannot read stats for `{}`: {e}",
+                    column.name()
+                );
+                return Ok(());
+            }
+        };
+
+        // `take_max = is_desc`: DESC picks the largest min, ASC picks
+        // the smallest max.
+        let Some(threshold) =
+            compute_best_threshold(&stats, rg_metadata, fetch, is_desc)?
+        else {
+            return Ok(());
+        };
+
+        // Cast the threshold to the sort expression's output data
+        // type. For `CAST(small_val AS Int64) DESC` the column is
+        // Int16 (so the stats array is Int16) but the BinaryExpr
+        // must compare Int64 vs Int64 to evaluate. If the cast
+        // fails, bail out — this is best-effort.
+        let sort_expr_type = match first_sort_expr.expr.data_type(arrow_schema) {
+            Ok(t) => t,
+            Err(e) => {
+                debug!("Skipping TopK stats init: cannot resolve sort expr type: {e}");
+                return Ok(());
+            }
+        };
+        let threshold = if threshold.data_type() != sort_expr_type {
+            match threshold.cast_to(&sort_expr_type) {
+                Ok(v) => v,
+                Err(e) => {
+                    debug!(
+                        "Skipping TopK stats init: cannot cast threshold from {:?} to {sort_expr_type:?}: {e}",
+                        threshold.data_type()
+                    );
+                    return Ok(());
+                }
+            }
+        } else {
+            threshold
+        };
+
+        // Build `sort_expr {op} threshold`. The dynamic filter's
+        // children must remain stable across updates, so reuse the
+        // sort expression as-is (it shares the same column children
+        // that TopK declared).
+        //
+        // Use `>=` / `<=` rather than `>` / `<` because the
+        // threshold derived from stats is only a *safe* bound —
+        // some row in the file may equal it and still belong to
+        // the final K. The real TopK will tighten this to strict
+        // `>` / `<` on the next update once it has seen actual
+        // data.
+        let op = if is_desc {
+            Operator::GtEq
+        } else {
+            Operator::LtEq
+        };
+        let new_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&first_sort_expr.expr),
+            op,
+            lit(threshold),
+        ));
+        dynamic_filter.update(new_expr)?;
+        Ok(())
+    }
 }
 
 /// Build a page pruning predicate from an optional predicate expression.
@@ -1611,6 +1950,7 @@ mod test {
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
+                topk_fetch: None,
             }
         }
     }
