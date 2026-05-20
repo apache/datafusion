@@ -447,6 +447,9 @@ mod parquet {
                 coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
                     parquet_options::CoerceInt96Opt::CoerceInt96(compression)
                 }),
+                coerce_int96_tz_opt: global_options.global.coerce_int96_tz.map(|tz| {
+                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz)
+                }),
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
                 }),
@@ -552,6 +555,9 @@ mod parquet {
             skip_arrow_metadata: proto.skip_arrow_metadata,
             coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
                 parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
+            }),
+            coerce_int96_tz: proto.coerce_int96_tz_opt.as_ref().map(|opt| match opt {
+                parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => tz.clone(),
             }),
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,

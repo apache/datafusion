@@ -66,7 +66,7 @@ use datafusion_expr::ExpressionPlacement;
 ///    Sort (a, b)
 /// ```
 ///
-/// A better plan is to  filter the data *before* the Sort, which sorts fewer
+/// A better plan is to filter the data *before* the Sort, which sorts fewer
 /// rows and therefore does less work overall:
 ///
 /// ```text
@@ -80,7 +80,7 @@ use datafusion_expr::ExpressionPlacement;
 /// different result.
 ///
 /// ```text
-///  Filter (a > 10)   <-- can not move this Filter before the limit
+///  Filter (a > 10)   <-- cannot move this Filter before the limit
 ///    Limit (fetch=3)
 ///      Sort (a, b)
 /// ```
@@ -90,46 +90,46 @@ use datafusion_expr::ExpressionPlacement;
 /// satisfies `filter(op(data)) = op(filter(data))`.
 ///
 /// The filter-commutative property is plan and column-specific. A filter on `a`
-/// can be pushed through a `Aggregate(group_by = [a], agg=[sum(b))`. However, a
-/// filter on  `sum(b)` can not be pushed through the same aggregate.
+/// can be pushed through a `Aggregate(group_by = [a], agg=[sum(b)])`. However, a
+/// filter on `sum(b)` cannot be pushed through the same aggregate.
 ///
 /// # Handling Conjunctions
 ///
-/// It is possible to only push down **part** of a filter expression if is
+/// It is possible to only push down **part** of a filter expression if it is
 /// connected with `AND`s (more formally if it is a "conjunction").
 ///
 /// For example, given the following plan:
 ///
 /// ```text
 /// Filter(a > 10 AND sum(b) < 5)
-///   Aggregate(group_by = [a], agg = [sum(b))
+///   Aggregate(group_by = [a], agg = [sum(b)])
 /// ```
 ///
-/// The `a > 10` is commutative with the `Aggregate` but  `sum(b) < 5` is not.
-/// Therefore it is possible to only push part of the expression, resulting in:
+/// The `a > 10` is commutative with the `Aggregate` but `sum(b) < 5` is not.
+/// Therefore it is possible to only push down part of the expression, resulting in:
 ///
 /// ```text
 /// Filter(sum(b) < 5)
-///   Aggregate(group_by = [a], agg = [sum(b))
+///   Aggregate(group_by = [a], agg = [sum(b)])
 ///     Filter(a > 10)
 /// ```
 ///
 /// # Handling Column Aliases
 ///
-/// This optimizer must sometimes handle re-writing filter expressions when they
-/// pushed, for example if there is a projection that aliases `a+1` to `"b"`:
+/// This optimizer must sometimes handle rewriting filter expressions when they are
+/// pushed. For example, consider a projection that aliases `a+1` to `"b"`:
 ///
 /// ```text
 /// Filter (b > 10)
 ///     Projection: [a+1 AS "b"]  <-- changes the name of `a+1` to `b`
 /// ```
 ///
-/// To apply the filter prior to the `Projection`, all references to `b` must be
+/// To push this filter below the `Projection`, all references to `b` must be
 /// rewritten to `a+1`:
 ///
 /// ```text
-/// Projection: a AS "b"
-///     Filter: (a + 1 > 10)  <--- changed from b to a + 1
+/// Projection: [a+1 AS "b"]
+///     Filter: (a+1 > 10)  <--- changed from b to a+1
 /// ```
 /// # Implementation Notes
 ///
@@ -813,25 +813,22 @@ impl OptimizerRule for PushDownFilter {
 
         match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(child_filter) => {
-                let parents_predicates = split_conjunction_owned(filter.predicate);
-
-                // remove duplicated filters
-                let child_predicates = split_conjunction_owned(child_filter.predicate);
-                let new_predicates = parents_predicates
+                // child filters first to preserve execution order
+                let new_predicates = split_conjunction_owned(child_filter.predicate)
                     .into_iter()
-                    .chain(child_predicates)
-                    // use IndexSet to remove dupes while preserving predicate order
-                    .collect::<IndexSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>();
+                    .chain(split_conjunction_owned(filter.predicate))
+                    // use IndexSet to remove duplicates while preserving predicate order
+                    .collect::<IndexSet<_>>();
 
                 let Some(new_predicate) = conjunction(new_predicates) else {
                     return plan_err!("at least one expression exists");
                 };
+
                 let new_filter = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
                     child_filter.input,
                 )?);
+
                 self.rewrite(new_filter, config)
             }
             LogicalPlan::Repartition(repartition) => {
@@ -1248,7 +1245,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut push_predicates = vec![];
                 for (push, expr) in predicate_push_or_keep
                     .into_iter()
-                    .zip(split_conjunction_owned(filter.predicate).into_iter())
+                    .zip(split_conjunction_owned(filter.predicate))
                 {
                     if !push {
                         keep_predicates.push(expr);
@@ -2486,7 +2483,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a
-          Filter: test.a >= Int64(1) AND test.a <= Int64(1)
+          Filter: test.a <= Int64(1) AND test.a >= Int64(1)
             Limit: skip=0, fetch=1
               TableScan: test
         "
@@ -3262,6 +3259,28 @@ mod tests {
     }
 
     #[test]
+    fn multi_combined_two_filters() -> Result<()> {
+        let plan = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Inexact,
+            vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
+            Some(vec![0]),
+        )?
+        .filter(col("a").eq(lit(10i64)))?
+        .filter(col("b").gt(lit(11i64)))?
+        .project(vec![col("a"), col("b")])?
+        .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: a, b
+          Filter: a = Int64(10) AND b > Int64(11)
+            TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]
+        "
+        )
+    }
+
+    #[test]
     fn multi_combined_filter_exact() -> Result<()> {
         let plan = table_scan_with_pushdown_provider_builder(
             TableProviderFilterPushDown::Exact,
@@ -3269,6 +3288,27 @@ mod tests {
             Some(vec![0]),
         )?
         .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+        .project(vec![col("a"), col("b")])?
+        .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: a, b
+          TableScan: test projection=[a], full_filters=[a = Int64(10), b > Int64(11)]
+        "
+        )
+    }
+
+    #[test]
+    fn multi_combined_two_filters_exact() -> Result<()> {
+        let plan = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Exact,
+            vec![],
+            Some(vec![0]),
+        )?
+        .filter(col("a").eq(lit(10i64)))?
+        .filter(col("b").gt(lit(11i64)))?
         .project(vec![col("a"), col("b")])?
         .build()?;
 

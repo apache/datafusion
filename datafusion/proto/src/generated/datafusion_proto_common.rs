@@ -900,6 +900,12 @@ pub struct ParquetOptions {
     pub max_predicate_cache_size_opt: ::core::option::Option<
         parquet_options::MaxPredicateCacheSizeOpt,
     >,
+    /// Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
+    /// is set. When `Some`, INT96 columns coerce to
+    /// `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+    /// `Timestamp(<coerce_int96>, None)`. No effect when `coerce_int96` is unset.
+    #[prost(oneof = "parquet_options::CoerceInt96TzOpt", tags = "36")]
+    pub coerce_int96_tz_opt: ::core::option::Option<parquet_options::CoerceInt96TzOpt>,
 }
 /// Nested message and enum types in `ParquetOptions`.
 pub mod parquet_options {
@@ -957,6 +963,15 @@ pub mod parquet_options {
     pub enum MaxPredicateCacheSizeOpt {
         #[prost(uint64, tag = "33")]
         MaxPredicateCacheSize(u64),
+    }
+    /// Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
+    /// is set. When `Some`, INT96 columns coerce to
+    /// `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+    /// `Timestamp(<coerce_int96>, None)`. No effect when `coerce_int96` is unset.
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum CoerceInt96TzOpt {
+        #[prost(string, tag = "36")]
+        CoerceInt96Tz(::prost::alloc::string::String),
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
