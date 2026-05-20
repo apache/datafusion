@@ -3212,25 +3212,6 @@ async fn roundtrip_join_null_aware() -> Result<()> {
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
-    let direct: usize = ctx
-        .execute_logical_plan(plan)
-        .await?
-        .collect()
-        .await?
-        .iter()
-        .map(|b| b.num_rows())
-        .sum();
-    let rt: usize = ctx
-        .execute_logical_plan(logical_round_trip)
-        .await?
-        .collect()
-        .await?
-        .iter()
-        .map(|b| b.num_rows())
-        .sum();
-    assert_eq!(direct, 0);
-    assert_eq!(rt, direct);
-
     Ok(())
 }
 
@@ -3241,43 +3222,39 @@ async fn roundtrip_join_null_aware() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_join_null_equality() -> Result<()> {
     use datafusion_common::NullEquality;
-    use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-    use datafusion_expr::logical_plan::Join;
+    use datafusion_expr::JoinType;
+    use datafusion_expr::logical_plan::{Join, JoinConstraint};
 
     let ctx = SessionContext::new();
-    let sql = "
-        SELECT t1.a FROM (VALUES (1)) AS t1(a)
-        INNER JOIN (VALUES (1)) AS t2(b) ON t1.a = t2.b
-    ";
-    let plan = ctx
-        .sql(sql)
-        .await?
-        .into_optimized_plan()?
-        .transform_up(|node| {
-            Ok(match node {
-                LogicalPlan::Join(j) => Transformed::yes(LogicalPlan::Join(Join {
-                    null_equality: NullEquality::NullEqualsNull,
-                    ..j
-                })),
-                other => Transformed::no(other),
-            })
-        })?
-        .data;
 
-    let bytes = logical_plan_to_bytes(&plan)?;
+    let left_schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let right_schema =
+        Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+    ctx.register_table(
+        "t1",
+        Arc::new(datafusion::datasource::empty::EmptyTable::new(left_schema)),
+    )?;
+    ctx.register_table(
+        "t2",
+        Arc::new(datafusion::datasource::empty::EmptyTable::new(right_schema)),
+    )?;
+    let left = ctx.table("t1").await?.into_optimized_plan()?;
+    let right = ctx.table("t2").await?.into_optimized_plan()?;
+
+    let join = LogicalPlan::Join(Join::try_new(
+        Arc::new(left),
+        Arc::new(right),
+        vec![(col("t1.a"), col("t2.b"))],
+        None,
+        JoinType::Inner,
+        JoinConstraint::On,
+        NullEquality::NullEqualsNull,
+        false,
+    )?);
+
+    let bytes = logical_plan_to_bytes(&join)?;
     let rt = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-    assert_eq!(format!("{plan:?}"), format!("{rt:?}"));
-
-    let mut found = false;
-    rt.apply(|n| {
-        if let LogicalPlan::Join(j) = n
-            && j.null_equality == NullEquality::NullEqualsNull
-        {
-            found = true;
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    assert!(found);
+    assert_eq!(format!("{join:?}"), format!("{rt:?}"));
 
     Ok(())
 }

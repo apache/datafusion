@@ -850,11 +850,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let right_keys: Vec<Expr> =
                     from_proto::parse_exprs(&join.right_join_key, ctx, extension_codec)?;
                 if left_keys.len() != right_keys.len() {
-                    return internal_err!(
-                        "JoinNode: left_join_key and right_join_key must be the same length, got {} and {}",
+                    return Err(proto_error(format!(
+                        "Received a JoinNode message with left_join_key and right_join_key of different lengths: {} and {}",
                         left_keys.len(),
                         right_keys.len()
-                    );
+                    )));
                 }
                 let join_type =
                     protobuf::JoinType::try_from(join.join_type).map_err(|_| {
@@ -1494,7 +1494,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 join_constraint,
                 null_equality,
                 null_aware,
-                ..
+                // Not encoded; recomputed by `Join::try_new` on decode.
+                schema: _,
             }) => {
                 let left: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     left.as_ref(),
