@@ -1048,7 +1048,11 @@ fn try_collapse_projection_chain(
             break;
         }
 
-        let mut new_exprs = Vec::with_capacity(current_exprs.len());
+        // Compute substituted exprs first, then commit them in place. A
+        // mid-loop bail would otherwise leave `current_exprs` half-updated
+        // and inconsistent with `current_input`.
+        let mut new_phys: Vec<Arc<dyn PhysicalExpr>> =
+            Vec::with_capacity(current_exprs.len());
         for proj_expr in &current_exprs {
             // If there is no match in the input projection, we cannot unify these
             // projections. This case will arise if the projection expression contains
@@ -1056,13 +1060,11 @@ fn try_collapse_projection_chain(
             let Some(expr) = update_expr(&proj_expr.expr, inner_exprs, true)? else {
                 break 'outer;
             };
-            new_exprs.push(ProjectionExpr {
-                expr,
-                alias: proj_expr.alias.clone(),
-            });
+            new_phys.push(expr);
         }
-
-        current_exprs = new_exprs;
+        for (proj_expr, expr) in current_exprs.iter_mut().zip(new_phys) {
+            proj_expr.expr = expr;
+        }
         current_input = Arc::clone(inner_proj.input());
         collapsed_any = true;
     }
