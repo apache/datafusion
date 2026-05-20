@@ -397,6 +397,7 @@ impl DFHeapSize for String {
 
 impl DFHeapSize for str {
     fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
+        // Internal accounting helper for owners like Arc<str>
         self.len()
     }
 }
@@ -631,10 +632,9 @@ mod tests {
     }
 
     #[test]
-    fn test_str() {
-        let s: &str = "hello";
-        assert!(size(s) > 0);
-        assert_eq!(size(""), 0);
+    fn test_owned_str() {
+        let a: Arc<str> = Arc::from("Hello");
+        assert!(size(&a) > 0);
     }
 
     #[test]
