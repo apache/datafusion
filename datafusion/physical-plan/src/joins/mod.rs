@@ -46,6 +46,7 @@ mod join_filter;
 /// Note: This module is public for internal testing purposes only
 /// and is not guaranteed to be stable across versions.
 pub mod join_hash_map;
+mod nlj_filter_analysis;
 
 use array_map::ArrayMap;
 use utils::JoinHashMapType;

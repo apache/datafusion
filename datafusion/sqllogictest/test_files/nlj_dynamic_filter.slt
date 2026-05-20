@@ -1,0 +1,387 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for dynamic filter pushdown in NestedLoopJoinExec.
+#
+# NLJ handles non-equijoin predicates (range, temporal, inequality).
+# Dynamic filters extract build-side bounds from the JoinFilter expression
+# and push them to the probe-side scan for Parquet row group pruning.
+#
+# For example, `events JOIN windows ON e.ts BETWEEN w.start AND w.end`
+# derives `e.ts >= min(w.start) AND e.ts <= max(w.end)` from the build
+# side and pushes it to the events scan.
+
+# Setup: enable filter pushdown and collect statistics
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+set datafusion.execution.parquet.reorder_filters = true;
+
+# Use small row groups so pruning is visible in tests
+statement ok
+set datafusion.execution.parquet.max_row_group_size = 5;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# ================================================================
+# Create test data
+# ================================================================
+
+# Build side (windows): small table with narrow ranges
+# start: [100, 200, 300], end: [150, 250, 400]
+statement ok
+CREATE TABLE windows_mem(start INT, end_val INT) AS VALUES
+(100, 150),
+(200, 250),
+(300, 400);
+
+query I
+COPY windows_mem TO 'test_files/scratch/nlj_dynamic_filter/windows.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE windows_parquet(start INT, end_val INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/nlj_dynamic_filter/windows.parquet';
+
+# Probe side (events): larger table with timestamps spanning wide range
+# 50 rows: ts = [1, 2, 3, ..., 50] * 10 = [10, 20, 30, ..., 500]
+# With row_group_size=5, this creates 10 row groups
+statement ok
+CREATE TABLE events_mem(ts INT, payload VARCHAR) AS
+SELECT value * 10 AS ts, 'data_' || CAST(value AS VARCHAR) AS payload
+FROM generate_series(1, 50) AS t(value);
+
+query I
+COPY events_mem TO 'test_files/scratch/nlj_dynamic_filter/events.parquet'
+STORED AS PARQUET;
+----
+50
+
+statement ok
+CREATE EXTERNAL TABLE events_parquet(ts INT, payload VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/nlj_dynamic_filter/events.parquet';
+
+# ================================================================
+# Test 1: Correctness — range join results
+# ================================================================
+# events.ts BETWEEN windows.start AND windows.end_val
+# Matching events:
+#   window (100, 150): ts in {100, 110, 120, 130, 140, 150}
+#   window (200, 250): ts in {200, 210, 220, 230, 240, 250}
+#   window (300, 400): ts in {300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400}
+
+query III rowsort
+SELECT e.ts, w.start, w.end_val
+FROM events_parquet e
+INNER JOIN windows_parquet w
+  ON e.ts >= w.start AND e.ts <= w.end_val
+ORDER BY e.ts, w.start;
+----
+100 100 150
+110 100 150
+120 100 150
+130 100 150
+140 100 150
+150 100 150
+200 200 250
+210 200 250
+220 200 250
+230 200 250
+240 200 250
+250 200 250
+300 300 400
+310 300 400
+320 300 400
+330 300 400
+340 300 400
+350 300 400
+360 300 400
+370 300 400
+380 300 400
+390 300 400
+400 300 400
+
+# ================================================================
+# Test 2: EXPLAIN shows NestedLoopJoinExec with DynamicFilter
+# ================================================================
+
+query TT
+EXPLAIN
+SELECT e.ts, w.start, w.end_val
+FROM events_parquet e
+INNER JOIN windows_parquet w
+  ON e.ts >= w.start AND e.ts <= w.end_val;
+----
+physical_plan
+01)NestedLoopJoinExec: join_type=Inner, filter=ts@0 >= start@1 AND ts@0 <= end_val@2, projection=[ts@2, start@0, end_val@1]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/nlj_dynamic_filter/windows.parquet]]}, projection=[start, end_val], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/nlj_dynamic_filter/events.parquet]]}, projection=[ts], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# ================================================================
+# Test 3: DynamicFilter disabled when config is off
+# ================================================================
+
+statement ok
+SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = false;
+
+query TT
+EXPLAIN
+SELECT e.ts, w.start, w.end_val
+FROM events_parquet e
+INNER JOIN windows_parquet w
+  ON e.ts >= w.start AND e.ts <= w.end_val;
+----
+physical_plan
+01)NestedLoopJoinExec: join_type=Inner, filter=ts@0 >= start@1 AND ts@0 <= end_val@2, projection=[ts@2, start@0, end_val@1]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/nlj_dynamic_filter/windows.parquet]]}, projection=[start, end_val], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/nlj_dynamic_filter/events.parquet]]}, projection=[ts], file_type=parquet
+
+# Re-enable for remaining tests
+statement ok
+SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+# ================================================================
+# Test 4: Correctness with inequality join (probe > build)
+# ================================================================
+
+query II rowsort
+SELECT e.ts, w.start
+FROM events_parquet e
+INNER JOIN windows_parquet w
+  ON e.ts > w.start
+WHERE w.start = 300
+ORDER BY e.ts;
+----
+310 300
+320 300
+330 300
+340 300
+350 300
+360 300
+370 300
+380 300
+390 300
+400 300
+410 300
+420 300
+430 300
+440 300
+450 300
+460 300
+470 300
+480 300
+490 300
+500 300
+
+# ================================================================
+# Test 5: Correctness with BETWEEN expression
+# ================================================================
+# BETWEEN expands to >= AND <=, which our expression analysis handles.
+# events.ts BETWEEN windows.start AND windows.end_val
+# Same results as Test 1 (BETWEEN is syntactic sugar for >= AND <=)
+
+query III rowsort
+SELECT e.ts, w.start, w.end_val
+FROM events_parquet e
+INNER JOIN windows_parquet w
+  ON e.ts BETWEEN w.start AND w.end_val
+ORDER BY e.ts, w.start;
+----
+100 100 150
+110 100 150
+120 100 150
+130 100 150
+140 100 150
+150 100 150
+200 200 250
+210 200 250
+220 200 250
+230 200 250
+240 200 250
+250 200 250
+300 300 400
+310 300 400
+320 300 400
+330 300 400
+340 300 400
+350 300 400
+360 300 400
+370 300 400
+380 300 400
+390 300 400
+400 300 400
+
+# ================================================================
+# Test 6: Multi-column range join
+# ================================================================
+# Create tables with two range columns for multi-column bound derivation
+
+statement ok
+CREATE TABLE tiers_mem(min_amount INT, max_amount INT, tier VARCHAR) AS VALUES
+(0, 100, 'bronze'),
+(101, 300, 'silver'),
+(301, 500, 'gold');
+
+query I
+COPY tiers_mem TO 'test_files/scratch/nlj_dynamic_filter/tiers.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE tiers_parquet(min_amount INT, max_amount INT, tier VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/nlj_dynamic_filter/tiers.parquet';
+
+# orders: amount = [10, 20, ..., 500]
+statement ok
+CREATE TABLE orders_mem(amount INT, order_id INT) AS
+SELECT value * 10 AS amount, value AS order_id
+FROM generate_series(1, 50) AS t(value);
+
+query I
+COPY orders_mem TO 'test_files/scratch/nlj_dynamic_filter/orders.parquet'
+STORED AS PARQUET;
+----
+50
+
+statement ok
+CREATE EXTERNAL TABLE orders_parquet(amount INT, order_id INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/nlj_dynamic_filter/orders.parquet';
+
+# Multi-column range join: amount >= min_amount AND amount <= max_amount
+# bronze (0-100): amounts 10,20,...,100 = 10 rows
+# silver (101-300): amounts 110,120,...,300 = 20 rows
+# gold (301-500): amounts 310,320,...,500 = 20 rows
+
+query I
+SELECT count(*)
+FROM orders_parquet o
+INNER JOIN tiers_parquet t
+  ON o.amount >= t.min_amount AND o.amount <= t.max_amount;
+----
+50
+
+query TI rowsort
+SELECT t.tier, o.amount
+FROM orders_parquet o
+INNER JOIN tiers_parquet t
+  ON o.amount >= t.min_amount AND o.amount <= t.max_amount
+WHERE t.tier = 'gold'
+ORDER BY o.amount;
+----
+gold 310
+gold 320
+gold 330
+gold 340
+gold 350
+gold 360
+gold 370
+gold 380
+gold 390
+gold 400
+gold 410
+gold 420
+gold 430
+gold 440
+gold 450
+gold 460
+gold 470
+gold 480
+gold 490
+gold 500
+
+# ================================================================
+# Test 7: Combination of cross-side and same-side predicates
+# ================================================================
+# e.ts >= w.start AND e.ts <= w.end_val AND w.start > 150
+# The same-side predicate (w.start > 150) is not extractable as a bound pair
+# but should not break the cross-side extraction
+
+query III rowsort
+SELECT e.ts, w.start, w.end_val
+FROM events_parquet e
+INNER JOIN windows_parquet w
+  ON e.ts >= w.start AND e.ts <= w.end_val
+WHERE w.start > 150
+ORDER BY e.ts, w.start;
+----
+200 200 250
+210 200 250
+220 200 250
+230 200 250
+240 200 250
+250 200 250
+300 300 400
+310 300 400
+320 300 400
+330 300 400
+340 300 400
+350 300 400
+360 300 400
+370 300 400
+380 300 400
+390 300 400
+400 300 400
+
+# ================================================================
+# Cleanup
+# ================================================================
+
+statement ok
+DROP TABLE windows_mem;
+
+statement ok
+DROP TABLE events_mem;
+
+statement ok
+DROP TABLE windows_parquet;
+
+statement ok
+DROP TABLE events_parquet;
+
+statement ok
+DROP TABLE tiers_mem;
+
+statement ok
+DROP TABLE orders_mem;
+
+statement ok
+DROP TABLE tiers_parquet;
+
+statement ok
+DROP TABLE orders_parquet;
+
+# Reset configuration
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+set datafusion.execution.parquet.reorder_filters = false;
+
+statement ok
+set datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+set datafusion.explain.physical_plan_only = false;

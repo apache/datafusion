@@ -17,18 +17,23 @@
 
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
-use std::fmt::Formatter;
+use std::fmt::{self, Formatter};
 use std::ops::{BitOr, ControlFlow};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 
+use super::nlj_filter_analysis::{self, BoundPair};
 use super::utils::{
     asymmetric_join_output_partitioning, need_produce_result_in_final,
     reorder_output_after_swap, swap_join_projection,
 };
 use crate::common::can_project;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
+use crate::filter_pushdown::{
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
+};
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
@@ -60,6 +65,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, Result, ScalarValue, Statistics, arrow_err, assert_eq_or_internal_err,
@@ -72,6 +78,7 @@ use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
+use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -189,7 +196,6 @@ use crate::spill::spill_manager::SpillManager;
 /// Note this structure includes a [`OnceAsync`] that is used to coordinate the
 /// loading of the left side with the processing in each output stream.
 /// Therefore it can not be [`Clone`]
-#[derive(Debug)]
 pub struct NestedLoopJoinExec {
     /// left side
     pub(crate) left: Arc<dyn ExecutionPlan>,
@@ -225,6 +231,37 @@ pub struct NestedLoopJoinExec {
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
+    /// Dynamic filter for pushing build-side bounds to probe scan
+    dynamic_filter: Option<NLJDynamicFilter>,
+}
+
+/// Holds the dynamic filter and extracted bound pairs for NLJ.
+#[derive(Clone)]
+pub(crate) struct NLJDynamicFilter {
+    filter: Arc<DynamicFilterPhysicalExpr>,
+    /// Extracted (probe_col, operator, build_col) pairs from JoinFilter
+    bound_pairs: Vec<BoundPair>,
+}
+
+/// Custom Debug that omits `dynamic_filter` — it is optimizer-injected runtime state
+/// (contains `Arc<Mutex<SharedBuildAccumulator>>`) that is not preserved by proto
+/// serialization and would cause roundtrip tests to diverge.
+impl fmt::Debug for NestedLoopJoinExec {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("NestedLoopJoinExec")
+            .field("left", &self.left)
+            .field("right", &self.right)
+            .field("filter", &self.filter)
+            .field("join_type", &self.join_type)
+            .field("join_schema", &self.join_schema)
+            .field("build_side_data", &self.build_side_data)
+            .field("left_spill_data", &self.left_spill_data)
+            .field("column_indices", &self.column_indices)
+            .field("projection", &self.projection)
+            .field("metrics", &self.metrics)
+            .field("cache", &self.cache)
+            .finish()
+    }
 }
 
 /// Helps to build [`NestedLoopJoinExec`].
@@ -304,6 +341,7 @@ impl NestedLoopJoinExecBuilder {
             projection,
             metrics: Default::default(),
             cache: Arc::new(cache),
+            dynamic_filter: None,
         })
     }
 }
@@ -509,12 +547,22 @@ impl NestedLoopJoinExec {
             join_schema: Arc::clone(&self.join_schema),
             column_indices: self.column_indices.clone(),
             projection: self.projection.clone(),
+            dynamic_filter: self.dynamic_filter.clone(),
         }
     }
 }
 
+impl NestedLoopJoinExec {
+    /// Check if dynamic filter pushdown is allowed for this join.
+    fn allow_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
+        self.filter.is_some()
+            && matches!(self.join_type, JoinType::Inner)
+            && config.optimizer.enable_join_dynamic_filter_pushdown
+    }
+}
+
 impl DisplayAs for NestedLoopJoinExec {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let display_filter = self.filter.as_ref().map_or_else(
@@ -694,11 +742,192 @@ impl ExecutionPlan for NestedLoopJoinExec {
             metrics,
             batch_size,
             spill_state,
+            self.dynamic_filter.clone(),
+            self.right.schema(),
         )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    /// Forward path (top-down): Route parent filters to children and create
+    /// dynamic filters for probe-side scan optimization.
+    ///
+    /// # What it does
+    ///
+    /// 1. **Route parent filters**: Uses `column_indices` to determine which
+    ///    output columns belong to which side (left/right). Parent filters
+    ///    referencing only left columns go to the left child, and vice versa.
+    ///
+    /// 2. **Create dynamic filter (Post phase only)**: Analyzes the `JoinFilter`
+    ///    expression to extract `(probe_col, operator, build_col)` pairs, then
+    ///    creates a `DynamicFilterPhysicalExpr` targeting the probe-side columns.
+    ///    This filter starts as `lit(true)` and gets updated with actual bounds
+    ///    at runtime after the build side is collected.
+    ///
+    /// # Example
+    ///
+    /// ```text
+    /// SQL: SELECT * FROM events e JOIN windows w ON e.ts BETWEEN w.start AND w.end
+    ///
+    /// Plan BEFORE this function:
+    ///   NestedLoopJoinExec [filter: e.ts >= w.start AND e.ts <= w.end]
+    ///   ├── left (build): DataSourceExec [windows.parquet]
+    ///   └── right (probe): DataSourceExec [events.parquet]  ← no filter
+    ///
+    /// This function (Post phase):
+    ///   1. extract_bound_pairs(filter) → [ProbeGtEq(ts, start), ProbeLtEq(ts, end)]
+    ///   2. Creates DynamicFilterPhysicalExpr(children=[Column("ts")], lit(true))
+    ///   3. Adds as self_filter to right child
+    ///
+    /// After recursive pushdown, the plan becomes:
+    ///   NestedLoopJoinExec [filter: e.ts >= w.start AND e.ts <= w.end]
+    ///   ├── left (build): DataSourceExec [windows.parquet]
+    ///   └── right (probe): DataSourceExec [events.parquet]
+    ///                        filter: DynamicFilterPhysicalExpr(ts, lit(true))
+    ///                                  ↑ placeholder, updated at runtime
+    /// ```
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn crate::PhysicalExpr>>,
+        config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        let (left_preserved, right_preserved) = self.join_type.on_lr_is_preserved();
+
+        // If a projection is applied (e.g., SELECT col_a, col_c instead of SELECT *),
+        // the output schema has fewer columns than the full join schema.
+        // Parent filters reference positions in the projected output, so we must
+        // use the projected column_indices for routing — not the full list.
+        // Without this, a parent filter on output position 1 would map to the
+        // wrong column (position 1 in the full schema vs the projected schema).
+        let column_indices_for_routing = match self.projection.as_ref() {
+            Some(projection) => projection
+                .iter()
+                .map(|i| self.column_indices[*i].clone())
+                .collect(),
+            None => self.column_indices.clone(),
+        };
+
+        // Map each output column position to its source side (Left or Right).
+        // Parent filters reference output positions (e.g., Column("ts", 2)).
+        // We need to know which side each position comes from so we can route
+        // the filter to the correct child.
+        // Example: output [start, end_val, ts, payload]
+        //   left_allowed  = {0, 1}  (start, end_val from left)
+        //   right_allowed = {2, 3}  (ts, payload from right)
+        let (mut left_allowed, mut right_allowed) = (
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+        );
+        column_indices_for_routing
+            .iter()
+            .enumerate()
+            .for_each(|(output_idx, ci)| {
+                match ci.side {
+                    JoinSide::Left => left_allowed.insert(output_idx),
+                    JoinSide::Right => right_allowed.insert(output_idx),
+                    JoinSide::None => false,
+                };
+            });
+
+        let left_child = if left_preserved {
+            ChildFilterDescription::from_child_with_allowed_indices(
+                &parent_filters,
+                left_allowed,
+                self.left(),
+            )?
+        } else {
+            ChildFilterDescription::all_unsupported(&parent_filters)
+        };
+
+        let mut right_child = if right_preserved {
+            ChildFilterDescription::from_child_with_allowed_indices(
+                &parent_filters,
+                right_allowed,
+                self.right(),
+            )?
+        } else {
+            ChildFilterDescription::all_unsupported(&parent_filters)
+        };
+
+        // In Post phase, create dynamic filter for the probe (right) side
+        if phase == FilterPushdownPhase::Post
+            && self.allow_dynamic_filter_pushdown(config)
+            && let Some(join_filter) = &self.filter
+        {
+            let bound_pairs = nlj_filter_analysis::extract_bound_pairs(join_filter);
+            if !bound_pairs.is_empty() {
+                let probe_cols = nlj_filter_analysis::probe_columns_from_pairs(
+                    &bound_pairs,
+                    &self.right.schema(),
+                );
+                let dynamic_filter =
+                    Arc::new(DynamicFilterPhysicalExpr::new(probe_cols, lit(true)));
+                right_child = right_child.with_self_filter(dynamic_filter);
+            }
+        }
+
+        Ok(FilterDescription::new()
+            .with_child(left_child)
+            .with_child(right_child))
+    }
+
+    /// Return path (bottom-up): Capture the `DynamicFilterPhysicalExpr` Arc
+    /// reference so we can update it at runtime with actual build-side bounds.
+    ///
+    /// # Example
+    ///
+    /// ```text
+    /// After gather + recursive pushdown:
+    ///   DataSourceExec stores Arc<DynamicFilterPhysicalExpr> (reference #1)
+    ///   ChildPushdownResult reports it back via self_filters
+    ///
+    /// This function:
+    ///   1. Detects DynamicFilterPhysicalExpr in right child's self_filters
+    ///   2. Downcasts to Arc<DynamicFilterPhysicalExpr>
+    ///   3. Stores in NLJDynamicFilter { filter: Arc (reference #2), bound_pairs }
+    ///   4. Returns updated NestedLoopJoinExec
+    ///
+    /// Now both NLJ (producer) and DataSourceExec (consumer) hold the same Arc:
+    ///   NLJ calls filter.update(bounds) → DataSourceExec sees it immediately
+    /// ```
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
+
+        // Check if our dynamic filter was pushed to the right (probe) child
+        let right_self_filters = &child_pushdown_result.self_filters[1];
+
+        if let Some(filter_result) = right_self_filters.first() {
+            let predicate = Arc::clone(&filter_result.predicate);
+            if let Ok(dynamic_filter) =
+                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
+            {
+                // Extract bound pairs again (same analysis as in gather_filters)
+                let bound_pairs = self
+                    .filter
+                    .as_ref()
+                    .map(nlj_filter_analysis::extract_bound_pairs)
+                    .unwrap_or_default();
+
+                // Build updated node with dynamic filter stored
+                let builder = NestedLoopJoinExecBuilder::from(self);
+                let mut new_node = builder.build()?;
+                new_node.dynamic_filter = Some(NLJDynamicFilter {
+                    filter: dynamic_filter,
+                    bound_pairs,
+                });
+                result = result
+                    .with_updated_node(Arc::new(new_node) as Arc<dyn ExecutionPlan>);
+            }
+        }
+        Ok(result)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
@@ -1074,6 +1303,11 @@ pub(crate) struct NestedLoopJoinStream {
 
     /// Memory-limited spill fallback state. See [`SpillState`] for details.
     spill_state: SpillState,
+
+    /// Dynamic filter info for pushing build-side bounds to probe scan
+    dynamic_filter_info: Option<NLJDynamicFilter>,
+    /// Schema of the probe (right) side, for building predicate expressions
+    probe_schema: SchemaRef,
 }
 
 pub(crate) struct NestedLoopJoinMetrics {
@@ -1325,6 +1559,8 @@ impl NestedLoopJoinStream {
         metrics: NestedLoopJoinMetrics,
         batch_size: usize,
         spill_state: SpillState,
+        dynamic_filter_info: Option<NLJDynamicFilter>,
+        probe_schema: SchemaRef,
     ) -> Self {
         Self {
             output_schema: Arc::clone(&schema),
@@ -1347,6 +1583,8 @@ impl NestedLoopJoinStream {
             handled_empty_output: false,
             should_track_unmatched_right: need_produce_right_in_final(join_type),
             spill_state,
+            dynamic_filter_info,
+            probe_schema,
         }
     }
 
@@ -1491,6 +1729,27 @@ impl NestedLoopJoinStream {
             // Standard path: use OnceFut
             match self.left_data.get_shared(cx) {
                 Poll::Ready(Ok(left_data)) => {
+                    // Compute and push dynamic filter bounds before probing starts
+                    if let Some(df_info) = &self.dynamic_filter_info
+                        && !df_info.bound_pairs.is_empty()
+                    {
+                        if let Ok((mins, maxes)) =
+                            nlj_filter_analysis::compute_build_bounds(
+                                left_data.batch(),
+                                &df_info.bound_pairs,
+                            )
+                            && let Some(predicate) =
+                                nlj_filter_analysis::build_probe_predicate(
+                                    &df_info.bound_pairs,
+                                    &mins,
+                                    &maxes,
+                                    &self.probe_schema,
+                                )
+                        {
+                            let _ = df_info.filter.update(predicate);
+                        }
+                        df_info.filter.mark_complete();
+                    }
                     self.buffered_left_data = Some(left_data);
                     self.left_exhausted = true;
                     self.state = NLJState::FetchingRight;
@@ -3940,5 +4199,569 @@ pub(crate) mod tests {
         +----+----+-----+-------+
         "));
         Ok(())
+    }
+
+    // ================================================================
+    // Dynamic filter expression analysis tests
+    // ================================================================
+
+    mod dynamic_filter_tests {
+        use super::*;
+        use crate::joins::nlj_filter_analysis::{self, BoundPair, BoundType};
+        use std::collections::HashMap;
+
+        /// Helper: build a JoinFilter with the given expression and column indices.
+        fn make_filter(
+            expr: Arc<dyn PhysicalExpr>,
+            left_indices: Vec<usize>,
+            right_indices: Vec<usize>,
+            fields: Vec<Field>,
+        ) -> JoinFilter {
+            let column_indices =
+                JoinFilter::build_column_indices(left_indices, right_indices);
+            let schema = Arc::new(Schema::new(fields));
+            JoinFilter::new(expr, column_indices, schema)
+        }
+
+        #[test]
+        fn test_extract_bound_pairs_range_join() {
+            // e.ts >= w.start AND e.ts <= w.end
+            // build_column_indices puts left first, then right:
+            //   column_indices[0] = Left(0)  → w.start
+            //   column_indices[1] = Left(1)  → w.end
+            //   column_indices[2] = Right(0) → e.ts
+            // So intermediate schema: Col(0)=Left(start), Col(1)=Left(end), Col(2)=Right(ts)
+            let start = Arc::new(Column::new("start", 0)) as Arc<dyn PhysicalExpr>;
+            let end = Arc::new(Column::new("end", 1)) as Arc<dyn PhysicalExpr>;
+            let ts = Arc::new(Column::new("ts", 2)) as Arc<dyn PhysicalExpr>;
+
+            // ts >= start → Col(2) >= Col(0)
+            let ge_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(&ts),
+                Operator::GtEq,
+                Arc::clone(&start),
+            )) as Arc<dyn PhysicalExpr>;
+            // ts <= end → Col(2) <= Col(1)
+            let le_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(&ts),
+                Operator::LtEq,
+                Arc::clone(&end),
+            )) as Arc<dyn PhysicalExpr>;
+            let combined = Arc::new(BinaryExpr::new(ge_expr, Operator::And, le_expr))
+                as Arc<dyn PhysicalExpr>;
+
+            let filter = make_filter(
+                combined,
+                vec![0, 1], // left indices: start(0), end(1)
+                vec![0],    // right index: ts(0)
+                vec![
+                    Field::new("start", DataType::Int64, true),
+                    Field::new("end", DataType::Int64, true),
+                    Field::new("ts", DataType::Int64, true),
+                ],
+            );
+
+            let pairs = nlj_filter_analysis::extract_bound_pairs(&filter);
+            assert_eq!(pairs.len(), 2);
+
+            // ts >= start → probe(ts=0) >= build(start=0) → ProbeGtEq
+            assert_eq!(pairs[0].probe_col_idx, 0); // ts in right schema
+            assert_eq!(pairs[0].build_col_idx, 0); // start in left schema
+            assert_eq!(pairs[0].bound_type, BoundType::ProbeGtEq);
+
+            // ts <= end → probe(ts=0) <= build(end=1) → ProbeLtEq
+            assert_eq!(pairs[1].probe_col_idx, 0); // ts in right schema
+            assert_eq!(pairs[1].build_col_idx, 1); // end in left schema
+            assert_eq!(pairs[1].bound_type, BoundType::ProbeLtEq);
+        }
+
+        #[test]
+        fn test_extract_bound_pairs_flipped_operator() {
+            // build.start <= probe.ts  (build on left in expression)
+            // Should flip to: probe.ts >= build.start → ProbeGtEq
+            // column_indices: [Left(0)=start, Right(0)=ts]
+            let start = Arc::new(Column::new("start", 0)) as Arc<dyn PhysicalExpr>;
+            let ts = Arc::new(Column::new("ts", 1)) as Arc<dyn PhysicalExpr>;
+
+            let expr = Arc::new(BinaryExpr::new(start, Operator::LtEq, ts))
+                as Arc<dyn PhysicalExpr>;
+
+            let filter = make_filter(
+                expr,
+                vec![0], // left: start(0)
+                vec![0], // right: ts(0)
+                vec![
+                    Field::new("start", DataType::Int64, true),
+                    Field::new("ts", DataType::Int64, true),
+                ],
+            );
+
+            let pairs = nlj_filter_analysis::extract_bound_pairs(&filter);
+            assert_eq!(pairs.len(), 1);
+            assert_eq!(pairs[0].probe_col_idx, 0);
+            assert_eq!(pairs[0].build_col_idx, 0);
+            // build <= probe flips to probe >= build
+            assert_eq!(pairs[0].bound_type, BoundType::ProbeGtEq);
+        }
+
+        #[test]
+        fn test_extract_bound_pairs_equality() {
+            // probe.id = build.id → ProbeEq
+            // column_indices: [Left(0)=build.id, Right(0)=probe.id]
+            let build_id = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+            let probe_id = Arc::new(Column::new("id", 1)) as Arc<dyn PhysicalExpr>;
+
+            let expr = Arc::new(BinaryExpr::new(probe_id, Operator::Eq, build_id))
+                as Arc<dyn PhysicalExpr>;
+
+            let filter = make_filter(
+                expr,
+                vec![0],
+                vec![0],
+                vec![
+                    Field::new("id", DataType::Int32, true),
+                    Field::new("id", DataType::Int32, true),
+                ],
+            );
+
+            let pairs = nlj_filter_analysis::extract_bound_pairs(&filter);
+            assert_eq!(pairs.len(), 1);
+            assert_eq!(pairs[0].bound_type, BoundType::ProbeEq);
+        }
+
+        #[test]
+        fn test_extract_bound_pairs_no_cross_side() {
+            // left.a > left.b (both same side) → should return empty
+            let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+            let b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+
+            let expr =
+                Arc::new(BinaryExpr::new(a, Operator::Gt, b)) as Arc<dyn PhysicalExpr>;
+
+            // column_indices: [Left(0), Left(1)]
+            let filter = make_filter(
+                expr,
+                vec![0, 1],
+                vec![],
+                vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
+                ],
+            );
+
+            let pairs = nlj_filter_analysis::extract_bound_pairs(&filter);
+            assert!(pairs.is_empty());
+        }
+
+        #[test]
+        fn test_extract_bound_pairs_non_comparison_skipped() {
+            // probe.a + build.b (Plus, not comparison) → should return empty
+            let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+            let b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+
+            let expr =
+                Arc::new(BinaryExpr::new(a, Operator::Plus, b)) as Arc<dyn PhysicalExpr>;
+
+            let filter = make_filter(
+                expr,
+                vec![0],
+                vec![0],
+                vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
+                ],
+            );
+
+            let pairs = nlj_filter_analysis::extract_bound_pairs(&filter);
+            assert!(pairs.is_empty());
+        }
+
+        #[test]
+        fn test_compute_build_bounds() {
+            // Build batch: start=[100, 200, 300], end=[150, 250, 400]
+            let start = Arc::new(arrow::array::Int64Array::from(vec![100, 200, 300]));
+            let end = Arc::new(arrow::array::Int64Array::from(vec![150, 250, 400]));
+            let batch = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("start", DataType::Int64, false),
+                    Field::new("end", DataType::Int64, false),
+                ])),
+                vec![start, end],
+            )
+            .unwrap();
+
+            let pairs = vec![
+                BoundPair {
+                    probe_col_idx: 0,
+                    build_col_idx: 0,
+                    bound_type: BoundType::ProbeGtEq,
+                },
+                BoundPair {
+                    probe_col_idx: 0,
+                    build_col_idx: 1,
+                    bound_type: BoundType::ProbeLtEq,
+                },
+            ];
+
+            let (mins, maxes) =
+                nlj_filter_analysis::compute_build_bounds(&batch, &pairs).unwrap();
+
+            assert_eq!(mins[&0], ScalarValue::Int64(Some(100))); // min(start)
+            assert_eq!(maxes[&0], ScalarValue::Int64(Some(300))); // max(start)
+            assert_eq!(mins[&1], ScalarValue::Int64(Some(150))); // min(end)
+            assert_eq!(maxes[&1], ScalarValue::Int64(Some(400))); // max(end)
+        }
+
+        #[test]
+        fn test_compute_build_bounds_with_nulls() {
+            // Build batch with nulls: val=[None, 200, None, 400]
+            let val = Arc::new(arrow::array::Int64Array::from(vec![
+                None,
+                Some(200),
+                None,
+                Some(400),
+            ]));
+            let batch = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("val", DataType::Int64, true)])),
+                vec![val],
+            )
+            .unwrap();
+
+            let pairs = vec![BoundPair {
+                probe_col_idx: 0,
+                build_col_idx: 0,
+                bound_type: BoundType::ProbeGtEq,
+            }];
+
+            let (mins, maxes) =
+                nlj_filter_analysis::compute_build_bounds(&batch, &pairs).unwrap();
+
+            // Nulls should be skipped
+            assert_eq!(mins[&0], ScalarValue::Int64(Some(200)));
+            assert_eq!(maxes[&0], ScalarValue::Int64(Some(400)));
+        }
+
+        #[test]
+        fn test_build_probe_predicate_range() {
+            // pairs: ts >= min(start), ts <= max(end)
+            let pairs = vec![
+                BoundPair {
+                    probe_col_idx: 0,
+                    build_col_idx: 0,
+                    bound_type: BoundType::ProbeGtEq,
+                },
+                BoundPair {
+                    probe_col_idx: 0,
+                    build_col_idx: 1,
+                    bound_type: BoundType::ProbeLtEq,
+                },
+            ];
+            let mut mins = HashMap::new();
+            mins.insert(0, ScalarValue::Int64(Some(100)));
+            mins.insert(1, ScalarValue::Int64(Some(150)));
+            let mut maxes = HashMap::new();
+            maxes.insert(0, ScalarValue::Int64(Some(300)));
+            maxes.insert(1, ScalarValue::Int64(Some(400)));
+
+            let probe_schema = Schema::new(vec![Field::new("ts", DataType::Int64, true)]);
+
+            let predicate = nlj_filter_analysis::build_probe_predicate(
+                &pairs,
+                &mins,
+                &maxes,
+                &probe_schema,
+            );
+
+            assert!(predicate.is_some());
+            let pred = predicate.unwrap();
+            // Should be: ts >= 100 AND ts <= 400
+            let display = format!("{pred}");
+            assert!(
+                display.contains(">="),
+                "Expected >= in predicate: {display}"
+            );
+            assert!(
+                display.contains("<="),
+                "Expected <= in predicate: {display}"
+            );
+        }
+
+        #[test]
+        fn test_build_probe_predicate_equality() {
+            // probe.id = build.id → probe >= min AND probe <= max
+            let pairs = vec![BoundPair {
+                probe_col_idx: 0,
+                build_col_idx: 0,
+                bound_type: BoundType::ProbeEq,
+            }];
+            let mut mins = HashMap::new();
+            mins.insert(0, ScalarValue::Int32(Some(10)));
+            let mut maxes = HashMap::new();
+            maxes.insert(0, ScalarValue::Int32(Some(30)));
+
+            let probe_schema = Schema::new(vec![Field::new("id", DataType::Int32, true)]);
+
+            let predicate = nlj_filter_analysis::build_probe_predicate(
+                &pairs,
+                &mins,
+                &maxes,
+                &probe_schema,
+            );
+
+            assert!(predicate.is_some());
+            let pred = predicate.unwrap();
+            // ProbeEq should generate both >= and <= bounds
+            let display = format!("{pred}");
+            assert!(
+                display.contains(">="),
+                "Expected >= for Eq bound: {display}"
+            );
+            assert!(
+                display.contains("<="),
+                "Expected <= for Eq bound: {display}"
+            );
+        }
+
+        #[test]
+        fn test_build_probe_predicate_empty_pairs() {
+            let pairs = vec![];
+            let mins = HashMap::new();
+            let maxes = HashMap::new();
+            let probe_schema = Schema::new(vec![Field::new("id", DataType::Int32, true)]);
+
+            let predicate = nlj_filter_analysis::build_probe_predicate(
+                &pairs,
+                &mins,
+                &maxes,
+                &probe_schema,
+            );
+
+            assert!(predicate.is_none());
+        }
+
+        #[test]
+        fn test_extract_bound_pairs_multi_column() {
+            // Two separate cross-side comparisons on different columns:
+            // probe.ts >= build.start AND probe.amount <= build.max_amount
+            // column_indices: [Left(0)=start, Left(1)=max_amount, Right(0)=ts, Right(1)=amount]
+            let start = Arc::new(Column::new("start", 0)) as Arc<dyn PhysicalExpr>;
+            let max_amt = Arc::new(Column::new("max_amount", 1)) as Arc<dyn PhysicalExpr>;
+            let ts = Arc::new(Column::new("ts", 2)) as Arc<dyn PhysicalExpr>;
+            let amount = Arc::new(Column::new("amount", 3)) as Arc<dyn PhysicalExpr>;
+
+            let ge_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(&ts),
+                Operator::GtEq,
+                Arc::clone(&start),
+            )) as Arc<dyn PhysicalExpr>;
+            let le_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(&amount),
+                Operator::LtEq,
+                Arc::clone(&max_amt),
+            )) as Arc<dyn PhysicalExpr>;
+            let combined = Arc::new(BinaryExpr::new(ge_expr, Operator::And, le_expr))
+                as Arc<dyn PhysicalExpr>;
+
+            let filter = make_filter(
+                combined,
+                vec![0, 1], // left: start(0), max_amount(1)
+                vec![0, 1], // right: ts(0), amount(1)
+                vec![
+                    Field::new("start", DataType::Int64, true),
+                    Field::new("max_amount", DataType::Int64, true),
+                    Field::new("ts", DataType::Int64, true),
+                    Field::new("amount", DataType::Int64, true),
+                ],
+            );
+
+            let pairs = nlj_filter_analysis::extract_bound_pairs(&filter);
+            assert_eq!(pairs.len(), 2);
+
+            // ts >= start
+            assert_eq!(pairs[0].probe_col_idx, 0); // ts
+            assert_eq!(pairs[0].build_col_idx, 0); // start
+            assert_eq!(pairs[0].bound_type, BoundType::ProbeGtEq);
+
+            // amount <= max_amount
+            assert_eq!(pairs[1].probe_col_idx, 1); // amount
+            assert_eq!(pairs[1].build_col_idx, 1); // max_amount
+            assert_eq!(pairs[1].bound_type, BoundType::ProbeLtEq);
+        }
+
+        #[test]
+        fn test_extract_bound_pairs_mixed_cross_and_same_side() {
+            // probe.ts >= build.start AND build.x != build.y (same-side, should skip)
+            // Only the cross-side comparison should be extracted
+            let start = Arc::new(Column::new("start", 0)) as Arc<dyn PhysicalExpr>;
+            let x = Arc::new(Column::new("x", 1)) as Arc<dyn PhysicalExpr>;
+            let ts = Arc::new(Column::new("ts", 2)) as Arc<dyn PhysicalExpr>;
+
+            let ge_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(&ts),
+                Operator::GtEq,
+                Arc::clone(&start),
+            )) as Arc<dyn PhysicalExpr>;
+            // Same-side comparison: build.start != build.x (both Left)
+            let ne_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(&start),
+                Operator::NotEq,
+                Arc::clone(&x),
+            )) as Arc<dyn PhysicalExpr>;
+            let combined = Arc::new(BinaryExpr::new(ge_expr, Operator::And, ne_expr))
+                as Arc<dyn PhysicalExpr>;
+
+            let filter = make_filter(
+                combined,
+                vec![0, 1], // left: start(0), x(1)
+                vec![0],    // right: ts(0)
+                vec![
+                    Field::new("start", DataType::Int64, true),
+                    Field::new("x", DataType::Int64, true),
+                    Field::new("ts", DataType::Int64, true),
+                ],
+            );
+
+            let pairs = nlj_filter_analysis::extract_bound_pairs(&filter);
+            // Only the cross-side GtEq should be extracted, NotEq is skipped
+            assert_eq!(pairs.len(), 1);
+            assert_eq!(pairs[0].bound_type, BoundType::ProbeGtEq);
+        }
+
+        #[test]
+        fn test_extract_bound_pairs_all_operators() {
+            // Test all 5 comparison operators from probe perspective:
+            // probe > build, probe >= build, probe < build, probe <= build, probe = build
+            let build_col = |idx: usize, name: &str| -> Arc<dyn PhysicalExpr> {
+                Arc::new(Column::new(name, idx))
+            };
+            let probe_col = |idx: usize, name: &str| -> Arc<dyn PhysicalExpr> {
+                Arc::new(Column::new(name, idx))
+            };
+
+            // Each comparison: probe_col(right) <op> build_col(left)
+            // column_indices layout: [Left(0), Right(0), Left(1), Right(1), ...]
+            let exprs: Vec<(Operator, BoundType)> = vec![
+                (Operator::Gt, BoundType::ProbeGt),
+                (Operator::GtEq, BoundType::ProbeGtEq),
+                (Operator::Lt, BoundType::ProbeLt),
+                (Operator::LtEq, BoundType::ProbeLtEq),
+                (Operator::Eq, BoundType::ProbeEq),
+            ];
+
+            for (op, expected_bound) in exprs {
+                // Intermediate schema: [Left(0)=build_val, Right(0)=probe_val]
+                let b = build_col(0, "b");
+                let p = probe_col(1, "p");
+                let expr = Arc::new(BinaryExpr::new(p, op, b)) as Arc<dyn PhysicalExpr>;
+
+                let filter = make_filter(
+                    expr,
+                    vec![0],
+                    vec![0],
+                    vec![
+                        Field::new("b", DataType::Int32, true),
+                        Field::new("p", DataType::Int32, true),
+                    ],
+                );
+
+                let pairs = nlj_filter_analysis::extract_bound_pairs(&filter);
+                assert_eq!(pairs.len(), 1, "Failed for operator {op:?}");
+                assert_eq!(
+                    pairs[0].bound_type, expected_bound,
+                    "Failed for operator {op:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn test_build_probe_predicate_multi_column() {
+            // Two probe columns: ts >= min(start) AND amount <= max(max_amount)
+            let pairs = vec![
+                BoundPair {
+                    probe_col_idx: 0,
+                    build_col_idx: 0,
+                    bound_type: BoundType::ProbeGtEq,
+                },
+                BoundPair {
+                    probe_col_idx: 1,
+                    build_col_idx: 1,
+                    bound_type: BoundType::ProbeLtEq,
+                },
+            ];
+            let mut mins = HashMap::new();
+            mins.insert(0, ScalarValue::Int64(Some(100)));
+            mins.insert(1, ScalarValue::Int64(Some(50)));
+            let mut maxes = HashMap::new();
+            maxes.insert(0, ScalarValue::Int64(Some(300)));
+            maxes.insert(1, ScalarValue::Int64(Some(500)));
+
+            let probe_schema = Schema::new(vec![
+                Field::new("ts", DataType::Int64, true),
+                Field::new("amount", DataType::Int64, true),
+            ]);
+
+            let predicate = nlj_filter_analysis::build_probe_predicate(
+                &pairs,
+                &mins,
+                &maxes,
+                &probe_schema,
+            );
+
+            assert!(predicate.is_some());
+            let display = format!("{}", predicate.unwrap());
+            // Should contain: ts >= 100 AND amount <= 500
+            assert!(
+                display.contains("ts"),
+                "Expected ts in predicate: {display}"
+            );
+            assert!(
+                display.contains("amount"),
+                "Expected amount in predicate: {display}"
+            );
+            assert!(
+                display.contains(">="),
+                "Expected >= in predicate: {display}"
+            );
+            assert!(
+                display.contains("<="),
+                "Expected <= in predicate: {display}"
+            );
+        }
+
+        #[test]
+        fn test_compute_build_bounds_multi_column() {
+            // Two build columns: start=[100, 200, 300], max_amount=[50, 500, 250]
+            let start = Arc::new(arrow::array::Int64Array::from(vec![100, 200, 300]));
+            let max_amt = Arc::new(arrow::array::Int64Array::from(vec![50, 500, 250]));
+            let batch = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("start", DataType::Int64, false),
+                    Field::new("max_amount", DataType::Int64, false),
+                ])),
+                vec![start, max_amt],
+            )
+            .unwrap();
+
+            let pairs = vec![
+                BoundPair {
+                    probe_col_idx: 0,
+                    build_col_idx: 0,
+                    bound_type: BoundType::ProbeGtEq,
+                },
+                BoundPair {
+                    probe_col_idx: 1,
+                    build_col_idx: 1,
+                    bound_type: BoundType::ProbeLtEq,
+                },
+            ];
+
+            let (mins, maxes) =
+                nlj_filter_analysis::compute_build_bounds(&batch, &pairs).unwrap();
+
+            assert_eq!(mins[&0], ScalarValue::Int64(Some(100)));
+            assert_eq!(maxes[&0], ScalarValue::Int64(Some(300)));
+            assert_eq!(mins[&1], ScalarValue::Int64(Some(50)));
+            assert_eq!(maxes[&1], ScalarValue::Int64(Some(500)));
+        }
     }
 }
