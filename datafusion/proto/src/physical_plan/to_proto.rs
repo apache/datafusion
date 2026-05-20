@@ -644,7 +644,7 @@ fn serialize_range_partitioning(
 ) -> Result<protobuf::PhysicalRangePartitioning> {
     Ok(protobuf::PhysicalRangePartitioning {
         sort_expr: serialize_physical_sort_exprs(
-            range.sort_exprs().iter().cloned(),
+            range.ordering().iter().cloned(),
             codec,
             proto_converter,
         )?,

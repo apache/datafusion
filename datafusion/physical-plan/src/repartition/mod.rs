@@ -2326,7 +2326,7 @@ mod tests {
         let expr = col("my_awesome_field", &schema)?;
         let input = MockExec::new(vec![Ok(batch)], Arc::clone(&schema));
         let partitioning = Partitioning::Range(RangePartitioning::new(
-            vec![PhysicalSortExpr::new_default(expr)],
+            [PhysicalSortExpr::new_default(expr)].into(),
             vec![SplitPoint::new(vec![ScalarValue::Utf8(Some(
                 "foo".to_string(),
             ))])],

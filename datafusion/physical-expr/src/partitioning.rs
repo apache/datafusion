@@ -23,7 +23,7 @@ use crate::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -149,13 +149,11 @@ impl Display for Partitioning {
 ///
 /// [`RangePartitioning`] describes an ordered key space with split points.
 ///
-/// - `sort_exprs` define the partitioning key and ordering.
+/// - `ordering` defines the partitioning key and ordering.
 /// - `split_points` define the boundaries between adjacent partitions.
-/// - The declaring source must ensure every emitted row belongs to exactly one
-///   declared partition and is emitted by that partition.
 ///
-/// The sort expressions must be non-empty, and split points must be strictly
-/// ordered according to those sort expressions.
+/// The ordering must be non-empty, and split points must be strictly ordered
+/// according to that ordering.
 ///
 /// `N` split points define `N + 1` partitions:
 ///
@@ -172,7 +170,7 @@ impl Display for Partitioning {
 /// For a single range key:
 ///
 /// ```text
-/// sort_exprs = [date ASC NULLS LAST]
+/// ordering = [date ASC NULLS LAST]
 /// split_points = [
 ///   (2022-01-01),
 ///   (2023-01-01),
@@ -184,11 +182,11 @@ impl Display for Partitioning {
 /// ```
 ///
 /// The same model extends to compound keys.
-/// For `sort_exprs = [time ASC, city ASC]`, split points are ordered
+/// For `ordering = [time ASC, city ASC]`, split points are ordered
 /// lexicographically by `(time, city)`:
 ///
 /// ```text
-/// sort_exprs = [time ASC NULLS LAST, city ASC NULLS LAST]
+/// ordering = [time ASC NULLS LAST, city ASC NULLS LAST]
 /// split_points = [
 ///   (2022, Allston),
 ///   (2023, Allston),
@@ -206,7 +204,7 @@ pub struct RangePartitioning {
     /// Ordered partitioning key. Sort options are part of the partitioning
     /// because `ASC`/`DESC` and null ordering decide which side of a split point
     /// a row belongs to.
-    sort_exprs: Vec<PhysicalSortExpr>,
+    ordering: LexOrdering,
     /// Boundaries between adjacent partitions. `N` split points define `N + 1`
     /// partitions as described in [`RangePartitioning`].
     split_points: Vec<SplitPoint>,
@@ -215,7 +213,7 @@ pub struct RangePartitioning {
 /// A boundary between adjacent range partitions.
 ///
 /// A split point is a tuple with one [`ScalarValue`] per sort expression in the
-/// parent [`RangePartitioning`].
+/// parent [`RangePartitioning`] ordering.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SplitPoint {
     values: Vec<ScalarValue>,
@@ -250,21 +248,21 @@ impl RangePartitioning {
     ///
     /// The caller is responsible for satisfying the contract documented on
     /// [`RangePartitioning`]: every split point must have one value per sort
-    /// expression, there must be at least one sort expression, and split points
-    /// must be strictly ordered according to those sort expressions.
-    pub fn new(sort_exprs: Vec<PhysicalSortExpr>, split_points: Vec<SplitPoint>) -> Self {
+    /// expression in the ordering, and split points must be strictly ordered
+    /// according to that ordering.
+    pub fn new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Self {
         Self {
-            sort_exprs,
+            ordering,
             split_points,
         }
     }
 
-    /// Returns the ordered expressions that define the range key.
+    /// Returns the ordering that defines the range key.
     ///
     /// Sort options are part of the partitioning because `ASC`/`DESC` and null
     /// ordering decide which side of a split point a row belongs to.
-    pub fn sort_exprs(&self) -> &[PhysicalSortExpr] {
-        &self.sort_exprs
+    pub fn ordering(&self) -> &LexOrdering {
+        &self.ordering
     }
 
     /// Returns the ordered split points between partitions.
@@ -286,7 +284,7 @@ impl RangePartitioning {
         input_eq_properties: &EquivalenceProperties,
     ) -> Option<Self> {
         let exprs = self
-            .sort_exprs
+            .ordering
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
             .collect::<Vec<_>>();
@@ -294,14 +292,18 @@ impl RangePartitioning {
             .project_expressions(&exprs, mapping)
             .collect::<Option<Vec<_>>>()?;
         let sort_exprs = self
-            .sort_exprs
+            .ordering
             .iter()
             .zip(projected_exprs)
             .map(|(sort_expr, expr)| PhysicalSortExpr::new(expr, sort_expr.options))
-            .collect();
+            .collect::<Vec<_>>();
+        let ordering = LexOrdering::new(sort_exprs)?;
+        if ordering.len() != self.ordering.len() {
+            return None;
+        }
 
         Some(Self {
-            sort_exprs,
+            ordering,
             split_points: self.split_points.clone(),
         })
     }
@@ -309,16 +311,11 @@ impl RangePartitioning {
 
 impl Display for RangePartitioning {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let sort_exprs = self
-            .sort_exprs
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
         let split_points = format_range_split_points(&self.split_points);
         write!(
             f,
-            "Range([{sort_exprs}], [{}], {})",
+            "Range([{}], [{}], {})",
+            self.ordering,
             split_points,
             self.partition_count()
         )
@@ -335,7 +332,7 @@ fn format_range_split_points(split_points: &[SplitPoint]) -> String {
 
 impl PartialEq for RangePartitioning {
     fn eq(&self, other: &Self) -> bool {
-        self.sort_exprs == other.sort_exprs && self.split_points == other.split_points
+        self.ordering == other.ordering && self.split_points == other.split_points
     }
 }
 
@@ -565,6 +562,7 @@ mod tests {
 
     use super::*;
     use crate::expressions::Column;
+    use crate::projection::ProjectionTargets;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1072,10 +1070,10 @@ mod tests {
             Arc::new(Column::new_with_schema("a", &schema)?);
 
         let range_partitioning = RangePartitioning::new(
-            vec![PhysicalSortExpr::new_default(Arc::clone(&col_a))],
+            [PhysicalSortExpr::new_default(Arc::clone(&col_a))].into(),
             vec![int_split_point([10]), int_split_point([20])],
         );
-        assert_eq!(range_partitioning.sort_exprs()[0].to_string(), "a@0 ASC");
+        assert_eq!(range_partitioning.ordering()[0].to_string(), "a@0 ASC");
         assert_eq!(
             range_partitioning.split_points(),
             &[int_split_point([10]), int_split_point([20])]
@@ -1101,7 +1099,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b", &schema)?);
         let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
         let range_partitioning = Partitioning::Range(RangePartitioning::new(
-            vec![PhysicalSortExpr::new(col_b, SortOptions::new(true, false))],
+            [PhysicalSortExpr::new(col_b, SortOptions::new(true, false))].into(),
             vec![int_split_point([10])],
         ));
 
@@ -1123,6 +1121,46 @@ mod tests {
     }
 
     #[test]
+    fn test_range_partitioning_project_degrades_if_ordering_collapses() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+        let target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 0));
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let range_partitioning = Partitioning::Range(RangePartitioning::new(
+            [
+                PhysicalSortExpr::new_default(Arc::clone(&col_a)),
+                PhysicalSortExpr::new_default(Arc::clone(&col_b)),
+            ]
+            .into(),
+            vec![int_split_point([10, 100])],
+        ));
+        let mapping = ProjectionMapping::from_iter([
+            (
+                Arc::clone(&col_a),
+                ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
+            ),
+            (
+                Arc::clone(&col_b),
+                ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
+            ),
+        ]);
+
+        let projected = range_partitioning.project(&mapping, &eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_multi_partition_range_does_not_satisfy_hash_distribution() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
@@ -1135,10 +1173,11 @@ mod tests {
 
         let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
         let range_partitioning = Partitioning::Range(RangePartitioning::new(
-            vec![
+            [
                 PhysicalSortExpr::new_default(Arc::clone(&col_a)),
                 PhysicalSortExpr::new_default(Arc::clone(&col_b)),
-            ],
+            ]
+            .into(),
             vec![int_split_point([10, 100])],
         ));
         let required = Distribution::HashPartitioned(vec![col_a, col_b]);

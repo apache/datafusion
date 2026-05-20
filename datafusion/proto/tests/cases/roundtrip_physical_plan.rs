@@ -1814,7 +1814,7 @@ fn roundtrip_range_partitioning() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
     let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
     let range_partitioning = Partitioning::Range(RangePartitioning::new(
-        vec![PhysicalSortExpr::new_default(col("a", &schema)?)],
+        [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
         vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
     ));
     // RepartitionExec is used only to carry the partitioning through proto.

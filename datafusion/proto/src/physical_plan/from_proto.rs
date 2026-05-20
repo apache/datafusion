@@ -667,13 +667,22 @@ fn parse_protobuf_range_partitioning(
         input_schema,
         proto_converter,
     )?;
+    let sort_expr_count = sort_exprs.len();
+    let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
+        internal_datafusion_err!("Range partitioning requires non-empty ordering")
+    })?;
+    if ordering.len() != sort_expr_count {
+        return Err(internal_datafusion_err!(
+            "Range partitioning ordering must not contain duplicate expressions"
+        ));
+    }
     let split_points = range_partitioning
         .split_point
         .iter()
         .map(parse_protobuf_range_split_point)
         .collect::<Result<_>>()?;
     Ok(Partitioning::Range(RangePartitioning::new(
-        sort_exprs,
+        ordering,
         split_points,
     )))
 }
