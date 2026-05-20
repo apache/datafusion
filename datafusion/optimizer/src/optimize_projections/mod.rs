@@ -536,6 +536,31 @@ fn optimize_subqueries(
 /// - `Ok(None)`: Signals that merge is not beneficial (and has not taken place).
 /// - `Err(error)`: An error occurred during the function call.
 fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Projection>> {
+    // Iteratively merge as long as the current Projection's input is another
+    // Projection that can be folded. Without this, a chain of N consecutive
+    // projections (e.g. SQL of the form `SELECT *, <expr> AS dN FROM ...`
+    // stacked N times) requires N applications of this rule (re-run by the
+    // outer optimizer loop, each walking the full plan tree) before the
+    // chain is fully collapsed.
+    let mut current = proj;
+    let mut transformed_any = false;
+    loop {
+        let result = merge_consecutive_projections_one_level(current)?;
+        current = result.data;
+        if !result.transformed {
+            return Ok(if transformed_any {
+                Transformed::yes(current)
+            } else {
+                Transformed::no(current)
+            });
+        }
+        transformed_any = true;
+    }
+}
+
+fn merge_consecutive_projections_one_level(
+    proj: Projection,
+) -> Result<Transformed<Projection>> {
     let Projection {
         expr,
         input,
