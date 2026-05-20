@@ -17,14 +17,20 @@
 
 //! [`ParquetMorselizer`] state machines for opening Parquet files
 
+mod early_stop;
+mod encryption;
+
+use self::early_stop::EarlyStoppingStream;
+#[cfg(feature = "parquet_encryption")]
+use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{DecoderBuilderConfig, PushDecoderStreamState};
 use crate::row_filter::{RowFilterGenerator, build_projection_read_plan};
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
-    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
-    apply_file_schema_type_coercions, coerce_int96_to_resolution,
+    Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
+    apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
@@ -36,11 +42,10 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::mem;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use arrow::datatypes::{SchemaRef, TimeUnit};
+#[cfg(feature = "parquet_encryption")]
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, ScalarValue, Statistics, exec_err};
@@ -53,7 +58,6 @@ use datafusion_physical_expr_common::physical_expr::{
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
-    PruningMetrics,
 };
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
@@ -61,9 +65,7 @@ use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::{
-    FutureExt, Stream, StreamExt, future::BoxFuture, ready, stream::BoxStream,
-};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use log::debug;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
@@ -119,6 +121,10 @@ pub(super) struct ParquetMorselizer {
     pub enable_row_group_stats_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
+    /// Optional timezone applied to INT96-coerced timestamps. When `Some`, the
+    /// coerced column type becomes `Timestamp(<coerce_int96>, Some(<tz>))`.
+    /// No effect when `coerce_int96` is `None`.
+    pub coerce_int96_tz: Option<Arc<str>>,
     /// Optional parquet FileDecryptionProperties
     #[cfg(feature = "parquet_encryption")]
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -281,6 +287,7 @@ struct PreparedParquetOpen {
     enable_row_group_stats_pruning: bool,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
+    coerce_int96_tz: Option<Arc<str>>,
     expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
@@ -651,6 +658,7 @@ impl ParquetMorselizer {
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
+            coerce_int96_tz: self.coerce_int96_tz.clone(),
             expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
@@ -778,11 +786,13 @@ impl MetadataLoadedParquetOpen {
         }
 
         if let Some(ref coerce) = prepared.coerce_int96
-            && let Some(merged) = coerce_int96_to_resolution(
+            && let Some(merged) = Int96Coercer::new(
                 reader_metadata.parquet_schema(),
                 &physical_file_schema,
                 coerce,
             )
+            .with_timezone(prepared.coerce_int96_tz.clone())
+            .coerce()
         {
             physical_file_schema = Arc::new(merged);
             options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -1322,153 +1332,6 @@ fn constant_value_from_stats(
     None
 }
 
-/// Wraps an inner RecordBatchStream and a [`FilePruner`]
-///
-/// This can terminate the scan early when some dynamic filters is updated after
-/// the scan starts, so we discover after the scan starts that the file can be
-/// pruned (can't have matching rows).
-struct EarlyStoppingStream<S> {
-    /// Has the stream finished processing? All subsequent polls will return
-    /// None
-    done: bool,
-    file_pruner: FilePruner,
-    files_ranges_pruned_statistics: PruningMetrics,
-    /// The inner stream
-    inner: S,
-}
-
-impl<S> EarlyStoppingStream<S> {
-    pub fn new(
-        stream: S,
-        file_pruner: FilePruner,
-        files_ranges_pruned_statistics: PruningMetrics,
-    ) -> Self {
-        Self {
-            done: false,
-            inner: stream,
-            file_pruner,
-            files_ranges_pruned_statistics,
-        }
-    }
-}
-
-impl<S> EarlyStoppingStream<S>
-where
-    S: Stream<Item = Result<RecordBatch>> + Unpin,
-{
-    fn check_prune(&mut self, input: Result<RecordBatch>) -> Result<Option<RecordBatch>> {
-        let batch = input?;
-
-        // Since dynamic filters may have been updated, see if we can stop
-        // reading this stream entirely.
-        if self.file_pruner.should_prune()? {
-            self.files_ranges_pruned_statistics.add_pruned(1);
-            // Previously this file range has been counted as matched
-            self.files_ranges_pruned_statistics.subtract_matched(1);
-            self.done = true;
-            Ok(None)
-        } else {
-            // Return the adapted batch
-            Ok(Some(batch))
-        }
-    }
-}
-
-impl<S> Stream for EarlyStoppingStream<S>
-where
-    S: Stream<Item = Result<RecordBatch>> + Unpin,
-{
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        if self.done {
-            return Poll::Ready(None);
-        }
-        match ready!(self.inner.poll_next_unpin(cx)) {
-            None => {
-                // input done
-                self.done = true;
-                Poll::Ready(None)
-            }
-            Some(input_batch) => {
-                let output = self.check_prune(input_batch);
-                Poll::Ready(output.transpose())
-            }
-        }
-    }
-}
-
-#[derive(Default)]
-struct EncryptionContext {
-    #[cfg(feature = "parquet_encryption")]
-    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
-    #[cfg(feature = "parquet_encryption")]
-    encryption_factory: Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)>,
-}
-
-#[cfg(feature = "parquet_encryption")]
-impl EncryptionContext {
-    fn new(
-        file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
-        encryption_factory: Option<(
-            Arc<dyn EncryptionFactory>,
-            EncryptionFactoryOptions,
-        )>,
-    ) -> Self {
-        Self {
-            file_decryption_properties,
-            encryption_factory,
-        }
-    }
-
-    async fn get_file_decryption_properties(
-        &self,
-        file_location: &object_store::path::Path,
-    ) -> Result<Option<Arc<FileDecryptionProperties>>> {
-        match &self.file_decryption_properties {
-            Some(file_decryption_properties) => {
-                Ok(Some(Arc::clone(file_decryption_properties)))
-            }
-            None => match &self.encryption_factory {
-                Some((encryption_factory, encryption_config)) => Ok(encryption_factory
-                    .get_file_decryption_properties(encryption_config, file_location)
-                    .await?),
-                None => Ok(None),
-            },
-        }
-    }
-}
-
-#[cfg(not(feature = "parquet_encryption"))]
-#[expect(dead_code)]
-impl EncryptionContext {
-    async fn get_file_decryption_properties(
-        &self,
-        _file_location: &object_store::path::Path,
-    ) -> Result<Option<Arc<FileDecryptionProperties>>> {
-        Ok(None)
-    }
-}
-
-impl ParquetMorselizer {
-    #[cfg(feature = "parquet_encryption")]
-    fn get_encryption_context(&self) -> EncryptionContext {
-        EncryptionContext::new(
-            self.file_decryption_properties.clone(),
-            self.encryption_factory.clone(),
-        )
-    }
-
-    #[cfg(not(feature = "parquet_encryption"))]
-    #[expect(dead_code)]
-    fn get_encryption_context(&self) -> EncryptionContext {
-        EncryptionContext::default()
-    }
-}
-
 /// Return the initial [`ParquetAccessPlan`]
 ///
 /// If the user has supplied one as an extension, use that
@@ -1748,6 +1611,10 @@ mod test {
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
                 coerce_int96: self.coerce_int96,
+                // End-to-end coercion behavior (including timezone) is
+                // covered by parquet.slt. No opener-level test currently
+                // needs a non-default value here.
+                coerce_int96_tz: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),

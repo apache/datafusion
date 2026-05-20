@@ -851,6 +851,22 @@ SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) from t1
 44 0
 
 
+#correlated_scalar_subquery_count_agg_duplicated_in_projection
+# Two structurally identical correlated COUNT subqueries in the same
+# projection must each receive the count-bug compensation, so unmatched
+# outer rows produce 0 (not NULL) on both sides.
+query III rowsort
+SELECT
+  t1_id,
+  (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) + 1 AS a,
+  (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) + 2 AS b
+FROM t1
+----
+11 2 3
+22 1 2
+33 4 5
+44 1 2
+
 #correlated_scalar_subquery_count_agg2
 query TT
 explain SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
@@ -1848,17 +1864,16 @@ logical_plan
 physical_plan
 01)ScalarSubqueryExec: subqueries=1
 02)--SortPreservingMergeExec: [i@0 ASC NULLS LAST]
-03)----SortExec: expr=[i@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------ProjectionExec: expr=[value@0 as i]
-05)--------FilterExec: CAST(value@0 AS Float64) > scalar_subquery(<pending>)
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
-08)--AggregateExec: mode=Final, gby=[], aggr=[avg(u.j)]
-09)----CoalescePartitionsExec
-10)------AggregateExec: mode=Partial, gby=[], aggr=[avg(u.j)]
-11)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------ProjectionExec: expr=[value@0 as j]
-13)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
+03)----ProjectionExec: expr=[value@0 as i]
+04)------FilterExec: CAST(value@0 AS Float64) > scalar_subquery(<pending>)
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
+07)--AggregateExec: mode=Final, gby=[], aggr=[avg(u.j)]
+08)----CoalescePartitionsExec
+09)------AggregateExec: mode=Partial, gby=[], aggr=[avg(u.j)]
+10)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+11)----------ProjectionExec: expr=[value@0 as j]
+12)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
 
 query I
 SELECT i

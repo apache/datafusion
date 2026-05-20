@@ -420,7 +420,7 @@ exp(numeric_expression)
 
 ### `factorial`
 
-Factorial. Returns 1 if value is less than 2.
+Factorial of a non-negative integer. Errors if the argument is negative or the result overflows.
 
 ```sql
 factorial(numeric_expression)
@@ -3268,6 +3268,7 @@ _Alias of [current_date](#current_date)._
 - [array_max](#array_max)
 - [array_min](#array_min)
 - [array_ndims](#array_ndims)
+- [array_normalize](#array_normalize)
 - [array_pop_back](#array_pop_back)
 - [array_pop_front](#array_pop_front)
 - [array_position](#array_position)
@@ -3321,6 +3322,7 @@ _Alias of [current_date](#current_date)._
 - [list_length](#list_length)
 - [list_max](#list_max)
 - [list_ndims](#list_ndims)
+- [list_normalize](#list_normalize)
 - [list_pop_back](#list_pop_back)
 - [list_pop_front](#list_pop_front)
 - [list_position](#list_position)
@@ -3892,6 +3894,33 @@ array_ndims(array, element)
 #### Aliases
 
 - list_ndims
+
+### `array_normalize`
+
+Returns the L2-normalized vector for the input numeric array, computed as `array[i] / sqrt(sum(array[i]^2))` per element. Returns NULL if the input is NULL, contains NULL elements, or has zero magnitude (all elements are zero). Returns an empty array for an empty input array.
+
+```sql
+array_normalize(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_normalize([3.0, 4.0]);
++-----------------------------+
+| array_normalize(List([3.0,4.0])) |
++-----------------------------+
+| [0.6, 0.8]                  |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_normalize
 
 ### `array_pop_back`
 
@@ -4777,6 +4806,10 @@ _Alias of [array_max](#array_max)._
 ### `list_ndims`
 
 _Alias of [array_ndims](#array_ndims)._
+
+### `list_normalize`
+
+_Alias of [array_normalize](#array_normalize)._
 
 ### `list_pop_back`
 
