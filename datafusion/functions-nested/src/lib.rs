@@ -41,7 +41,10 @@ pub mod macros;
 pub mod macros_lambda;
 
 pub mod array_any_match;
+pub(crate) mod lambda_utils;
+
 pub mod array_compact;
+pub mod array_filter;
 pub mod array_has;
 pub mod array_normalize;
 pub mod array_transform;
@@ -88,6 +91,7 @@ use std::sync::Arc;
 pub mod expr_fn {
     pub use super::array_any_match::array_any_match;
     pub use super::array_compact::array_compact;
+    pub use super::array_filter::array_filter;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
@@ -200,6 +204,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
 pub fn all_default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
     vec![
         array_any_match::array_any_match_higher_order_function(),
+        array_filter::array_filter_higher_order_function(),
         array_transform::array_transform_higher_order_function(),
     ]
 }

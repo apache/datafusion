@@ -3258,6 +3258,7 @@ _Alias of [current_date](#current_date)._
 - [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
+- [array_filter](#array_filter)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -3313,6 +3314,7 @@ _Alias of [current_date](#current_date)._
 - [list_empty](#list_empty)
 - [list_except](#list_except)
 - [list_extract](#list_extract)
+- [list_filter](#list_filter)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
@@ -3659,6 +3661,34 @@ array_except(array1, array2)
 ### `array_extract`
 
 _Alias of [array_element](#array_element)._
+
+### `array_filter`
+
+filters the values of an array using a boolean lambda
+
+```sql
+array_filter(array, x -> x > 2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda that returns a boolean. Elements for which the lambda returns true are kept.
+
+#### Example
+
+```sql
+> select array_filter([1, 2, 3, 4, 5], x -> x > 2);
++--------------------------------------------+
+| array_filter([1, 2, 3, 4, 5], x -> x > 2) |
++--------------------------------------------+
+| [3, 4, 5]                                  |
++--------------------------------------------+
+```
+
+#### Aliases
+
+- list_filter
 
 ### `array_has`
 
@@ -4770,6 +4800,10 @@ _Alias of [array_except](#array_except)._
 ### `list_extract`
 
 _Alias of [array_element](#array_element)._
+
+### `list_filter`
+
+_Alias of [array_filter](#array_filter)._
 
 ### `list_has`
 

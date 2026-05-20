@@ -1123,6 +1123,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             coerce_int96: value.coerce_int96_opt.clone().map(|opt| match opt {
                 protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => Some(v),
             }).unwrap_or(None),
+            coerce_int96_tz: value.coerce_int96_tz_opt.clone().map(|opt| match opt {
+                protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => Some(v),
+            }).unwrap_or(None),
             skip_arrow_metadata: value.skip_arrow_metadata,
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
@@ -1348,6 +1351,39 @@ mod tests {
         assert!(opts.use_content_defined_chunking.is_none());
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(opts, recovered);
+    }
+
+    #[test]
+    fn test_parquet_options_coerce_int96_tz_unset_round_trip() {
+        let opts = ParquetOptions::default();
+        assert!(opts.coerce_int96_tz.is_none());
+        let recovered = parquet_options_proto_round_trip(opts.clone());
+        assert_eq!(recovered.coerce_int96_tz, None);
+    }
+
+    #[test]
+    fn test_parquet_options_coerce_int96_tz_set_round_trip() {
+        let opts = ParquetOptions {
+            coerce_int96: Some("us".to_string()),
+            coerce_int96_tz: Some("UTC".to_string()),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts.clone());
+        assert_eq!(recovered.coerce_int96, Some("us".to_string()));
+        assert_eq!(recovered.coerce_int96_tz, Some("UTC".to_string()));
+    }
+
+    #[test]
+    fn test_table_parquet_options_coerce_int96_tz_round_trip() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.coerce_int96 = Some("us".to_string());
+        opts.global.coerce_int96_tz = Some("America/Los_Angeles".to_string());
+        let recovered = table_parquet_options_proto_round_trip(opts.clone());
+        assert_eq!(recovered.global.coerce_int96, Some("us".to_string()));
+        assert_eq!(
+            recovered.global.coerce_int96_tz,
+            Some("America/Los_Angeles".to_string())
+        );
     }
 
     #[test]
