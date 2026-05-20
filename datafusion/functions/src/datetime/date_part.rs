@@ -18,7 +18,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{DatePart, binary, date_part};
@@ -27,9 +26,7 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    ArrowTimestampType, DataType, Date32Type, Date64Type, Field, FieldRef,
-    IntervalUnit as ArrowIntervalUnit, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    DataType, Field, FieldRef, IntervalUnit as ArrowIntervalUnit, TimeUnit,
 };
 use chrono::{Datelike, NaiveDate};
 use datafusion_common::types::{NativeType, logical_date};
@@ -55,6 +52,8 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
+
+use crate::datetime::common::date_to_scalar;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
@@ -346,47 +345,6 @@ fn is_nanosecond(part: &str) -> bool {
     IntervalUnit::from_str(part_normalization(part))
         .map(|p| matches!(p, IntervalUnit::Nanosecond))
         .unwrap_or(false)
-}
-
-fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
-    Some(match target_type {
-        Date32 => ScalarValue::Date32(Some(Date32Type::from_naive_date(date))),
-        Date64 => ScalarValue::Date64(Some(Date64Type::from_naive_date(date))),
-
-        Timestamp(unit, tz_opt) => {
-            let naive_midnight = date.and_hms_opt(0, 0, 0)?;
-            let tz: Option<Tz> = tz_opt.clone().and_then(|s| s.parse().ok());
-
-            match unit {
-                Second => ScalarValue::TimestampSecond(
-                    TimestampSecondType::from_naive_datetime(naive_midnight, tz.as_ref()),
-                    tz_opt.clone(),
-                ),
-                Millisecond => ScalarValue::TimestampMillisecond(
-                    TimestampMillisecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    ),
-                    tz_opt.clone(),
-                ),
-                Microsecond => ScalarValue::TimestampMicrosecond(
-                    TimestampMicrosecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    ),
-                    tz_opt.clone(),
-                ),
-                Nanosecond => ScalarValue::TimestampNanosecond(
-                    TimestampNanosecondType::from_naive_datetime(
-                        naive_midnight,
-                        tz.as_ref(),
-                    ),
-                    tz_opt.clone(),
-                ),
-            }
-        }
-        _ => return None,
-    })
 }
 
 // Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error

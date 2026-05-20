@@ -31,24 +31,30 @@ use arrow::array::types::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{Array, ArrayRef, PrimitiveArray};
-use arrow::datatypes::DataType::{self, Time32, Time64, Timestamp};
+use arrow::datatypes::DataType::{self, Date32, Date64, Time32, Time64, Timestamp};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{Field, FieldRef};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{NativeType, logical_date, logical_string};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
 };
+use datafusion_expr::preimage::PreimageResult;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, TypeSignature, Volatility,
+    Cast, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility, interval_arithmetic::Interval,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
+use crate::datetime::common::date_to_scalar;
+
 use chrono::{
-    DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
+    DateTime, Datelike, Duration, LocalResult, Months, NaiveDate, NaiveDateTime, Offset,
+    TimeDelta, Timelike, Weekday,
 };
 
 /// Represents the granularity for date truncation operations
@@ -131,6 +137,16 @@ impl DateTruncGranularity {
                 | Self::Second
                 | Self::Millisecond
                 | Self::Microsecond
+        )
+    }
+
+    /// Returns true if this granularity has variable width when expressed in a
+    /// timezone — i.e. it can span 23 or 25 wall-clock hours around DST.
+    /// Used by `preimage` to stay conservative for timezone-aware coarse buckets.
+    fn has_variable_width_in_tz(&self) -> bool {
+        matches!(
+            self,
+            Self::Day | Self::Week | Self::Month | Self::Quarter | Self::Year
         )
     }
 }
@@ -422,6 +438,87 @@ impl ScalarUDFImpl for DateTruncFunc {
         &self.aliases
     }
 
+    /// Compute the preimage for `date_trunc(granularity, col) = literal`.
+    ///
+    /// `date_trunc` floors a timestamp to the start of the given period, so
+    /// for any aligned literal `L` the preimage is the half-open interval
+    /// `[L, L + 1 granularity)`.
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        let [precision, col_expr] = take_function_args(self.name(), args)?;
+
+        // Granularity literal (e.g. "month").
+        let Some(granularity) = precision
+            .as_literal()
+            .and_then(|sv| sv.try_as_str().flatten())
+            .and_then(|s| DateTruncGranularity::from_str(s).ok())
+        else {
+            return Ok(PreimageResult::None);
+        };
+
+        // If the column is a Date32/Date64 wrapped in the signature's implicit
+        // cast to Timestamp(ns), emit bounds in the Date type against the raw
+        // column. `unwrap_cast_in_comparison` doesn't currently support Date
+        // targets, so without this branch the cast survives in the plan and
+        // blocks pruning on Date partition columns.
+        if let Some(result) = date_column_preimage(col_expr, lit_expr, granularity, info)
+        {
+            return Ok(result);
+        }
+
+        // Time columns reach preimage as raw Time (the signature has a
+        // dedicated Coercible variant for Time, no implicit cast). All valid
+        // Time granularities are constant-step.
+        if let Some(result) = time_column_preimage(col_expr, lit_expr, granularity, info)
+        {
+            return Ok(result);
+        }
+
+        // The bounds must match the column's type. The simplifier coerces the
+        // literal to that type before calling `preimage`, but using
+        // `info.get_data_type` as the source of truth (and matches `date_part`).
+        // Date columns reach here as `Cast(_, Timestamp(ns))` and are fully
+        // handled by the Date arm above; Time columns are handled by the Time
+        // arm. Anything else bails.
+        let target_type = info.get_data_type(col_expr)?;
+        let (unit, tz_opt) = match &target_type {
+            Timestamp(unit, tz) => (*unit, tz.clone()),
+            _ => return Ok(PreimageResult::None),
+        };
+
+        // Coarse, timezone-aware buckets can have variable widths around DST.
+        // Stay conservative for those.
+        if tz_opt.is_some() && granularity.has_variable_width_in_tz() {
+            return Ok(PreimageResult::None);
+        }
+
+        // Extract the literal value and verify it matches the column's type.
+        let Some(value) = lit_expr
+            .as_literal()
+            .and_then(|lit| timestamp_value(lit, unit, &tz_opt))
+        else {
+            return Ok(PreimageResult::None);
+        };
+
+        let Some((lower, upper)) =
+            timestamp_preimage_bounds(unit, value, &tz_opt, granularity)
+        else {
+            return Ok(PreimageResult::None);
+        };
+
+        Ok(PreimageResult::Range {
+            expr: col_expr.clone(),
+            interval: Box::new(Interval::try_new(
+                timestamp_to_scalar(unit, lower, &tz_opt),
+                timestamp_to_scalar(unit, upper, &tz_opt),
+            )?),
+        })
+    }
+
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // The DATE_TRUNC function preserves the order of its second argument.
         let precision = &input[0];
@@ -568,6 +665,311 @@ where
     T: Datelike,
 {
     1 + 3 * ((date.month() - 1) / 3)
+}
+
+/// Extract an `i64` timestamp value from a literal that matches the column's
+/// `(unit, tz)`. Returns `None` if the literal is null or not a matching
+/// `Timestamp*` variant — the simplifier is responsible for coercing the
+/// literal first, so a mismatch here means the rewrite is not applicable.
+/// Peel the signature-inserted `Cast(date_col, Timestamp(ns))` wrapper and
+/// emit Date-type preimage bounds against the raw column. Returns `None` if
+/// the column isn't a Date wrapped in the expected cast, or if the literal
+/// isn't a midnight-UTC value aligned to the granularity boundary.
+fn date_column_preimage(
+    col_expr: &Expr,
+    lit_expr: &Expr,
+    granularity: DateTruncGranularity,
+    info: &SimplifyContext,
+) -> Option<PreimageResult> {
+    // The signature wraps Date columns as exactly Cast(_, Timestamp(Nanosecond, None)).
+    let Expr::Cast(Cast { expr: inner, field }) = col_expr else {
+        return None;
+    };
+    if !matches!(field.data_type(), Timestamp(Nanosecond, None)) {
+        return None;
+    }
+    let inner_type = info.get_data_type(inner).ok()?;
+    if !matches!(inner_type, Date32 | Date64) {
+        return None;
+    }
+
+    // The post-coercion literal is Timestamp(ns) with no tz. Anything not at
+    // midnight UTC can never equal date_trunc(g, date_col); bail so the
+    // unsimplified predicate runs and returns its (empty) result.
+    let ts_ns = match lit_expr.as_literal()? {
+        ScalarValue::TimestampNanosecond(Some(v), tz) if tz.is_none() => *v,
+        _ => return None,
+    };
+    let dt = timestamp_ns_to_datetime(ts_ns)?;
+    if dt.time() != chrono::NaiveTime::from_hms_opt(0, 0, 0)? {
+        return None;
+    }
+    let lower = dt.date();
+
+    let upper = date_preimage_upper(lower, granularity)?;
+
+    Some(PreimageResult::Range {
+        expr: inner.as_ref().clone(),
+        interval: Box::new(
+            Interval::try_new(
+                date_to_scalar(lower, &inner_type)?,
+                date_to_scalar(upper, &inner_type)?,
+            )
+            .ok()?,
+        ),
+    })
+}
+
+/// Upper bound (exclusive) of the date bucket starting at `lower` for the
+/// given granularity. Returns `None` if `lower` isn't aligned to the bucket
+/// boundary (e.g. month-granularity with day != 1).
+///
+/// Date columns have day-level precision, so every value casts to midnight
+/// UTC. Since `date_trunc(any_g, midnight)` is still midnight, sub-day
+/// granularities collapse to a 1-day interval (same as `Day`).
+fn date_preimage_upper(
+    lower: NaiveDate,
+    granularity: DateTruncGranularity,
+) -> Option<NaiveDate> {
+    match granularity {
+        DateTruncGranularity::Microsecond
+        | DateTruncGranularity::Millisecond
+        | DateTruncGranularity::Second
+        | DateTruncGranularity::Minute
+        | DateTruncGranularity::Hour
+        | DateTruncGranularity::Day => lower.succ_opt(),
+        DateTruncGranularity::Week => {
+            if lower.weekday() != Weekday::Mon {
+                return None;
+            }
+            lower.checked_add_signed(Duration::days(7))
+        }
+        DateTruncGranularity::Month => {
+            if lower.day() != 1 {
+                return None;
+            }
+            lower.checked_add_months(Months::new(1))
+        }
+        DateTruncGranularity::Quarter => {
+            if lower.day() != 1 || !matches!(lower.month(), 1 | 4 | 7 | 10) {
+                return None;
+            }
+            lower.checked_add_months(Months::new(3))
+        }
+        DateTruncGranularity::Year => {
+            if lower.day() != 1 || lower.month() != 1 {
+                return None;
+            }
+            lower.checked_add_months(Months::new(12))
+        }
+    }
+}
+
+/// Emit constant-step preimage bounds for `date_trunc(g, time_col) = lit` on
+/// `Time32`/`Time64` columns. Time has no timezone and no calendar arithmetic,
+/// so every supported granularity (Hour and finer) is a fixed-width bucket.
+fn time_column_preimage(
+    col_expr: &Expr,
+    lit_expr: &Expr,
+    granularity: DateTruncGranularity,
+    info: &SimplifyContext,
+) -> Option<PreimageResult> {
+    let target_type = info.get_data_type(col_expr).ok()?;
+    let unit = match &target_type {
+        Time32(unit) | Time64(unit) => *unit,
+        _ => return None,
+    };
+    if !granularity.valid_for_time() {
+        return None;
+    }
+
+    let value = lit_expr
+        .as_literal()
+        .and_then(|lit| time_value(lit, unit))?;
+    let step = constant_granularity_step(unit, granularity)?;
+    let step = if step == 0 { 1 } else { step };
+    // Alignment: literal must already be on a bucket boundary, else the
+    // original predicate is unsatisfiable.
+    if value % step != 0 {
+        return None;
+    }
+    let upper = value.checked_add(step)?;
+
+    Some(PreimageResult::Range {
+        expr: col_expr.clone(),
+        interval: Box::new(
+            Interval::try_new(time_to_scalar(unit, value), time_to_scalar(unit, upper))
+                .ok()?,
+        ),
+    })
+}
+
+/// Extract the underlying i64 representation from a Time scalar of the given
+/// unit. Time32 values are sign-extended; valid times fit comfortably.
+fn time_value(literal: &ScalarValue, unit: TimeUnit) -> Option<i64> {
+    match (unit, literal) {
+        (Second, ScalarValue::Time32Second(Some(v))) => Some(*v as i64),
+        (Millisecond, ScalarValue::Time32Millisecond(Some(v))) => Some(*v as i64),
+        (Microsecond, ScalarValue::Time64Microsecond(Some(v))) => Some(*v),
+        (Nanosecond, ScalarValue::Time64Nanosecond(Some(v))) => Some(*v),
+        _ => None,
+    }
+}
+
+/// Wrap an i64 value back into the matching Time scalar. The unit uniquely
+/// determines whether the result is `Time32` or `Time64`.
+fn time_to_scalar(unit: TimeUnit, value: i64) -> ScalarValue {
+    match unit {
+        Second => ScalarValue::Time32Second(Some(value as i32)),
+        Millisecond => ScalarValue::Time32Millisecond(Some(value as i32)),
+        Microsecond => ScalarValue::Time64Microsecond(Some(value)),
+        Nanosecond => ScalarValue::Time64Nanosecond(Some(value)),
+    }
+}
+
+fn timestamp_value(
+    literal: &ScalarValue,
+    unit: TimeUnit,
+    tz_opt: &Option<Arc<str>>,
+) -> Option<i64> {
+    match (unit, literal) {
+        (Second, ScalarValue::TimestampSecond(Some(v), tz)) if tz == tz_opt => Some(*v),
+        (Millisecond, ScalarValue::TimestampMillisecond(Some(v), tz)) if tz == tz_opt => {
+            Some(*v)
+        }
+        (Microsecond, ScalarValue::TimestampMicrosecond(Some(v), tz)) if tz == tz_opt => {
+            Some(*v)
+        }
+        (Nanosecond, ScalarValue::TimestampNanosecond(Some(v), tz)) if tz == tz_opt => {
+            Some(*v)
+        }
+        _ => None,
+    }
+}
+
+/// Wrap a raw `i64` timestamp value back into the matching `ScalarValue` for
+/// the given `(unit, tz)`. Mirrors `date_part::date_to_scalar`.
+fn timestamp_to_scalar(
+    unit: TimeUnit,
+    value: i64,
+    tz_opt: &Option<Arc<str>>,
+) -> ScalarValue {
+    match unit {
+        Second => ScalarValue::TimestampSecond(Some(value), tz_opt.clone()),
+        Millisecond => ScalarValue::TimestampMillisecond(Some(value), tz_opt.clone()),
+        Microsecond => ScalarValue::TimestampMicrosecond(Some(value), tz_opt.clone()),
+        Nanosecond => ScalarValue::TimestampNanosecond(Some(value), tz_opt.clone()),
+    }
+}
+
+/// Returns timestamp preimage bounds `[lower, upper)` for
+/// `date_trunc(granularity, expr) = lower`. Returns `None` if the literal is
+/// not aligned to the granularity (e.g. `date_trunc('month', col) = '2024-05-15'`,
+/// which is unsatisfiable) or if the upper bound would overflow.
+fn timestamp_preimage_bounds(
+    unit: TimeUnit,
+    lower: i64,
+    tz_opt: &Option<Arc<str>>,
+    granularity: DateTruncGranularity,
+) -> Option<(i64, i64)> {
+    // Verify the literal is already truncated to this granularity. If it
+    // isn't, the original predicate is unsatisfiable; returning None defers to
+    // the unsimplified plan rather than producing a bogus interval.
+    let tz = parse_tz(tz_opt).ok().flatten();
+    if general_date_trunc(unit, lower, tz, granularity).ok()? != lower {
+        return None;
+    }
+
+    let upper = if let Some(step) = constant_granularity_step(unit, granularity) {
+        // step == 0 happens when the granularity is finer than the unit's
+        // resolution (e.g. truncating a TimestampSecond to microseconds is a
+        // no-op); the preimage is then the singleton `[lower, lower + 1 unit)`.
+        let step = if step == 0 { 1 } else { step };
+        lower.checked_add(step)?
+    } else {
+        next_calendar_boundary_utc(unit, lower, granularity)?
+    };
+
+    Some((lower, upper))
+}
+
+/// Width of one bucket for `(unit, granularity)` measured in `unit`s, when
+/// that width is constant. Returns `None` for calendar-variable buckets
+/// (month/quarter/year), which are handled by `next_calendar_boundary_utc`.
+fn constant_granularity_step(
+    unit: TimeUnit,
+    granularity: DateTruncGranularity,
+) -> Option<i64> {
+    match (unit, granularity) {
+        (Second, DateTruncGranularity::Microsecond) => Some(0),
+        (Second, DateTruncGranularity::Millisecond) => Some(0),
+        (Second, DateTruncGranularity::Second) => Some(1),
+        (Second, DateTruncGranularity::Minute) => Some(60),
+        (Second, DateTruncGranularity::Hour) => Some(3_600),
+        (Second, DateTruncGranularity::Day) => Some(86_400),
+        (Second, DateTruncGranularity::Week) => Some(604_800),
+
+        (Millisecond, DateTruncGranularity::Microsecond) => Some(0),
+        (Millisecond, DateTruncGranularity::Millisecond) => Some(1),
+        (Millisecond, DateTruncGranularity::Second) => Some(1_000),
+        (Millisecond, DateTruncGranularity::Minute) => Some(60_000),
+        (Millisecond, DateTruncGranularity::Hour) => Some(3_600_000),
+        (Millisecond, DateTruncGranularity::Day) => Some(86_400_000),
+        (Millisecond, DateTruncGranularity::Week) => Some(604_800_000),
+
+        (Microsecond, DateTruncGranularity::Microsecond) => Some(1),
+        (Microsecond, DateTruncGranularity::Millisecond) => Some(1_000),
+        (Microsecond, DateTruncGranularity::Second) => Some(1_000_000),
+        (Microsecond, DateTruncGranularity::Minute) => Some(60_000_000),
+        (Microsecond, DateTruncGranularity::Hour) => Some(3_600_000_000),
+        (Microsecond, DateTruncGranularity::Day) => Some(86_400_000_000),
+        (Microsecond, DateTruncGranularity::Week) => Some(604_800_000_000),
+
+        (Nanosecond, DateTruncGranularity::Microsecond) => Some(1_000),
+        (Nanosecond, DateTruncGranularity::Millisecond) => Some(1_000_000),
+        (Nanosecond, DateTruncGranularity::Second) => Some(1_000_000_000),
+        (Nanosecond, DateTruncGranularity::Minute) => Some(60_000_000_000),
+        (Nanosecond, DateTruncGranularity::Hour) => Some(3_600_000_000_000),
+        (Nanosecond, DateTruncGranularity::Day) => Some(86_400_000_000_000),
+        (Nanosecond, DateTruncGranularity::Week) => Some(604_800_000_000_000),
+        _ => None,
+    }
+}
+
+/// Compute the next month/quarter/year boundary in UTC and convert it back
+/// to the timestamp's `unit`. Uses `chrono::Months` for calendar arithmetic,
+/// matching the chrono-first style used in `date_part::preimage`.
+fn next_calendar_boundary_utc(
+    unit: TimeUnit,
+    lower: i64,
+    granularity: DateTruncGranularity,
+) -> Option<i64> {
+    let scale = timestamp_unit_scale(unit);
+    let lower_ns = lower.checked_mul(scale)?;
+    let lower_dt = timestamp_ns_to_datetime(lower_ns)?;
+
+    let months = match granularity {
+        DateTruncGranularity::Month => 1,
+        DateTruncGranularity::Quarter => 3,
+        DateTruncGranularity::Year => 12,
+        _ => return None,
+    };
+    let next_dt = lower_dt.checked_add_months(Months::new(months))?;
+
+    let upper_ns = next_dt.and_utc().timestamp_nanos_opt()?;
+    if upper_ns % scale != 0 {
+        return None;
+    }
+    Some(upper_ns / scale)
+}
+
+fn timestamp_unit_scale(unit: TimeUnit) -> i64 {
+    match unit {
+        Second => 1_000_000_000,
+        Millisecond => 1_000_000,
+        Microsecond => 1_000,
+        Nanosecond => 1,
+    }
 }
 
 fn _date_trunc_coarse_with_tz(
@@ -781,7 +1183,41 @@ mod tests {
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use datafusion_common::{DFSchema, DFSchemaRef};
+    use datafusion_expr::preimage::PreimageResult;
+    use datafusion_expr::simplify::SimplifyContext;
+    use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, col};
+
+    /// Build a `SimplifyContext` whose schema declares `x` with the given type.
+    /// The preimage method consults `info.get_data_type(col_expr)`, so unit
+    /// tests need a real schema (matches the date_part / floor test pattern).
+    fn ctx_with_x(data_type: DataType) -> SimplifyContext {
+        let schema: DFSchemaRef = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![Field::new("x", data_type, true)].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        SimplifyContext::builder().with_schema(schema).build()
+    }
+
+    fn assert_preimage_none(granularity: &str, literal: ScalarValue) {
+        let date_trunc = DateTruncFunc::new();
+        let args = vec![
+            Expr::Literal(ScalarValue::Utf8(Some(granularity.to_string())), None),
+            col("x"),
+        ];
+        let lit_expr = Expr::Literal(literal.clone(), None);
+        let info = ctx_with_x(literal.data_type());
+
+        let result = date_trunc.preimage(&args, &lit_expr, &info).unwrap();
+
+        assert!(
+            matches!(result, PreimageResult::None),
+            "expected no preimage for literal {literal:?}"
+        );
+    }
 
     #[test]
     fn date_trunc_test() {
@@ -877,6 +1313,31 @@ mod tests {
             let result = date_trunc_coarse(granularity_enum, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
         });
+    }
+
+    #[test]
+    fn test_date_trunc_preimage_none_cases() {
+        // Literal not aligned to the granularity → unsatisfiable, skip rewrite.
+        let non_truncated = string_to_timestamp_nanos("2024-05-01T10:30:15Z").unwrap();
+        assert_preimage_none(
+            "minute",
+            ScalarValue::TimestampNanosecond(Some(non_truncated), None),
+        );
+
+        // Coarse granularity with a named timezone: bucket width is variable
+        // around DST, so we conservatively skip the rewrite.
+        let day_start_tz =
+            string_to_timestamp_nanos("2024-10-27T00:00:00+02:00").unwrap();
+        assert_preimage_none(
+            "day",
+            ScalarValue::TimestampNanosecond(
+                Some(day_start_tz),
+                Some(Arc::<str>::from("Europe/Berlin")),
+            ),
+        );
+
+        // Unsupported literal type (Int32) → no preimage.
+        assert_preimage_none("day", ScalarValue::Int32(Some(0)));
     }
 
     #[test]
