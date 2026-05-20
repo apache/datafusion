@@ -739,6 +739,8 @@ impl BatchPartitioner {
                 ))
             }
             Partitioning::Range(_) => {
+                // Range repartition execution is tracked in
+                // https://github.com/apache/datafusion/issues/22397
                 not_impl_err!(
                     "Range partitioning execution is not implemented by RepartitionExec"
                 )
@@ -1452,6 +1454,8 @@ impl ExecutionPlan for RepartitionExec {
                 Partitioning::Hash(new_partitions, *size)
             }
             Partitioning::Range(_) => {
+                // Range partitioning optimizer propagation is tracked in
+                // https://github.com/apache/datafusion/issues/22395
                 return not_impl_err!(
                     "Projection pushdown through RepartitionExec with range partitioning is not implemented"
                 );
@@ -1494,6 +1498,8 @@ impl ExecutionPlan for RepartitionExec {
         }
         match self.partitioning() {
             Partitioning::Range(_) => {
+                // Range partitioning optimizer propagation is tracked in
+                // https://github.com/apache/datafusion/issues/22395
                 return not_impl_err!(
                     "Sort pushdown through RepartitionExec with range partitioning is not implemented"
                 );
@@ -1526,6 +1532,8 @@ impl ExecutionPlan for RepartitionExec {
             Hash(hash, _) => Hash(hash, target_partitions),
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
             Range(_) => {
+                // Range repartition execution is tracked in
+                // https://github.com/apache/datafusion/issues/22397
                 return not_impl_err!(
                     "Changing RepartitionExec partition counts with range partitioning is not implemented"
                 );
@@ -1659,6 +1667,8 @@ impl RepartitionExec {
                 )
             }
             Partitioning::Range(_) => {
+                // Range repartition execution is tracked in
+                // https://github.com/apache/datafusion/issues/22397
                 return not_impl_err!(
                     "Range partitioning execution is not implemented by RepartitionExec"
                 );

@@ -161,6 +161,7 @@ impl Display for Partitioning {
 /// partition 0: key < split_points[0]
 /// partition 1: split_points[0] <= key < split_points[1]
 /// ...
+/// partition N - 1: split_points[N - 2] <= key < split_points[N - 1]
 /// partition N: split_points[N - 1] <= key
 /// ```
 ///
@@ -201,12 +202,9 @@ impl Display for Partitioning {
 /// not implemented and will be introduced incrementally.
 #[derive(Debug, Clone)]
 pub struct RangePartitioning {
-    /// Ordered partitioning key. Sort options are part of the partitioning
-    /// because `ASC`/`DESC` and null ordering decide which side of a split point
-    /// a row belongs to.
+    /// Ordered partitioning key.
     ordering: LexOrdering,
-    /// Boundaries between adjacent partitions. `N` split points define `N + 1`
-    /// partitions as described in [`RangePartitioning`].
+    /// Boundaries between adjacent partitions.
     split_points: Vec<SplitPoint>,
 }
 

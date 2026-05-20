@@ -46,6 +46,7 @@ impl From<&Partitioning> for FFI_Partitioning {
                 Self::Hash(exprs, *size)
             }
             // FFI does not yet expose range partition metadata.
+            // See https://github.com/apache/datafusion/issues/22394
             Partitioning::Range(range) => {
                 Self::UnknownPartitioning(range.partition_count())
             }
