@@ -23,12 +23,12 @@ Trigger this skill any time the work touches `datafusion/ffi/`:
 
 1. **No `datafusion` dependency.** `datafusion-ffi` must not depend on the umbrella `datafusion` crate. Use the leaf crates (`datafusion-common`, `datafusion-expr`, `datafusion-catalog`, `datafusion-physical-plan`, etc.). `datafusion` is fine in `[dev-dependencies]`.
 2. **`#[repr(C)]` on every `FFI_X` struct**, not `#[stabby::stabby]`. Stabby is used for `SString`/`SVec` only. Reasons documented in the README (build time, Arrow types lack `IStable`).
-3. **`unsafe extern "C"` on every function pointer.** Plain `extern "C"` is reserved for `version` and `library_marker_id`.
-4. **`unsafe impl Send` + `unsafe impl Sync`** for every `FFI_X` and every `ForeignX` — the raw pointer makes the struct `!Send`/`!Sync` by default.
+3. **`unsafe extern "C"` on every function-pointer field — including `version`.** The one exception is the `library_marker_id` field, which is plain `extern "C" fn() -> usize`. Plain (safe) `extern "C"` also applies to the standalone function defs in `src/lib.rs` — `pub extern "C" fn version()` and `pub extern "C" fn get_library_marker_id()` — which coerce into the `unsafe extern "C"` `version` field slot at construction.
+4. **Match `Send`/`Sync` to the wrapped trait.** Raw `*mut c_void` makes every `FFI_X` `!Send + !Sync` by default — `unsafe impl` whichever bounds the consumer-facing trait requires. Most DataFusion traits (`TableProvider`, `ExecutionPlan`, all UDFs, codecs) need both. `Send`-only: `RecordBatchStream`, `Accumulator`, `GroupsAccumulator`, `PartitionEvaluator` (mutable / stream APIs). The matching `ForeignX` always carries the same bounds — pick consistently.
 5. **`#![deny(clippy::clone_on_ref_ptr)]`** is on at the crate root. Use `Arc::clone(&x)`, never `x.clone()` on `Arc`.
 6. **Run before pushing:** `cargo fmt --all`, `cargo clippy -p datafusion-ffi --all-targets --all-features -- -D warnings`, `cargo test -p datafusion-ffi`.
-7. **`api-change` label required.** Any PR that modifies an `FFI_X` struct layout (adds/removes/reorders fields, changes a function-pointer signature, adds a variant to an FFI enum, or changes the `version` extern) must carry the `api-change` GitHub label. Layout changes break ABI for already-compiled consumer libraries. The label drives release-note flagging so downstream users (e.g. `datafusion-python`, plugin authors) know they must recompile against the new DataFusion major. The `version()` extern in `src/lib.rs` returns the major of workspace `CARGO_PKG_VERSION`; consumers compare it at load time and can refuse mismatched producers. Apply via `gh pr edit <num> --add-label api-change`. When reviewing such a PR, block merge until label present.
-8. **No FFI struct changes in patch releases.** Patch releases ship from branches named `branch-<major>` (e.g. `branch-53`, `branch-52`). FFI struct layout changes (anything that would earn rule 7's `api-change` label) **must not** target a `branch-<major>` branch and must not be back-ported. Patch releases are ABI-stable by contract — a consumer compiled against `53.1.0` must keep working against `53.1.1`. Before reviewing/approving an FFI PR, check the PR's base branch: if it matches `branch-*` or the PR description / labels indicate patch / back-port, reject the FFI struct change and ask the author to retarget `main`. Bugfixes that do not alter struct layout (e.g. fixing a function-pointer body) are fine to back-port. Quick check: `gh pr view <num> --json baseRefName,labels`.
+7. **`api-change` label required.** Any PR that modifies an `FFI_X` struct layout (adds/removes/reorders fields, changes a function-pointer signature, adds a variant to an FFI enum, or changes the `version` extern) must carry the `api-change` GitHub label. Layout changes break ABI for already-compiled consumer libraries. The label is the project-wide convention for highlighting breaking public-API changes in release notes — see `docs/source/contributor-guide/api-health.md` §"What to do when making breaking API changes?" (step 1 names the label explicitly). Downstream users (e.g. `datafusion-python`, plugin authors) read the labelled notes to know they must recompile against the new DataFusion major. The `version()` extern in `src/lib.rs` returns the major of workspace `CARGO_PKG_VERSION`; consumers compare it at load time and can refuse mismatched producers. Apply via `gh pr edit <num> --add-label api-change`. When reviewing such a PR, block merge until label present.
+8. **No FFI struct changes in patch releases.** Patch releases ship from branches matching `^branch-\d+$` (e.g. `branch-53`, `branch-52`). FFI struct layout changes (anything that would earn rule 7's `api-change` label) **must not** target a release branch and must not be back-ported. Patch releases are ABI-stable by contract — a consumer compiled against `53.1.0` must keep working against `53.1.1`. Before reviewing/approving an FFI PR, check the PR's base branch: if it matches the regex above, or the PR description / labels indicate patch / back-port, reject the FFI struct change and ask the author to retarget `main`. Bugfixes that do not alter struct layout (e.g. fixing a function-pointer body) are fine to back-port. Quick check: `gh pr view <num> --json baseRefName,labels --jq '.baseRefName'` then match against `^branch-\d+$`. Do **not** glob-match `branch-*` — back-port / cherry-pick working branches (e.g. `branch-53-cherry-pick-1`) also share that prefix but are not release branches; only the strict `branch-<digits>` form is the freeze target.
 
 ## The standard wrapper shape
 
@@ -46,14 +46,8 @@ pub struct FFI_X {
     // gets the right answer either way without the consumer needing to know.
     some_method: unsafe extern "C" fn(this: &Self, ...) -> FFI_Result<...>,
 
-    // `Option<fn>` exists exactly once in this crate today:
-    // `FFI_TableProvider::supports_filters_pushdown`, gated by the
-    // `can_support_pushdown_filters: bool` argument to `FFI_TableProvider::new`.
-    // Treat it as an exception, not a pattern. Default to a plain
-    // `unsafe extern "C" fn` and let dynamic dispatch handle override-or-default.
-    // Reach for `Option<fn>` only if you can name an explicit constructor
-    // argument that toggles the slot AND there is a real reason to suppress
-    // the FFI hop (e.g. consumer-side short-circuiting on a hot path).
+    // `Option<fn>` is the capability-flag exception — see § "Method coverage".
+    // Crate uses it exactly once: `FFI_TableProvider::supports_filters_pushdown`.
     optional_method: Option<unsafe extern "C" fn(&Self, ...) -> FFI_Result<...>>,
 
     // Codec only if the trait moves Exprs/Plans across the boundary.
@@ -67,6 +61,8 @@ pub struct FFI_X {
     pub library_marker_id: extern "C" fn() -> usize,
 }
 
+// Pick bounds to match the wrapped trait (see rule 4).
+// Most wrappers want both; `Send`-only for streams / mutable traits.
 unsafe impl Send for FFI_X {}
 unsafe impl Sync for FFI_X {}
 ```
@@ -88,7 +84,16 @@ struct XPrivateData {
 }
 ```
 
-For traits that require `&mut self` (e.g. `Accumulator`), use `Box<dyn X>`. A `Box`-backed `FFI_X` **cannot implement `Clone`**; document this and skip the `clone` function pointer or hand-write a release path that distinguishes producer vs consumer side (see `FFI_Accumulator` in `src/udaf/accumulator.rs`).
+For traits that require `&mut self` (e.g. `Accumulator`, `GroupsAccumulator`, `PartitionEvaluator`), use `Box<dyn X>`:
+
+```rust
+struct XPrivateData {
+    inner: Box<dyn X>,
+    runtime: Option<Handle>, // include when any async method exists
+}
+```
+
+A `Box`-backed `FFI_X` **cannot implement `Clone`**; document this and skip the `clone` function pointer, or hand-write a release path that distinguishes producer vs consumer side. Canonical example: `FFI_Accumulator` in `src/udaf/accumulator.rs`. See also `FFI_GroupsAccumulator` (`src/udaf/groups_accumulator.rs`) and `FFI_PartitionEvaluator` (`src/udwf/partition_evaluator.rs`).
 
 ### 3. Function-pointer wrappers
 
@@ -221,10 +226,17 @@ What integration tests catch that unit tests cannot:
 | Change                                                                | Unit | Integration |
 | --------------------------------------------------------------------- | ---- | ----------- |
 | New `FFI_X` wrapper                                                   | Yes  | Yes         |
-| New method on existing `FFI_X`                                        | Yes  | Yes if the method takes/returns a non-trivial FFI type (anything other than primitives + enums). Pure-stabby-string getters can skip. |
+| New method on existing `FFI_X`                                        | Yes  | Yes if the method takes/returns a non-trivial FFI type. See note below. |
 | Bugfix to a wrapper body, no signature change                         | Yes  | Only if reproducing the bug requires cross-library symbol lookup or `dlopen` semantics |
 | Layout change (`#[repr(C)]` field add/remove/reorder, fn-ptr sig)     | Yes  | **Mandatory** — this is exactly the bug class integration tests exist for |
 | New `From<X> for FFI_X` or codec change                               | Yes  | Yes if the codec is exercised by the cross-library round-trip |
+
+**"Non-trivial FFI type" for the table above** — anything other than:
+
+- Primitives (`u8`/`u64`/`bool`/`usize`, etc.) and `#[repr(u8)]` FFI enums (`FFI_TableType`, `Volatility`, `InsertOp`, `TableProviderFilterPushDown`).
+- A `stabby::string::String` (`SString`) returned by value, with no other args or returns.
+
+Concrete skippable example: `fn name(&self) -> SString` reading a field already validated by another method. Concrete *non*-skippable examples: anything returning `SVec<T>`, `FFI_Option<T>`, `FFI_Result<T>`, `WrappedSchema`, `WrappedArray`, an `FfiFuture`, an `FFI_*` sub-struct, or any `*mut`/`*const` pointer — those exercise alignment / padding / niche-opt across the ABI boundary and need the two-build coverage. When unsure, write the integration test; the cost is one constructor + ~20 lines.
 
 If you skip the integration test for a layout change, you have effectively shipped untested ABI.
 
@@ -249,20 +261,22 @@ When adding or auditing an `FFI_X`, **enumerate every method on the wrapped trai
 
 ### Known gaps to close
 
-A re-audit (2026-05) opened tracking issues for each wrapper with real gaps. Treat new PRs in these areas as opportunities to fix them; treat new wrappers as required to avoid creating more. Each linked issue lists the specific missing methods and severity.
+Tracked gaps live on GitHub under the [`ffi`](https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+label%3Affi) label — that query is the source of truth and stays current as issues are filed or closed. Treat new PRs in those areas as opportunities to fix the listed methods; treat new wrappers as required to avoid creating more. Each open issue names the specific wrapper, the missing methods, and the severity.
 
-- **`FFI_TableProvider`** — [#22328](https://github.com/apache/datafusion/issues/22328). Missing: `constraints`, `get_table_definition`, `get_logical_plan`, `get_column_default`, `scan_with_args`, `statistics`, `delete_from`, `update`, `truncate`. DML omissions are the worst — they silently demote a writable table to read-only on the foreign side.
-- **`FFI_ExecutionPlan`** — [#22329](https://github.com/apache/datafusion/issues/22329). Largest single gap by method count: 18 defaults (distribution / ordering, filter pushdown, projection swapping, limit pushdown, cardinality, partition stats, state / fetch handling). Silently breaks optimizer decisions on the consumer side.
-- **`FFI_ScalarUDF`** — [#22330](https://github.com/apache/datafusion/issues/22330). Missing: `display_name`, `schema_name`, `with_updated_config`, `simplify`, `preimage`, `conditional_arguments`, `evaluate_bounds`, `propagate_constraints`, `struct_field_mapping`, `output_ordering`, `preserves_lex_ordering`, `placement`, `documentation`. Optimizer hooks + SQL-output naming silently disabled.
-- **`FFI_AggregateUDF`** — [#22331](https://github.com/apache/datafusion/issues/22331). Missing: `display_name`, `schema_name`, `human_display`, `window_function_schema_name`, `window_function_display_name`, `simplify`, `simplify_expr_op_literal`, `reverse_udf` / `reverse_expr`, `is_descending`, `value_from_stats`, `default_value`, `supports_null_handling_clause`, `supports_within_group_clause`, `set_monotonicity`, `documentation`. Statistics-driven shortcuts (`value_from_stats`) and SQL surface area (null-handling / within-group clauses) silently absent.
-- **`FFI_WindowUDF`** — [#22332](https://github.com/apache/datafusion/issues/22332). Missing: `simplify`, `expressions`, `reverse_expr`, `documentation`. `expressions()` selects which physical args reach the evaluator — silent fallback can change semantics.
-- **`FFI_SchemaProvider`** — [#22333](https://github.com/apache/datafusion/issues/22333). Missing: `table_type` async cheap-path. Forces full `table()` materialization for `information_schema.tables` probes. (`owner_name` is exposed as a static `FFI_Option<SString>` snapshot field — note for future review, not a gap today.)
-- **`FFI_PhysicalOptimizerRule`** — [#22334](https://github.com/apache/datafusion/issues/22334). Missing: `optimize_with_context`. Rules whose output depends on per-invocation statistics / options are silently downgraded to the context-free path.
-- **`FFI_GroupsAccumulator`** — [#22335](https://github.com/apache/datafusion/issues/22335). Missing: `size`. Consumer-side memory accounting reports trait default rather than producer's real footprint.
-- **`FFI_PartitionEvaluator`** — [#22336](https://github.com/apache/datafusion/issues/22336). Missing: `memoize`. Performance regression for memoizing evaluators; correctness unaffected.
-- **`FFI_RecordBatchStream`** — [#22337](https://github.com/apache/datafusion/issues/22337). Open question: no `library_marker_id` field, unlike most other `FFI_X`. Confirm intentional vs gap; if intentional, document the rationale and update this skill.
+Quick CLI list:
 
-Wrappers not listed above are not certified complete — they are merely not currently tracked. Re-enumerate the trait surface (see "How to enumerate defaults" below) whenever you audit one; upstream trait drift can introduce new defaulted methods at any time and silently re-open the silent-override-loss bug class.
+```bash
+gh issue list --repo apache/datafusion --label ffi --state open --limit 50
+```
+
+Common severity classes seen on the label today:
+
+- **DML / optimizer-relevant defaults silently lost** — e.g. `delete_from`/`update`/`truncate` on table providers, distribution / ordering / pushdown on execution plans, `value_from_stats` on aggregates. These demote producer capability on the foreign side.
+- **SQL surface area silently absent** — naming hooks (`display_name`, `schema_name`, `documentation`), null-handling and within-group clauses on UDAFs, etc.
+- **Performance regressions, not correctness** — e.g. `memoize` on partition evaluators, `size` on groups accumulators.
+- **Open design questions** — e.g. whether `FFI_RecordBatchStream` needs `library_marker_id` at all.
+
+When in doubt, open the label query; do not assume the list above is exhaustive. Wrappers without an open issue are **not** certified complete — re-enumerate the trait surface (see "How to enumerate defaults" below) whenever you audit one; upstream trait drift can introduce new defaulted methods at any time and silently re-open the silent-override-loss bug class.
 
 When *closing* a gap, add the fn pointer unconditionally — the wrapper body calls the trait method on the inner `Arc<dyn Trait>` and Rust's dynamic dispatch picks the producer's override or falls back to the default. Use `Option<fn>` only when the new method also gains a corresponding capability flag on the producer's `new()`. Either way the layout changes, so the PR is an ABI break: mark `api-change`, do not back-port to `branch-<major>`, and the workspace major bump in the next release makes the `version()` extern surface the change to consumers at load time.
 
@@ -308,12 +322,12 @@ If a method's body is non-trivial, the consumer-side default is non-trivial too.
 
 When reviewing a PR that touches `datafusion/ffi/`:
 
-1. **Trait coverage.** Pull up the underlying trait. List its methods. Confirm every non-defaulted method has a function pointer. For each *defaulted* method, ask whether a real-world producer would override it — if yes, the PR must either plumb it through (preferably as `Option<fn>`) or explicitly justify the omission in a comment.
+1. **Trait coverage.** Pull up the underlying trait. List its methods. Confirm every non-defaulted method has a function pointer. For each *defaulted* method, ask whether a real-world producer would override it — if yes, the PR must either plumb it through as a plain `unsafe extern "C" fn` (let dynamic dispatch on `Arc<dyn Trait>` pick override-or-default) or explicitly justify the omission in a comment. Reserve `Option<fn>` for the capability-flag pattern described in §"Method coverage" — do not use it just because the trait has a default.
 2. **Layout fields.** `clone`, `release`, `version`, `private_data`, `library_marker_id` all present?
 3. **Marker-id bypass** in `From<&FFI_X>`?
 4. **Round-trip downcast** in the constructor?
 5. **`Drop` calling `release`**, and `release` nulling the pointer?
-6. **`Send` + `Sync` unsafe impls** on both `FFI_X` and `ForeignX`?
+6. **`Send`/`Sync` unsafe impls** match the wrapped trait's bounds (rule 4), and `FFI_X` + `ForeignX` agree?
 7. **Stabby types** for strings/vecs; crate-local `FFI_Option`/`FFI_Result` for optional/fallible payloads?
 8. **Async** uses `FfiFuture` + `.into_ffi()`, never blocking?
 9. **Codec** present on any method that ships an `Expr` / plan?
@@ -322,7 +336,7 @@ When reviewing a PR that touches `datafusion/ffi/`:
 12. **`Arc::clone(&x)`** everywhere — no implicit `x.clone()` on `Arc` (the lint will reject it but worth pre-flagging).
 13. **`cargo clippy --all-targets --all-features -- -D warnings`** clean on the crate?
 14. **`api-change` label** on the PR if any `FFI_X` struct layout / fn-ptr signature / FFI enum / `version` extern changed? Block merge until applied.
-15. **Base branch check.** If FFI struct layout changed, base branch must be `main`, never `branch-<major>`. Reject back-ports of ABI-breaking changes to patch-release branches. `gh pr view <num> --json baseRefName,labels` to verify.
+15. **Base branch check.** If FFI struct layout changed, base branch must be `main`, never a release branch matching `^branch-\d+$` (e.g. `branch-53`). Reject back-ports of ABI-breaking changes to patch-release branches. Verify with `gh pr view <num> --json baseRefName,labels --jq '.baseRefName'`; match strictly against `^branch-\d+$` — cherry-pick working branches like `branch-53-cherry-pick-1` also start with `branch-` and must not false-positive.
 
 ## References
 
