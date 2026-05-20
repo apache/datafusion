@@ -2739,8 +2739,8 @@ mod test {
     #[tokio::test]
     async fn rejected_struct_conjunct_runs_post_scan_not_dropped() {
         use arrow::array::{Int32Array, StringArray, StructArray};
-        use arrow::datatypes::Fields;
         use arrow::buffer::NullBuffer;
+        use arrow::datatypes::Fields;
 
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
