@@ -271,7 +271,23 @@ impl OptimizerRule for PushDownTopKThroughJoin {
         //
         // Example (new): Sort(b ASC, fetch=5) → Join → Sort(a ASC, fetch=10)
         //   Different exprs, insert Sort(b, fetch=5) above preserved child.
-        let new_preserved_child = if let LogicalPlan::Sort(child_sort) = inner_child {
+        //
+        // If `deep_resolved_exprs` became volatile while resolving through
+        // projections inside the preserved child (e.g. a `random() AS col`
+        // projection turns the column reference into `random()` itself),
+        // structural equality with an existing inner Sort is unsound: two
+        // syntactically identical `random()` expressions evaluate to
+        // different values. In that case we must not match against the
+        // inner Sort — fall back to inserting a new Sort above the
+        // preserved child using `resolved_sort_exprs`, which is guaranteed
+        // non-volatile (verified above).
+        let deep_exprs_volatile =
+            deep_resolved_exprs.iter().any(|se| se.expr.is_volatile());
+        let inner_sort = match inner_child {
+            LogicalPlan::Sort(s) if !deep_exprs_volatile => Some(s),
+            _ => None,
+        };
+        let new_preserved_child = if let Some(child_sort) = inner_sort {
             let same_exprs = sort_exprs_equal(&child_sort.expr, &deep_resolved_exprs);
             let child_fetch_tighter = match child_sort.fetch {
                 Some(child_fetch) => child_fetch <= fetch,

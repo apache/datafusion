@@ -1170,6 +1170,43 @@ logical_plan
 08)--------------TableScan: t1 projection=[a]
 09)--------TableScan: t2 projection=[x]
 
+# Volatile expression inside the preserved child *and* an existing inner
+# Sort whose expr is also `random()`: must NOT tighten the inner Sort.
+#
+# After resolving the outer ORDER BY (a non-volatile column reference)
+# through the inner `random() AS rand_col` Projection, the deep-resolved
+# sort expr becomes `random()`. The existing inner Sort below the
+# Projection happens to also be on `random()` — but those are independent
+# random() invocations producing different orderings. Treating them as
+# "same expr" and tightening fetch=10 → fetch=2 would discard rows the
+# outer ordering would have ranked high.
+#
+# Expected: fall back to inserting a new Sort(t1.rand_col, fetch=2) above
+# the preserved-side SubqueryAlias; the inner Sort(random(), fetch=10)
+# stays untouched.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.rand_col, t2.x
+    FROM (
+        SELECT random() AS rand_col, a
+        FROM (SELECT a FROM t1 ORDER BY random() LIMIT 10)
+    ) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY rand_col ASC LIMIT 2;
+----
+logical_plan
+01)Sort: sub.rand_col ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: sub
+03)----Projection: t1.rand_col, t2.x
+04)------Left Join: t1.a = t2.x
+05)--------Sort: t1.rand_col ASC NULLS LAST, fetch=2
+06)----------SubqueryAlias: t1
+07)------------Projection: random() AS rand_col, t1.a
+08)--------------Sort: random() ASC NULLS LAST, fetch=10
+09)----------------TableScan: t1 projection=[a]
+10)--------TableScan: t2 projection=[x]
+
 ###
 ### Config reset
 ###
