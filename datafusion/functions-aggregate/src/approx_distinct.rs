@@ -385,6 +385,10 @@ impl AggregateUDFImpl for ApproxDistinct {
         Ok(ScalarValue::UInt64(Some(0)))
     }
 
+    fn is_nullable(&self) -> bool {
+        false
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let data_type = args.input_fields[0].data_type();
         match data_type {
