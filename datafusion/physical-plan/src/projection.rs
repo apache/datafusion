@@ -382,12 +382,6 @@ impl ExecutionPlan for ProjectionExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // Collapse the entire run of consecutive `ProjectionExec`s in a single
-        // pass instead of unifying one level at a time. The pairwise approach
-        // had to allocate (and recompute equivalence properties for) one
-        // intermediate `ProjectionExec` per level, which is the dominant cost
-        // for plans with many chained projections (e.g. a long pipeline of
-        // `SELECT *, <expr> AS dN FROM ...`).
         match try_collapse_projection_chain(projection)? {
             Some(plan) => Ok(Some(plan)),
             None => Ok(Some(Arc::new(projection.clone()))),
@@ -1017,37 +1011,25 @@ pub fn update_join_filter(
     })
 }
 
-/// Unifies `projection` with its input (which is also a [`ProjectionExec`]).
-/// Iteratively collapse a chain of consecutive [`ProjectionExec`]s starting
-/// at `outer` into a single `ProjectionExec`. Returns `None` if the very
-/// first level cannot be unified (matching the previous behavior of
-/// [`try_unifying_projections`] + recursive `remove_unnecessary_projections`).
-///
-/// Functionally equivalent to repeatedly applying [`try_unifying_projections`]
-/// and re-entering [`remove_unnecessary_projections`] on the result, but
-/// avoids constructing an intermediate `ProjectionExec` (and recomputing its
-/// [`PlanProperties`] / equivalence properties) for every level it walks
-/// through. For long projection chains the saved work scales linearly with
-/// the chain length.
+/// Collapse a chain of consecutive [`ProjectionExec`]s into one. Returns
+/// `None` if nothing could be merged.
 fn try_collapse_projection_chain(
     outer: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let mut current_exprs: Vec<ProjectionExpr> = outer.expr().to_vec();
     let mut current_input: Arc<dyn ExecutionPlan> = Arc::clone(outer.input());
+    let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
     let mut collapsed_any = false;
 
-    loop {
-        // Only continue if the current input is itself a projection.
+    'outer: loop {
         let Some(inner_proj) = current_input.downcast_ref::<ProjectionExec>()
         else {
             break;
         };
 
-        // Replicate the "merging is beneficial" guard from
-        // `try_unifying_projections`: if any column referenced more than once
-        // in `current_exprs` resolves to a non-trivial expression in the
-        // inner projection, fusing them would duplicate that computation.
-        let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
+        // Merging a referenced-more-than-once column whose inner expression is
+        // non-trivial would duplicate that computation. See #8296.
+        column_ref_map.clear();
         for proj_expr in &current_exprs {
             proj_expr.expr.apply(|expr| {
                 if let Some(column) = expr.downcast_ref::<Column>() {
@@ -1068,24 +1050,15 @@ fn try_collapse_projection_chain(
             break;
         }
 
-        // Substitute each outer expression through the inner projection.
-        let mut new_exprs: Vec<ProjectionExpr> =
-            Vec::with_capacity(current_exprs.len());
-        let mut can_unify = true;
+        let mut new_exprs = Vec::with_capacity(current_exprs.len());
         for proj_expr in &current_exprs {
-            match update_expr(&proj_expr.expr, inner_exprs, true)? {
-                Some(expr) => new_exprs.push(ProjectionExpr {
-                    expr,
-                    alias: proj_expr.alias.clone(),
-                }),
-                None => {
-                    can_unify = false;
-                    break;
-                }
-            }
-        }
-        if !can_unify {
-            break;
+            let Some(expr) = update_expr(&proj_expr.expr, inner_exprs, true)? else {
+                break 'outer;
+            };
+            new_exprs.push(ProjectionExpr {
+                expr,
+                alias: proj_expr.alias.clone(),
+            });
         }
 
         current_exprs = new_exprs;
@@ -1097,11 +1070,8 @@ fn try_collapse_projection_chain(
         return Ok(None);
     }
 
-    // After collapsing the projection chain, hand the unified projection back
-    // to `remove_unnecessary_projections` once. This gives the non-Projection
-    // input (e.g. `DataSourceExec`) the chance to absorb the projection via
-    // its own `try_swapping_with_projection` impl — the same behaviour the
-    // pairwise recursion used to provide for the final step.
+    // Give the (now non-Projection) input a chance to absorb the unified
+    // projection via its own `try_swapping_with_projection` impl.
     let unified: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(current_exprs, current_input)?);
     remove_unnecessary_projections(unified).data().map(Some)

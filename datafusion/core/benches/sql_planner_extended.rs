@@ -324,13 +324,9 @@ fn build_non_case_left_join_df_with_push_down_filter(
     rt.block_on(async { ctx.sql(&query).await.unwrap() })
 }
 
-/// Build a query of the shape:
-///   join + wide-OR filter + N chained CTEs, each adding one column
-///   defined by a depth-K nested CASE ladder over the same input column.
-///
-/// The chained projections force the physical planner to walk a stack of
-/// `ProjectionExec`s whose expression trees all reference the same upstream
-/// column, which exercises the `ProjectionPushdown` physical rule heavily.
+/// Join + wide-OR filter + N chained CTEs, each adding one column defined
+/// by a depth-K nested CASE ladder over the same input column. Exercises
+/// the physical `ProjectionPushdown` rule on long projection chains.
 fn build_chained_case_projection_query(
     chained_steps: usize,
     case_depth: usize,
@@ -516,9 +512,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
     control_group.finish();
 
-    // Hot-spot bench: N chained CTE projections, each adding one column
-    // defined by a depth-K nested CASE ladder, on top of a join + wide-OR
-    // filter. Exercises the physical `ProjectionPushdown` rule.
     let chained_df = build_chained_case_projection_df(&rt, 80, 23, 30);
     c.bench_function(
         "physical_plan_chained_case_projection_hotspot",
