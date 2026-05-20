@@ -891,6 +891,9 @@ fn unsigned_to_char(value: u64) -> Result<char> {
     codepoint_to_char(codepoint)
 }
 
+/// Normalizes integer scalar payloads while preserving Spark formatting semantics:
+/// signed values format as decimal for `%d` / `%s` / `%c`, but use their original
+/// bit width for `%x` / `%o` via `unsigned_bits`.
 #[derive(Debug, Clone, Copy)]
 enum IntegerValue {
     Signed { decimal: i64, unsigned_bits: u64 },
