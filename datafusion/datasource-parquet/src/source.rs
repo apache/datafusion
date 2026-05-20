@@ -296,6 +296,21 @@ pub struct ParquetSource {
     /// Sort order driving `PreparedAccessPlan::reorder_by_statistics`
     /// in the opener.
     sort_order_for_reorder: Option<LexOrdering>,
+    /// Optional TopK fetch (K) hint plumbed from the surrounding
+    /// `SortExec(fetch=K)` by the `PushdownSort` rule (via
+    /// [`FileSource::with_topk_fetch_hint`]). When set together with
+    /// `sort_order_for_reorder`, the opener can use it to:
+    /// 1. Seed the TopK dynamic filter from per-row-group min/max
+    ///    statistics before `PruningPredicate` build.
+    /// 2. Truncate `row_group_indexes` once cumulative `num_rows >= K`.
+    ///
+    /// Not surfaced in EXPLAIN — the same value is shown on the
+    /// `SortExec` above the data source.
+    #[expect(
+        dead_code,
+        reason = "consumed by `with_topk_fetch_hint` and the opener in subsequent commits"
+    )]
+    topk_fetch: Option<usize>,
 }
 
 impl ParquetSource {
@@ -322,6 +337,7 @@ impl ParquetSource {
             encryption_factory: None,
             reverse_row_groups: false,
             sort_order_for_reorder: None,
+            topk_fetch: None,
         }
     }
 
