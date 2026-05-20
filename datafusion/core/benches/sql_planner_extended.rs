@@ -513,17 +513,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     control_group.finish();
 
     let chained_df = build_chained_case_projection_df(&rt, 80, 23, 30);
-    c.bench_function(
-        "physical_plan_chained_case_projection_hotspot",
-        |b| {
-            b.iter(|| {
-                let df_clone = chained_df.clone();
-                black_box(rt.block_on(async {
-                    df_clone.create_physical_plan().await.unwrap()
-                }));
-            })
-        },
-    );
+    c.bench_function("physical_plan_chained_case_projection_hotspot", |b| {
+        b.iter(|| {
+            let df_clone = chained_df.clone();
+            black_box(
+                rt.block_on(async { df_clone.create_physical_plan().await.unwrap() }),
+            );
+        })
+    });
 
     let mut chained_group =
         c.benchmark_group("physical_plan_chained_case_projection_sweep");

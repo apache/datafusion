@@ -1022,8 +1022,7 @@ fn try_collapse_projection_chain(
     let mut collapsed_any = false;
 
     'outer: loop {
-        let Some(inner_proj) = current_input.downcast_ref::<ProjectionExec>()
-        else {
+        let Some(inner_proj) = current_input.downcast_ref::<ProjectionExec>() else {
             break;
         };
 
