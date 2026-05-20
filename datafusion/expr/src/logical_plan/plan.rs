@@ -2499,8 +2499,12 @@ impl Filter {
     ///
     /// Skips the type-checking and dealiasing done in [Self::try_new].
     /// For internal use in DataFusion only.
+    ///
+    /// **Preconditions:**
+    /// - the `predicate` expression returns a boolean value
+    /// - the `predicate` expression is not aliased
     #[doc(hidden)]
-    pub fn new_unchecked(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
+    pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }
     }
 

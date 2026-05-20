@@ -52,27 +52,30 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     let mut other_predicates = Vec::new();
 
     for pred in predicates {
-        use Operator::*;
-
-        if let Expr::BinaryExpr(BinaryExpr {
-            left,
-            op: Gt | GtEq | Lt | LtEq | Eq,
-            right,
-        }) = &pred
-        {
-            if let (Some(col), Some(_)) =
-                (extract_column_from_expr(left), right.as_literal())
-            {
-                column_predicates.entry(col).or_default().push(pred);
-            } else if let (Some(_), Some(col)) =
-                (left.as_literal(), extract_column_from_expr(right))
-            {
-                column_predicates.entry(col).or_default().push(pred);
-            } else {
-                other_predicates.push(pred);
+        match &pred {
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op:
+                    Operator::Gt
+                    | Operator::GtEq
+                    | Operator::Lt
+                    | Operator::LtEq
+                    | Operator::Eq,
+                right,
+            }) => {
+                if let (Some(col), Some(_)) =
+                    (extract_column_from_expr(left), right.as_literal())
+                {
+                    column_predicates.entry(col).or_default().push(pred);
+                } else if let (Some(_), Some(col)) =
+                    (left.as_literal(), extract_column_from_expr(right))
+                {
+                    column_predicates.entry(col).or_default().push(pred);
+                } else {
+                    other_predicates.push(pred);
+                }
             }
-        } else {
-            other_predicates.push(pred)
+            _ => other_predicates.push(pred),
         }
     }
 

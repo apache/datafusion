@@ -414,15 +414,15 @@ fn push_down_all_join(
     // 3) should be kept as filter conditions
     let left_schema = join.left.schema();
     let right_schema = join.right.schema();
-    let left_schema_columns = schema_columns(left_schema);
-    let right_schema_columns = schema_columns(right_schema);
+
+    let left_schema_columns = schema_columns(left_schema.as_ref());
+    let right_schema_columns = schema_columns(right_schema.as_ref());
 
     let mut left_push = vec![];
     let mut right_push = vec![];
     let mut keep_predicates = vec![];
     let mut join_conditions = vec![];
     let mut checker = ColumnChecker::new(left_schema, right_schema);
-
     for predicate in predicates {
         if left_preserved && checker.is_left_only(&predicate) {
             left_push.push(predicate);
@@ -470,7 +470,6 @@ fn push_down_all_join(
             &left_schema_columns,
         ));
     }
-
     if right_preserved {
         right_push.extend(extract_or_clauses_for_join(
             &keep_predicates,
@@ -483,14 +482,13 @@ fn push_down_all_join(
     }
 
     // For predicates from join filter, we should check with if a join side is preserved
-    // in terms of join filtering.
+    // in term of join filtering.
     if on_left_preserved {
         left_push.extend(extract_or_clauses_for_join(
             &on_filter_join_conditions,
             &left_schema_columns,
         ));
     }
-
     if on_right_preserved {
         right_push.extend(extract_or_clauses_for_join(
             &on_filter_join_conditions,
@@ -512,15 +510,11 @@ fn push_down_all_join(
     }
 
     if let Some(predicate) = conjunction(left_push) {
-        join.left = Arc::new(LogicalPlan::Filter(Filter::new_unchecked(
-            predicate, join.left,
-        )));
+        join.left = Arc::new(LogicalPlan::Filter(Filter::new(predicate, join.left)));
     }
 
     if let Some(predicate) = conjunction(right_push) {
-        join.right = Arc::new(LogicalPlan::Filter(Filter::new_unchecked(
-            predicate, join.right,
-        )));
+        join.right = Arc::new(LogicalPlan::Filter(Filter::new(predicate, join.right)));
     }
 
     // wrap the join on the filter whose predicates must be kept, if any
@@ -802,15 +796,13 @@ impl OptimizerRule for PushDownFilter {
                 new_predicates.len()
             );
         }
-
         if old_predicate_len != new_predicates.len() {
-            if let Some(new_predicate) = conjunction(new_predicates) {
-                filter.predicate = new_predicate;
-            } else {
+            let Some(new_predicate) = conjunction(new_predicates) else {
                 // new_predicates is empty - remove the filter entirely
                 // Return the child plan without the filter
                 return Ok(Transformed::yes(Arc::unwrap_or_clone(filter.input)));
-            }
+            };
+            filter.predicate = new_predicate;
         }
 
         // If the child has a fetch (limit) or skip (offset), pushing a filter
@@ -975,7 +967,7 @@ impl OptimizerRule for PushDownFilter {
 
                     let push_predicate =
                         replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
-                    inputs.push(Arc::new(LogicalPlan::Filter(Filter::new_unchecked(
+                    inputs.push(Arc::new(LogicalPlan::Filter(Filter::new(
                         push_predicate,
                         input,
                     ))))
@@ -1001,7 +993,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut push_predicates = vec![];
                 for expr in predicates {
                     let cols = expr.column_refs();
-                    if cols.iter().all(|col| group_expr_columns.contains(col)) {
+                    if cols.iter().all(|c| group_expr_columns.contains(c)) {
                         push_predicates.push(replace_cols_by_name(expr, &replace_map)?);
                     } else {
                         keep_predicates.push(expr);
@@ -1044,8 +1036,8 @@ impl OptimizerRule for PushDownFilter {
                 let potential_partition_keys = window
                     .window_expr
                     .iter()
-                    .map(|expr| {
-                        match expr {
+                    .map(|e| {
+                        match e {
                             Expr::WindowFunction(window_func) => {
                                 extract_partition_keys(window_func)
                             }
@@ -1122,7 +1114,7 @@ impl OptimizerRule for PushDownFilter {
                 // Check which non-volatile filters are supported by source
                 let supported_filters = scan
                     .source
-                    .supports_filters_pushdown(&non_volatile_filters)?;
+                    .supports_filters_pushdown(non_volatile_filters.as_slice())?;
                 assert_eq_or_internal_err!(
                     non_volatile_filters.len(),
                     supported_filters.len(),
@@ -1148,7 +1140,7 @@ impl OptimizerRule for PushDownFilter {
                     .map(|(&pred, _)| pred);
 
                 // Add new scan filters
-                let new_scan_filters = scan
+                let new_scan_filters: Vec<Expr> = scan
                     .filters
                     .iter()
                     .chain(new_scan_filters)
@@ -1189,7 +1181,6 @@ impl OptimizerRule for PushDownFilter {
                     filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
                     return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                 }
-
                 let prevent_cols =
                     extension_plan.node.prevent_predicate_push_down_columns();
 
@@ -1203,7 +1194,7 @@ impl OptimizerRule for PushDownFilter {
                             !expr
                                 .column_refs()
                                 .iter()
-                                .any(|col| prevent_cols.contains(&col.name))
+                                .any(|c| prevent_cols.contains(&c.name))
                         })
                         .collect();
 
@@ -1220,10 +1211,10 @@ impl OptimizerRule for PushDownFilter {
                     .into_iter()
                     .zip(split_conjunction_owned(filter.predicate))
                 {
-                    if push {
-                        push_predicates.push(expr)
+                    if !push {
+                        keep_predicates.push(expr);
                     } else {
-                        keep_predicates.push(expr)
+                        push_predicates.push(expr);
                     }
                 }
 
@@ -1234,7 +1225,7 @@ impl OptimizerRule for PushDownFilter {
                     .inputs()
                     .into_iter()
                     .map(|child| {
-                        LogicalPlan::Filter(Filter::new_unchecked(
+                        LogicalPlan::Filter(Filter::new(
                             predicate.clone(),
                             Arc::new(child.clone()),
                         ))
@@ -1317,7 +1308,7 @@ fn rewrite_projection(
     let projection = if let Some(expr) = conjunction(push_predicates) {
         // re-write all filters based on this projection
         // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
-        projection.input = Arc::new(LogicalPlan::Filter(Filter::new_unchecked(
+        projection.input = Arc::new(LogicalPlan::Filter(Filter::new(
             replace_cols_by_name(expr, &pushable_map)?,
             projection.input,
         )));
@@ -1328,6 +1319,14 @@ fn rewrite_projection(
     };
 
     Ok((projection, keep_predicates))
+}
+
+/// Creates a new LogicalPlan::Filter node.
+///
+/// Deprecated: use [`Filter::try_new`] directly.
+#[deprecated]
+pub fn make_filter(predicate: Expr, input: Arc<LogicalPlan>) -> Result<LogicalPlan> {
+    Filter::try_new(predicate, input).map(LogicalPlan::Filter)
 }
 
 impl PushDownFilter {
@@ -1355,12 +1354,12 @@ where
 
 /// replaces columns by its name on the projection.
 pub fn replace_cols_by_name(
-    expr: Expr,
+    e: Expr,
     replace_map: &HashMap<String, impl AsRef<Expr>>,
 ) -> Result<Expr> {
-    expr.transform_up(|expr| {
-        if let Expr::Column(col) = &expr
-            && let Some(new_expr) = replace_map.get(&col.flat_name())
+    e.transform_up(|expr| {
+        if let Expr::Column(c) = &expr
+            && let Some(new_expr) = replace_map.get(&c.flat_name())
         {
             Ok(Transformed::yes(new_expr.as_ref().clone()))
         } else {
@@ -1380,9 +1379,9 @@ fn unalias(expr: &Expr) -> &Expr {
 }
 
 /// check whether the expression uses the columns in `check_map`.
-fn contain<T>(expr: &Expr, check_map: &HashMap<String, T>) -> bool {
+fn contain<T>(e: &Expr, check_map: &HashMap<String, T>) -> bool {
     let mut is_contain = false;
-    expr.apply(|expr| {
+    e.apply(|expr| {
         if let Expr::Column(c) = &expr
             && check_map.contains_key(&c.flat_name())
         {
@@ -1398,7 +1397,7 @@ fn contain<T>(expr: &Expr, check_map: &HashMap<String, T>) -> bool {
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
     if let Some(predicate) = conjunction(predicates) {
-        LogicalPlan::Filter(Filter::new_unchecked(predicate, Arc::new(plan)))
+        LogicalPlan::Filter(Filter::new(predicate, Arc::new(plan)))
     } else {
         plan
     }
@@ -1473,6 +1472,17 @@ mod tests {
             let optimized_plan = optimizer.optimize($plan, &OptimizerContext::new(), observe)?;
             assert_snapshot!(optimized_plan, @ $expected);
             Ok::<(), DataFusionError>(())
+        }};
+    }
+
+    /// For testing that we don't return [Transformed::yes] when not necessary,
+    /// as it triggers rebuilding parent plan nodes.
+    macro_rules! assert_plan_not_transformed {
+        ($plan:expr) => {{
+            let transformed = PushDownFilter::new()
+                .rewrite($plan, &OptimizerContext::new())
+                .expect("failed to optimize plan");
+            assert!(!transformed.transformed);
         }};
     }
 
@@ -1624,10 +1634,8 @@ mod tests {
             .aggregate(vec![col("a")], vec![sum(col("b")).alias("b")])?
             .filter(col("b").gt(lit(10i64)))?
             .build()?;
-        let transformed = PushDownFilter::new()
-            .rewrite(plan.clone(), &OptimizerContext::new())
-            .expect("failed to optimize plan");
-        assert!(!transformed.transformed);
+        assert_plan_not_transformed!(plan.clone());
+
         // filter of aggregate is after aggregation since they are non-commutative
         assert_optimized_plan_equal!(
             plan,
@@ -1820,10 +1828,7 @@ mod tests {
             .window(vec![window])?
             .filter(col("c").gt(lit(10i64)))?
             .build()?;
-        let transformed = PushDownFilter::new()
-            .rewrite(plan.clone(), &OptimizerContext::new())
-            .expect("failed to optimize plan");
-        assert!(!transformed.transformed);
+        assert_plan_not_transformed!(plan.clone());
 
         assert_optimized_plan_equal!(
             plan,
@@ -3049,10 +3054,7 @@ mod tests {
                 Some(filter),
             )?
             .build()?;
-        let transformed = PushDownFilter::new()
-            .rewrite(plan.clone(), &OptimizerContext::new())
-            .expect("failed to optimize plan");
-        assert!(!transformed.transformed);
+        assert_plan_not_transformed!(plan.clone());
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
@@ -3163,16 +3165,12 @@ mod tests {
             .rewrite(plan, &OptimizerContext::new())
             .expect("failed to optimize plan");
         assert!(optimized.transformed);
-
-        let optimized_again = PushDownFilter::new()
-            .rewrite(optimized.data.clone(), &OptimizerContext::new())
-            .expect("failed to optimize plan");
-        assert!(!optimized_again.transformed);
+        assert_plan_not_transformed!(optimized.data.clone());
 
         // Optimizing the same plan multiple times should produce the same plan
         // each time.
         assert_optimized_plan_equal!(
-            optimized_again.data,
+            optimized.data,
             @r"
         Filter: a = Int64(1)
           TableScan: test, partial_filters=[a = Int64(1)]
@@ -3184,11 +3182,7 @@ mod tests {
     fn filter_with_table_provider_unsupported() -> Result<()> {
         let plan =
             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Unsupported)?;
-
-        let transformed = PushDownFilter::new()
-            .rewrite(plan.clone(), &OptimizerContext::new())
-            .expect("failed to optimize plan");
-        assert!(!transformed.transformed);
+        assert_plan_not_transformed!(plan.clone());
 
         assert_optimized_plan_equal!(
             plan,
