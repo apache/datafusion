@@ -898,13 +898,6 @@ enum IntegerValue {
 }
 
 impl IntegerValue {
-    fn decimal(self) -> IntegerFormatValue {
-        match self {
-            Self::Signed { decimal, .. } => IntegerFormatValue::Signed(decimal),
-            Self::Unsigned(value) => IntegerFormatValue::Unsigned(value),
-        }
-    }
-
     fn unsigned_bits(self) -> u64 {
         match self {
             Self::Signed { unsigned_bits, .. } => unsigned_bits,
@@ -918,21 +911,58 @@ impl IntegerValue {
             Self::Unsigned(value) => unsigned_to_char(value),
         }
     }
-}
 
-enum IntegerFormatValue {
-    Signed(i64),
-    Unsigned(u64),
-}
-
-impl std::fmt::Display for IntegerFormatValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn format_decimal(
+        self,
+        spec: &ConversionSpecifier,
+        writer: &mut String,
+    ) -> Result<()> {
         match self {
-            Self::Signed(value) => write!(f, "{value}"),
-            Self::Unsigned(value) => write!(f, "{value}"),
+            Self::Signed { decimal, .. } => spec.format_signed(writer, decimal),
+            Self::Unsigned(value) => spec.format_unsigned(writer, value),
+        }
+    }
+
+    fn decimal_string(self) -> String {
+        match self {
+            Self::Signed { decimal, .. } => decimal.to_string(),
+            Self::Unsigned(value) => value.to_string(),
         }
     }
 }
+
+macro_rules! signed_integer_value {
+    ($source:ty, $unsigned:ty) => {
+        impl From<$source> for IntegerValue {
+            fn from(value: $source) -> Self {
+                Self::Signed {
+                    decimal: value as i64,
+                    unsigned_bits: (value as $unsigned) as u64,
+                }
+            }
+        }
+    };
+}
+
+signed_integer_value!(i8, u8);
+signed_integer_value!(i16, u16);
+signed_integer_value!(i32, u32);
+signed_integer_value!(i64, u64);
+
+macro_rules! unsigned_integer_value {
+    ($source:ty) => {
+        impl From<$source> for IntegerValue {
+            fn from(value: $source) -> Self {
+                Self::Unsigned(value as u64)
+            }
+        }
+    };
+}
+
+unsigned_integer_value!(u8);
+unsigned_integer_value!(u16);
+unsigned_integer_value!(u32);
+unsigned_integer_value!(u64);
 
 impl ConversionSpecifier {
     /// Validates that the grouping separator flag is not used with scientific
@@ -966,56 +996,14 @@ impl ConversionSpecifier {
 
                 _ => self.format_boolean(string, value),
             },
-            ScalarValue::Int8(value) => self.format_integer(
-                string,
-                value.map(|value| IntegerValue::Signed {
-                    decimal: value as i64,
-                    unsigned_bits: (value as u8) as u64,
-                }),
-                "Int8",
-            ),
-            ScalarValue::Int16(value) => self.format_integer(
-                string,
-                value.map(|value| IntegerValue::Signed {
-                    decimal: value as i64,
-                    unsigned_bits: (value as u16) as u64,
-                }),
-                "Int16",
-            ),
-            ScalarValue::Int32(value) => self.format_integer(
-                string,
-                value.map(|value| IntegerValue::Signed {
-                    decimal: value as i64,
-                    unsigned_bits: (value as u32) as u64,
-                }),
-                "Int32",
-            ),
-            ScalarValue::Int64(value) => self.format_integer(
-                string,
-                value.map(|value| IntegerValue::Signed {
-                    decimal: value,
-                    unsigned_bits: value as u64,
-                }),
-                "Int64",
-            ),
-            ScalarValue::UInt8(value) => self.format_integer(
-                string,
-                value.map(|value| IntegerValue::Unsigned(value as u64)),
-                "UInt8",
-            ),
-            ScalarValue::UInt16(value) => self.format_integer(
-                string,
-                value.map(|value| IntegerValue::Unsigned(value as u64)),
-                "UInt16",
-            ),
-            ScalarValue::UInt32(value) => self.format_integer(
-                string,
-                value.map(|value| IntegerValue::Unsigned(value as u64)),
-                "UInt32",
-            ),
-            ScalarValue::UInt64(value) => {
-                self.format_integer(string, value.map(IntegerValue::Unsigned), "UInt64")
-            }
+            ScalarValue::Int8(value) => self.format_integer(string, value, "Int8"),
+            ScalarValue::Int16(value) => self.format_integer(string, value, "Int16"),
+            ScalarValue::Int32(value) => self.format_integer(string, value, "Int32"),
+            ScalarValue::Int64(value) => self.format_integer(string, value, "Int64"),
+            ScalarValue::UInt8(value) => self.format_integer(string, value, "UInt8"),
+            ScalarValue::UInt16(value) => self.format_integer(string, value, "UInt16"),
+            ScalarValue::UInt32(value) => self.format_integer(string, value, "UInt32"),
+            ScalarValue::UInt64(value) => self.format_integer(string, value, "UInt64"),
             ScalarValue::Float16(value) => match (self.conversion_type, value) {
                 (
                     ConversionType::DecFloatLower
@@ -1377,31 +1365,25 @@ impl ConversionSpecifier {
         }
     }
 
-    fn format_integer(
+    fn format_integer<T>(
         &self,
         writer: &mut String,
-        value: Option<IntegerValue>,
+        value: &Option<T>,
         type_name: &str,
-    ) -> Result<()> {
-        let Some(value) = value else {
+    ) -> Result<()>
+    where
+        T: Copy + Into<IntegerValue>,
+    {
+        let Some(value) = value.map(Into::into) else {
             return if self.conversion_type.supports_integer() {
                 self.format_string(writer, "null")
             } else {
-                exec_err!(
-                    "Invalid conversion type: {:?} for {}",
-                    self.conversion_type,
-                    type_name
-                )
+                self.invalid_integer_conversion(type_name)
             };
         };
 
         match self.conversion_type {
-            ConversionType::DecInt => match value.decimal() {
-                IntegerFormatValue::Signed(value) => self.format_signed(writer, value),
-                IntegerFormatValue::Unsigned(value) => {
-                    self.format_unsigned(writer, value)
-                }
-            },
+            ConversionType::DecInt => value.format_decimal(self, writer),
             ConversionType::HexIntLower
             | ConversionType::HexIntUpper
             | ConversionType::OctInt => {
@@ -1411,14 +1393,18 @@ impl ConversionSpecifier {
                 self.format_char(writer, value.to_char()?)
             }
             ConversionType::StringLower | ConversionType::StringUpper => {
-                self.format_string(writer, &value.decimal().to_string())
+                self.format_string(writer, &value.decimal_string())
             }
-            _ => exec_err!(
-                "Invalid conversion type: {:?} for {}",
-                self.conversion_type,
-                type_name
-            ),
+            _ => self.invalid_integer_conversion(type_name),
         }
+    }
+
+    fn invalid_integer_conversion<T>(&self, type_name: &str) -> Result<T> {
+        exec_err!(
+            "Invalid conversion type: {:?} for {}",
+            self.conversion_type,
+            type_name
+        )
     }
 
     fn format_hex_float(&self, writer: &mut String, value: f64) -> Result<()> {
@@ -2528,54 +2514,66 @@ mod tests {
     #[test]
     fn test_integer_formatting_across_widths() -> Result<()> {
         let cases = [
-            (ScalarValue::Int8(Some(-1)), "%d|%x|%o|%s", "-1|ff|377|-1"),
+            (
+                ScalarValue::Int8(Some(-1)),
+                "%d|%x|%o|%s",
+                4,
+                "-1|ff|377|-1",
+            ),
             (
                 ScalarValue::Int16(Some(-1)),
                 "%d|%x|%o|%s",
+                4,
                 "-1|ffff|177777|-1",
             ),
             (
                 ScalarValue::Int32(Some(-1)),
                 "%d|%x|%o|%s",
+                4,
                 "-1|ffffffff|37777777777|-1",
             ),
             (
                 ScalarValue::Int64(Some(-1)),
                 "%d|%x|%o|%s",
+                4,
                 "-1|ffffffffffffffff|1777777777777777777777|-1",
             ),
             (
                 ScalarValue::UInt8(Some(255)),
                 "%d|%x|%o|%s|%c",
+                5,
                 "255|ff|377|255|ÿ",
             ),
             (
                 ScalarValue::UInt16(Some(65535)),
                 "%d|%x|%o|%s",
+                4,
                 "65535|ffff|177777|65535",
             ),
             (
                 ScalarValue::UInt32(Some(u32::MAX)),
                 "%d|%x|%o|%s",
+                4,
                 "4294967295|ffffffff|37777777777|4294967295",
             ),
             (
                 ScalarValue::UInt64(Some(u64::MAX)),
                 "%d|%x|%o|%s",
+                4,
                 "18446744073709551615|ffffffffffffffff|1777777777777777777777|18446744073709551615",
             ),
             (
                 ScalarValue::Int32(None),
                 "%d|%x|%o|%s|%c",
+                5,
                 "null|null|null|null|null",
             ),
         ];
 
-        for (value, fmt, expected) in cases {
-            let data_types =
-                vec![value.data_type(); fmt.chars().filter(|c| *c == '%').count()];
+        for (value, fmt, arg_count, expected) in cases {
+            let data_types = vec![value.data_type(); arg_count];
             let formatter = Formatter::parse(fmt, &data_types)?;
-            let args = vec![value; data_types.len()];
+            let args = vec![value; arg_count];
             assert_eq!(formatter.format(&args)?, expected, "{fmt}");
         }
         Ok(())
