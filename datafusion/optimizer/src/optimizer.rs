@@ -490,7 +490,7 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
 /// # Error semantics
 ///
 /// On `Err`, `*plan` is left in an **unspecified** state and must not be used.
-/// Note this is different than consuming APIs such as [`TreeNode::rewrite`] 
+/// Note this is different than consuming APIs such as [`TreeNode::rewrite`]
 /// where the original plan is freed and no longer available on error
 #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn rewrite_plan_in_place(
