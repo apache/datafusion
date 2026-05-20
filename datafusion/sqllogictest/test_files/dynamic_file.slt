@@ -265,3 +265,52 @@ SELECT id, CAST(string_col AS varchar) FROM '../../parquet-testing/data/alltypes
 3 1
 0 0
 1 1
+
+# Glob expressions in dynamic-file paths (DuckDB-compatible
+# semantics). The `CREATE EXTERNAL TABLE` equivalents live in
+# `glob.slt`.
+
+statement ok
+CREATE TABLE glob_seed2(id INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE glob_seed3(id INT) AS VALUES (1), (2), (3);
+
+query I
+COPY (SELECT * FROM glob_seed2) TO 'test_files/scratch/dynamic_file/glob/top1.parquet' STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM glob_seed2) TO 'test_files/scratch/dynamic_file/glob/top2.parquet' STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM glob_seed3) TO 'test_files/scratch/dynamic_file/glob/nested/a/b/deep.parquet' STORED AS PARQUET;
+----
+3
+
+# `*` does not cross `/`: only the two top-level files match.
+query I
+SELECT count(*) FROM 'test_files/scratch/dynamic_file/glob/*.parquet';
+----
+4
+
+# `**` recurses across directory levels.
+query I
+SELECT count(*) FROM 'test_files/scratch/dynamic_file/glob/**/deep.parquet';
+----
+3
+
+# Character classes work.
+query I
+SELECT count(*) FROM 'test_files/scratch/dynamic_file/glob/top[12].parquet';
+----
+4
+
+statement ok
+DROP TABLE glob_seed2;
+
+statement ok
+DROP TABLE glob_seed3;
