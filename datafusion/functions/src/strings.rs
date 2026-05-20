@@ -703,6 +703,10 @@ impl StringViewArrayBuilder {
         if self.in_progress.capacity() < required_cap {
             self.flush_in_progress();
             let to_reserve = (length as usize).max(self.next_block_size() as usize);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "StringView block_size bounds growth, so reserve cannot overflow capacity"
+            )]
             self.in_progress.reserve(to_reserve);
         }
 
@@ -730,6 +734,10 @@ impl StringViewArrayBuilder {
         if self.in_progress.capacity() < required_cap {
             self.flush_in_progress();
             let to_reserve = (length as usize).max(self.next_block_size() as usize);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "StringView block_size bounds growth, so reserve cannot overflow capacity"
+            )]
             self.in_progress.reserve(to_reserve);
         }
     }
