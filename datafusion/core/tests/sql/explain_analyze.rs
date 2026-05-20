@@ -877,8 +877,12 @@ async fn parquet_explain_analyze() {
         .unwrap()
         .to_string();
 
-    // should contain aggregated stats
-    assert_contains!(&formatted, "output_rows=8");
+    // should contain aggregated stats. The scan now applies the predicate
+    // post-scan (the `FilterExec` above it is removed), so `output_rows` is
+    // the matching row count (5) rather than the decoded row count (8).
+    // The 3 rejected rows show up as `post_scan_rows_pruned=3`.
+    assert_contains!(&formatted, "output_rows=5");
+    assert_contains!(&formatted, "post_scan_rows_pruned=3");
     assert_contains!(
         &formatted,
         "row_groups_pruned_bloom_filter=1 total \u{2192} 1 matched"
@@ -1010,14 +1014,10 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r"
+        @"
     SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
       RecursiveQueryExec: name=number_series, is_distinct=false
-        CoalescePartitionsExec
-          ProjectionExec: expr=[id@0 as id, 1 as level]
-            FilterExec: id@0 = 1
-              RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1
-                DataSourceExec: file_groups={1 group: [[TMP_DIR/hierarchy.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
+        DataSourceExec: file_groups={1 group: [[TMP_DIR/hierarchy.parquet]]}, projection=[id, 1 as level], file_type=parquet, predicate=id@0 = 1, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 1 AND 1 <= id_max@1, required_guarantees=[id in (1)]
         CoalescePartitionsExec
           ProjectionExec: expr=[id@0 + 1 as id, level@1 + 1 as level]
             FilterExec: id@0 < 10

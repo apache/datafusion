@@ -25,8 +25,9 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::page_filter::PagePruningAccessPlanFilter;
+use crate::post_scan_filter::DecoderProjection;
 use crate::push_decoder::{DecoderBuilderConfig, PushDecoderStreamState};
-use crate::row_filter::{RowFilterGenerator, build_projection_read_plan};
+use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
     Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
@@ -36,7 +37,6 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -1156,25 +1156,61 @@ impl RowGroupsPrunedParquetOpen {
             };
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
-        let read_plan = build_projection_read_plan(
-            prepared.projection.expr_iter(),
+
+        // ---------------------------------------------------------------
+        // Filter placement
+        //
+        // The scan accepts every pushable filter (the parent `FilterExec`
+        // is gone), so the predicate must be applied here. Each conjunct
+        // is routed to one of two places:
+        //
+        // * the parquet `RowFilter` (during decode, only when
+        //   `pushdown_filters = true`), or
+        // * the in-scan post-scan filter (otherwise, plus any conjunct
+        //   the `RowFilter` machinery cannot evaluate on this file —
+        //   `RowFilterGenerator::rejected_conjuncts`).
+        //
+        // Either way every conjunct is applied; nothing is silently
+        // dropped.
+        // ---------------------------------------------------------------
+        let pushdown_predicate = prepared
+            .pushdown_filters
+            .then_some(prepared.predicate.as_ref())
+            .flatten();
+        let mut row_filter_generator = RowFilterGenerator::new(
+            pushdown_predicate,
             &prepared.physical_file_schema,
-            reader_metadata.parquet_schema(),
+            file_metadata.as_ref(),
+            prepared.reorder_predicates,
+            &prepared.file_metrics,
         );
 
-        let (decoder, pending_decoders, remaining_limit) = {
-            let pushdown_predicate = prepared
-                .pushdown_filters
-                .then_some(prepared.predicate.as_ref())
-                .flatten();
-            let mut row_filter_generator = RowFilterGenerator::new(
-                pushdown_predicate,
-                &prepared.physical_file_schema,
-                file_metadata.as_ref(),
-                prepared.reorder_predicates,
-                &prepared.file_metrics,
-            );
+        let post_scan_conjuncts: Vec<Arc<dyn PhysicalExpr>> = if prepared.pushdown_filters
+        {
+            // Pushdown enabled: only what the RowFilter could not place
+            // falls through to post-scan.
+            row_filter_generator.rejected_conjuncts().to_vec()
+        } else if let Some(predicate) = prepared.predicate.as_ref() {
+            // Pushdown disabled: the whole predicate runs post-scan
+            // (in-scan equivalent of a FilterExec).
+            datafusion_physical_expr::split_conjunction(predicate)
+                .into_iter()
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
 
+        let decoder_projection = DecoderProjection::build(
+            &prepared.projection,
+            &post_scan_conjuncts,
+            &prepared.physical_file_schema,
+            reader_metadata.parquet_schema(),
+            &prepared.output_schema,
+            &prepared.file_metrics,
+        )?;
+
+        let (decoder, pending_decoders, remaining_limit) = {
             // Split into consecutive runs of row groups that share the same filter
             // requirement. Fully matched row groups skip the RowFilter; others need it.
             // Reverse the run order for reverse scans so the combined decoder stream
@@ -1184,11 +1220,17 @@ impl RowGroupsPrunedParquetOpen {
                 runs.reverse();
             }
             let run_count = runs.len();
-            let decoder_limit = prepared.limit.filter(|_| run_count == 1);
-            let remaining_limit = prepared.limit.filter(|_| run_count > 1);
+            // Decoder-local limits are only safe when no post-decode work
+            // can reject rows. A post-scan filter can — so when one is
+            // present the limit must be enforced at the stream level via
+            // `remaining_limit`.
+            let single_no_post_scan =
+                run_count == 1 && decoder_projection.post_scan_filter.is_none();
+            let decoder_limit = prepared.limit.filter(|_| single_no_post_scan);
+            let remaining_limit = prepared.limit.filter(|_| !single_no_post_scan);
 
             let decoder_config = DecoderBuilderConfig {
-                read_plan: &read_plan,
+                projection_mask: &decoder_projection.projection_mask,
                 batch_size: prepared.batch_size,
                 arrow_reader_metrics: &arrow_reader_metrics,
                 force_filter_selections: prepared.force_filter_selections,
@@ -1226,18 +1268,12 @@ impl RowGroupsPrunedParquetOpen {
         let predicate_cache_records =
             prepared.file_metrics.predicate_cache_records.clone();
 
-        // Check if we need to replace the schema to handle things like differing nullability or metadata.
-        // See note below about file vs. output schema.
-        let stream_schema = read_plan.projected_schema;
-        let replace_schema = stream_schema != prepared.output_schema;
-
-        // Rebase column indices to match the narrowed stream schema.
-        // The projection expressions have indices based on physical_file_schema,
-        // but the stream only contains the columns selected by the ProjectionMask.
-        let projection = prepared
-            .projection
-            .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
-        let projector = projection.make_projector(&stream_schema)?;
+        let DecoderProjection {
+            projection_mask: _,
+            projector,
+            replace_schema,
+            post_scan_filter,
+        } = decoder_projection;
         let output_schema = Arc::clone(&prepared.output_schema);
         let files_ranges_pruned_statistics =
             prepared.file_metrics.files_ranges_pruned_statistics.clone();
@@ -1253,6 +1289,7 @@ impl RowGroupsPrunedParquetOpen {
             predicate_cache_inner_records,
             predicate_cache_records,
             baseline_metrics: prepared.baseline_metrics,
+            post_scan_filter,
         }
         .into_stream();
 
@@ -1857,14 +1894,16 @@ mod test {
                 .build()
         };
 
-        // A filter on "a" should not exclude any rows even if it matches the data
+        // A filter on "a" cannot be excluded by file-level stats (no stats on
+        // column 0). The scan now accepts the filter and applies it post-scan
+        // (in-scan equivalent of `FilterExec`), so only matching rows survive.
         let expr = col("a").eq(lit(1));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_rows, 1);
 
         // A filter on `b = 5.0` should exclude all rows
         let expr = col("b").eq(lit(ScalarValue::Float32(Some(5.0))));
@@ -1979,14 +2018,16 @@ mod test {
                 .build()
         };
 
-        // Filter should match the partition value and file statistics
+        // Filter should match the partition value and file statistics (i.e. no
+        // file-level pruning). The scan now accepts the filter and applies it
+        // post-scan, leaving only the single row where `b = 1.0`.
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_rows, 1);
 
         // Should prune based on partition value but not file statistics
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1.0)));
@@ -2518,13 +2559,17 @@ mod test {
         )
         .await;
 
+        // The scan now always applies the predicate (RowFilter or post-scan),
+        // so both paths return the same matching rows. The page index only
+        // affects IO — it decides whether the 90 non-matching rows are
+        // physically read before being rejected.
         assert_eq!(
             rows_with_page_index, 10,
             "page index should prune 9 of 10 pages"
         );
         assert_eq!(
-            rows_without_page_index, 100,
-            "without page index all rows are returned"
+            rows_without_page_index, 10,
+            "without page index the post-scan filter still rejects non-matching rows"
         );
     }
 
@@ -2684,5 +2729,96 @@ mod test {
 
         assert!(runs[2].needs_filter);
         assert_eq!(runs[2].access_plan.row_group_indexes(), vec![3]);
+    }
+
+    /// End-to-end regression test for the "drop-on-floor" bug fixed by
+    /// `build_row_filter` now returning rejected conjuncts and the opener
+    /// routing them to the post-scan filter.
+    ///
+    /// Setup: a parquet file with a struct column where some rows have a NULL
+    /// struct. Predicate `s IS NOT NULL` is set on the source with
+    /// `pushdown_filters = true`. `ParquetSource::try_pushdown_filters` would
+    /// have already removed the parent `FilterExec` (the conjunct is pushable
+    /// at table schema level). Inside `build_row_filter`,
+    /// `FilterCandidateBuilder::build` rejects the whole-struct reference as
+    /// non-primitive.
+    ///
+    /// Before the fix the rejected conjunct was silently dropped, leaving the
+    /// scan with no `RowFilter` and no post-scan filter, so every row was
+    /// returned — i.e. the predicate was relaxed and the query returned wrong
+    /// results. After the fix the conjunct is surfaced and applied as a
+    /// post-scan filter, so only the rows with a non-null struct survive.
+    #[tokio::test]
+    async fn rejected_struct_conjunct_runs_post_scan_not_dropped() {
+        use arrow::array::{Int32Array, StringArray, StructArray};
+        use arrow::buffer::NullBuffer;
+        use arrow::datatypes::Fields;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8}).
+        let struct_fields: Fields = vec![
+            Arc::new(Field::new("value", DataType::Int32, true)),
+            Arc::new(Field::new("label", DataType::Utf8, true)),
+        ]
+        .into();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(struct_fields.clone()), true),
+        ]));
+
+        // Data: rows 0 and 2 have a non-null struct, row 1 is null.
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StructArray::new(
+                    struct_fields,
+                    vec![
+                        Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])) as _,
+                        Arc::new(StringArray::from(vec![Some("a"), None, Some("c")]))
+                            as _,
+                    ],
+                    Some(NullBuffer::from(vec![true, false, true])),
+                )),
+            ],
+        )
+        .unwrap();
+
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "rejected.parquet",
+            vec![batch],
+            None,
+        )
+        .await;
+
+        let file = PartitionedFile::new("rejected.parquet".to_string(), data_size as u64);
+
+        // `s IS NOT NULL` references a whole struct, which `PushdownChecker`
+        // flags as non-primitive — `FilterCandidateBuilder::build` returns
+        // `Ok(None)` and the conjunct lands in `rejected`.
+        let predicate = logical2physical(&col("s").is_not_null(), &schema);
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            // The RowFilter path: emulates the post-`try_pushdown_filters`
+            // state where the parent `FilterExec` has already been removed
+            // and the scan owns the conjunct.
+            .with_pushdown_filters(true)
+            .build();
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let (_, rows) = count_batches_and_rows(stream).await;
+
+        // 2 rows have a non-null struct. Before the fix this returned 3
+        // (the conjunct was silently dropped).
+        assert_eq!(
+            rows, 2,
+            "expected 2 rows with non-null struct; the rejected conjunct must \
+             be applied post-scan, not silently dropped"
+        );
     }
 }
