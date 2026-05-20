@@ -138,12 +138,14 @@ pub(super) struct ParquetMorselizer {
     /// Optional sort order used to reorder row groups by their min/max statistics.
     pub sort_order_for_reorder: Option<LexOrdering>,
     /// Optional TopK fetch (K) hint plumbed from the surrounding
-    /// `SortExec(fetch=K)` via [`crate::ParquetSource`]'s
-    /// `with_topk_fetch_hint`. The opener uses it (in combination with
-    /// `sort_order_for_reorder` and a bare-`DynamicFilterPhysicalExpr`
-    /// predicate) to seed the TopK threshold from per-RG statistics
-    /// before `PruningPredicate` build and to truncate
-    /// `row_group_indexes` once cumulative `num_rows` reaches `K`.
+    /// `SortExec(fetch=K)` via [`ParquetSource`]'s `with_topk_fetch_hint`.
+    /// The opener uses it (in combination with `sort_order_for_reorder` and
+    /// a bare-`DynamicFilterPhysicalExpr` predicate) to seed the TopK
+    /// threshold from per-RG statistics before `PruningPredicate` build and
+    /// to truncate `row_group_indexes` once cumulative `num_rows` reaches
+    /// `K`.
+    ///
+    /// [`ParquetSource`]: crate::source::ParquetSource
     pub topk_fetch: Option<usize>,
 }
 
@@ -1173,14 +1175,48 @@ impl RowGroupsPrunedParquetOpen {
         // Both inputs come from the sort-pushdown channel —
         // `ParquetSource::try_pushdown_sort` sets `sort_order_for_reorder`
         // and/or `reverse_row_groups`.
-        // Same gate as the stats-init step in `prepare_filters`. The
-        // boolean is hoisted here because the closure captures it.
+        // Same gate as the stats-init step in `prepare_filters`, plus:
+        //
+        // * `sort_order.len() == 1`: the leading-column reorder only
+        //   sorts row groups by `min(col0)`. With a multi-column sort
+        //   (e.g. `ORDER BY b ASC, a DESC`) ties on the leading column
+        //   may span row groups, so truncating after the first K rows
+        //   could drop a row group that contains a member of the true
+        //   top-K once the tie is broken by the trailing columns.
+        //   Multi-column TopK still benefits from reorder + reverse;
+        //   we only skip the cumulative truncation.
+        //
+        // * `remapped_children.is_none()`: a projection between TopK
+        //   and the scan would also break the assumption that the
+        //   cumulative `num_rows` over the scan-side row groups maps
+        //   directly to the K rows TopK is looking for.
+        //
+        // The boolean is hoisted here because the closure captures it.
         let topk_no_where_active = prepared.topk_fetch.is_some()
-            && prepared.sort_order_for_reorder.is_some()
             && prepared
-                .predicate
+                .sort_order_for_reorder
                 .as_ref()
-                .is_some_and(topk_no_where::predicate_is_pure_dynamic_filter);
+                .is_some_and(|so| so.len() == 1)
+            && prepared.predicate.as_ref().is_some_and(|p| {
+                topk_no_where::predicate_is_pure_dynamic_filter(p)
+                    && topk_no_where::find_dynamic_filter(p).is_some_and(|df| {
+                        // Same `remapped_children == original_children`
+                        // check as the stats-init gate, allowing the
+                        // identity-remap that `reassign_expr_columns`
+                        // produces during filter pushdown.
+                        match df.remapped_children() {
+                            None => true,
+                            Some(remapped) => {
+                                let originals = df.original_children();
+                                originals.len() == remapped.len()
+                                    && originals
+                                        .iter()
+                                        .zip(remapped.iter())
+                                        .all(|(orig, new)| orig.as_ref() == new.as_ref())
+                            }
+                        }
+                    })
+            });
         let prepare_access_plan =
             |plan: ParquetAccessPlan| -> Result<PreparedAccessPlan> {
                 let mut prepared_plan = plan.prepare(rg_metadata)?;
@@ -1574,6 +1610,61 @@ mod topk_no_where {
         let Some(dynamic_filter) = find_dynamic_filter(predicate) else {
             return Ok(());
         };
+
+        // Bail out if a projection sits between the TopK and the scan
+        // that actually rewrote the filter's column references (i.e.
+        // the dynamic filter's `remapped_children` differ from
+        // `original_children`). In that case the stored expression
+        // inside the dynamic filter is in the TopK output column space
+        // (e.g. `a@1`) but `sort_order_for_reorder` is in the scan
+        // column space (e.g. `a@0`, or worse, `CAST(a@0 AS Int64) + 1`
+        // for a computed projection). Installing a scan-side BinaryExpr
+        // would either bypass the children remapping (so the TopK side
+        // ends up evaluating against the wrong column) or, when
+        // `remap_children` does find a match, double-wrap the
+        // expression with the projection's cast/computation. Either
+        // way the resulting filter is wrong. Punt on the stats-init —
+        // TopK will tighten the dynamic filter from real data on the
+        // first batch as before.
+        //
+        // We deliberately allow `remapped_children == original_children`
+        // here: the filter-pushdown path always rebuilds children via
+        // `reassign_expr_columns`, which produces fresh `Arc`s that
+        // `with_new_children_if_necessary` then installs as
+        // `remapped_children`. When the two slices are *logically* equal
+        // there's no projection rewriting in play and stats-init is
+        // safe.
+        if let Some(remapped) = dynamic_filter.remapped_children() {
+            let originals = dynamic_filter.original_children();
+            let logically_equal = originals.len() == remapped.len()
+                && originals
+                    .iter()
+                    .zip(remapped.iter())
+                    .all(|(orig, new)| orig.as_ref() == new.as_ref());
+            if !logically_equal {
+                debug!(
+                    "Skipping TopK stats init: dynamic filter children were rewritten by projection pushdown"
+                );
+                return Ok(());
+            }
+        }
+
+        // Multi-column sort is unsafe for the dual cumulative-RG prune
+        // (the leading-column reorder doesn't disambiguate ties on the
+        // leading column, so the tie may span row groups). Stats init
+        // *itself* is safe for multi-column sort — the seeded threshold
+        // is still a valid lower/upper bound on the K-th value of the
+        // leading column — but we gate both on the same "single-column
+        // sort" condition for symmetry and to keep the no-WHERE TopK
+        // path obviously correct. Multi-column TopK still tightens its
+        // filter from real data on the first batch as before.
+        if sort_order.len() != 1 {
+            debug!(
+                "Skipping TopK stats init: multi-column sort (len={})",
+                sort_order.len()
+            );
+            return Ok(());
+        }
 
         let first_sort_expr = sort_order.first();
         let Some(column) = find_column_in_expr(&first_sort_expr.expr) else {
