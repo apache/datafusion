@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use crate::listing_glob::LISTING_GLOB_MATCH_OPTIONS;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::listing_glob::{normalize_glob_separators, split_glob_expression};
+use crate::listing_glob::{
+    find_url_path_start, normalize_glob_separators, split_glob_expression,
+};
 use datafusion_common::{DataFusionError, Result, TableReference};
 use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::CachedFileList;
@@ -93,16 +95,36 @@ impl ListingTableUrl {
     /// of ambiguity it is recommended users always include trailing `/` when intending to
     /// refer to a directory.
     ///
-    /// ## Glob File Paths
+    /// ## Glob Expressions
     ///
-    /// If no scheme is provided, and the path contains a glob expression, it will
-    /// be resolved as follows.
+    /// Glob expressions (`*`, `**`, `?`, `[abc]`) are supported in both
+    /// scheme-less filesystem paths and scheme URLs (e.g.
+    /// `s3://bucket/data/**/x.parquet`, `file:///foo/*.parquet`).
     ///
-    /// The string up to the first path segment containing a glob expression will be extracted,
-    /// and resolved in the same manner as a normal scheme-less path above.
+    /// The string up to the first path segment containing a glob
+    /// character will be extracted as the literal listing prefix
+    /// (passed to `ObjectStore::list`). The remaining string will be
+    /// interpreted as a [`glob::Pattern`] and used to filter the
+    /// listed paths.
     ///
-    /// The remaining string will be interpreted as a [`glob::Pattern`] and used as a
-    /// filter when listing files from object storage
+    /// Match semantics mirror DuckDB's filesystem glob:
+    ///
+    /// * `*` matches any characters within a single path segment; it
+    ///   does **not** cross `/`.
+    /// * `**` matches zero or more directory levels (required for
+    ///   recursion across subdirectories).
+    /// * `?` matches exactly one non-separator character. **Only in
+    ///   scheme-less paths** — in scheme URLs, `?` is reserved for the
+    ///   URL query delimiter; use `[abc]` or `*` to match arbitrary
+    ///   single characters in remote-store globs.
+    /// * `[abc]` / `[a-z]` matches one character from the class.
+    /// * Partition-style `key=value` directory segments are matched
+    ///   literally (e.g. `year=*/x.parquet`).
+    ///
+    /// When an explicit glob is present, the
+    /// `datafusion.execution.listing_table_ignore_subdirectory`
+    /// session option is **not** consulted — the pattern is
+    /// authoritative.
     ///
     /// [file URI]: https://en.wikipedia.org/wiki/File_URI_scheme
     /// [URL]: https://url.spec.whatwg.org/
@@ -116,11 +138,61 @@ impl ListingTableUrl {
         }
 
         match Url::parse(s) {
+            #[cfg(not(target_arch = "wasm32"))]
+            Ok(_) => Self::parse_url(s),
+            #[cfg(target_arch = "wasm32")]
             Ok(url) => Self::try_new(url, None),
             #[cfg(not(target_arch = "wasm32"))]
             Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
             Err(e) => Err(DataFusionError::External(Box::new(e))),
         }
+    }
+
+    /// Creates a new [`ListingTableUrl`] from a string that
+    /// [`Url::parse`] accepts, detecting any trailing glob expression
+    /// in the *path* component (the segment between the authority and
+    /// the optional `?query`/`#fragment`).
+    ///
+    /// We split on the raw input string rather than on the parsed URL
+    /// because `Url::parse` strips path information into structured
+    /// components, but we want the literal text to feed into
+    /// [`split_glob_expression`].
+    ///
+    /// `?` is **not** treated as a glob wildcard inside scheme URLs —
+    /// it is reserved for the URL query delimiter to avoid ambiguity
+    /// with HTTP-style queries (e.g. `https://host/p?a=b`). The other
+    /// wildcards (`*`, `**`, `[abc]`) are unaffected and remain the
+    /// recommended way to glob remote-store paths.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn parse_url(s: &str) -> Result<Self> {
+        let Some(path_start) = find_url_path_start(s) else {
+            // Should be unreachable: `Url::parse` accepted `s`, so a
+            // `://` separator must be present.
+            let url =
+                Url::parse(s).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            return Self::try_new(url, None);
+        };
+        let after_authority = &s[path_start..];
+        // Slice the URL path off at the first `?` (query) or `#`
+        // (fragment) so glob detection only sees the structural path.
+        let path_end = after_authority
+            .find(['?', '#'])
+            .unwrap_or(after_authority.len());
+        let path = &after_authority[..path_end];
+        let suffix = &after_authority[path_end..];
+
+        let (prefix, glob) = match split_glob_expression(path) {
+            Some((prefix, glob)) => {
+                let glob = Pattern::new(&normalize_glob_separators(glob))
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                (prefix, Some(glob))
+            }
+            None => (path, None),
+        };
+        let reconstructed = format!("{}{}{}", &s[..path_start], prefix, suffix);
+        let url = Url::parse(&reconstructed)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Self::try_new(url, glob)
     }
 
     /// Creates a new [`ListingTableUrl`] interpreting `s` as a filesystem path
@@ -180,7 +252,7 @@ impl ListingTableUrl {
     ///
     /// When an explicit glob is present, it is matched against the full
     /// relative path below this URL's prefix using DuckDB-compatible
-    /// semantics (see [`LISTING_GLOB_MATCH_OPTIONS`]): `*` does not cross
+    /// semantics: `*` does not cross
     /// `/`, `**` is required for recursion, partition-style `key=value`
     /// directory segments are matched literally, and the
     /// `ignore_subdirectory` option is **not** consulted — the explicit

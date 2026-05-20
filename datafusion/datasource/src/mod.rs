@@ -886,6 +886,82 @@ mod tests {
         }
     }
 
+    /// Round-trips scheme URLs (s3://, gs://, file://, http(s)://)
+    /// through [`ListingTableUrl::parse`] and asserts the detected
+    /// glob and listing prefix match the user's intent. URL paths
+    /// previously had no glob detection at all.
+    #[test]
+    fn test_url_parse_glob_in_scheme_urls() {
+        // (input, expected scheme, expected prefix (as_ref), expected glob string or None)
+        let cases: &[(&str, &str, &str, Option<&str>)] = &[
+            // s3 + recursive. object_store `Path` strips the trailing
+            // `/`, so the listing prefix is `data` not `data/`.
+            (
+                "s3://bucket/data/**/x.parquet",
+                "s3",
+                "data",
+                Some("**/x.parquet"),
+            ),
+            // s3 + filename glob — prefix is the bucket root (empty
+            // path).
+            ("s3://bucket/*.parquet", "s3", "", Some("*.parquet")),
+            // gs:// with directory-segment wildcard
+            (
+                "gs://bucket/year=*/part-*.parquet",
+                "gs",
+                "",
+                Some("year=*/part-*.parquet"),
+            ),
+            // file:// URL with glob — works the same as a path
+            (
+                "file:///foo/**/x.parquet",
+                "file",
+                "foo",
+                Some("**/x.parquet"),
+            ),
+            // http(s) with IPv6 host
+            (
+                "https://[::1]:8080/data/*.parquet",
+                "https",
+                "data",
+                Some("*.parquet"),
+            ),
+            // No glob in path — preserved verbatim
+            (
+                "s3://bucket/data/file.parquet",
+                "s3",
+                "data/file.parquet",
+                None,
+            ),
+            // `?` is reserved for the URL query delimiter even though
+            // it would be a glob char in a filesystem path. Path
+            // glob is `None`, query is preserved in the URL.
+            ("https://host.example/p?a=b", "https", "p", None),
+            // Percent-encoded `*` is literal, not a glob
+            ("s3://bucket/data/%2A.parquet", "s3", "data/*.parquet", None),
+        ];
+
+        for (input, scheme, prefix, expected_glob) in cases {
+            let url = ListingTableUrl::parse(input)
+                .unwrap_or_else(|e| panic!("failed to parse {input}: {e}"));
+            assert_eq!(url.scheme(), *scheme, "scheme mismatch for {input}");
+            assert_eq!(
+                url.prefix().as_ref(),
+                *prefix,
+                "prefix mismatch for {input}"
+            );
+            match (url.get_glob(), expected_glob) {
+                (Some(g), Some(want)) => {
+                    assert_eq!(g.as_str(), *want, "glob mismatch for {input}",)
+                }
+                (None, None) => {}
+                (got, want) => {
+                    panic!("glob mismatch for {input}: got={got:?} want={want:?}",)
+                }
+            }
+        }
+    }
+
     /// Regression test for <https://github.com/apache/datafusion/issues/19605>
     #[tokio::test]
     async fn test_calculate_range_single_line_file() {

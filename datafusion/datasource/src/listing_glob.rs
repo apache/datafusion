@@ -97,6 +97,36 @@ pub(crate) fn normalize_glob_separators(glob: &str) -> Cow<'_, str> {
     }
 }
 
+/// Locate the byte index at which the path component of a URL string
+/// begins, so callers can apply [`split_glob_expression`] to the raw
+/// path *before* `Url::parse` runs (URL parsing eats `?` as the
+/// query-string delimiter and would otherwise prevent globs that use
+/// `?` from being detected in remote-store URLs).
+///
+/// Returns `None` if the string contains no `://` scheme separator at
+/// all. For a URL with a scheme but no path (e.g. `s3://bucket`),
+/// returns `s.len()` — the path is the empty suffix.
+///
+/// The authority (the segment between `://` and the first path `/`)
+/// may include an IPv6 host enclosed in `[...]`; `/` characters inside
+/// the brackets are ignored when locating the path start.
+pub(crate) fn find_url_path_start(s: &str) -> Option<usize> {
+    let after_scheme = s.find("://")? + 3;
+    let bytes = s.as_bytes();
+    let mut i = after_scheme;
+    let mut in_brackets = false;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'[' => in_brackets = true,
+            b']' => in_brackets = false,
+            b'/' if !in_brackets => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    Some(bytes.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +189,36 @@ mod tests {
         } else {
             assert_eq!(normalize_glob_separators("**\\x.parquet"), "**/x.parquet");
         }
+    }
+
+    #[test]
+    fn test_find_url_path_start() {
+        fn split(s: &str) -> Option<(&str, &str)> {
+            find_url_path_start(s).map(|i| (&s[..i], &s[i..]))
+        }
+        assert_eq!(
+            split("s3://bucket/p/*.parquet"),
+            Some(("s3://bucket", "/p/*.parquet"))
+        );
+        // `s3://bucket` — no path component
+        assert_eq!(split("s3://bucket"), Some(("s3://bucket", "")));
+        // `file:///foo` — empty authority, path starts at the third `/`
+        assert_eq!(
+            split("file:///foo/**/x.parquet"),
+            Some(("file://", "/foo/**/x.parquet"))
+        );
+        // IPv6 host — `/` inside `[...]` is part of the authority,
+        // not the start of the path
+        assert_eq!(
+            split("http://[::1]:8080/p/*.parquet"),
+            Some(("http://[::1]:8080", "/p/*.parquet"))
+        );
+        assert_eq!(
+            split("http://[::1]/p/*.parquet"),
+            Some(("http://[::1]", "/p/*.parquet"))
+        );
+        // No scheme separator
+        assert_eq!(find_url_path_start("/local/path/*.parquet"), None);
     }
 
     #[test]
