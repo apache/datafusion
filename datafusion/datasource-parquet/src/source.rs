@@ -390,8 +390,20 @@ impl ParquetSource {
         self
     }
 
-    /// If true, the predicate will be used during the parquet scan.
-    /// Defaults to false.
+    /// If true, the predicate is applied as a parquet `RowFilter` during
+    /// decode (late materialization).  Defaults to false.
+    ///
+    /// **Note:** the parquet scan always accepts pushable filter conjuncts
+    /// (the `FilterExec` above the scan is always removed). This flag only
+    /// chooses *where* the filter runs:
+    ///
+    /// * `true`  — conjuncts the parquet [`RowFilter`] can take run during
+    ///   decode; any remaining conjuncts fall through to the in-scan
+    ///   post-scan filter.
+    /// * `false` — the whole predicate runs as a post-scan filter on decoded
+    ///   batches (behaviorally identical to a `FilterExec`).
+    ///
+    /// [`RowFilter`]: parquet::arrow::arrow_reader::RowFilter
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
         self.table_parquet_options.global.pushdown_filters = pushdown_filters;
         self
@@ -406,6 +418,9 @@ impl ParquetSource {
     /// minimize the cost of filter evaluation by reordering the
     /// predicate [`Expr`]s. If false, the predicates are applied in
     /// the same order as specified in the query. Defaults to false.
+    ///
+    /// Has no effect on conjuncts that fall through to the in-scan
+    /// post-scan filter (they are applied as a single conjoined predicate).
     ///
     /// [`Expr`]: datafusion_expr::Expr
     pub fn with_reorder_filters(mut self, reorder_filters: bool) -> Self {
@@ -701,13 +716,13 @@ impl FileSource for ParquetSource {
         config: &ConfigOptions,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         let table_schema = self.table_schema.table_schema();
-        // Determine if based on configs we should push filters down.
-        // If either the table / scan itself or the config has pushdown enabled,
-        // we will push down the filters.
-        // If both are disabled, we will not push down the filters.
-        // By default they are both disabled.
-        // Regardless of pushdown, we will update the predicate to include the filters
-        // because even if scan pushdown is disabled we can still use the filters for stats pruning.
+        // The parquet scan always accepts pushable filters: those that
+        // `can_expr_be_pushed_down_with_schemas` accepts will be applied
+        // inside the scan, either as a parquet `RowFilter` (when
+        // `pushdown_filters` is enabled) or as the in-scan post-scan filter
+        // (otherwise / for conjuncts the `RowFilter` cannot evaluate). The
+        // `pushdown_filters` config is preserved because it still controls
+        // the `RowFilter` vs. post-scan placement downstream.
         let config_pushdown_enabled = config.execution.parquet.pushdown_filters;
         let table_pushdown_enabled = self.pushdown_filters();
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
@@ -749,14 +764,9 @@ impl FileSource for ParquetSource {
         source.predicate = Some(predicate);
         source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
-        // If pushdown_filters is false we tell our parents that they still have to handle the filters,
-        // even if we updated the predicate to include the filters (they will only be used for stats pruning).
-        if !pushdown_filters {
-            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
-            )
-            .with_updated_node(source));
-        }
+        // Report each pushable filter as accepted (`Yes`) so the parent
+        // `FilterExec` is removed. The scan now owns these filters and
+        // guarantees they are applied (RowFilter or post-scan).
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             filters.iter().map(|f| f.discriminant).collect(),
         )
