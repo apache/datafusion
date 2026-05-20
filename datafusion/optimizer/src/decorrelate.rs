@@ -514,13 +514,14 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .transform_up(|expr| {
                 let new_expr = match expr {
                     Expr::AggregateFunction(expr::AggregateFunction { func, params }) => {
-                        let arg_types = params
+                        let fields = params
                             .args
                             .iter()
-                            .map(|arg| arg.get_type(schema.as_ref()))
+                            .map(|arg| arg.to_field(schema.as_ref()).map(|(_, f)| f))
                             .collect::<Result<Vec<_>>>()?;
-                        let return_type = func.return_type(&arg_types)?;
-                        let default_value = func.default_value(&return_type)?;
+                        let return_field = func.return_field(&fields)?;
+                        let default_value =
+                            func.default_value(return_field.data_type())?;
                         Transformed::yes(Expr::Literal(default_value, None))
                     }
                     _ => Transformed::no(expr),
