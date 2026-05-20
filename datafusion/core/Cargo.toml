@@ -296,9 +296,4 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
-name = "multi_group_by"
-required-features = ["parquet"]
-
-[[bench]]
-harness = false
 name = "reset_plan_states"
