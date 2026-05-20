@@ -40,6 +40,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, RowSelectionPolicy};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
@@ -49,7 +50,6 @@ use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Gauge};
 
 use crate::access_plan::PreparedAccessPlan;
-use crate::row_filter::ParquetReadPlan;
 
 /// Shared options applied to every [`ParquetPushDecoderBuilder`] in a file scan.
 ///
@@ -58,7 +58,9 @@ use crate::row_filter::ParquetReadPlan;
 /// requirements). All decoders in that scan share the same projection, batch
 /// size, metrics sink, and selection policy.
 pub(crate) struct DecoderBuilderConfig<'a> {
-    pub(crate) read_plan: &'a ParquetReadPlan,
+    /// Projection mask installed on every decoder in the scan.  Sourced from
+    /// the file's [`DecoderProjection`](crate::post_scan_filter::DecoderProjection).
+    pub(crate) projection_mask: &'a ProjectionMask,
     pub(crate) batch_size: usize,
     pub(crate) arrow_reader_metrics: &'a ArrowReaderMetrics,
     pub(crate) force_filter_selections: bool,
@@ -77,7 +79,7 @@ impl DecoderBuilderConfig<'_> {
         metadata: ArrowReaderMetadata,
     ) -> ParquetPushDecoderBuilder {
         let mut builder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
-            .with_projection(self.read_plan.projection_mask.clone())
+            .with_projection(self.projection_mask.clone())
             .with_batch_size(self.batch_size)
             .with_metrics(self.arrow_reader_metrics.clone());
         if self.force_filter_selections {

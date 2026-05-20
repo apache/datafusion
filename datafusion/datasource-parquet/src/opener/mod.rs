@@ -25,8 +25,9 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::page_filter::PagePruningAccessPlanFilter;
+use crate::post_scan_filter::DecoderProjection;
 use crate::push_decoder::{DecoderBuilderConfig, PushDecoderStreamState};
-use crate::row_filter::{RowFilterGenerator, build_projection_read_plan};
+use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
@@ -36,7 +37,6 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -1148,11 +1148,18 @@ impl RowGroupsPrunedParquetOpen {
             };
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
-        let read_plan = build_projection_read_plan(
-            prepared.projection.expr_iter(),
+
+        // Build the decoder projection (mask + projector + replace_schema) in
+        // a single call.  Encapsulating it behind `DecoderProjection` keeps
+        // the opener's orchestration body focused on filter / decoder /
+        // stream wiring, and gives a clean seam for the in-scan post-scan
+        // filter introduced in a later change.
+        let decoder_projection = DecoderProjection::build(
+            &prepared.projection,
             &prepared.physical_file_schema,
             reader_metadata.parquet_schema(),
-        );
+            &prepared.output_schema,
+        )?;
 
         let (decoder, pending_decoders, remaining_limit) = {
             let pushdown_predicate = prepared
@@ -1180,7 +1187,7 @@ impl RowGroupsPrunedParquetOpen {
             let remaining_limit = prepared.limit.filter(|_| run_count > 1);
 
             let decoder_config = DecoderBuilderConfig {
-                read_plan: &read_plan,
+                projection_mask: &decoder_projection.projection_mask,
                 batch_size: prepared.batch_size,
                 arrow_reader_metrics: &arrow_reader_metrics,
                 force_filter_selections: prepared.force_filter_selections,
@@ -1218,18 +1225,11 @@ impl RowGroupsPrunedParquetOpen {
         let predicate_cache_records =
             prepared.file_metrics.predicate_cache_records.clone();
 
-        // Check if we need to replace the schema to handle things like differing nullability or metadata.
-        // See note below about file vs. output schema.
-        let stream_schema = read_plan.projected_schema;
-        let replace_schema = stream_schema != prepared.output_schema;
-
-        // Rebase column indices to match the narrowed stream schema.
-        // The projection expressions have indices based on physical_file_schema,
-        // but the stream only contains the columns selected by the ProjectionMask.
-        let projection = prepared
-            .projection
-            .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
-        let projector = projection.make_projector(&stream_schema)?;
+        let DecoderProjection {
+            projection_mask: _,
+            projector,
+            replace_schema,
+        } = decoder_projection;
         let output_schema = Arc::clone(&prepared.output_schema);
         let files_ranges_pruned_statistics =
             prepared.file_metrics.files_ranges_pruned_statistics.clone();
