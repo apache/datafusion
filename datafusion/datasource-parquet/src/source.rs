@@ -306,10 +306,6 @@ pub struct ParquetSource {
     ///
     /// Not surfaced in EXPLAIN — the same value is shown on the
     /// `SortExec` above the data source.
-    #[expect(
-        dead_code,
-        reason = "consumed by `with_topk_fetch_hint` and the opener in subsequent commits"
-    )]
     topk_fetch: Option<usize>,
 }
 
@@ -615,6 +611,18 @@ impl FileSource for ParquetSource {
             self.reverse_row_groups,
             self.table_schema.table_schema(),
         )
+    }
+
+    /// Accept a TopK fetch (K) hint from the surrounding `SortExec`.
+    ///
+    /// `PushdownSort` invokes this after producing an `Inexact` result
+    /// for a `SortExec(fetch=Some(K))`. The opener uses `topk_fetch`
+    /// (together with `sort_order_for_reorder`) to drive stats-based
+    /// init of the TopK dynamic filter and cumulative row-group pruning.
+    fn with_topk_fetch_hint(&self, fetch: usize) -> Option<Arc<dyn FileSource>> {
+        let mut conf = self.clone();
+        conf.topk_fetch = Some(fetch);
+        Some(Arc::new(conf))
     }
 
     fn table_schema(&self) -> &TableSchema {
