@@ -115,9 +115,9 @@ fn scan_with_predicate(
     let file_metrics = ParquetFileMetrics::new(0, &path.display().to_string(), &metrics);
 
     let builder = if pushdown {
-        if let Some(row_filter) =
-            build_row_filter(predicate, file_schema, &metadata, false, &file_metrics)?
-        {
+        let (row_filter, _rejected) =
+            build_row_filter(predicate, file_schema, &metadata, false, &file_metrics)?;
+        if let Some(row_filter) = row_filter {
             builder.with_row_filter(row_filter)
         } else {
             builder

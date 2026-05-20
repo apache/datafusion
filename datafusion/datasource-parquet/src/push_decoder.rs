@@ -39,8 +39,8 @@ use arrow::datatypes::Schema;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use parquet::DecodeResult;
-use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, RowSelectionPolicy};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
@@ -50,6 +50,7 @@ use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Gauge};
 
 use crate::access_plan::PreparedAccessPlan;
+use crate::post_scan_filter::PostScanFilter;
 
 /// Shared options applied to every [`ParquetPushDecoderBuilder`] in a file scan.
 ///
@@ -59,7 +60,8 @@ use crate::access_plan::PreparedAccessPlan;
 /// size, metrics sink, and selection policy.
 pub(crate) struct DecoderBuilderConfig<'a> {
     /// Projection mask installed on every decoder in the scan.  Sourced from
-    /// the file's [`DecoderProjection`](crate::post_scan_filter::DecoderProjection).
+    /// the file's [`DecoderProjection`](crate::post_scan_filter::DecoderProjection)
+    /// so it already covers any post-scan filter columns.
     pub(crate) projection_mask: &'a ProjectionMask,
     pub(crate) batch_size: usize,
     pub(crate) arrow_reader_metrics: &'a ArrowReaderMetrics,
@@ -122,6 +124,12 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) predicate_cache_inner_records: Gauge,
     pub(crate) predicate_cache_records: Gauge,
     pub(crate) baseline_metrics: BaselineMetrics,
+    /// Predicate evaluated on each decoded batch after the parquet
+    /// `RowFilter` (if any) and before the projector. Carries any conjuncts
+    /// the `RowFilter` machinery could not handle, plus the whole predicate
+    /// when `pushdown_filters = false`. `None` when no conjunct needs
+    /// post-scan evaluation.
+    pub(crate) post_scan_filter: Option<PostScanFilter>,
 }
 
 impl PushDecoderStreamState {
@@ -170,6 +178,37 @@ impl PushDecoderStreamState {
                     }
                 }
                 Ok(DecodeResult::Data(batch)) => {
+                    let mut timer = self.baseline_metrics.elapsed_compute().timer();
+                    self.copy_arrow_reader_metrics();
+
+                    // Apply the in-scan post-scan filter (if any) before
+                    // limit slicing and projection. The decoder's projection
+                    // mask already covers the predicate's columns. The
+                    // `remaining_limit` (rather than a decoder-local limit)
+                    // is the only correctness-safe place to enforce LIMIT
+                    // when a post-scan filter can reject rows — the opener
+                    // is responsible for not pushing the limit into the
+                    // decoder in that case.
+                    let batch = if let Some(filter) = &self.post_scan_filter {
+                        match filter.filter(&batch) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                timer.stop();
+                                drop(timer);
+                                return Some((Err(e), self));
+                            }
+                        }
+                    } else {
+                        batch
+                    };
+
+                    // Don't yield empty batches downstream — keep pulling
+                    // until we have rows or the decoder is exhausted.
+                    if batch.num_rows() == 0 {
+                        timer.stop();
+                        continue;
+                    }
+
                     let batch = if let Some(remaining_limit) = self.remaining_limit {
                         if batch.num_rows() > remaining_limit {
                             self.remaining_limit = Some(0);
@@ -182,8 +221,6 @@ impl PushDecoderStreamState {
                     } else {
                         batch
                     };
-                    let mut timer = self.baseline_metrics.elapsed_compute().timer();
-                    self.copy_arrow_reader_metrics();
                     let result = self.project_batch(&batch);
                     timer.stop();
                     // Release the borrow on baseline_metrics before moving self
