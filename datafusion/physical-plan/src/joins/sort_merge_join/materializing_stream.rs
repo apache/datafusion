@@ -600,6 +600,16 @@ impl Stream for MaterializingSortMergeJoinStream {
                                                 .filter_mask
                                                 .len();
                                         if accumulated >= self.batch_size {
+                                            // Ensure required spilled batches are restored to memory
+                                            // before processing, as this path invokes freeze_all().
+                                            let needed = self.get_required_batch_indices(
+                                                self.buffered_data.batches.len(),
+                                            );
+                                            if let Err(e) = ready!(
+                                                self.poll_spilled_batches(cx, &needed)
+                                            ) {
+                                                return Poll::Ready(Some(Err(e)));
+                                            }
                                             match self.process_filtered_batches()? {
                                                 Poll::Ready(Some(batch)) => {
                                                     return Poll::Ready(Some(Ok(batch)));
