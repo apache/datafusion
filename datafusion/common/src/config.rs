@@ -1254,6 +1254,13 @@ config_namespace! {
         /// `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
         pub prefer_existing_sort: bool, default = false
 
+         /// When set to true, the physical plan optimizer will use `PartialSortExec`
+         /// instead of `SortExec` when the input is already sorted on a prefix of the
+         /// required ordering, even for bounded (finite) inputs. This reduces memory
+         /// usage by sorting data segment-by-segment instead of buffering the entire input.
+         /// When false (default), `PartialSortExec` is only used for unbounded (streaming) inputs.
+        pub prefer_partial_sort: bool, default = false
+
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next
         /// rule. When set to false, any rules that produce errors will cause the query to fail

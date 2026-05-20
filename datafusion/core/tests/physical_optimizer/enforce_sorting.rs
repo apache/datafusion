@@ -96,6 +96,7 @@ fn csv_exec_sorted(
 pub(crate) struct EnforceSortingTest {
     plan: Arc<dyn ExecutionPlan>,
     repartition_sorts: bool,
+    prefer_partial_sort: bool,
 }
 
 impl EnforceSortingTest {
@@ -103,6 +104,7 @@ impl EnforceSortingTest {
         Self {
             plan,
             repartition_sorts: false,
+            prefer_partial_sort: false,
         }
     }
 
@@ -112,11 +114,18 @@ impl EnforceSortingTest {
         self
     }
 
+    /// Set whether to prefer partial sort for bounded inputs
+    pub(crate) fn with_prefer_partial_sort(mut self, prefer_partial_sort: bool) -> Self {
+        self.prefer_partial_sort = prefer_partial_sort;
+        self
+    }
+
     /// Runs the enforce sorting test and returns a string with the input and
     /// optimized plan as strings for snapshot comparison using insta
     pub(crate) fn run(&self) -> String {
         let mut config = ConfigOptions::new();
         config.optimizer.repartition_sorts = self.repartition_sorts;
+        config.optimizer.prefer_partial_sort = self.prefer_partial_sort;
 
         // This file has 4 rules that use tree node, apply these rules as in the
         // EnforceSorting::optimize implementation
@@ -1798,6 +1807,60 @@ async fn test_not_replaced_with_partial_sort_for_bounded_input() -> Result<()> {
     );
     let test =
         EnforceSortingTest::new(physical_plan.clone()).with_repartition_sorts(false);
+
+    assert_snapshot!(test.run(), @r"
+    Input / Optimized Plan:
+    SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[b@1 ASC, c@2 ASC], file_type=parquet
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_replace_with_partial_sort_for_bounded_input_with_config() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let parquet_ordering = [sort_expr("a", &schema)].into();
+    let parquet_input = parquet_exec_with_sort(schema.clone(), vec![parquet_ordering]);
+    let physical_plan = sort_exec(
+        [sort_expr("a", &schema), sort_expr("c", &schema)].into(),
+        parquet_input,
+    );
+    let test = EnforceSortingTest::new(physical_plan.clone())
+        .with_repartition_sorts(false)
+        .with_prefer_partial_sort(true);
+
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: expr=[a@0 ASC, c@2 ASC], preserve_partitioning=[false]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+    
+    Optimized Plan:
+    PartialSortExec: expr=[a@0 ASC, c@2 ASC], common_prefix_length=[1]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_not_replaced_with_partial_sort_for_bounded_input_no_prefix() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let parquet_ordering = [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let parquet_input = parquet_exec_with_sort(schema.clone(), vec![parquet_ordering]);
+    let physical_plan = sort_exec(
+        [
+            sort_expr("a", &schema),
+            sort_expr("b", &schema),
+            sort_expr("c", &schema),
+        ]
+        .into(),
+        parquet_input,
+    );
+    // Even with prefer_partial_sort = true, no common prefix → stays SortExec
+    let test = EnforceSortingTest::new(physical_plan.clone())
+        .with_repartition_sorts(false)
+        .with_prefer_partial_sort(true);
 
     assert_snapshot!(test.run(), @r"
     Input / Optimized Plan:

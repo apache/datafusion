@@ -245,7 +245,9 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let adjusted = pushdown_sorts(sort_pushdown)?;
         adjusted
             .plan
-            .transform_up(|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
+            .transform_up(|plan| {
+                Ok(Transformed::yes(replace_with_partial_sort(plan, config)?))
+            })
             .data()
     }
 
@@ -258,12 +260,15 @@ impl PhysicalOptimizerRule for EnforceSorting {
     }
 }
 
-/// Only interested with [`SortExec`]s and their unbounded children.
-/// If the plan is not a [`SortExec`] or its child is not unbounded, returns the original plan.
-/// Otherwise, by checking the requirement satisfaction searches for a replacement chance.
-/// If there's one replaces the [`SortExec`] plan with a [`PartialSortExec`]
+/// Checks if a [`SortExec`] can be replaced with a [`PartialSortExec`] when
+/// the child's existing ordering satisfies a prefix of the required sort ordering.
+///
+/// For unbounded inputs, this replacement is always attempted.
+/// For bounded inputs, this replacement is only attempted when
+/// `config.optimizer.prefer_partial_sort` is set to `true`.
 fn replace_with_partial_sort(
     plan: Arc<dyn ExecutionPlan>,
+    config: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let Some(sort_plan) = plan.downcast_ref::<SortExec>() else {
         return Ok(plan);
@@ -271,7 +276,7 @@ fn replace_with_partial_sort(
 
     // It's safe to get first child of the SortExec
     let child = Arc::clone(sort_plan.children()[0]);
-    if !child.boundedness().is_unbounded() {
+    if !child.boundedness().is_unbounded() && !config.optimizer.prefer_partial_sort {
         return Ok(plan);
     }
 

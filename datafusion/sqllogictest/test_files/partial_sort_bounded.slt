@@ -1,0 +1,218 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for PartialSortExec with bounded (finite) inputs
+# when `prefer_partial_sort` config is enabled.
+
+###############################################################
+# Test 1: prefix_length=2, suffix=1 — sorted on (a,b), ORDER BY a,b,c
+###############################################################
+
+statement ok
+COPY (
+  SELECT a, b, c FROM (VALUES
+    (1, 10, 'z'), (1, 10, 'a'), (1, 20, 'x'), (1, 20, 'b'),
+    (2, 10, 'y'), (2, 10, 'c'), (2, 30, 'w'), (2, 30, 'd')
+  ) AS t(a, b, c)
+  ORDER BY a, b
+) TO '/tmp/test_partial_sort_bounded.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE sorted_ab
+STORED AS PARQUET
+WITH ORDER (a ASC, b ASC)
+LOCATION '/tmp/test_partial_sort_bounded.parquet';
+
+# Default: bounded input uses SortExec (not PartialSortExec)
+query TT
+EXPLAIN SELECT * FROM sorted_ab ORDER BY a, b, c;
+----
+logical_plan
+01)Sort: sorted_ab.a ASC NULLS LAST, sorted_ab.b ASC NULLS LAST, sorted_ab.c ASC NULLS LAST
+02)--TableScan: sorted_ab projection=[a, b, c]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[tmp/test_partial_sort_bounded.parquet]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=parquet
+
+# Enable prefer_partial_sort
+statement ok
+set datafusion.optimizer.prefer_partial_sort = true;
+
+# With config: PartialSortExec with common_prefix_length=2
+query TT
+EXPLAIN SELECT * FROM sorted_ab ORDER BY a, b, c;
+----
+logical_plan
+01)Sort: sorted_ab.a ASC NULLS LAST, sorted_ab.b ASC NULLS LAST, sorted_ab.c ASC NULLS LAST
+02)--TableScan: sorted_ab projection=[a, b, c]
+physical_plan
+01)PartialSortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], common_prefix_length=[2]
+02)--DataSourceExec: file_groups={1 group: [[tmp/test_partial_sort_bounded.parquet]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=parquet
+
+# Verify correctness
+query IIT
+SELECT * FROM sorted_ab ORDER BY a, b, c;
+----
+1 10 a
+1 10 z
+1 20 b
+1 20 x
+2 10 c
+2 10 y
+2 30 d
+2 30 w
+
+# Verify with LIMIT
+query TT
+EXPLAIN SELECT * FROM sorted_ab ORDER BY a, b, c LIMIT 3;
+----
+logical_plan
+01)Sort: sorted_ab.a ASC NULLS LAST, sorted_ab.b ASC NULLS LAST, sorted_ab.c ASC NULLS LAST, fetch=3
+02)--TableScan: sorted_ab projection=[a, b, c]
+physical_plan
+01)PartialSortExec: TopK(fetch=3), expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], common_prefix_length=[2]
+02)--DataSourceExec: file_groups={1 group: [[tmp/test_partial_sort_bounded.parquet]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=parquet
+
+query IIT
+SELECT * FROM sorted_ab ORDER BY a, b, c LIMIT 3;
+----
+1 10 a
+1 10 z
+1 20 b
+
+statement ok
+set datafusion.optimizer.prefer_partial_sort = false;
+
+statement ok
+DROP TABLE sorted_ab;
+
+###############################################################
+# Test 2: prefix_length=1, suffix=2 — sorted on (a), ORDER BY a,b,c
+###############################################################
+
+statement ok
+COPY (
+  SELECT a, b, c, d FROM (VALUES
+    (1, 3, 20, 'p'), (1, 1, 10, 'q'), (1, 2, 30, 'r'),
+    (2, 2, 10, 's'), (2, 3, 20, 't'), (2, 1, 30, 'u'),
+    (3, 1, 10, 'v'), (3, 1, 20, 'w')
+  ) AS t(a, b, c, d)
+  ORDER BY a
+) TO '/tmp/test_partial_sort_prefix1.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE sorted_a
+STORED AS PARQUET
+WITH ORDER (a ASC)
+LOCATION '/tmp/test_partial_sort_prefix1.parquet';
+
+statement ok
+set datafusion.optimizer.prefer_partial_sort = true;
+
+# prefix=1, sorting b and c within each group of a
+query TT
+EXPLAIN SELECT * FROM sorted_a ORDER BY a, b, c;
+----
+logical_plan
+01)Sort: sorted_a.a ASC NULLS LAST, sorted_a.b ASC NULLS LAST, sorted_a.c ASC NULLS LAST
+02)--TableScan: sorted_a projection=[a, b, c, d]
+physical_plan
+01)PartialSortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], common_prefix_length=[1]
+02)--DataSourceExec: file_groups={1 group: [[tmp/test_partial_sort_prefix1.parquet]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet
+
+# Verify correctness — within each a group, (b,c) should be sorted
+query IIIT
+SELECT * FROM sorted_a ORDER BY a, b, c;
+----
+1 1 10 q
+1 2 30 r
+1 3 20 p
+2 1 30 u
+2 2 10 s
+2 3 20 t
+3 1 10 v
+3 1 20 w
+
+statement ok
+set datafusion.optimizer.prefer_partial_sort = false;
+
+statement ok
+DROP TABLE sorted_a;
+
+###############################################################
+# Test 3: prefix_length=3, suffix=1 — sorted on (a,b,c), ORDER BY a,b,c,d
+###############################################################
+
+statement ok
+COPY (
+  SELECT a, b, c, d FROM (VALUES
+    (1, 1, 1, 40), (1, 1, 1, 10), (1, 1, 2, 30), (1, 1, 2, 20),
+    (1, 2, 1, 50), (1, 2, 1, 5),
+    (2, 1, 1, 60), (2, 1, 1, 15)
+  ) AS t(a, b, c, d)
+  ORDER BY a, b, c
+) TO '/tmp/test_partial_sort_prefix3.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE sorted_abc
+STORED AS PARQUET
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '/tmp/test_partial_sort_prefix3.parquet';
+
+statement ok
+set datafusion.optimizer.prefer_partial_sort = true;
+
+# prefix=3, only sorting d within each (a,b,c) group
+query TT
+EXPLAIN SELECT * FROM sorted_abc ORDER BY a, b, c, d;
+----
+logical_plan
+01)Sort: sorted_abc.a ASC NULLS LAST, sorted_abc.b ASC NULLS LAST, sorted_abc.c ASC NULLS LAST, sorted_abc.d ASC NULLS LAST
+02)--TableScan: sorted_abc projection=[a, b, c, d]
+physical_plan
+01)PartialSortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST, d@3 ASC NULLS LAST], common_prefix_length=[3]
+02)--DataSourceExec: file_groups={1 group: [[tmp/test_partial_sort_prefix3.parquet]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], file_type=parquet
+
+# Verify correctness — d sorted within each (a,b,c) group
+query IIII
+SELECT * FROM sorted_abc ORDER BY a, b, c, d;
+----
+1 1 1 10
+1 1 1 40
+1 1 2 20
+1 1 2 30
+1 2 1 5
+1 2 1 50
+2 1 1 15
+2 1 1 60
+
+# After reset: back to SortExec
+statement ok
+set datafusion.optimizer.prefer_partial_sort = false;
+
+query TT
+EXPLAIN SELECT * FROM sorted_abc ORDER BY a, b, c, d;
+----
+logical_plan
+01)Sort: sorted_abc.a ASC NULLS LAST, sorted_abc.b ASC NULLS LAST, sorted_abc.c ASC NULLS LAST, sorted_abc.d ASC NULLS LAST
+02)--TableScan: sorted_abc projection=[a, b, c, d]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST, d@3 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[tmp/test_partial_sort_prefix3.parquet]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], file_type=parquet
+
+statement ok
+DROP TABLE sorted_abc;
