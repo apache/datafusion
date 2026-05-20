@@ -490,18 +490,8 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
 /// # Error semantics
 ///
 /// On `Err`, `*plan` is left in an **unspecified** state and must not be used.
-/// Because `rule.rewrite()` consumes the plan by value, a failing rule drops
-/// the node it was handed and the [`std::mem::take`] placeholder
-/// (`LogicalPlan::default()`, an `EmptyRelation`) is left in its place — at the
-/// root for a top-level failure, or somewhere in a subtree for a failure deeper
-/// in the recursion. The pre-rule plan is **not** recoverable here: restoring it
-/// would require cloning it before every rule invocation, which is exactly the
-/// allocation this function exists to avoid.
-///
-/// Callers must therefore discard `*plan` on `Err`, or restore it from a copy
-/// saved beforehand. [`Optimizer::optimize`] does this: with `skip_failed_rules`
-/// it restores `new_plan` from the `prev_plan` clone it already holds, and
-/// without it the error aborts the pass and the plan is dropped unobserved.
+/// Note this is different than consuming APIs such as [`TreeNode::rewrite`] 
+/// where the original plan is freed and no longer available on error
 #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn rewrite_plan_in_place(
     plan: &mut LogicalPlan,
