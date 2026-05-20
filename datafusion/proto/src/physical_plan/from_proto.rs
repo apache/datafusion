@@ -63,6 +63,7 @@ use crate::{convert_required, protobuf};
 use datafusion_physical_expr::expressions::{
     DynamicFilterInner, DynamicFilterPhysicalExpr,
 };
+use datafusion_physical_expr_common::physical_expr::OptionalFilterPhysicalExpr;
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -560,6 +561,16 @@ pub fn parse_physical_expr_with_converter(
                     },
                 ));
             base_filter
+        }
+        ExprType::OptionalFilter(optional_filter) => {
+            let inner = parse_required_physical_expr(
+                optional_filter.inner.as_deref(),
+                ctx,
+                "inner",
+                input_schema,
+                proto_converter,
+            )?;
+            Arc::new(OptionalFilterPhysicalExpr::new(inner))
         }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
