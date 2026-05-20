@@ -152,8 +152,10 @@ impl Display for Partitioning {
 /// - `ordering` defines the partitioning key and ordering.
 /// - `split_points` define the boundaries between adjacent partitions.
 ///
-/// The ordering must be non-empty, and split points must be strictly ordered
-/// according to that ordering.
+/// Comparisons use the lexicographic order defined by `ordering`, including
+/// `ASC`/`DESC` and null ordering. Split points must be strictly ordered
+/// according to that ordering, and each split point must have one value per
+/// ordering expression.
 ///
 /// `N` split points define `N + 1` partitions:
 ///
@@ -165,8 +167,8 @@ impl Display for Partitioning {
 /// partition N: split_points[N - 1] <= key
 /// ```
 ///
-/// Values equal to a split point belong to the partition after that split
-/// point.
+/// Values equal to split point `i` belong to partition `i + 1`, so interior
+/// partitions are lower-inclusive and upper-exclusive.
 ///
 /// For a single range key:
 ///
@@ -245,9 +247,7 @@ impl RangePartitioning {
     /// Creates range partitioning metadata.
     ///
     /// The caller is responsible for satisfying the contract documented on
-    /// [`RangePartitioning`]: every split point must have one value per sort
-    /// expression in the ordering, and split points must be strictly ordered
-    /// according to that ordering.
+    /// [`RangePartitioning`].
     pub fn new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Self {
         Self {
             ordering,
@@ -256,17 +256,11 @@ impl RangePartitioning {
     }
 
     /// Returns the ordering that defines the range key.
-    ///
-    /// Sort options are part of the partitioning because `ASC`/`DESC` and null
-    /// ordering decide which side of a split point a row belongs to.
     pub fn ordering(&self) -> &LexOrdering {
         &self.ordering
     }
 
     /// Returns the ordered split points between partitions.
-    ///
-    /// `N` split points define `N + 1` partitions as described in
-    /// [`RangePartitioning`].
     pub fn split_points(&self) -> &[SplitPoint] {
         &self.split_points
     }
