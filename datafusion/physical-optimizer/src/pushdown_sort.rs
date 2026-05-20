@@ -125,6 +125,14 @@ impl PhysicalOptimizerRule for PushdownSort {
                         return Ok(Transformed::yes(Arc::new(new_spm)));
                     }
                     SortOrderPushdownResult::Inexact { inner } => {
+                        // Surface the sort's fetch (K) to the data source so
+                        // it can drive TopK-aware per-file optimisations
+                        // (stats-seeded threshold, cumulative RG pruning).
+                        // No-op for sources that don't override the hint.
+                        let inner = sort_child
+                            .fetch()
+                            .and_then(|fetch| inner.with_topk_fetch_hint(fetch))
+                            .unwrap_or(inner);
                         let new_sort = SortExec::new(required_ordering.clone(), inner)
                             .with_fetch(sort_child.fetch())
                             .with_preserve_partitioning(true);
@@ -169,9 +177,19 @@ impl PhysicalOptimizerRule for PushdownSort {
                     }
                 }
                 SortOrderPushdownResult::Inexact { inner } => {
-                    // Data source is optimized for the ordering but not perfectly sorted
-                    // Keep the Sort operator but use the optimized input
-                    // Benefits: TopK queries can terminate early, better cache locality
+                    // Data source is optimized for the ordering but not perfectly sorted.
+                    // Keep the Sort operator but use the optimized input.
+                    // Benefits: TopK queries can terminate early, better cache locality.
+                    //
+                    // If the SortExec carries a fetch (LIMIT) we are in a
+                    // TopK shape — surface `K` to the data source so it can
+                    // drive TopK-aware per-file optimisations (stats-seeded
+                    // threshold, cumulative RG pruning). No-op for sources
+                    // that don't override the hint.
+                    let inner = sort_exec
+                        .fetch()
+                        .and_then(|fetch| inner.with_topk_fetch_hint(fetch))
+                        .unwrap_or(inner);
                     Ok(Transformed::yes(Arc::new(
                         SortExec::new(required_ordering.clone(), inner)
                             .with_fetch(sort_exec.fetch())

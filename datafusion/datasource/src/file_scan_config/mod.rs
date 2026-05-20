@@ -999,6 +999,19 @@ impl DataSource for FileScanConfig {
         Some(Arc::new(new_config))
     }
 
+    fn with_topk_fetch_hint(&self, fetch: usize) -> Option<Arc<dyn DataSource>> {
+        // Delegate to the underlying file source. If the source accepts the
+        // hint, swap it in on a clone so the rest of the config (eq
+        // properties, schema, etc.) is preserved unchanged.
+        self.file_source
+            .with_topk_fetch_hint(fetch)
+            .map(|new_file_source| {
+                let mut new_config = self.clone();
+                new_config.file_source = new_file_source;
+                Arc::new(new_config) as Arc<dyn DataSource>
+            })
+    }
+
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,

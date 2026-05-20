@@ -789,6 +789,20 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
+
+    /// Hint to the plan that an `Inexact` sort-pushdown is being layered
+    /// under a `SortExec(fetch=Some(fetch))` (i.e. a TopK).
+    ///
+    /// `PushdownSort` calls this on the `inner` plan returned by
+    /// `try_pushdown_sort` when the eliminated/wrapped `SortExec` carried
+    /// a fetch. Data sources that can take advantage of `K` for further
+    /// per-file work (e.g. stats-seeded TopK threshold, cumulative
+    /// row-group pruning) should override this and return a new plan
+    /// with the hint applied. The default returns `None`, meaning
+    /// "no change — keep using the original plan".
+    fn with_topk_fetch_hint(&self, _fetch: usize) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
 }
 
 impl dyn ExecutionPlan {

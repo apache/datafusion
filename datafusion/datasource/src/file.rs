@@ -293,6 +293,22 @@ pub trait FileSource: Any + Send + Sync {
         files
     }
 
+    /// Optional TopK fetch (K) hint for sort-pushdown `Inexact` scans.
+    ///
+    /// When the `PushdownSort` rule produces an `Inexact` result over a
+    /// `SortExec(fetch=Some(K))`, the surrounding `SortExec` is kept in
+    /// the plan (the source can only approximate the ordering). Sources
+    /// that can use `K` to drive further per-file optimisations — e.g.
+    /// seeding a TopK dynamic filter from parquet per-row-group min/max
+    /// statistics, or truncating the row-group iteration once cumulative
+    /// `num_rows` reaches `K` — should override this method and return a
+    /// new source with the hint set.
+    ///
+    /// Default returns `None` (no-op).
+    fn with_topk_fetch_hint(&self, _fetch: usize) -> Option<Arc<dyn FileSource>> {
+        None
+    }
+
     /// Try to push down a projection into this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should
