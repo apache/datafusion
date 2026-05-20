@@ -822,6 +822,70 @@ mod tests {
         assert!(url.contains(&Path::parse("/var/data/mytable/").unwrap(), false));
     }
 
+    /// Covers the glob arm of [`ListingTableUrl::contains`] end-to-end:
+    /// the path-with-glob string is parsed, then synthetic file paths are
+    /// matched against it. Asserts DuckDB-compatible semantics and that
+    /// `ignore_subdirectory` is ignored once an explicit glob is present.
+    #[test]
+    fn test_url_contains_glob() {
+        let cases: &[(&str, &[(&str, bool)])] = &[
+            // `*` does not cross `/`
+            (
+                "/var/data/mytable/*.parquet",
+                &[
+                    ("/var/data/mytable/file.parquet", true),
+                    ("/var/data/mytable/sub/file.parquet", false),
+                    ("/var/data/mytable/file.csv", false),
+                ],
+            ),
+            // `**` recurses, matching zero or more directory levels
+            (
+                "/var/data/mytable/**/*.parquet",
+                &[
+                    ("/var/data/mytable/file.parquet", true),
+                    ("/var/data/mytable/sub/file.parquet", true),
+                    ("/var/data/mytable/a/b/c/file.parquet", true),
+                    ("/var/data/mytable/file.csv", false),
+                ],
+            ),
+            // partition-style `key=value` dirs are matched literally,
+            // unlike the no-glob arm which skips them
+            (
+                "/var/data/mytable/year=*/file.parquet",
+                &[
+                    ("/var/data/mytable/year=2024/file.parquet", true),
+                    ("/var/data/mytable/year=2025/file.parquet", true),
+                    ("/var/data/mytable/month=01/file.parquet", false),
+                    ("/var/data/mytable/file.parquet", false),
+                ],
+            ),
+            // `*` spans exactly one directory segment
+            (
+                "/var/data/mytable/*/file.parquet",
+                &[
+                    ("/var/data/mytable/sub/file.parquet", true),
+                    ("/var/data/mytable/a/b/file.parquet", false),
+                ],
+            ),
+        ];
+
+        for (pattern, checks) in cases {
+            let url = ListingTableUrl::parse(pattern).unwrap();
+            for (path, expected) in *checks {
+                let p = Path::parse(path).unwrap();
+                // With an explicit glob, `ignore_subdirectory` is not
+                // consulted, so both values must agree with `expected`.
+                for ignore in [true, false] {
+                    assert_eq!(
+                        url.contains(&p, ignore),
+                        *expected,
+                        "pattern={pattern} path={path} ignore_subdirectory={ignore}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Regression test for <https://github.com/apache/datafusion/issues/19605>
     #[tokio::test]
     async fn test_calculate_range_single_line_file() {

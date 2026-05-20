@@ -15,13 +15,39 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Helpers for detecting and splitting glob expressions inside listing-table
-//! paths and URLs.
+//! Helpers for detecting, splitting, and matching glob expressions inside
+//! listing-table paths and URLs.
 //!
 //! This module owns the small surface that decides what counts as a glob
-//! expression in a path (`?`, `*`, `[`), and how to split a path into a
-//! literal listing prefix and the trailing glob pattern. Behaviour matching
-//! and `glob::Pattern` construction live in [`crate::url`].
+//! expression in a path (`?`, `*`, `[`), how to split a path into a
+//! literal listing prefix and the trailing glob pattern, and the
+//! [`glob::MatchOptions`] used to match listed object-store paths against
+//! the pattern. `glob::Pattern` construction itself lives in [`crate::url`].
+
+use std::borrow::Cow;
+
+use glob::MatchOptions;
+
+/// Glob matching options used when checking listed object-store paths
+/// against an explicit glob in a [`crate::url::ListingTableUrl`].
+///
+/// These mirror DuckDB's filesystem glob semantics:
+///
+/// * `*` matches any characters within a single path segment and does
+///   **not** cross `/`.
+/// * `**` is required to match across directory levels (matches zero or
+///   more directory components).
+/// * `?` matches exactly one non-separator character.
+/// * `[abc]` / `[a-z]` matches one character from a class.
+///
+/// Hidden files (segments starting with `.`) are not auto-excluded;
+/// DataFusion's object-store listing does not special-case them either,
+/// so this options struct mirrors that for consistency.
+pub(crate) const LISTING_GLOB_MATCH_OPTIONS: MatchOptions = MatchOptions {
+    case_sensitive: true,
+    require_literal_separator: true,
+    require_literal_leading_dot: false,
+};
 
 /// Characters whose presence in a path segment marks the start of a glob
 /// expression: `?` (single character), `*` (any characters), `[` (character
@@ -55,9 +81,85 @@ pub(crate) fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// Normalize OS-specific path separators in a glob pattern to `/` so that
+/// the pattern can be matched against object-store paths (which always
+/// use `/` as the delimiter).
+///
+/// On Unix this is a no-op. On Windows the raw glob substring returned
+/// by [`split_glob_expression`] may contain `\`, because
+/// [`std::path::is_separator`] treats `\` as a separator on that
+/// platform.
+pub(crate) fn normalize_glob_separators(glob: &str) -> Cow<'_, str> {
+    if cfg!(windows) && glob.contains('\\') {
+        Cow::Owned(glob.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(glob)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glob::Pattern;
+
+    /// Verifies the `LISTING_GLOB_MATCH_OPTIONS` reproduces DuckDB's
+    /// glob semantics for paths and patterns produced by
+    /// [`split_glob_expression`]. The expected results were
+    /// cross-checked against `duckdb` v1.5.2 on the same inputs.
+    #[test]
+    fn test_listing_glob_match_options_duckdb_parity() {
+        fn m(pat: &str, s: &str) -> bool {
+            Pattern::new(pat)
+                .unwrap()
+                .matches_with(s, LISTING_GLOB_MATCH_OPTIONS)
+        }
+
+        // `*` does not cross `/`
+        assert!(m("abc*123.parquet", "abc_X_123.parquet"));
+        assert!(m("abc*123.parquet", "abc123.parquet")); // `*` matches empty
+        assert!(!m("abc*123.parquet", "sub/abc_S_123.parquet"));
+        assert!(!m("*123.parquet", "sub/abc_S_123.parquet"));
+
+        // `**` matches zero or more directory components
+        assert!(m("**/abc*123.parquet", "abc_X_123.parquet"));
+        assert!(m("**/abc*123.parquet", "sub/abc_S_123.parquet"));
+        assert!(m("**/abc*123.parquet", "a/b/abc_X_123.parquet"));
+
+        // partition-style (`key=value`) directories match literally
+        assert!(m("**/abc*123.parquet", "year=2021/abc_X_123.parquet"));
+        assert!(m("year=*/abc*123.parquet", "year=2021/abc_X_123.parquet"));
+
+        // `*` occupies exactly one directory segment
+        assert!(m("*/abc*123.parquet", "year=2021/abc_X_123.parquet"));
+        assert!(!m("*/abc*123.parquet", "a/b/abc_X_123.parquet"));
+
+        // `?` matches exactly one non-separator character
+        assert!(m("abc?123.parquet", "abcX123.parquet"));
+        assert!(!m("abc?123.parquet", "abc123.parquet"));
+        assert!(!m("abc?123.parquet", "abcXY123.parquet"));
+
+        // character classes
+        assert!(m("abc[X9]*.parquet", "abc999.parquet"));
+        assert!(m("abc[X9]*.parquet", "abcX123.parquet"));
+        assert!(!m("abc[X9]*.parquet", "abcZ123.parquet"));
+    }
+
+    #[test]
+    fn test_normalize_glob_separators() {
+        assert!(matches!(
+            normalize_glob_separators("**/x.parquet"),
+            Cow::Borrowed("**/x.parquet")
+        ));
+        // Unix paths never contain `\`, so it is preserved as a literal.
+        if !cfg!(windows) {
+            assert!(matches!(
+                normalize_glob_separators("a\\b*.parquet"),
+                Cow::Borrowed("a\\b*.parquet")
+            ));
+        } else {
+            assert_eq!(normalize_glob_separators("**\\x.parquet"), "**/x.parquet");
+        }
+    }
 
     #[test]
     fn test_split_glob() {

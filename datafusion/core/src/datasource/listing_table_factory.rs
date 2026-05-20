@@ -71,7 +71,7 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
-        let mut table_path =
+        let table_path =
             ListingTableUrl::parse(&cmd.location)?.with_table_ref(cmd.name.clone());
         let file_extension = match table_path.is_collection() {
             // Setting the extension to be empty instead of allowing the default extension seems
@@ -152,24 +152,42 @@ impl TableProviderFactory for ListingTableFactory {
             // specifically for parquet file format.
             // See: https://github.com/apache/datafusion/issues/7317
             None => {
-                // if the folder then rewrite a file path as 'path/*.parquet'
-                // to only read the files the reader can understand
+                // If the location is a folder, filter the listing down
+                // to files the reader can understand by setting the file
+                // extension on the listing options.
+                //
+                // The historical approach was to inject a glob like
+                // `*.parquet` onto `table_path`, which doubled as both
+                // an extension filter *and* a way to gate the listing
+                // to top-level files when
+                // `listing_table_ignore_subdirectory` was true. Under
+                // DuckDB-compatible glob semantics a single-segment
+                // glob does not cross `/`, so injecting `*.parquet`
+                // would silently break recursion when the user turned
+                // `ignore_subdirectory` off. Using the explicit
+                // file-extension filter does the same filtering while
+                // leaving directory-recursion behaviour to
+                // `ListingTableUrl::contains`.
                 if table_path.is_folder() && table_path.get_glob().is_none() {
-                    // Since there are no files yet to infer an actual extension,
-                    // derive the pattern based on compression type.
-                    // So for gzipped CSV the pattern is `*.csv.gz`
-                    let glob = match options.format.compression_type() {
+                    // Derive the extension from the configured format /
+                    // compression so newly written files (none on disk
+                    // at table-creation time) are also matched; for
+                    // gzipped CSV this gives `.csv.gz`.
+                    let ext = match options.format.compression_type() {
                         Some(compression) => {
                             match options.format.get_ext_with_compression(&compression) {
-                                // Use glob based on `FileFormat` extension
-                                Ok(ext) => format!("*.{ext}"),
-                                // Fallback to `file_type`, if not supported by `FileFormat`
-                                Err(_) => format!("*.{}", cmd.file_type.to_lowercase()),
+                                Ok(ext) => ext,
+                                Err(_) => cmd.file_type.to_lowercase(),
                             }
                         }
-                        None => format!("*.{}", cmd.file_type.to_lowercase()),
+                        None => cmd.file_type.to_lowercase(),
                     };
-                    table_path = table_path.with_glob(glob.as_ref())?;
+                    let ext_with_dot = if ext.starts_with('.') {
+                        ext
+                    } else {
+                        format!(".{ext}")
+                    };
+                    options = options.with_file_extension(ext_with_dot);
                 }
                 let schema = options.infer_schema(session_state, &table_path).await?;
                 let df_schema = Arc::clone(&schema).to_dfschema()?;
@@ -234,7 +252,6 @@ mod tests {
     use datafusion_execution::cache::file_statistics_cache::DefaultFileStatisticsCache;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use glob::Pattern;
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
@@ -342,12 +359,15 @@ mod tests {
         assert_eq!(csv_options.compression, CompressionTypeVariant::GZIP);
 
         let listing_options = listing_table.options();
-        assert_eq!("", listing_options.file_extension);
-        // Glob pattern is set to search for gzipped files
+        // The folder LOCATION configures extension-based filtering on
+        // the listing options (`.csv.gz` here) instead of injecting a
+        // glob into the URL; that keeps DuckDB-compatible glob
+        // semantics from interfering with `ignore_subdirectory`.
+        assert_eq!(".csv.gz", listing_options.file_extension);
         let table_path = listing_table.table_paths().first().unwrap();
-        assert_eq!(
-            table_path.get_glob().clone().unwrap(),
-            Pattern::new("*.csv.gz").unwrap()
+        assert!(
+            table_path.get_glob().is_none(),
+            "folder LOCATION should not auto-add a glob to the URL",
         );
     }
 
@@ -380,12 +400,14 @@ mod tests {
         let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let listing_options = listing_table.options();
-        assert_eq!("", listing_options.file_extension);
-        // Glob pattern is set to search for gzipped files
+        // See `test_create_using_folder_with_compression` — folder
+        // LOCATION values filter by extension on the listing options
+        // rather than by a glob on the URL.
+        assert_eq!(".csv", listing_options.file_extension);
         let table_path = listing_table.table_paths().first().unwrap();
-        assert_eq!(
-            table_path.get_glob().clone().unwrap(),
-            Pattern::new("*.csv").unwrap()
+        assert!(
+            table_path.get_glob().is_none(),
+            "folder LOCATION should not auto-add a glob to the URL",
         );
     }
 
@@ -414,7 +436,9 @@ mod tests {
         let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
 
         let listing_options = listing_table.options();
-        assert_eq!("", listing_options.file_extension);
+        // Folder LOCATION → the factory now sets the extension on the
+        // listing options instead of injecting a glob into the URL.
+        assert_eq!(".parquet", listing_options.file_extension);
     }
 
     #[tokio::test]

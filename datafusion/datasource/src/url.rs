@@ -17,8 +17,9 @@
 
 use std::sync::Arc;
 
+use crate::listing_glob::LISTING_GLOB_MATCH_OPTIONS;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::listing_glob::split_glob_expression;
+use crate::listing_glob::{normalize_glob_separators, split_glob_expression};
 use datafusion_common::{DataFusionError, Result, TableReference};
 use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::CachedFileList;
@@ -127,7 +128,10 @@ impl ListingTableUrl {
     fn parse_path(s: &str) -> Result<Self> {
         let (path, glob) = match split_glob_expression(s) {
             Some((prefix, glob)) => {
-                let glob = Pattern::new(glob)
+                // On Windows the glob substring can contain `\` because
+                // [`std::path::is_separator`] treats it as a separator;
+                // object-store paths always use `/`, so normalize here.
+                let glob = Pattern::new(&normalize_glob_separators(glob))
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 (prefix, Some(glob))
             }
@@ -173,31 +177,40 @@ impl ListingTableUrl {
     }
 
     /// Returns `true` if `path` matches this [`ListingTableUrl`]
+    ///
+    /// When an explicit glob is present, it is matched against the full
+    /// relative path below this URL's prefix using DuckDB-compatible
+    /// semantics (see [`LISTING_GLOB_MATCH_OPTIONS`]): `*` does not cross
+    /// `/`, `**` is required for recursion, partition-style `key=value`
+    /// directory segments are matched literally, and the
+    /// `ignore_subdirectory` option is **not** consulted — the explicit
+    /// pattern is authoritative.
+    ///
+    /// When no glob is present, `ignore_subdirectory` controls whether
+    /// the listing recurses; `key=value` segments (Hive partition dirs)
+    /// are still followed in either case so that partitioned tables work.
     pub fn contains(&self, path: &Path, ignore_subdirectory: bool) -> bool {
-        let Some(all_segments) = self.strip_prefix(path) else {
+        let Some(mut all_segments) = self.strip_prefix(path) else {
             return false;
         };
 
-        // remove any segments that contain `=` as they are allowed even
-        // when ignore subdirectories is `true`.
-        let mut segments = all_segments.filter(|s| !s.contains('='));
-
         match &self.glob {
             Some(glob) => {
-                if ignore_subdirectory {
-                    segments
-                        .next()
-                        .is_some_and(|file_name| glob.matches(file_name))
-                } else {
-                    let stripped = segments.join(DELIMITER);
-                    glob.matches(&stripped)
-                }
+                // Explicit glob: match the full relative path (including
+                // any `key=value` segments). `ignore_subdirectory` is
+                // intentionally ignored — `*`/`**` in the pattern fully
+                // describe the user's intent re: directory traversal.
+                let stripped = all_segments.join(DELIMITER);
+                glob.matches_with(&stripped, LISTING_GLOB_MATCH_OPTIONS)
             }
-            // where we are ignoring subdirectories, we require
-            // the path to be either empty, or contain just the
-            // final file name segment.
-            None if ignore_subdirectory => segments.count() <= 1,
-            // in this case, any valid path at or below the url is allowed
+            // No glob: when ignoring subdirectories, only the final file
+            // segment is accepted, but `key=value` (Hive partition)
+            // segments are skipped so partitioned tables still work.
+            None if ignore_subdirectory => {
+                all_segments.filter(|s| !s.contains('=')).count() <= 1
+            }
+            // No glob and recursion permitted: any valid path at or
+            // below the URL is allowed.
             None => true,
         }
     }
