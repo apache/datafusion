@@ -24,11 +24,10 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use crate::PartitionedFile;
-use crate::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
+use crate::morsel::{Morsel, MorselPlan, MorselPlanner, MorselStream, Morselizer};
 use arrow::array::{Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
-use futures::stream::BoxStream;
 use futures::{Future, FutureExt};
 
 // Use thin wrappers around usize so the test setups are more explicit
@@ -629,16 +628,16 @@ impl MockMorsel {
 }
 
 impl Morsel for MockMorsel {
-    fn into_stream(self: Box<Self>) -> BoxStream<'static, Result<RecordBatch>> {
+    fn into_stream(self: Box<Self>) -> Result<MorselStream> {
         self.observer.push(MorselEvent::MorselStreamStarted {
             morsel_id: self.morsel_id,
         });
-        Box::pin(MockMorselStream {
+        Ok(MorselStream::Async(Box::pin(MockMorselStream {
             observer: self.observer.clone(),
             morsel_id: self.morsel_id,
             batch_ids: self.batch_ids.into(),
             finished: false,
-        })
+        })))
     }
 }
 

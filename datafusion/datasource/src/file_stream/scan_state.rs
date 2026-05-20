@@ -19,11 +19,12 @@ use datafusion_common::internal_datafusion_err;
 use std::collections::VecDeque;
 use std::task::{Context, Poll};
 
-use crate::morsel::{Morsel, MorselPlanner, Morselizer, PendingMorselPlanner};
+use crate::morsel::{
+    Morsel, MorselPlanner, MorselStream, Morselizer, PendingMorselPlanner,
+};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_plan::metrics::ScopedTimerGuard;
-use futures::stream::BoxStream;
 use futures::{FutureExt as _, StreamExt as _};
 
 use super::work_source::WorkSource;
@@ -75,7 +76,7 @@ pub(super) struct ScanState {
     /// Ready morsels for the current file.
     ready_morsels: VecDeque<Box<dyn Morsel>>,
     /// The active reader, if any.
-    reader: Option<BoxStream<'static, Result<RecordBatch>>>,
+    morsel_stream: Option<MorselStream>,
     /// The single planner currently blocked on I/O, if any.
     ///
     /// Once the I/O completes, yields the next planner and is pushed back
@@ -100,7 +101,7 @@ impl ScanState {
             on_error,
             ready_planners: Default::default(),
             ready_morsels: Default::default(),
-            reader: None,
+            morsel_stream: None,
             pending_planner: None,
             metrics,
         }
@@ -123,8 +124,8 @@ impl ScanState {
     /// The return [`ScanAndReturn`] tells `poll_inner` how to update the
     /// outer `FileStreamState`.
     pub(super) fn poll_scan(&mut self, cx: &mut Context<'_>) -> ScanAndReturn {
-        let _processing_timer: ScopedTimerGuard<'_> =
-            self.metrics.time_processing.timer();
+        let time_processing = self.metrics.time_processing.clone();
+        let _timer: ScopedTimerGuard<'_> = time_processing.timer();
 
         // Try and resolve outstanding IO first. If it is still pending, check
         // the current reader or ready morsels before yielding. New planning
@@ -155,61 +156,8 @@ impl ScanState {
         }
 
         // Next try and get the next batch from the active reader, if any.
-        if let Some(reader) = self.reader.as_mut() {
-            match reader.poll_next_unpin(cx) {
-                // Morsels should ideally only expose ready-to-decode streams,
-                // but tolerate pending readers here.
-                Poll::Pending => return ScanAndReturn::Return(Poll::Pending),
-                Poll::Ready(Some(Ok(batch))) => {
-                    self.metrics.time_scanning_until_data.stop();
-                    self.metrics.time_scanning_total.stop();
-                    // Apply any remaining row limit.
-                    let (batch, finished) = match &mut self.remain {
-                        Some(remain) => {
-                            if *remain > batch.num_rows() {
-                                *remain -= batch.num_rows();
-                                self.metrics.time_scanning_total.start();
-                                (batch, false)
-                            } else {
-                                let batch = batch.slice(0, *remain);
-                                let done = 1 + self.work_source.skipped_on_limit();
-                                self.metrics.files_processed.add(done);
-                                *remain = 0;
-                                (batch, true)
-                            }
-                        }
-                        None => {
-                            self.metrics.time_scanning_total.start();
-                            (batch, false)
-                        }
-                    };
-                    return if finished {
-                        ScanAndReturn::Done(Some(Ok(batch)))
-                    } else {
-                        ScanAndReturn::Return(Poll::Ready(Some(Ok(batch))))
-                    };
-                }
-                Poll::Ready(Some(Err(err))) => {
-                    self.reader = None;
-                    self.metrics.file_scan_errors.add(1);
-                    self.metrics.time_scanning_until_data.stop();
-                    self.metrics.time_scanning_total.stop();
-                    return match self.on_error {
-                        OnError::Skip => {
-                            self.metrics.files_processed.add(1);
-                            ScanAndReturn::Continue
-                        }
-                        OnError::Fail => ScanAndReturn::Error(err),
-                    };
-                }
-                Poll::Ready(None) => {
-                    self.reader = None;
-                    self.metrics.files_processed.add(1);
-                    self.metrics.time_scanning_until_data.stop();
-                    self.metrics.time_scanning_total.stop();
-                    return ScanAndReturn::Continue;
-                }
-            }
+        if let Some(scan_and_return) = self.poll_reader(cx) {
+            return scan_and_return;
         }
 
         // No active reader, but a morsel is ready to become the reader.
@@ -217,7 +165,20 @@ impl ScanState {
             self.metrics.time_opening.stop();
             self.metrics.time_scanning_until_data.start();
             self.metrics.time_scanning_total.start();
-            self.reader = Some(morsel.into_stream());
+            let morsel_stream = match morsel.into_stream() {
+                Ok(stream) => stream,
+                Err(e) => {
+                    self.metrics.file_open_errors.add(1);
+                    return match self.on_error {
+                        OnError::Skip => {
+                            self.metrics.files_processed.add(1);
+                            ScanAndReturn::Continue
+                        }
+                        OnError::Fail => ScanAndReturn::Error(e),
+                    };
+                }
+            };
+            self.morsel_stream = Some(morsel_stream);
             return ScanAndReturn::Continue;
         }
 
@@ -288,6 +249,86 @@ impl ScanState {
                 OnError::Fail => ScanAndReturn::Error(err),
             },
         }
+    }
+
+    /// if there is an active reader, poll it for the next batch and return it
+    /// if ready. Otherwise, return None.
+    fn poll_reader(&mut self, cx: &mut Context<'_>) -> Option<ScanAndReturn> {
+        let morsel_stream = self.morsel_stream.as_mut()?;
+
+        let ret = match morsel_stream {
+            MorselStream::Sync(reader) => match reader.next() {
+                Some(Ok(batch)) => self.handle_batch(batch),
+                Some(Err(err)) => self.handle_scan_error(DataFusionError::from(err)),
+                None => self.handle_reader_finished(),
+            },
+            MorselStream::Async(reader) => match reader.poll_next_unpin(cx) {
+                // Morsels should ideally only expose ready-to-decode streams,
+                // but tolerate pending readers here.
+                Poll::Pending => ScanAndReturn::Return(Poll::Pending),
+                Poll::Ready(Some(Ok(batch))) => self.handle_batch(batch),
+                Poll::Ready(Some(Err(err))) => self.handle_scan_error(err),
+                Poll::Ready(None) => self.handle_reader_finished(),
+            },
+        };
+        Some(ret)
+    }
+
+    fn handle_batch(&mut self, batch: RecordBatch) -> ScanAndReturn {
+        self.metrics.time_scanning_until_data.stop();
+        self.metrics.time_scanning_total.stop();
+        let (batch, finished) = match &mut self.remain {
+            Some(remain) => {
+                if *remain > batch.num_rows() {
+                    *remain -= batch.num_rows();
+                    self.metrics.time_scanning_total.start();
+                    (batch, false)
+                } else {
+                    let batch = batch.slice(0, *remain);
+                    let done = 1 + self.work_source.skipped_on_limit();
+                    self.metrics.files_processed.add(done);
+                    *remain = 0;
+                    (batch, true)
+                }
+            }
+            None => {
+                self.metrics.time_scanning_total.start();
+                (batch, false)
+            }
+        };
+
+        if finished {
+            ScanAndReturn::Done(Some(Ok(batch)))
+        } else {
+            ScanAndReturn::Return(Poll::Ready(Some(Ok(batch))))
+        }
+    }
+
+    fn handle_scan_error(&mut self, err: DataFusionError) -> ScanAndReturn {
+        self.morsel_stream = None;
+        self.metrics.file_scan_errors.add(1);
+        self.metrics.time_scanning_until_data.stop();
+        self.metrics.time_scanning_total.stop();
+        match self.on_error {
+            OnError::Skip => {
+                self.metrics.files_processed.add(1);
+                ScanAndReturn::Continue
+            }
+            OnError::Fail => ScanAndReturn::Error(err),
+        }
+    }
+
+    fn handle_reader_finished(&mut self) -> ScanAndReturn {
+        self.morsel_stream = None;
+        self.metrics.time_scanning_until_data.stop();
+        self.metrics.time_scanning_total.stop();
+        if self.ready_morsels.is_empty()
+            && self.ready_planners.is_empty()
+            && self.pending_planner.is_none()
+        {
+            self.metrics.files_processed.add(1);
+        }
+        ScanAndReturn::Continue
     }
 }
 
