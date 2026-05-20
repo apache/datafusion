@@ -340,8 +340,16 @@ impl NamePreserver {
 
     pub fn save(&self, expr: &Expr) -> SavedName {
         if self.use_alias {
-            let (relation, name) = expr.qualified_name();
-            SavedName::Saved { relation, name }
+            match expr {
+                Expr::Alias(alias) => SavedName::Saved {
+                    relation: alias.relation.clone(),
+                    name: alias.name.clone(),
+                },
+                _ => {
+                    let (relation, name) = expr.qualified_name();
+                    SavedName::Saved { relation, name }
+                }
+            }
         } else {
             SavedName::None
         }

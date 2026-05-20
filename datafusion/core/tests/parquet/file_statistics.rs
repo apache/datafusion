@@ -30,8 +30,10 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::DFSchema;
 use datafusion_common::stats::Precision;
 use datafusion_execution::cache::DefaultListFilesCache;
-use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+use datafusion_execution::cache::cache_manager::{
+    CacheManagerConfig, FileStatisticsCache,
+};
+use datafusion_execution::cache::file_statistics_cache::DefaultFileStatisticsCache;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{Expr, col, lit};
@@ -236,7 +238,7 @@ async fn list_files_with_session_level_cache() {
 
 async fn get_listing_table(
     table_path: &ListingTableUrl,
-    static_cache: Option<Arc<DefaultFileStatisticsCache>>,
+    static_cache: Option<Arc<dyn FileStatisticsCache>>,
     opt: &ListingOptions,
 ) -> ListingTable {
     let schema = opt
@@ -249,12 +251,9 @@ async fn get_listing_table(
     let config1 = ListingTableConfig::new(table_path.clone())
         .with_listing_options(opt.clone())
         .with_schema(schema);
-    let table = ListingTable::try_new(config1).unwrap();
-    if let Some(c) = static_cache {
-        table.with_cache(Some(c))
-    } else {
-        table
-    }
+    ListingTable::try_new(config1)
+        .unwrap()
+        .with_cache(static_cache)
 }
 
 fn get_cache_runtime_state() -> (
@@ -267,7 +266,7 @@ fn get_cache_runtime_state() -> (
     let list_file_cache = Arc::new(DefaultListFilesCache::default());
 
     let cache_config = cache_config
-        .with_files_statistics_cache(Some(file_static_cache.clone()))
+        .with_file_statistics_cache(Some(file_static_cache.clone()))
         .with_list_files_cache(Some(list_file_cache.clone()));
 
     let rt = RuntimeEnvBuilder::new()
