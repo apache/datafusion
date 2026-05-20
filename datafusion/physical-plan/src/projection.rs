@@ -1026,8 +1026,7 @@ fn try_collapse_projection_chain(
             break;
         };
 
-        // Merging a referenced-more-than-once column whose inner expression is
-        // non-trivial would duplicate that computation. See #8296.
+        // Collect the column references usage in the outer projection.
         column_ref_map.clear();
         for proj_expr in &current_exprs {
             proj_expr.expr.apply(|expr| {
@@ -1038,6 +1037,10 @@ fn try_collapse_projection_chain(
             })?;
         }
         let inner_exprs = inner_proj.expr();
+        // Merging these projections is not beneficial, e.g
+        // If an expression is not trivial (KeepInPlace) and it is referred more than 1, unifies projections will be
+        // beneficial as caching mechanism for non-trivial computations.
+        // See discussion in: https://github.com/apache/datafusion/issues/8296
         let blocked = column_ref_map.iter().any(|(column, count)| {
             *count > 1
                 && !inner_exprs[column.index()]
@@ -1051,6 +1054,9 @@ fn try_collapse_projection_chain(
 
         let mut new_exprs = Vec::with_capacity(current_exprs.len());
         for proj_expr in &current_exprs {
+            // If there is no match in the input projection, we cannot unify these
+            // projections. This case will arise if the projection expression contains
+            // a `PhysicalExpr` variant `update_expr` doesn't support.
             let Some(expr) = update_expr(&proj_expr.expr, inner_exprs, true)? else {
                 break 'outer;
             };
@@ -1069,8 +1075,7 @@ fn try_collapse_projection_chain(
         return Ok(None);
     }
 
-    // Give the (now non-Projection) input a chance to absorb the unified
-    // projection via its own `try_swapping_with_projection` impl.
+    // To unify 3 or more sequential projections:
     let unified: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(current_exprs, current_input)?);
     remove_unnecessary_projections(unified).data().map(Some)
