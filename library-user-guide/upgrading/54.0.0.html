@@ -1109,22 +1109,22 @@ Instead, it is created within the <code class="docutils literal notranslate"><sp
 <p>Use the file statistics cache provided by the <code class="docutils literal notranslate"><span class="pre">CacheManager</span></code> when initializing a new <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code>:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">ListingTable</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">config</span><span class="p">)</span><span class="o">?</span>
 <span class="w">  </span><span class="p">.</span><span class="n">with_cache</span><span class="p">(</span><span class="n">ctx</span><span class="p">.</span><span class="n">runtime_env</span><span class="p">().</span><span class="n">cache_manager</span><span class="p">.</span><span class="n">get_file_statistic_cache</span><span class="p">())</span>
-<span class="p">[#</span><span class="mi">21075</span><span class="p">]:</span><span class="w"> </span><span class="nc">https</span><span class="p">:</span><span class="c1">//github.com/apache/datafusion/pull/21075</span>
+</pre></div>
+</div>
+</section>
+<section id="unionstofilter-optimizer-rule-is-now-disabled-by-default">
+<h3><code class="docutils literal notranslate"><span class="pre">UnionsToFilter</span></code> optimizer rule is now disabled by default<a class="headerlink" href="#unionstofilter-optimizer-rule-is-now-disabled-by-default" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.enable_unions_to_filter</span></code> option now defaults to
+<code class="docutils literal notranslate"><span class="pre">false</span></code>. When enabled, the rule rewrites <code class="docutils literal notranslate"><span class="pre">UNION</span> <span class="pre">DISTINCT</span></code> branches that read the
+same source and differ only by filter predicates into a single scan with a
+combined <code class="docutils literal notranslate"><span class="pre">OR</span></code> predicate:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Before: two separate scans</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span>
+<span class="k">UNION</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
 
-<span class="p">###</span><span class="w"> </span><span class="err">`</span><span class="n">UnionsToFilter</span><span class="err">`</span><span class="w"> </span><span class="n">optimizer</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">now</span><span class="w"> </span><span class="n">disabled</span><span class="w"> </span><span class="n">by</span><span class="w"> </span><span class="n">default</span>
-
-<span class="n">The</span><span class="w"> </span><span class="err">`</span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">enable_unions_to_filter</span><span class="err">`</span><span class="w"> </span><span class="n">option</span><span class="w"> </span><span class="n">now</span><span class="w"> </span><span class="n">defaults</span><span class="w"> </span><span class="n">to</span>
-<span class="err">`</span><span class="kc">false</span><span class="err">`</span><span class="p">.</span><span class="w"> </span><span class="n">When</span><span class="w"> </span><span class="n">enabled</span><span class="p">,</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="n">rewrites</span><span class="w"> </span><span class="err">`</span><span class="n">UNION</span><span class="w"> </span><span class="n">DISTINCT</span><span class="err">`</span><span class="w"> </span><span class="n">branches</span><span class="w"> </span><span class="n">that</span><span class="w"> </span><span class="n">read</span><span class="w"> </span><span class="n">the</span>
-<span class="n">same</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">differ</span><span class="w"> </span><span class="n">only</span><span class="w"> </span><span class="n">by</span><span class="w"> </span><span class="n">filter</span><span class="w"> </span><span class="n">predicates</span><span class="w"> </span><span class="n">into</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">single</span><span class="w"> </span><span class="n">scan</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">a</span>
-<span class="n">combined</span><span class="w"> </span><span class="err">`</span><span class="n">OR</span><span class="err">`</span><span class="w"> </span><span class="n">predicate</span><span class="p">:</span>
-<span class="err">```</span><span class="n">sql</span>
-<span class="o">--</span><span class="w"> </span><span class="n">Before</span><span class="p">:</span><span class="w"> </span><span class="nc">two</span><span class="w"> </span><span class="n">separate</span><span class="w"> </span><span class="n">scans</span>
-<span class="n">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="n">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span>
-<span class="n">UNION</span>
-<span class="n">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="n">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
-
-<span class="o">--</span><span class="w"> </span><span class="n">After</span><span class="p">:</span><span class="w"> </span><span class="nc">one</span><span class="w"> </span><span class="n">scan</span>
-<span class="n">SELECT</span><span class="w"> </span><span class="n">DISTINCT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="n">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="n">OR</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+<span class="c1">-- After: one scan</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">OR</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
 </pre></div>
 </div>
 <p><strong>Who is affected:</strong></p>
@@ -1139,9 +1139,140 @@ a combined <code class="docutils literal notranslate"><span class="pre">OR</span
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">enable_unions_to_filter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
 </pre></div>
 </div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/21075">PR #21075</a> for more details</p>
+</section>
+<section id="higher-order-functions-and-lambdas">
+<h3>Higher-order functions and lambdas<a class="headerlink" href="#higher-order-functions-and-lambdas" title="Link to this heading">#</a></h3>
+<p>The changes below are related to the added support for higher-order functions
+and lambdas. For more info, see <a class="reference external" href="https://github.com/apache/datafusion/issues/14205">#14205</a>, <a class="reference external" href="https://github.com/apache/datafusion/pull/18921">PR #18921</a>, <a class="reference external" href="https://github.com/apache/datafusion/pull/21679">PR #21679</a> and
+<a class="reference external" href="https://github.com/apache/datafusion/issues/21172">EPIC #21172</a>.</p>
+<section id="functionregistry-exposes-two-additional-methods">
+<h4><code class="docutils literal notranslate"><span class="pre">FunctionRegistry</span></code> exposes two additional methods<a class="headerlink" href="#functionregistry-exposes-two-additional-methods" title="Link to this heading">#</a></h4>
+<p><code class="docutils literal notranslate"><span class="pre">FunctionRegistry</span></code> exposes two additional methods, <code class="docutils literal notranslate"><span class="pre">higher_order_function</span></code>
+which returns the registered higher-order function with the given name, if
+any, and <code class="docutils literal notranslate"><span class="pre">higher_order_function_names</span></code> which exposes the set of registered
+user defined higher-order function names.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who implement the <code class="docutils literal notranslate"><span class="pre">FunctionRegistry</span></code> trait</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Add <code class="docutils literal notranslate"><span class="pre">higher_order_function</span></code> and <code class="docutils literal notranslate"><span class="pre">higher_order_function_names</span></code> to your implementation.</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>impl FunctionRegistry for FunctionRegistryImpl {
+<span class="w"> </span>     fn udfs(&amp;self) -&gt; HashSet&lt;String&gt; {
+<span class="w"> </span>        self.scalar_functions.keys().cloned().collect()
+<span class="w"> </span>    }
+<span class="gi">+</span>
+<span class="gi">+    fn higher_order_function(&amp;self, name: &amp;str) -&gt; Result&lt;Arc&lt;dyn HigherOrderUDF&gt;&gt; {</span>
+<span class="gi">+        self.higher_order_functions</span>
+<span class="gi">+            .get(name)</span>
+<span class="gi">+            .cloned()</span>
+<span class="gi">+            .ok_or_else(|| plan_datafusion_err!(&quot;Higher-order function {name} not found&quot;))</span>
+<span class="gi">+    }</span>
+<span class="gi">+</span>
+<span class="gi">+    fn higher_order_function_names(&amp;self) -&gt; HashSet&lt;String&gt; {</span>
+<span class="gi">+        self.higher_order_functions.keys().cloned().collect()</span>
+<span class="gi">+    }</span>
+}
+</pre></div>
+</div>
+</section>
+<section id="contextprovider-exposes-two-additional-methods">
+<h4><code class="docutils literal notranslate"><span class="pre">ContextProvider</span></code> exposes two additional methods<a class="headerlink" href="#contextprovider-exposes-two-additional-methods" title="Link to this heading">#</a></h4>
+<p><code class="docutils literal notranslate"><span class="pre">ContextProvider</span></code> exposes two additional methods, <code class="docutils literal notranslate"><span class="pre">get_higher_order_meta</span></code>
+which returns the registered higher-order function with the given name,
+if any, and <code class="docutils literal notranslate"><span class="pre">higher_order_function_names</span></code> which exposes the registered
+user defined higher-order function names.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who implement the <code class="docutils literal notranslate"><span class="pre">ContextProvider</span></code> trait</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Add <code class="docutils literal notranslate"><span class="pre">get_higher_order_meta</span></code> and <code class="docutils literal notranslate"><span class="pre">higher_order_function_names</span></code> to your implementation.</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>impl ContextProvider for ContextProviderImpl {
+<span class="w"> </span>     fn udfs(&amp;self) -&gt; HashSet&lt;String&gt; {
+<span class="w"> </span>        self.scalar_functions.keys().cloned().collect()
+<span class="w"> </span>    }
+<span class="gi">+</span>
+<span class="gi">+    fn get_higher_order_meta(&amp;self, name: &amp;str) -&gt; Option&lt;Arc&lt;dyn HigherOrderUDF&gt;&gt; {</span>
+<span class="gi">+        self.higher_order_functions.get(name).cloned()</span>
+<span class="gi">+    }</span>
+<span class="gi">+</span>
+<span class="gi">+    fn higher_order_function_names(&amp;self) -&gt; Vec&lt;String&gt; {</span>
+<span class="gi">+        self.higher_order_functions.keys().cloned().collect()</span>
+<span class="gi">+    }</span>
+}
+</pre></div>
+</div>
+</section>
+<section id="add-higher-order-functions-method-to-session">
+<h4>Add <code class="docutils literal notranslate"><span class="pre">higher_order_functions()</span></code> method to <code class="docutils literal notranslate"><span class="pre">Session</span></code><a class="headerlink" href="#add-higher-order-functions-method-to-session" title="Link to this heading">#</a></h4>
+<p>The <code class="docutils literal notranslate"><span class="pre">higher_order_functions</span></code> method has been added to the <code class="docutils literal notranslate"><span class="pre">Session</span></code> trait,
+which exposes the registered user defined higher-order functions.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who implement the <code class="docutils literal notranslate"><span class="pre">Session</span></code> trait</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Add <code class="docutils literal notranslate"><span class="pre">higher_order_functions</span></code> to your implementation.</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>impl Session for MySession {
+<span class="w"> </span>    ...
+<span class="gi">+    fn higher_order_functions(&amp;self) -&gt; &amp;HashMap&lt;String, Arc&lt;dyn HigherOrderUDF&gt;&gt; {</span>
+<span class="gi">+        &amp;self.higher_order_functions</span>
+<span class="gi">+    }</span>
+}
+</pre></div>
+</div>
+</section>
+<section id="new-argument-on-taskcontext-new">
+<h4>New argument on <code class="docutils literal notranslate"><span class="pre">TaskContext::new</span></code><a class="headerlink" href="#new-argument-on-taskcontext-new" title="Link to this heading">#</a></h4>
+<p><code class="docutils literal notranslate"><span class="pre">TaskContext::new</span></code> expects a new argument, <code class="docutils literal notranslate"><span class="pre">higher_order_functions</span></code>, which is
+a map of higher-order functions keyed by name.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who call <code class="docutils literal notranslate"><span class="pre">TaskContext::new</span></code></p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Provide the new argument to the function. An empty hash map is sufficient.</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gi">+let higher_order_functions = HashMap::new();</span>
+
+TaskContext::new(
+<span class="w"> </span>    task_id,
+<span class="w"> </span>    session_id,
+<span class="w"> </span>    session_config,
+<span class="w"> </span>    scalar_functions,
+<span class="gi">+    higher_order_functions,</span>
+<span class="w"> </span>    aggregate_functions,
+<span class="w"> </span>    window_functions,
+<span class="w"> </span>    runtime,
+)
+</pre></div>
+</div>
+</section>
+<section id="the-expr-enum-has-three-new-variants">
+<h4>The <code class="docutils literal notranslate"><span class="pre">Expr</span></code> enum has three new variants<a class="headerlink" href="#the-expr-enum-has-three-new-variants" title="Link to this heading">#</a></h4>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">HigherOrderFunction</span></code>: Call a higher-order function with a set of arguments</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Lambda</span></code>: A Lambda expression with a set of parameters names and a body</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">LambdaVariable</span></code>: A named reference to a lambda parameter</p></li>
+</ul>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who match on an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> without a default branch <code class="docutils literal notranslate"><span class="pre">_</span> <span class="pre">=&gt;</span> <span class="pre">{}</span></code></p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Add the new branches to the match with the logic applicable to the context.</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>match expr {
+<span class="w"> </span>   Expr::Column(column) =&gt; ...,
+<span class="w"> </span>   ...,
+<span class="gi">+   Expr::HigherOrderFunction(func) =&gt; {},</span>
+<span class="gi">+   Expr::Lambda(lambda) =&gt; {},</span>
+<span class="gi">+   Expr::LambdaVariable(lambda_var) =&gt; {},</span>
+</pre></div>
+</div>
 </section>
 <section id="the-registerfunction-enum-has-a-new-higherorder-variant">
-<h3>The <code class="docutils literal notranslate"><span class="pre">RegisterFunction</span></code> enum has a new <code class="docutils literal notranslate"><span class="pre">HigherOrder</span></code> variant<a class="headerlink" href="#the-registerfunction-enum-has-a-new-higherorder-variant" title="Link to this heading">#</a></h3>
+<h4>The <code class="docutils literal notranslate"><span class="pre">RegisterFunction</span></code> enum has a new <code class="docutils literal notranslate"><span class="pre">HigherOrder</span></code> variant<a class="headerlink" href="#the-registerfunction-enum-has-a-new-higherorder-variant" title="Link to this heading">#</a></h4>
 <p><code class="docutils literal notranslate"><span class="pre">RegisterFunction</span></code> now has a <code class="docutils literal notranslate"><span class="pre">HigherOrder(Arc&lt;dyn</span> <span class="pre">HigherOrderUDF&gt;)</span></code> variant
 so user-defined higher-order functions can be registered</p>
 <p><strong>Who is affected:</strong></p>
@@ -1159,6 +1290,7 @@ so user-defined higher-order functions can be registered</p>
 }
 </pre></div>
 </div>
+</section>
 </section>
 </section>
 </section>
@@ -1238,7 +1370,16 @@ so user-defined higher-order functions can be registered</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default"><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#memorypool-now-requires-static-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">MemoryPool</span></code> now requires <code class="docutils literal notranslate"><span class="pre">'static</span></code> (adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#file-statistics-cache-is-now-memory-limited-and-managed-by-the-cachemanager">File statistics cache is now memory-limited and managed by the <code class="docutils literal notranslate"><span class="pre">CacheManager</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#the-registerfunction-enum-has-a-new-higherorder-variant">The <code class="docutils literal notranslate"><span class="pre">RegisterFunction</span></code> enum has a new <code class="docutils literal notranslate"><span class="pre">HigherOrder</span></code> variant</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unionstofilter-optimizer-rule-is-now-disabled-by-default"><code class="docutils literal notranslate"><span class="pre">UnionsToFilter</span></code> optimizer rule is now disabled by default</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#higher-order-functions-and-lambdas">Higher-order functions and lambdas</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#functionregistry-exposes-two-additional-methods"><code class="docutils literal notranslate"><span class="pre">FunctionRegistry</span></code> exposes two additional methods</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#contextprovider-exposes-two-additional-methods"><code class="docutils literal notranslate"><span class="pre">ContextProvider</span></code> exposes two additional methods</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#add-higher-order-functions-method-to-session">Add <code class="docutils literal notranslate"><span class="pre">higher_order_functions()</span></code> method to <code class="docutils literal notranslate"><span class="pre">Session</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#new-argument-on-taskcontext-new">New argument on <code class="docutils literal notranslate"><span class="pre">TaskContext::new</span></code></a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#the-expr-enum-has-three-new-variants">The <code class="docutils literal notranslate"><span class="pre">Expr</span></code> enum has three new variants</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#the-registerfunction-enum-has-a-new-higherorder-variant">The <code class="docutils literal notranslate"><span class="pre">RegisterFunction</span></code> enum has a new <code class="docutils literal notranslate"><span class="pre">HigherOrder</span></code> variant</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
