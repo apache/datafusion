@@ -521,28 +521,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             );
         })
     });
-
-    let mut chained_group =
-        c.benchmark_group("physical_plan_chained_case_projection_sweep");
-    for &steps in &[10usize, 20, 40] {
-        for &case_depth in &[5usize, 10, 15] {
-            let df = build_chained_case_projection_df(&rt, steps, case_depth, 30);
-            let label = format!("steps={steps},depth={case_depth}");
-            chained_group.bench_with_input(
-                BenchmarkId::new("physical_plan", &label),
-                &df,
-                |b, df| {
-                    b.iter(|| {
-                        let df_clone = df.clone();
-                        black_box(rt.block_on(async {
-                            df_clone.create_physical_plan().await.unwrap()
-                        }));
-                    })
-                },
-            );
-        }
-    }
-    chained_group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);
