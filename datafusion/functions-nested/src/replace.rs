@@ -19,11 +19,10 @@
 
 use arrow::array::{
     Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
-    NullBufferBuilder, OffsetSizeTrait, Scalar, new_null_array,
+    NullBufferBuilder, OffsetBufferBuilder, OffsetSizeTrait, Scalar, new_null_array,
 };
-use arrow::datatypes::{DataType, Field};
-
 use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
@@ -474,17 +473,16 @@ fn general_replace<O: OffsetSizeTrait>(
 }
 
 /// For each element of `list_array[i]`, replaces up to `arr_n[i]` occurrences
-/// of `needle[0]` with `to_array[i]`.
+/// of `needle` with `to_array[i]`.
 ///
 /// This is a specialized version of `general_replace` for scalar needles that
 /// uses a single bulk comparison for better performance.
 fn general_replace_with_scalar<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
-    needle: &ArrayRef,
+    needle: &Scalar<ArrayRef>,
     to_array: &ArrayRef,
     arr_n: &[i64],
 ) -> Result<ArrayRef> {
-    let mut offsets: Vec<O> = vec![O::usize_as(0)];
     let values = list_array.values();
     let original_data = values.to_data();
     let to_data = to_array.to_data();
@@ -496,57 +494,45 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         capacity,
     );
 
-    let mut valid = NullBufferBuilder::new(list_array.len());
-    let match_array = arrow_ord::cmp::not_distinct(
-        list_array.values(),
-        &Scalar::new(Arc::clone(needle)),
-    )?;
+    let mut offsets = OffsetBufferBuilder::<O>::new(list_array.len());
+    let match_array = arrow_ord::cmp::not_distinct(list_array.values(), needle)?;
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        let start = offset_window[0].to_usize().unwrap();
+        let end = offset_window[1].to_usize().unwrap();
+        let row_len = end - start;
+
         if list_array.is_null(row_index) {
-            offsets.push(offsets[row_index]);
-            valid.append_null();
+            offsets.push_length(0);
             continue;
         }
-
-        let start = offset_window[0];
-        let end = offset_window[1];
-        let start_usize = start.to_usize().unwrap();
-        let end_usize = end.to_usize().unwrap();
-        let row_len = end_usize - start_usize;
 
         let original_idx = O::usize_as(0);
         let replace_idx = O::usize_as(1);
         let n = arr_n[row_index];
         let mut counter = 0;
 
-        let eq_array = match_array.slice(start_usize, row_len);
+        let eq_array = match_array.slice(start, row_len);
         if n <= 0 || eq_array.true_count() == 0 {
-            mutable.extend(original_idx.to_usize().unwrap(), start_usize, end_usize);
-            offsets.push(offsets[row_index] + (end - start));
-            valid.append_non_null();
+            mutable.extend(original_idx.to_usize().unwrap(), start, end);
+            offsets.push_length(row_len);
             continue;
         }
 
-        let mut pending_retain: Option<O> = None;
+        let mut pending_retain: Option<usize> = None;
         for (i, is_match) in eq_array.iter().enumerate() {
-            let i = O::usize_as(i);
             if is_match == Some(true) && counter < n {
                 if let Some(rs) = pending_retain.take() {
                     mutable.extend(
                         original_idx.to_usize().unwrap(),
-                        start_usize + rs.to_usize().unwrap(),
-                        start_usize + i.to_usize().unwrap(),
+                        start + rs,
+                        start + i,
                     );
                 }
                 mutable.extend(replace_idx.to_usize().unwrap(), row_index, row_index + 1);
                 counter += 1;
                 if counter == n {
-                    mutable.extend(
-                        original_idx.to_usize().unwrap(),
-                        start_usize + i.to_usize().unwrap() + 1,
-                        end_usize,
-                    );
+                    mutable.extend(original_idx.to_usize().unwrap(), start + i + 1, end);
                     break;
                 }
             } else if pending_retain.is_none() {
@@ -557,50 +543,23 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         if counter < n
             && let Some(rs) = pending_retain
         {
-            mutable.extend(
-                original_idx.to_usize().unwrap(),
-                start_usize + rs.to_usize().unwrap(),
-                end_usize,
-            );
+            mutable.extend(original_idx.to_usize().unwrap(), start + rs, end);
         }
 
-        offsets.push(offsets[row_index] + (end - start));
-        valid.append_non_null();
+        offsets.push_length(row_len);
     }
 
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(list_array.value_type(), true)),
-        OffsetBuffer::<O>::new(offsets.into()),
+        offsets.finish(),
         arrow::array::make_array(data),
-        valid.finish(),
+        list_array.nulls().cloned(),
     )?))
 }
 
 /// Dispatches scalar-needle array replacement by list offset type.
-///
-/// `needle` must be a length-1 array containing the scalar element to replace.
-fn array_replace_dispatch_scalar(
-    array: &ArrayRef,
-    needle: &ArrayRef,
-    to: &ArrayRef,
-    arr_n: &[i64],
-) -> Result<ArrayRef> {
-    match array.data_type() {
-        DataType::List(_) => {
-            let list_array = array.as_list::<i32>();
-            general_replace_with_scalar::<i32>(list_array, needle, to, arr_n)
-        }
-        DataType::LargeList(_) => {
-            let list_array = array.as_list::<i64>();
-            general_replace_with_scalar::<i64>(list_array, needle, to, arr_n)
-        }
-        DataType::Null => Ok(new_null_array(array.data_type(), 1)),
-        array_type => exec_err!("array_replace does not support type '{array_type}'."),
-    }
-}
-
 fn replace_with_scalar_needle(
     list_array: &ArrayRef,
     scalar_from: &ScalarValue,
@@ -612,8 +571,19 @@ fn replace_with_scalar_needle(
         return array_replace_internal(list_array, &from_array, to_array, arr_n);
     }
 
-    let needle = scalar_from.to_array_of_size(1)?;
-    array_replace_dispatch_scalar(list_array, &needle, to_array, arr_n)
+    let needle = Scalar::new(scalar_from.to_array_of_size(1)?);
+    match list_array.data_type() {
+        DataType::List(_) => {
+            let list = list_array.as_list::<i32>();
+            general_replace_with_scalar::<i32>(list, &needle, to_array, arr_n)
+        }
+        DataType::LargeList(_) => {
+            let list = list_array.as_list::<i64>();
+            general_replace_with_scalar::<i64>(list, &needle, to_array, arr_n)
+        }
+        DataType::Null => Ok(new_null_array(list_array.data_type(), 1)),
+        array_type => exec_err!("array_replace does not support type '{array_type}'."),
+    }
 }
 
 fn array_replace_internal(
