@@ -19,10 +19,20 @@
 //!
 //! ## Key Benchmark Axes
 //!
-//! - **Density**: The ratio of distinct key values to the key range span.
-//!   For example, keys [0, 2, 4, 6, 8] have density = 5/9 ≈ 55% (5 distinct values
-//!   in a range of 9). Density affects hash table memory layout and cache behavior.
-//!   Lower density means keys are more spread out, leading to more cache misses.
+//! - **Density**: How tightly distinct keys pack into their numeric range.
+//!   `density = num_distinct_keys / (max_key - min_key + 1)`.
+//!   Examples for 5 distinct keys:
+//!     - `[0, 1, 2, 3, 4]`      → 5/5  = 100% (fully packed)
+//!     - `[0, 2, 4, 6, 8]`      → 5/9  ≈  55% (every 2nd slot)
+//!     - `[0, 10, 20, 30, 40]`  → 5/41 ≈  12% (every 10th slot)
+//!
+//!   Why it matters for this workload: future potential semi/anti-join
+//!   fast paths could exploit densely packed build keys to outperform the
+//!   general hash-table path, which is largely insensitive to density.
+//!   Varying density across benchmarks helps surface those potential gains
+//!   under different key distributions. Density describes only the
+//!   build-side key layout; the per-probe match count is tracked
+//!   separately as fanout.
 //!
 //! - **Hit Rate**: The percentage of probe rows that find a match in the build side.
 //!   This controls how often the join produces output rows.

@@ -302,8 +302,17 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "60M",
     },
     // RightSemi Join benchmarks with Int32 keys
-    // Matching ratio: 1:1 (build keys are unique, each probe matches at most 1 build row)
-    // Semi joins can short-circuit after first match, so hit rate affects performance.
+    //
+    // Fanout (average build rows matched per probe row, as measured by running
+    // the equivalent INNER JOIN under `EXPLAIN ANALYZE` and reading the
+    // `HashJoinExec` metrics): 1 for Q16-Q18. Build keys here are primary
+    // keys (`n_nationkey`, `s_suppkey`), so each probe row matches at most
+    // one build row. `prob_hit` controls what fraction of probe rows find
+    // that one match.
+    //
+    // Fanout still matters because semi joins short-circuit after the first
+    // match. Coverage of fanout > 1 (build-side duplicates) is left for a
+    // follow-up.
     //
     // Q16: RightSemi, Small build (25 rows), 100% Hit rate
     // Build Side: nation (25 rows) | Probe Side: customer (1.5M rows)
@@ -345,8 +354,17 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "60M_RightSemi",
     },
     // RightAnti Join benchmarks with Int32 keys
-    // Matching ratio: 1:1 (build keys are unique, each probe matches at most 1 build row)
-    // Anti joins can short-circuit after first match, so hit rate affects performance.
+    //
+    // Fanout (average build rows matched per probe row, as measured by running
+    // the equivalent INNER JOIN under `EXPLAIN ANALYZE` and reading the
+    // `HashJoinExec` metrics): 1 for Q19-Q21. Build keys here are primary
+    // keys (`n_nationkey`, `s_suppkey`), so each probe row matches at most
+    // one build row. `prob_hit` controls what fraction of probe rows find
+    // that one match (and are therefore filtered *out* by anti).
+    //
+    // Fanout still matters because anti joins short-circuit after the first
+    // match. Coverage of fanout > 1 (build-side duplicates) is left for a
+    // follow-up.
     //
     // Q19: RightAnti, Small build (25 rows), 100% Hit rate (no output)
     // Build Side: nation (25 rows) | Probe Side: customer (1.5M rows)
