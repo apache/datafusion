@@ -23,10 +23,8 @@ use arrow::{
     datatypes::{DataType, Field, FieldRef},
 };
 use datafusion_common::{
-    Result, ScalarValue, exec_err, plan_err,
-    utils::{
-        adjust_offsets_for_slice, list_values, list_values_row_number, take_function_args,
-    },
+    Result, exec_err, plan_err,
+    utils::{adjust_offsets_for_slice, list_values_row_number, take_function_args},
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
@@ -34,7 +32,12 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use std::{fmt::Debug, sync::Arc};
+use std::sync::Arc;
+
+use crate::lambda_utils::{
+    ListValuesResult, coerce_single_list_arg, extract_list_values,
+    single_list_lambda_parameters,
+};
 
 make_higher_order_function_expr_and_func!(
     ArrayTransform,
@@ -100,30 +103,7 @@ impl HigherOrderUDF for ArrayTransform {
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [list] = arg_types else {
-            return plan_err!(
-                "{} function requires 1 value argument, got {}",
-                self.name(),
-                arg_types.len()
-            );
-        };
-
-        let coerced = match list {
-            DataType::List(_) | DataType::LargeList(_) => list.clone(),
-            DataType::ListView(field) | DataType::FixedSizeList(field, _) => {
-                DataType::List(Arc::clone(field))
-            }
-            DataType::LargeListView(field) => DataType::LargeList(Arc::clone(field)),
-            _ => {
-                return plan_err!(
-                    "{} expected a list as first argument, got {}",
-                    self.name(),
-                    list
-                );
-            }
-        };
-
-        Ok(vec![coerced])
+        coerce_single_list_arg(self.name(), arg_types)
     }
 
     fn lambda_parameters(
@@ -131,22 +111,7 @@ impl HigherOrderUDF for ArrayTransform {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let [list, _] = take_function_args(self.name(), fields)?;
-        let ValueOrLambda::Value(list) = list else {
-            return plan_err!("{} expects a value as first argument", self.name());
-        };
-
-        let field = match list.data_type() {
-            DataType::List(field) => field,
-            DataType::LargeList(field) => field,
-            _ => return plan_err!("expected list, got {list}"),
-        };
-
-        // we don't need to check whether the lambda contains more than two parameters,
-        // e.g. array_transform([], (v, i, j) -> v+i+j), as datafusion will do that for us
-        Ok(LambdaParametersProgress::Complete(vec![vec![Arc::clone(
-            field,
-        )]]))
+        single_list_lambda_parameters(self.name(), fields)
     }
 
     fn return_field_from_args(
@@ -187,31 +152,10 @@ impl HigherOrderUDF for ArrayTransform {
 
         let list_array = list.to_array(args.number_rows)?;
 
-        // Fast path for fully null input array
-        if list_array.null_count() == list_array.len() {
-            return Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
-                args.return_type(),
-            )?));
-        }
-
-        // as per list_values docs, if list_array is sliced, list_values will be sliced too,
-        // so before constructing the transformed array below, we must adjust the list offsets with
-        // adjust_offsets_for_slice
-        let list_values = list_values(&list_array)?;
-
-        // fast path: when every sublist is empty and non-null we can return a scalar of an non-null empty sublist.
-        // If every sublist is null have already been handled above
-        if list_values.is_empty()
-            && list_array.null_count() == 0
-            && matches!(
-                args.return_type(),
-                DataType::List(_) | DataType::LargeList(_)
-            )
-        {
-            return Ok(ColumnarValue::Scalar(ScalarValue::new_default(
-                args.return_type(),
-            )?));
-        }
+        let list_values = match extract_list_values(&list_array, args.return_type())? {
+            ListValuesResult::EarlyReturn(v) => return Ok(v),
+            ListValuesResult::Values(v) => v,
+        };
 
         // by passing closures, lambda.evaluate can evaluate only those actually needed
         let values_param = || Ok(Arc::clone(&list_values));
@@ -279,60 +223,23 @@ impl HigherOrderUDF for ArrayTransform {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
-
     use arrow::{
-        array::{Array, ArrayRef, AsArray, Int32Array, ListArray, RecordBatch},
+        array::{Array, AsArray},
         buffer::{NullBuffer, OffsetBuffer},
-        datatypes::{DataType, Field},
     };
-    use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::{
-        Expr, col, execution_props::ExecutionProps, expr::HigherOrderFunction, lambda,
-        lambda_var, lit,
-    };
-    use datafusion_physical_expr::create_physical_expr;
 
     use crate::array_transform::array_transform_higher_order_function;
+    use crate::lambda_utils::test_utils::{create_i32_list, eval_hof_on_i32_list, v};
+    use datafusion_expr::lit;
 
-    fn create_i32_list(
-        values: impl Into<Int32Array>,
-        offsets: OffsetBuffer<i32>,
-        nulls: Option<NullBuffer>,
-    ) -> ListArray {
-        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
-
-        ListArray::new(list_field, offsets, Arc::new(values.into()), nulls)
-    }
-
-    fn divide_100_by(list: impl Array + Clone + 'static) -> Result<ArrayRef> {
-        let array_transform = array_transform_higher_order_function();
-
-        let schema = DFSchema::from_unqualified_fields(
-            vec![Field::new(
-                "list",
-                list.data_type().clone(),
-                list.is_nullable(),
-            )]
-            .into(),
-            HashMap::new(),
-        )?;
-
-        create_physical_expr(
-            &Expr::HigherOrderFunction(HigherOrderFunction::new(
-                array_transform,
-                vec![col("list"), lambda(["v"], lit(100i32) / lambda_var("v"))],
-            ))
-            .resolve_lambda_variables(&schema)?
-            .data,
-            &schema,
-            &ExecutionProps::new(),
-        )?
-        .evaluate(&RecordBatch::try_new(
-            Arc::clone(schema.inner()),
-            vec![Arc::new(list.clone())],
-        )?)?
-        .into_array(list.len())
+    fn divide_100_by(
+        list: impl Array + Clone + 'static,
+    ) -> datafusion_common::Result<arrow::array::ArrayRef> {
+        eval_hof_on_i32_list(
+            array_transform_higher_order_function(),
+            list,
+            lit(100i32) / v(),
+        )
     }
 
     #[test]
