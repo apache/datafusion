@@ -398,7 +398,9 @@ fn array_remove_dispatch_scalar(
             let list_array = array.as_list::<i64>();
             general_remove_with_scalar::<i64>(list_array, needle, arr_n)
         }
-        array_type => exec_err!("array_remove/array_remove_n/array_remove_all does not support type '{array_type}'."),
+        array_type => exec_err!(
+            "array_remove/array_remove_n/array_remove_all does not support type '{array_type}'."
+        ),
     }
 }
 
