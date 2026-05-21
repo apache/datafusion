@@ -963,8 +963,6 @@ pub fn update_expr(
                 return Ok(Transformed::no(expr));
             };
             if unproject {
-                state = RewriteState::RewrittenValid;
-                // Update the index of `column`:
                 let projected_expr = projected_exprs.get(column.index()).ok_or_else(|| {
                     internal_datafusion_err!(
                         "Column index {} out of bounds for projected expressions of length {}",
@@ -972,6 +970,17 @@ pub fn update_expr(
                         projected_exprs.len()
                     )
                 })?;
+                // Skip rebuilding the parent if substituting with an equal
+                // Column (e.g. pass-through `c0@0` -> `c0@0` during chained
+                // projection collapse). Without this, every CASE/BinaryExpr
+                // containing such a Column is reconstructed unnecessarily.
+                if let Some(projected_col) =
+                    projected_expr.expr.downcast_ref::<Column>()
+                    && projected_col == column
+                {
+                    return Ok(Transformed::no(expr));
+                }
+                state = RewriteState::RewrittenValid;
                 Ok(Transformed::yes(Arc::clone(&projected_expr.expr)))
             } else {
                 // default to invalid, in case we can't find the relevant column
