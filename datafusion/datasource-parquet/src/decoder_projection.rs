@@ -27,7 +27,7 @@
 //!   not carry.
 //!
 //! The opener constructs one [`DecoderProjection`] per file via
-//! [`DecoderProjection::build`] and hands it to the push-decoder stream,
+//! [`DecoderProjection::try_new`] and hands it to the push-decoder stream,
 //! which calls [`map`](DecoderProjection::map) on every decoded batch.
 
 use std::sync::Arc;
