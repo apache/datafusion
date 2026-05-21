@@ -38,9 +38,7 @@ use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, SortExpr, TableType};
-use datafusion_physical_expr::{
-    LexOrdering, create_physical_expr, create_physical_sort_exprs,
-};
+use datafusion_physical_expr::{LexOrdering, create_physical_expr, create_physical_sort_exprs, PhysicalExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
@@ -395,10 +393,7 @@ impl TableProvider for MemTable {
         let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
 
         // Create physical expressions for assignments upfront (outside batch loop)
-        let physical_assignments: HashMap<
-            String,
-            Arc<dyn datafusion_physical_plan::PhysicalExpr>,
-        > = assignments
+        let physical_assignments: HashMap<String, Arc<dyn PhysicalExpr>> = assignments
             .iter()
             .map(|(name, expr)| {
                 let physical_expr =
