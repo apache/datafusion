@@ -195,19 +195,35 @@ fn plan_string(plan: &Arc<dyn ExecutionPlan>) -> String {
         .to_string()
 }
 
-/// Run `EnsureRequirements`, assert `SanityCheckPlan` passes, and snapshot
-/// the resulting plan with `insta`. Use this for plan-shape tests so that
+/// Run `EnsureRequirements`, assert `SanityCheckPlan` passes, snapshot the
+/// resulting plan with `insta`, and verify idempotency by running the rule a
+/// second time and checking the plan is unchanged. Use this for plan-shape
+/// tests so a single call covers "correct plan + sanity + idempotent" and
 /// updating an intentional plan change is a single `cargo insta accept`.
 macro_rules! assert_ensure_requirements_plan {
     ($plan:expr, @ $snapshot:literal $(,)?) => {{
         let config = ConfigOptions::default();
-        let optimized = EnsureRequirements::new()
+        let p1 = EnsureRequirements::new()
             .optimize($plan, &config)
-            .expect("EnsureRequirements::optimize failed");
+            .expect("EnsureRequirements::optimize failed (pass 1)");
         SanityCheckPlan::new()
-            .optimize(Arc::clone(&optimized), &config)
-            .expect("SanityCheckPlan failed");
-        insta::assert_snapshot!(plan_string(&optimized), @ $snapshot);
+            .optimize(Arc::clone(&p1), &config)
+            .expect("SanityCheckPlan failed (pass 1)");
+        let p1_str = plan_string(&p1);
+        insta::assert_snapshot!(p1_str, @ $snapshot);
+
+        // Idempotency: a second pass must produce the same plan.
+        let p2 = EnsureRequirements::new()
+            .optimize(p1, &config)
+            .expect("EnsureRequirements::optimize failed (pass 2)");
+        let p2_str = plan_string(&p2);
+        assert_eq!(
+            p1_str, p2_str,
+            "EnsureRequirements is NOT idempotent!\nPass 1:\n{p1_str}\nPass 2:\n{p2_str}",
+        );
+        SanityCheckPlan::new()
+            .optimize(p2, &config)
+            .expect("SanityCheckPlan failed (pass 2)");
     }};
 }
 
@@ -272,14 +288,13 @@ fn test_projection_over_multi_partition_sort_limit() {
     let sort = Arc::new(SortExec::new(sort_expr, projection));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
-    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    assert_ensure_requirements_plan!(limit, @r"
     GlobalLimitExec: skip=0, fetch=21
       SortPreservingMergeExec: [a@0 DESC]
         SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
           ProjectionExec: expr=[a@0 as a, b@1 as b]
             MockMultiPartitionExec
     ");
-    assert_idempotent(limit);
 }
 
 // ========================================================================
@@ -364,13 +379,12 @@ fn test_coalesce_then_sort_limit() {
     let sort = Arc::new(SortExec::new(sort_expr, coalesce));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
-    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    assert_ensure_requirements_plan!(limit, @r"
     GlobalLimitExec: skip=0, fetch=10
       SortPreservingMergeExec: [a@0 DESC]
         SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
           MockMultiPartitionExec
     ");
-    assert_idempotent(limit);
 }
 
 // ========================================================================
@@ -395,14 +409,13 @@ fn test_filter_over_multi_partition_sort_limit() {
     let sort = Arc::new(SortExec::new(sort_expr, filter));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
-    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    assert_ensure_requirements_plan!(limit, @r"
     GlobalLimitExec: skip=0, fetch=21
       SortPreservingMergeExec: [a@0 DESC]
         SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
           FilterExec: true
             MockMultiPartitionExec
     ");
-    assert_idempotent(limit);
 }
 
 // ========================================================================
@@ -422,12 +435,11 @@ fn test_repartition_sort_limit_idempotent() {
     let sort = Arc::new(SortExec::new(sort_expr, repartition));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
-    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    assert_ensure_requirements_plan!(limit, @r"
     GlobalLimitExec: skip=0, fetch=10
       SortExec: expr=[a@0 DESC], preserve_partitioning=[false]
         MockMultiPartitionExec
     ");
-    assert_idempotent(limit);
 }
 
 // ========================================================================
@@ -445,13 +457,12 @@ fn test_skip_and_fetch_multi_partition() {
     // skip=5, fetch=10
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 5, Some(10)));
 
-    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    assert_ensure_requirements_plan!(limit, @r"
     GlobalLimitExec: skip=5, fetch=10
       SortPreservingMergeExec: [a@0 DESC]
         SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
           MockMultiPartitionExec
     ");
-    assert_idempotent(limit);
 }
 
 // ========================================================================
@@ -484,13 +495,12 @@ fn test_multi_column_sort_multi_partition() {
     let sort = Arc::new(SortExec::new(sort_expr, source));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
-    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    assert_ensure_requirements_plan!(limit, @r"
     GlobalLimitExec: skip=0, fetch=21
       SortPreservingMergeExec: [a@0 DESC, b@1 ASC NULLS LAST]
         SortExec: expr=[a@0 DESC, b@1 ASC NULLS LAST], preserve_partitioning=[true]
           MockMultiPartitionExec
     ");
-    assert_idempotent(limit);
 }
 
 // ========================================================================
