@@ -324,6 +324,57 @@ fn build_non_case_left_join_df_with_push_down_filter(
     rt.block_on(async { ctx.sql(&query).await.unwrap() })
 }
 
+/// Join + wide-OR filter + N chained CTEs, each adding one column defined
+/// by a depth-K nested CASE ladder over the same input column. Exercises
+/// the physical `ProjectionPushdown` rule on long projection chains.
+fn build_chained_case_projection_query(
+    chained_steps: usize,
+    case_depth: usize,
+    or_width: usize,
+) -> String {
+    let mut q = String::new();
+    q.push_str("WITH s0 AS (\n  SELECT l.c0, l.c1 FROM t l LEFT JOIN t r ON l.c0 = r.c0");
+    if or_width > 0 {
+        q.push_str("\n  WHERE (");
+        for i in 0..or_width {
+            if i > 0 {
+                q.push_str(" OR ");
+            }
+            let _ = write!(&mut q, "l.c1 = '{i}'");
+        }
+        q.push(')');
+    }
+    q.push_str("\n)");
+
+    for n in 1..=chained_steps {
+        q.push_str(",\n");
+        let _ = write!(&mut q, "s{n} AS (SELECT *, ");
+        for d in 0..case_depth {
+            let _ = write!(&mut q, "CASE WHEN c0 = '{d}' THEN 'label' ELSE ");
+        }
+        q.push_str("c0");
+        for _ in 0..case_depth {
+            q.push_str(" END");
+        }
+        let _ = write!(&mut q, " AS d{n} FROM s{prev})", prev = n - 1);
+    }
+
+    let _ = write!(&mut q, "\nSELECT * FROM s{chained_steps}");
+    q
+}
+
+fn build_chained_case_projection_df(
+    rt: &Runtime,
+    chained_steps: usize,
+    case_depth: usize,
+    or_width: usize,
+) -> DataFrame {
+    let ctx = SessionContext::new();
+    register_string_table(&ctx, 100, 1000);
+    let query = build_chained_case_projection_query(chained_steps, case_depth, or_width);
+    rt.block_on(async { ctx.sql(&query).await.unwrap() })
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     let baseline_ctx = SessionContext::new();
     let case_heavy_ctx = SessionContext::new();
@@ -460,6 +511,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         }
     }
     control_group.finish();
+
+    let chained_df = build_chained_case_projection_df(&rt, 80, 23, 30);
+    c.bench_function("physical_plan_chained_case_projection_hotspot", |b| {
+        b.iter(|| {
+            let df_clone = chained_df.clone();
+            black_box(
+                rt.block_on(async { df_clone.create_physical_plan().await.unwrap() }),
+            );
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);
