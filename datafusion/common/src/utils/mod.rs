@@ -407,6 +407,10 @@ pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
         vec.drain(0..n).collect()
     } else {
         let remaining = vec.split_off(n);
+        // The emitted prefix keeps the original (larger) allocation. datafusion
+        // accounts memory by capacity rather than length, so shrink it to avoid
+        // handing off a short Vec that still reserves the pre-split capacity.
+        vec.shrink_to_fit();
         std::mem::replace(vec, remaining)
     }
 }
