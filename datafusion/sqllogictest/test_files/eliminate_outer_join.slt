@@ -370,6 +370,25 @@ select * from t1 left join t2 on t1.a = t2.x where (t2.y > 150) is unknown;
 3 30 c NULL NULL NULL
 NULL 40 d NULL NULL NULL
 
+# LEFT JOIN + WHERE NOT ((t2.y > 150) IS TRUE) -> stays LEFT JOIN
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where not ((t2.y > 150) is true);
+----
+logical_plan
+01)Filter: NOT t2.y > Int32(150) IS TRUE
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b, c]
+04)----TableScan: t2 projection=[x, y, z]
+
+# Both the matched-with-low-y row AND the LEFT-padded NULL rows must
+# survive.
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where not ((t2.y > 150) is true);
+----
+1 10 a 1 100 p
+3 30 c NULL NULL NULL
+NULL 40 d NULL NULL NULL
+
 ###
 ### FULL JOIN → LEFT / RIGHT conversion tests
 ###
