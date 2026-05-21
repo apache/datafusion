@@ -635,52 +635,6 @@ fn test_sort_pushdown_through_projection_adds_spm() {
     );
 }
 
-/// Regression: no extra SortPreservingMergeExec when plan is already optimal.
-/// OutputRequirementExec(SinglePartition) → SortPreservingMergeExec → SortExec(preserve=true)
-/// → multi-partition source. Must NOT add duplicate SortPreservingMergeExec.
-#[test]
-fn test_no_extra_spm_when_already_optimal() {
-    let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(10));
-
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
-
-    // Already-optimal plan: SPM → Sort(preserve=true) → source(10 partitions)
-    let sort = Arc::new(
-        SortExec::new(sort_expr.clone(), source).with_preserve_partitioning(true),
-    );
-    let spm: Arc<dyn ExecutionPlan> =
-        Arc::new(SortPreservingMergeExec::new(sort_expr, sort));
-
-    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(spm, 0, Some(21)));
-
-    let config = ConfigOptions::default();
-    let optimized = EnsureRequirements::new()
-        .optimize(limit, &config)
-        .expect("optimize failed");
-
-    let plan_str = datafusion_physical_plan::displayable(optimized.as_ref())
-        .indent(true)
-        .to_string();
-
-    // Count SortPreservingMergeExec occurrences — should be exactly 1
-    let spm_count = plan_str.matches("SortPreservingMergeExec").count();
-    assert!(
-        spm_count <= 1,
-        "Extra SortPreservingMergeExec added ({spm_count} found):\n{plan_str}"
-    );
-
-    SanityCheckPlan::new()
-        .optimize(optimized, &config)
-        .expect("SanityCheckPlan failed");
-}
-
 // ========================================================================
 // Idempotency tests for distribution-fix scenarios
 // These verify that the pushdown_sorts distribution fix actually
@@ -742,8 +696,14 @@ fn test_idempotent_projection_over_multi_partition_with_single_partition_require
     assert_idempotent(output_req);
 }
 
-/// Idempotency: SPM → Sort(preserve=true) → multi-partition
-/// This is the topology that caused test_pushdown_through_spm to fail.
+/// Idempotency: `SPM → Sort(preserve=true) → multi-partition`.
+/// This is the topology that caused `test_pushdown_through_spm` to fail.
+///
+/// Also acts as the "no extra SPM when already optimal" check — the
+/// input plan already contains exactly one `SortPreservingMergeExec`,
+/// so the optimised plan must too (we used to have a separate test for
+/// this property, but on this input it is implied by idempotency
+/// combined with the SPM-count assertion).
 #[test]
 fn test_idempotent_spm_sort_multi_partition() {
     let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(10));
@@ -762,6 +722,22 @@ fn test_idempotent_spm_sort_multi_partition() {
     let spm: Arc<dyn ExecutionPlan> =
         Arc::new(SortPreservingMergeExec::new(sort_expr, sort));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(spm, 0, Some(21)));
+
+    // No-extra-SPM property: count SortPreservingMergeExec occurrences in
+    // the first optimisation pass — must be ≤ 1 (the original SPM survives,
+    // none are added).
+    let config = ConfigOptions::default();
+    let optimized = EnsureRequirements::new()
+        .optimize(Arc::clone(&limit), &config)
+        .expect("optimize failed");
+    let plan_str = datafusion_physical_plan::displayable(optimized.as_ref())
+        .indent(true)
+        .to_string();
+    let spm_count = plan_str.matches("SortPreservingMergeExec").count();
+    assert!(
+        spm_count <= 1,
+        "Extra SortPreservingMergeExec added ({spm_count} found):\n{plan_str}"
+    );
 
     assert_idempotent(limit);
 }
