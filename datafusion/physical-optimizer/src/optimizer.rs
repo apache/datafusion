@@ -169,9 +169,24 @@ impl PhysicalOptimizer {
             // those are handled by the later `FilterPushdown` rule.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new()),
-            // EnsureRequirements: merged EnforceDistribution + EnforceSorting into a
-            // single idempotent rule with distribution-aware pushdown_sorts.
-            // See https://github.com/apache/datafusion/issues/21973
+            // Ensures each input plan satisfies the distribution and ordering
+            // requirements declared by `ExecutionPlan::required_input_distribution`
+            // and `ExecutionPlan::required_input_ordering`.
+            //
+            // If the requirements are already satisfied, this rule leaves the plan
+            // unchanged. For example, it does not add sorting when the input is a
+            // file scan whose existing order already satisfies the required ordering.
+            // Otherwise, this rule inserts the necessary repartitioning and sorting
+            // operators.
+            //
+            // This used to be implemented as two separate rules: `EnforceDistribution`
+            // and `EnforceSorting`. It is now a single idempotent rule that decides
+            // distribution and sorting together in one bottom-up pass, so the
+            // `pushdown_sorts` step no longer breaks distribution invariants set
+            // earlier in the pipeline. See the module-level doc on
+            // [`EnsureRequirements`](crate::ensure_requirements) for the per-phase
+            // breakdown, and <https://github.com/apache/datafusion/issues/21973>
+            // for the original failure mode.
             Arc::new(EnsureRequirements::new()),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),
