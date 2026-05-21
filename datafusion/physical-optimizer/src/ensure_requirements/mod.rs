@@ -68,15 +68,6 @@ use datafusion_physical_plan::ExecutionPlan;
 // as opaque boxes. This gives us control over the pass ordering and enables
 // future merging into a true single-pass architecture.
 
-// For the no-pushdown variant (Phase 3)
-use crate::enforce_sorting::replace_with_order_preserving_variants::{
-    OrderPreservationContext, replace_with_order_preserving_variants,
-};
-use crate::enforce_sorting::{
-    PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, ensure_sorting,
-    parallelize_sorts, replace_with_partial_sort,
-};
-
 /// Optimizer rule that enforces both distribution and sorting requirements.
 ///
 /// This rule combines the functionality of `EnforceDistribution` and
@@ -172,97 +163,6 @@ impl PhysicalOptimizerRule for EnsureRequirements {
 
     fn name(&self) -> &str {
         "EnsureRequirements"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
-
-/// Phase 3 variant: no `pushdown_sorts`, sort placement handled entirely
-/// by bottom-up passes. Currently experimental — some plan shapes differ
-/// from the `pushdown_sorts` variant (less optimal but still correct).
-#[derive(Default, Debug)]
-pub struct EnsureRequirementsNoPushdown {}
-
-impl EnsureRequirementsNoPushdown {
-    /// Create a new rule.
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl PhysicalOptimizerRule for EnsureRequirementsNoPushdown {
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Step 1: Distribution enforcement
-        use crate::enforce_distribution::{
-            DistributionContext as DistCtx, PlanWithKeyRequirements as KeyReqs,
-            adjust_input_keys_ordering as adj_keys, ensure_distribution as ensure_dist,
-        };
-        let top_down = config.optimizer.top_down_join_key_reordering;
-        let plan = if top_down {
-            KeyReqs::new_default(plan)
-                .transform_down(adj_keys)
-                .data()?
-                .plan
-        } else {
-            use crate::enforce_distribution::reorder_join_keys_to_inputs;
-            plan.transform_up(|p| Ok(Transformed::yes(reorder_join_keys_to_inputs(p)?)))
-                .data()?
-        };
-        let dist_ctx = DistCtx::new_default(plan);
-        let plan = dist_ctx
-            .transform_up(|ctx| ensure_dist(ctx, config))
-            .data()?
-            .plan;
-
-        // Step 2: ensure_sorting (bottom-up, NO pushdown_sorts)
-        let plan_requirements = PlanWithCorrespondingSort::new_default(plan);
-        let adjusted = plan_requirements.transform_up(ensure_sorting)?.data;
-
-        // Step 3: parallelize_sorts (optional)
-        let plan = if config.optimizer.repartition_sorts {
-            let ctx = PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
-            ctx.transform_up(parallelize_sorts).data()?.plan
-        } else {
-            adjusted.plan
-        };
-
-        // Step 4: order-preserving variants
-        let ctx = OrderPreservationContext::new_default(plan);
-        let plan = ctx
-            .transform_up(|c| {
-                replace_with_order_preserving_variants(c, false, true, config)
-            })
-            .data()?
-            .plan;
-
-        // Step 5: partial sort
-        let plan = plan
-            .transform_up(|p| Ok(Transformed::yes(replace_with_partial_sort(p)?)))
-            .data()?;
-
-        // NO pushdown_sorts — sort placement is purely bottom-up.
-        // Step 6: Final distribution enforcement
-        let dist_ctx2 = DistCtx::new_default(plan);
-        let plan = dist_ctx2
-            .transform_up(|ctx| ensure_dist(ctx, config))
-            .data()?
-            .plan;
-
-        // Step 7: Fix any sorting violations the final distribution pass introduced.
-        let sort_ctx2 = PlanWithCorrespondingSort::new_default(plan);
-        let adjusted2 = sort_ctx2.transform_up(ensure_sorting)?.data;
-
-        Ok(adjusted2.plan)
-    }
-
-    fn name(&self) -> &str {
-        "EnsureRequirementsNoPushdown"
     }
 
     fn schema_check(&self) -> bool {
