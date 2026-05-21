@@ -681,10 +681,10 @@ fn parse_protobuf_range_partitioning(
         .iter()
         .map(parse_protobuf_range_split_point)
         .collect::<Result<_>>()?;
-    Ok(Partitioning::Range(RangePartitioning::new(
+    Ok(Partitioning::Range(RangePartitioning::try_new(
         ordering,
         split_points,
-    )))
+    )?))
 }
 
 fn parse_protobuf_range_split_point(

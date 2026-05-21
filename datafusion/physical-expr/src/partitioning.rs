@@ -21,9 +21,10 @@ use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
     expressions::UnKnownColumn, physical_exprs_equal,
 };
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -203,7 +204,7 @@ impl Display for Partitioning {
 /// NOTE: Optimizer and execution behavior for this partitioning is intentionally
 /// not implemented and will be introduced incrementally. See
 /// <https://github.com/apache/datafusion/issues/22395>.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RangePartitioning {
     /// Ordered partitioning key.
     ordering: LexOrdering,
@@ -245,15 +246,22 @@ impl Display for SplitPoint {
 }
 
 impl RangePartitioning {
-    /// Creates range partitioning metadata.
+    /// Creates range partitioning metadata without validating split points.
     ///
-    /// The caller is responsible for satisfying the contract documented on
+    /// Use [`Self::try_new`] to validate the contract documented on
     /// [`RangePartitioning`].
     pub fn new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Self {
         Self {
             ordering,
             split_points,
         }
+    }
+
+    /// Creates range partitioning metadata and validates split point shape and
+    /// ordering.
+    pub fn try_new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Result<Self> {
+        validate_range_split_points(&ordering, &split_points)?;
+        Ok(Self::new(ordering, split_points))
     }
 
     /// Returns the ordering that defines the range key.
@@ -323,9 +331,83 @@ fn format_range_split_points(split_points: &[SplitPoint]) -> String {
         .join(", ")
 }
 
-impl PartialEq for RangePartitioning {
-    fn eq(&self, other: &Self) -> bool {
-        self.ordering == other.ordering && self.split_points == other.split_points
+fn validate_range_split_points(
+    ordering: &LexOrdering,
+    split_points: &[SplitPoint],
+) -> Result<()> {
+    let width = ordering.len();
+    for (idx, split_point) in split_points.iter().enumerate() {
+        let split_point_width = split_point.values.len();
+        if split_point_width != width {
+            return plan_err!(
+                "Range partitioning split point {idx} has width {split_point_width}, but ordering has width {width}"
+            );
+        }
+    }
+
+    for (idx, split_points) in split_points.windows(2).enumerate() {
+        if compare_split_points(ordering, &split_points[0], &split_points[1])?
+            != Ordering::Less
+        {
+            return plan_err!(
+                "Range partitioning split points must be strictly ordered: split point {idx} ({}) must be less than split point {} ({})",
+                split_points[0],
+                idx + 1,
+                split_points[1]
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn compare_split_points(
+    ordering: &LexOrdering,
+    left: &SplitPoint,
+    right: &SplitPoint,
+) -> Result<Ordering> {
+    for ((left_value, right_value), sort_expr) in
+        left.values.iter().zip(&right.values).zip(ordering.iter())
+    {
+        let value_ordering =
+            compare_scalar_values_for_sort(left_value, right_value, sort_expr)?;
+        if value_ordering != Ordering::Equal {
+            return Ok(value_ordering);
+        }
+    }
+
+    Ok(Ordering::Equal)
+}
+
+fn compare_scalar_values_for_sort(
+    left: &ScalarValue,
+    right: &ScalarValue,
+    sort_expr: &PhysicalSortExpr,
+) -> Result<Ordering> {
+    match (left.is_null(), right.is_null()) {
+        (true, true) => Ok(Ordering::Equal),
+        (true, false) => Ok(if sort_expr.options.nulls_first {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        }),
+        (false, true) => Ok(if sort_expr.options.nulls_first {
+            Ordering::Greater
+        } else {
+            Ordering::Less
+        }),
+        (false, false) => {
+            let Some(ordering) = left.partial_cmp(right) else {
+                return plan_err!(
+                    "Range partitioning split point values are not comparable: {left:?} and {right:?}"
+                );
+            };
+            Ok(if sort_expr.options.descending {
+                ordering.reverse()
+            } else {
+                ordering
+            })
+        }
     }
 }
 
@@ -455,9 +537,13 @@ impl Partitioning {
 
                     PartitioningSatisfaction::NotSatisfied
                 }
-                _ => PartitioningSatisfaction::NotSatisfied,
+                Partitioning::RoundRobinBatch(_)
+                | Partitioning::Range(_)
+                | Partitioning::UnknownPartitioning(_) => {
+                    PartitioningSatisfaction::NotSatisfied
+                }
             },
-            _ => PartitioningSatisfaction::NotSatisfied,
+            Distribution::SinglePartition => PartitioningSatisfaction::NotSatisfied,
         }
     }
 
@@ -1084,6 +1170,17 @@ mod tests {
         }
     }
 
+    fn assert_range_try_new_error(
+        ordering: LexOrdering,
+        split_points: Vec<SplitPoint>,
+        expected: &str,
+    ) {
+        let error = RangePartitioning::try_new(ordering, split_points)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+    }
+
     #[test]
     fn test_range_partitioning_metadata() -> Result<()> {
         let fixture = RangeTestFixture::new()?;
@@ -1103,6 +1200,65 @@ mod tests {
         assert_eq!(
             partitioning.to_string(),
             "Range([a@0 ASC], [(10), (20)], 3)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_try_new_validates_split_points() -> Result<()> {
+        let fixture = RangeTestFixture::new()?;
+        let asc_a: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::clone(&fixture.col_a))].into();
+        let ordering_ab: LexOrdering = [
+            PhysicalSortExpr::new_default(Arc::clone(&fixture.col_a)),
+            PhysicalSortExpr::new_default(Arc::clone(&fixture.col_b)),
+        ]
+        .into();
+
+        assert_range_try_new_error(
+            ordering_ab.clone(),
+            vec![int_split_point([10])],
+            "split point 0 has width 1, but ordering has width 2",
+        );
+
+        RangePartitioning::try_new(
+            [PhysicalSortExpr::new(
+                Arc::clone(&fixture.col_a),
+                SortOptions::new(true, false),
+            )]
+            .into(),
+            vec![int_split_point([20]), int_split_point([10])],
+        )?;
+
+        assert_range_try_new_error(
+            asc_a,
+            vec![int_split_point([20]), int_split_point([10])],
+            "split points must be strictly ordered",
+        );
+
+        assert_range_try_new_error(
+            [PhysicalSortExpr::new(
+                Arc::clone(&fixture.col_a),
+                SortOptions::new(false, false),
+            )]
+            .into(),
+            vec![
+                SplitPoint::new(vec![ScalarValue::Int64(None)]),
+                int_split_point([10]),
+            ],
+            "split points must be strictly ordered",
+        );
+
+        RangePartitioning::try_new(
+            ordering_ab.clone(),
+            vec![int_split_point([10, 20]), int_split_point([10, 30])],
+        )?;
+
+        assert_range_try_new_error(
+            ordering_ab,
+            vec![int_split_point([10, 30]), int_split_point([10, 20])],
+            "split points must be strictly ordered",
         );
 
         Ok(())
