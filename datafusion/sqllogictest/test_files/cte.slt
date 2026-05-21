@@ -210,6 +210,31 @@ SELECT * FROM t
 0 NULL
 NULL NULL
 
+# outer IS NOT NULL filters must see recursive output as nullable, not just the
+# non-null anchor literal.
+query II rowsort
+WITH RECURSIVE t(a, b) AS (
+  SELECT 0 AS a, 0 AS b
+  UNION ALL
+  SELECT b AS a, CAST(NULL AS INT) AS b FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t WHERE a IS NOT NULL
+----
+0 0
+0 NULL
+
+# outer IS NULL filters must see recursive output as nullable, not just the
+# non-null anchor literal.
+query I
+WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t WHERE a IS NULL
+----
+NULL
+
 # deduplicating recursive CTE with two variables works
 query II
 WITH RECURSIVE ranges AS (

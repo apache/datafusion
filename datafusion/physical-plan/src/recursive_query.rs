@@ -88,11 +88,28 @@ impl RecursiveQueryExec {
         recursive_term: Arc<dyn ExecutionPlan>,
         is_distinct: bool,
     ) -> Result<Self> {
+        let output_schema =
+            recursive_output_schema(&static_term.schema(), &recursive_term.schema());
+        Self::try_new_with_schema(
+            name,
+            static_term,
+            recursive_term,
+            output_schema,
+            is_distinct,
+        )
+    }
+
+    /// Create a new RecursiveQueryExec with an explicit output schema.
+    pub fn try_new_with_schema(
+        name: String,
+        static_term: Arc<dyn ExecutionPlan>,
+        recursive_term: Arc<dyn ExecutionPlan>,
+        output_schema: SchemaRef,
+        is_distinct: bool,
+    ) -> Result<Self> {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new(name.clone()));
         // Use the same work table for both the WorkTableExec and the recursive term
-        let output_schema =
-            recursive_output_schema(&static_term.schema(), &recursive_term.schema());
         let static_term = project_plan_to_schema(static_term, &output_schema)?;
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
         let recursive_term = project_plan_to_schema(recursive_term, &output_schema)?;
@@ -182,10 +199,11 @@ impl ExecutionPlan for RecursiveQueryExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        RecursiveQueryExec::try_new(
+        RecursiveQueryExec::try_new_with_schema(
             self.name.clone(),
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
+            self.schema(),
             self.is_distinct,
         )
         .map(|e| Arc::new(e) as _)

@@ -215,11 +215,13 @@ impl LogicalPlanBuilder {
             Arc::unwrap_or_clone(self.plan),
             Arc::clone(&output_schema),
         )?;
-        let recursive_term = plan_with_schema(coerced_recursive_term, output_schema)?;
+        let recursive_term =
+            plan_with_schema(coerced_recursive_term, Arc::clone(&output_schema))?;
         Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
             name,
             static_term: Arc::new(static_term),
             recursive_term: Arc::new(recursive_term),
+            schema: output_schema,
             is_distinct,
         })))
     }
