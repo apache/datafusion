@@ -252,6 +252,7 @@ message JoinNode {
   repeated LogicalExprNode right_join_key = 6;
   datafusion_common.NullEquality null_equality = 7;
   LogicalExprNode filter = 8;
+  bool null_aware = 9;
 }
 
 message DistinctNode {
