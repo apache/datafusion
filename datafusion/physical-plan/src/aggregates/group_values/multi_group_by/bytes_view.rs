@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aggregates::group_values::multi_group_by::{
-    GroupColumn, Nulls, nulls_equal_to,
+    GroupColumn, Nulls, nulls_equal_to, split_vec_min_alloc,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{
@@ -363,7 +363,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         //
         //   - Shift the `buffer index` of remaining non-inlined `views`
         //
-        let first_n_views = self.views.drain(0..n).collect::<Vec<_>>();
+        let first_n_views = split_vec_min_alloc(&mut self.views, n);
 
         let last_non_inlined_view = first_n_views
             .iter()
