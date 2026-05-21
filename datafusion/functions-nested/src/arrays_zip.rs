@@ -130,7 +130,7 @@ impl ScalarUDFImpl for ArraysZip {
                     return exec_err!("arrays_zip expects array arguments, got {dt}");
                 }
             };
-            fields.push(Field::new(format!("{}", i + 1), element_type, true));
+            fields.push(Field::new(arrays_zip_field_name(i), element_type, true));
         }
 
         Ok(List(Arc::new(Field::new_list_field(
@@ -163,9 +163,10 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("arrays_zip requires at least one argument");
     }
 
+    let field_names = arrays_zip_field_names(args.len());
     let num_rows = args[0].len();
 
-    if let Some(result) = try_perfect_list_zip(args)? {
+    if let Some(result) = try_perfect_list_zip(args, &field_names)? {
         return Ok(result);
     }
 
@@ -229,8 +230,8 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let struct_fields: Fields = element_types
         .iter()
-        .enumerate()
-        .map(|(i, dt)| Field::new(format!("{}", i + 1), dt.clone(), true))
+        .zip(field_names.iter())
+        .map(|(dt, name)| Field::new(name.clone(), dt.clone(), true))
         .collect::<Vec<_>>()
         .into();
 
@@ -332,18 +333,31 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result))
 }
 
+fn arrays_zip_field_name(index: usize) -> String {
+    (index + 1).to_string()
+}
+
+fn arrays_zip_field_names(len: usize) -> Vec<String> {
+    (0..len).map(arrays_zip_field_name).collect()
+}
+
 /// Fast path for regular List inputs whose existing buffers already match the
 /// zipped output: all offsets and values lengths match, and null rows cover no
 /// values. This lets us reuse offsets and child values instead of rebuilding.
-fn try_perfect_list_zip(args: &[ArrayRef]) -> Result<Option<ArrayRef>> {
+fn try_perfect_list_zip(
+    args: &[ArrayRef],
+    field_names: &[String],
+) -> Result<Option<ArrayRef>> {
+    debug_assert_eq!(args.len(), field_names.len());
+
     let mut list_arrays = Vec::with_capacity(args.len());
     let mut struct_fields = Vec::with_capacity(args.len());
 
-    for (i, arg) in args.iter().enumerate() {
+    for (arg, field_name) in args.iter().zip(field_names) {
         let arr = match arg.data_type() {
             List(field) => {
                 struct_fields.push(Field::new(
-                    (i + 1).to_string(),
+                    field_name.clone(),
                     field.data_type().clone(),
                     true,
                 ));
@@ -463,6 +477,36 @@ mod tests {
         assert!(result.offsets().ptr_eq(left.offsets()));
         assert!(Arc::ptr_eq(values.column(0), left.values()));
         assert!(Arc::ptr_eq(values.column(1), right.values()));
+    }
+
+    #[test]
+    fn perfect_zip_uses_supplied_field_names() {
+        let left = list(vec![1, 2, 3], vec![0, 1, 3]);
+        let right = list(vec![10, 20, 30], vec![0, 1, 3]);
+        let field_names = vec!["left".to_string(), "right".to_string()];
+
+        let result = try_perfect_list_zip(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &field_names,
+        )
+        .unwrap()
+        .unwrap();
+        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let values = result
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let names = values
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["left", "right"]);
     }
 
     #[test]
