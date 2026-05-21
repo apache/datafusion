@@ -53,6 +53,20 @@ pub async fn custom_datasource() -> Result<()> {
     search_accounts(db.clone(), Some(col("bank_account").gt(lit(8000u64))), 1).await?;
     search_accounts(db.clone(), Some(col("bank_account").gt(lit(200u64))), 2).await?;
 
+    // exercise SQL paths that push down non-trivial projections:
+    // - `SELECT 1 ...` requests no source columns (projection: Some([]))
+    // - `SELECT COUNT(id) ...` requests a single column (projection: Some([0]))
+    let ctx = SessionContext::new();
+    ctx.register_table("accounts", Arc::new(db))?;
+    ctx.sql("SELECT 1 AS a FROM accounts")
+        .await?
+        .collect()
+        .await?;
+    ctx.sql("SELECT COUNT(id) FROM accounts")
+        .await?
+        .collect()
+        .await?;
+
     Ok(())
 }
 
@@ -187,6 +201,7 @@ impl TableProvider for CustomDataSource {
 #[derive(Debug, Clone)]
 struct CustomExec {
     db: CustomDataSource,
+    projection: Option<Vec<usize>>,
     projected_schema: SchemaRef,
     cache: Arc<PlanProperties>,
 }
@@ -202,6 +217,7 @@ impl CustomExec {
         let cache = Self::compute_properties(projected_schema.clone());
         Self {
             db,
+            projection: projections.cloned(),
             projected_schema,
             cache: Arc::new(cache),
         }
@@ -263,15 +279,25 @@ impl ExecutionPlan for CustomExec {
             account_array.append_value(user.bank_account);
         }
 
+        // Build a batch holding every column the table can produce, then let
+        // Arrow drop the columns the query didn't ask for. `RecordBatch::project`
+        // preserves the row count, which matters when the projection selects
+        // zero columns (e.g. `SELECT 1 FROM t`).
+        let full_batch = RecordBatch::try_new(
+            self.db.schema(),
+            vec![
+                Arc::new(id_array.finish()),
+                Arc::new(account_array.finish()),
+            ],
+        )?;
+        let batch = match &self.projection {
+            Some(indices) => full_batch.project(indices)?,
+            None => full_batch,
+        };
+
         Ok(Box::pin(MemoryStream::try_new(
-            vec![RecordBatch::try_new(
-                self.projected_schema.clone(),
-                vec![
-                    Arc::new(id_array.finish()),
-                    Arc::new(account_array.finish()),
-                ],
-            )?],
-            self.schema(),
+            vec![batch],
+            self.projected_schema.clone(),
             None,
         )?))
     }
