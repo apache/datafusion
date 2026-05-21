@@ -395,6 +395,70 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
+/// Splits `vec` at index `n`, returning the first `n` elements and leaving the
+/// remaining `vec.len() - n` elements in `vec`.
+///
+/// Allocates for whichever side is smaller, so the new allocation is
+/// `min(n, vec.len() - n)` rather than always `n` (as `vec.drain(0..n).collect()`
+/// would). This matters when the split emits a prefix under memory pressure,
+/// where `n` can be close to `vec.len()`.
+pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
+    if n * 2 <= vec.len() {
+        vec.drain(0..n).collect()
+    } else {
+        let remaining = vec.split_off(n);
+        std::mem::replace(vec, remaining)
+    }
+}
+
+#[cfg(test)]
+mod split_vec_min_alloc_tests {
+    use super::split_vec_min_alloc;
+
+    #[test]
+    fn drain_branch() {
+        // n * 2 <= len  ->  drain+collect branch (allocates n elements)
+        let mut v = vec![1, 2, 3, 4, 5, 6];
+        let first = split_vec_min_alloc(&mut v, 2);
+        assert_eq!(first, vec![1, 2]);
+        assert_eq!(v, vec![3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn split_off_branch() {
+        // remaining < n  ->  split_off+replace branch (allocates remaining elements)
+        let mut v = vec![1, 2, 3, 4, 5, 6];
+        let first = split_vec_min_alloc(&mut v, 4);
+        assert_eq!(first, vec![1, 2, 3, 4]);
+        assert_eq!(v, vec![5, 6]);
+    }
+
+    #[test]
+    fn exactly_half() {
+        // n * 2 == len  ->  drain branch (boundary)
+        let mut v = vec![1, 2, 3, 4];
+        let first = split_vec_min_alloc(&mut v, 2);
+        assert_eq!(first, vec![1, 2]);
+        assert_eq!(v, vec![3, 4]);
+    }
+
+    #[test]
+    fn take_all() {
+        let mut v = vec![1, 2, 3];
+        let first = split_vec_min_alloc(&mut v, 3);
+        assert_eq!(first, vec![1, 2, 3]);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn take_none() {
+        let mut v = vec![1, 2, 3];
+        let first = split_vec_min_alloc(&mut v, 0);
+        assert!(first.is_empty());
+        assert_eq!(v, vec![1, 2, 3]);
+    }
+}
+
 /// Creates single element [`ListArray`], [`LargeListArray`] and
 /// [`FixedSizeListArray`] from other arrays
 ///

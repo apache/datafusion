@@ -27,7 +27,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use std::mem::size_of;
 use std::sync::Arc;
 
-use super::split_vec_min_alloc;
+use datafusion_common::utils::split_vec_min_alloc;
 
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
 /// [`BinaryArray`], [`StringViewArray`], etc)

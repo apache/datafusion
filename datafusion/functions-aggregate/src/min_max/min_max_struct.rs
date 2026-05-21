@@ -30,7 +30,7 @@ use datafusion_common::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 
-use super::split_vec_min_alloc;
+use datafusion_common::utils::split_vec_min_alloc;
 
 /// Accumulator for MIN/MAX operations on Struct data types.
 ///

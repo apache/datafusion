@@ -55,23 +55,6 @@ use half::f16;
 use std::mem::size_of_val;
 use std::ops::Deref;
 
-/// Splits `vec` at `n`, returning the first `n` elements and leaving the
-/// remainder in `vec`. Allocates for whichever portion is smaller to minimize
-/// peak memory: `drain+collect` when `n <= remaining`, `split_off+replace`
-/// when `remaining < n`.
-///
-/// Mirrors `split_vec_min_alloc` in `datafusion-physical-plan`'s
-/// `aggregates::group_values::multi_group_by` module (added in #22165); kept
-/// local here because that helper is `pub(super)` to a different crate.
-fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
-    if n * 2 <= vec.len() {
-        vec.drain(0..n).collect()
-    } else {
-        let remaining = vec.split_off(n);
-        std::mem::replace(vec, remaining)
-    }
-}
-
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
     if input_types.len() != 1 {
@@ -1014,54 +997,6 @@ make_udaf_expr_and_func!(
 pub use datafusion_functions_aggregate_common::min_max::{
     MaxAccumulator, MinAccumulator,
 };
-
-#[cfg(test)]
-mod split_vec_min_alloc_tests {
-    use super::split_vec_min_alloc;
-
-    #[test]
-    fn drain_branch() {
-        // n * 2 <= len  ->  drain+collect branch (allocates n elements)
-        let mut v = vec![1, 2, 3, 4, 5, 6];
-        let first = split_vec_min_alloc(&mut v, 2);
-        assert_eq!(first, vec![1, 2]);
-        assert_eq!(v, vec![3, 4, 5, 6]);
-    }
-
-    #[test]
-    fn split_off_branch() {
-        // remaining < n  ->  split_off+replace branch (allocates remaining elements)
-        let mut v = vec![1, 2, 3, 4, 5, 6];
-        let first = split_vec_min_alloc(&mut v, 4);
-        assert_eq!(first, vec![1, 2, 3, 4]);
-        assert_eq!(v, vec![5, 6]);
-    }
-
-    #[test]
-    fn exactly_half() {
-        // n * 2 == len  ->  drain branch (boundary)
-        let mut v = vec![1, 2, 3, 4];
-        let first = split_vec_min_alloc(&mut v, 2);
-        assert_eq!(first, vec![1, 2]);
-        assert_eq!(v, vec![3, 4]);
-    }
-
-    #[test]
-    fn take_all() {
-        let mut v = vec![1, 2, 3];
-        let first = split_vec_min_alloc(&mut v, 3);
-        assert_eq!(first, vec![1, 2, 3]);
-        assert!(v.is_empty());
-    }
-
-    #[test]
-    fn take_none() {
-        let mut v = vec![1, 2, 3];
-        let first = split_vec_min_alloc(&mut v, 0);
-        assert!(first.is_empty());
-        assert_eq!(v, vec![1, 2, 3]);
-    }
-}
 
 #[cfg(test)]
 mod tests {
