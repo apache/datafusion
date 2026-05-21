@@ -31,7 +31,8 @@ use super::{
 /// Structure for constructing metrics, counters, timers, etc.
 ///
 /// Note the use of `Cow<..>` is to avoid allocations in the common
-/// case of constant strings
+/// case of constant strings. Dynamically created label strings are shared when
+/// [`Label`] values are cloned.
 ///
 /// ```rust
 /// use datafusion_physical_expr_common::metrics::*;
@@ -47,6 +48,7 @@ use super::{
 ///     .with_new_label("filename", "my_awesome_file.parquet")
 ///     .counter("num_bytes", partition);
 /// ```
+#[derive(Clone)]
 pub struct MetricBuilder<'a> {
     /// Location that the metric created by this builder will be added do
     metrics: &'a ExecutionPlanMetricsSet,
