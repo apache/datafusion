@@ -32,7 +32,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
-use datafusion_common::{RecursionUnnestOption, UnnestOptions};
+use datafusion_common::{PositionColumn, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
@@ -378,7 +378,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         // Try processing unnest expression or do the final projection
-        let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
+        let plan = self.try_process_unnest(plan, select_exprs_post_aggr, None)?;
 
         // Process distinct clause
         let plan = match select.distinct {
@@ -436,10 +436,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
+    ///
+    /// `position` is set when the caller is the `UNNEST` table factor with
+    /// `WITH ORDINALITY` (Postgres / SQL standard, 1-indexed) or `WITH OFFSET`
+    /// (BigQuery, 0-indexed); the resulting Unnest plan gains an extra
+    /// position column.
     pub(super) fn try_process_unnest(
         &self,
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
+        position: Option<&PositionColumn>,
     ) -> Result<LogicalPlan> {
         // Try process group by unnest
         let input = self.try_process_aggregate_unnest(input)?;
@@ -504,6 +510,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } else {
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+                // Only attach the WITH ORDINALITY / WITH OFFSET position column on the
+                // first iteration; nested unnests would otherwise pile on duplicates.
+                if i == 0
+                    && let Some(pos) = position
+                {
+                    unnest_options = unnest_options.with_position(pos.to_owned());
+                }
                 let mut unnest_col_vec = vec![];
 
                 for (col, maybe_list_unnest) in unnest_columns.into_iter() {
@@ -528,6 +541,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 intermediate_plan = plan;
                 intermediate_select_exprs = outer_projection_exprs;
             }
+        }
+
+        // Project the synthetic position column alongside the rewritten unnest values
+        // so callers (e.g. `SELECT *` over the table factor) can see it.
+        if let Some(pos) = &position {
+            intermediate_select_exprs.push(Expr::Column(Column::from_name(&pos.name)));
         }
 
         LogicalPlanBuilder::from(intermediate_plan)

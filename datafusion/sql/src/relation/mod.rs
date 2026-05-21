@@ -21,7 +21,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    DFSchema, Diagnostic, Result, Span, Spans, TableReference, not_impl_err, plan_err,
+    DFSchema, Diagnostic, IndexBase, PositionColumn, Result, Span, Spans, TableReference,
+    not_impl_err, plan_err,
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::planner::{
@@ -228,13 +229,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             TableFactor::UNNEST {
                 alias,
                 array_exprs,
-                with_offset: false,
-                with_offset_alias: None,
+                with_offset,
+                with_offset_alias,
                 with_ordinality,
             } => {
-                if with_ordinality {
-                    return not_impl_err!("UNNEST with ordinality is not supported yet");
-                }
+                // `WITH ORDINALITY` (Postgres / SQL standard, 1-indexed) and
+                // `WITH OFFSET` (BigQuery, 0-indexed) are syntactic siblings —
+                // no dialect accepts both at once.
+                let position = match (with_ordinality, with_offset) {
+                    (false, false) => None,
+                    (true, true) => {
+                        return plan_err!(
+                            "UNNEST cannot use WITH ORDINALITY and WITH OFFSET together"
+                        );
+                    }
+                    (true, false) => {
+                        // `with_offset_alias` is only populated when `WITH OFFSET <alias>`
+                        // is parsed, which would also flip `with_offset` to true and be
+                        // caught by the (true, true) branch above; this is just defensive.
+                        Some(PositionColumn::new("ordinality", IndexBase::One))
+                    }
+                    (false, true) => {
+                        let name = with_offset_alias
+                            .as_ref()
+                            .map(|i| self.ident_normalizer.normalize(i.clone()))
+                            .unwrap_or_else(|| "offset".to_string());
+                        Some(PositionColumn::new(name, IndexBase::Zero))
+                    }
+                };
 
                 // Unnest table factor has empty input
                 let schema = DFSchema::empty();
@@ -256,13 +278,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if unnest_exprs.is_empty() {
                     return plan_err!("UNNEST must have at least one argument");
                 }
-                let logical_plan = self.try_process_unnest(input, unnest_exprs)?;
+                let logical_plan =
+                    self.try_process_unnest(input, unnest_exprs, position.as_ref())?;
                 (logical_plan, alias)
-            }
-            TableFactor::UNNEST { .. } => {
-                return not_impl_err!(
-                    "UNNEST table factor with offset is not supported yet"
-                );
             }
             TableFactor::Function {
                 name, args, alias, ..

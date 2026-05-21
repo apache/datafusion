@@ -422,12 +422,44 @@ select a from unnest([1,2]) as t(a);
 2
 
 
-## Unnest in from clause with offset is not supported
-query error DataFusion error: This feature is not implemented: UNNEST table factor with offset is not supported yet
-select * from unnest([1,2]) with offset;
+## UNNEST WITH OFFSET (BigQuery-style, 0-indexed). Default position column name is `offset`.
+query II
+select * from unnest([10, 20, 30]) with offset;
+----
+10 0
+20 1
+30 2
 
-query error DataFusion error: This feature is not implemented: UNNEST table factor with offset is not supported yet
-select * from unnest([1,2]) with offset offset_alias;
+## WITH OFFSET AS <alias> renames the position column.
+query II
+select * from unnest([10, 20, 30]) with offset offset_alias;
+----
+10 0
+20 1
+30 2
+
+## UNNEST WITH ORDINALITY (Postgres / SQL standard, 1-indexed). Default name is `ordinality`.
+query II
+select * from unnest([10, 20, 30]) with ordinality;
+----
+10 1
+20 2
+30 3
+
+## WITH ORDINALITY combined with the PG-style column-list table alias renames both columns.
+query II
+select v, ord from unnest([10, 20, 30]) with ordinality as t(v, ord);
+----
+10 1
+20 2
+30 3
+
+## WITH ORDINALITY and WITH OFFSET are mutually exclusive (no dialect accepts both).
+query error DataFusion error: Error during planning: UNNEST cannot use WITH ORDINALITY and WITH OFFSET together
+select * from unnest([1,2]) with ordinality with offset;
+
+query error DataFusion error: Error during planning: UNNEST cannot use WITH ORDINALITY and WITH OFFSET together
+select * from unnest([1,2]) with ordinality with offset offset_alias;
 
 
 ## More complex cases

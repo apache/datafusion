@@ -9459,6 +9459,77 @@ impl<'de> serde::Deserialize<'de> for InListNode {
         deserializer.deserialize_struct("datafusion.InListNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for IndexBase {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Zero => "INDEX_BASE_ZERO",
+            Self::One => "INDEX_BASE_ONE",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for IndexBase {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "INDEX_BASE_ZERO",
+            "INDEX_BASE_ONE",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = IndexBase;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "INDEX_BASE_ZERO" => Ok(IndexBase::Zero),
+                    "INDEX_BASE_ONE" => Ok(IndexBase::One),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for InsertOp {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -20523,6 +20594,116 @@ impl<'de> serde::Deserialize<'de> for PlanType {
         deserializer.deserialize_struct("datafusion.PlanType", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PositionColumn {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if self.base != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PositionColumn", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if self.base != 0 {
+            let v = IndexBase::try_from(self.base)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.base)))?;
+            struct_ser.serialize_field("base", &v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PositionColumn {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+            "base",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+            Base,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            "base" => Ok(GeneratedField::Base),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PositionColumn;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PositionColumn")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PositionColumn, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                let mut base__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Base => {
+                            if base__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("base"));
+                            }
+                            base__ = Some(map_.next_value::<IndexBase>()? as i32);
+                        }
+                    }
+                }
+                Ok(PositionColumn {
+                    name: name__.unwrap_or_default(),
+                    base: base__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PositionColumn", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PrepareNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -25083,12 +25264,18 @@ impl serde::Serialize for UnnestOptions {
         if !self.recursions.is_empty() {
             len += 1;
         }
+        if self.position.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.UnnestOptions", len)?;
         if self.preserve_nulls {
             struct_ser.serialize_field("preserveNulls", &self.preserve_nulls)?;
         }
         if !self.recursions.is_empty() {
             struct_ser.serialize_field("recursions", &self.recursions)?;
+        }
+        if let Some(v) = self.position.as_ref() {
+            struct_ser.serialize_field("position", v)?;
         }
         struct_ser.end()
     }
@@ -25103,12 +25290,14 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
             "preserve_nulls",
             "preserveNulls",
             "recursions",
+            "position",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             PreserveNulls,
             Recursions,
+            Position,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -25132,6 +25321,7 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                         match value {
                             "preserveNulls" | "preserve_nulls" => Ok(GeneratedField::PreserveNulls),
                             "recursions" => Ok(GeneratedField::Recursions),
+                            "position" => Ok(GeneratedField::Position),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -25153,6 +25343,7 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
             {
                 let mut preserve_nulls__ = None;
                 let mut recursions__ = None;
+                let mut position__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::PreserveNulls => {
@@ -25167,11 +25358,18 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                             }
                             recursions__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Position => {
+                            if position__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("position"));
+                            }
+                            position__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(UnnestOptions {
                     preserve_nulls: preserve_nulls__.unwrap_or_default(),
                     recursions: recursions__.unwrap_or_default(),
+                    position: position__,
                 })
             }
         }

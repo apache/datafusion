@@ -20,8 +20,9 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    NullEquality, RecursionUnnestOption, Result, ScalarValue, TableReference,
-    UnnestOptions, exec_datafusion_err, internal_err, plan_datafusion_err,
+    IndexBase, NullEquality, PositionColumn, RecursionUnnestOption, Result, ScalarValue,
+    TableReference, UnnestOptions, exec_datafusion_err, internal_err,
+    plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::registry::FunctionRegistry;
@@ -60,6 +61,7 @@ impl From<&protobuf::UnnestOptions> for UnnestOptions {
     fn from(opts: &protobuf::UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
+            position: opts.position.as_ref().map(Into::into),
             recursions: opts
                 .recursions
                 .iter()
@@ -69,6 +71,19 @@ impl From<&protobuf::UnnestOptions> for UnnestOptions {
                     depth: r.depth as usize,
                 })
                 .collect::<Vec<_>>(),
+        }
+    }
+}
+
+impl From<&protobuf::PositionColumn> for PositionColumn {
+    fn from(pos: &protobuf::PositionColumn) -> Self {
+        let base = match protobuf::IndexBase::try_from(pos.base) {
+            Ok(protobuf::IndexBase::One) => IndexBase::One,
+            _ => IndexBase::Zero,
+        };
+        Self {
+            name: pos.name.clone(),
+            base,
         }
     }
 }
