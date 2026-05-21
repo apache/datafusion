@@ -34,8 +34,8 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
-use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
+use datafusion_execution::cache::cache_manager::TableScopedPath;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
@@ -186,7 +186,7 @@ pub struct ListingTable {
     /// The SQL definition for this table, if any
     definition: Option<String>,
     /// Cache for collected file statistics
-    collected_statistics: Option<Arc<dyn FileStatisticsCache>>,
+    collected_statistics: Option<Arc<FileStatisticsCache>>,
     /// Constraints applied to this table
     constraints: Constraints,
     /// Column default expressions for columns that are not physically present in the data files
@@ -259,7 +259,7 @@ impl ListingTable {
     /// Setting a statistics cache on the `SessionContext` can avoid refetching statistics
     /// multiple times in the same session.
     ///
-    pub fn with_cache(mut self, cache: Option<Arc<dyn FileStatisticsCache>>) -> Self {
+    pub fn with_cache(mut self, cache: Option<Arc<FileStatisticsCache>>) -> Self {
         self.collected_statistics = cache;
         self
     }

@@ -19,13 +19,17 @@ pub mod cache_manager;
 pub mod file_statistics_cache;
 pub mod lru_queue;
 
+pub mod default_cache;
 mod file_metadata_cache;
 mod list_files_cache;
 
-pub use file_metadata_cache::DefaultFilesMetadataCache;
-pub use list_files_cache::DefaultListFilesCache;
-pub use list_files_cache::ListFilesEntry;
-pub use list_files_cache::TableScopedPath;
+use crate::cache::cache_manager::TableScopedPath;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
+use datafusion_common::instant::Instant;
+use datafusion_common::{HashMap, TableReference};
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::time::Duration;
 
 /// Base trait for cache implementations with common operations.
 ///
@@ -77,4 +81,84 @@ pub trait CacheAccessor<K, V>: Send + Sync {
 
     /// Return the cache name.
     fn name(&self) -> String;
+}
+
+/// A managed cache with capacity, expiration, and introspection policies.
+///
+/// Keys must implement [`Key`] and values must implement [`Value`] so
+/// the implementation can account for heap usage when enforcing the cache limit.
+///
+pub trait Cache<K: Key, V: Value>: CacheAccessor<K, V> {
+    /// Current memory budget, in bytes.
+    fn cache_limit(&self) -> usize;
+
+    /// Change the memory budget in bytes.
+    fn update_cache_limit(&self, limit: usize);
+
+    /// Time-to-live applied to newly inserted entries, or `None` if entries
+    /// never expire on their own.
+    fn cache_ttl(&self) -> Option<Duration>;
+
+    /// Change the TTL applied to subsequent inserts.
+    fn update_cache_ttl(&self, _ttl: Option<Duration>);
+
+    /// Invalidate every entry associated with `table_ref`.
+    fn drop_table_entries(
+        &self,
+        _table_ref: &Option<TableReference>,
+    ) -> datafusion_common::Result<()>;
+
+    /// Snapshot of all current entries with per-entry metadata (size, hits,
+    /// expiration) for diagnostics and observability.
+    fn list_entries(&self) -> HashMap<K, CacheEntryInfo<V>>;
+}
+
+/// Key type for entries stored in a [`Cache`].
+pub trait Key: Clone + Eq + Hash + Send + Sync + Debug {
+    /// Size of the key in bytes, used for cache memory accounting.
+    fn size(&self) -> usize;
+
+    /// Table this key is associated with, or `None` if the key is not
+    /// table-scoped.
+    fn table_ref(&self) -> Option<&TableReference>;
+}
+
+/// Value type for entries stored in a [`Cache`].
+pub trait Value: Clone + Send + Sync {
+    /// Size of the value in bytes used for cache memory accounting.
+    fn size(&self) -> usize;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CacheEntryInfo<V> {
+    pub value: V,
+    pub size_bytes: usize,
+    pub hits: usize,
+    pub expires: Option<Instant>,
+}
+
+impl<K: Key, V: Value> Debug for dyn Cache<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Cache name: {} with length: {}", self.name(), self.len())
+    }
+}
+
+impl Key for object_store::path::Path {
+    fn size(&self) -> usize {
+        self.as_ref().heap_size(&mut DFHeapSizeCtx::default())
+    }
+
+    fn table_ref(&self) -> Option<&TableReference> {
+        None
+    }
+}
+
+impl Key for TableScopedPath {
+    fn size(&self) -> usize {
+        DFHeapSize::heap_size(self, &mut DFHeapSizeCtx::default())
+    }
+
+    fn table_ref(&self) -> Option<&TableReference> {
+        self.table.as_ref()
+    }
 }

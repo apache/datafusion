@@ -76,8 +76,8 @@ use datafusion_common::{
 };
 pub use datafusion_execution::TaskContext;
 use datafusion_execution::cache::cache_manager::{
-    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
-    DEFAULT_METADATA_CACHE_LIMIT,
+    DEFAULT_FILE_STATISTICS_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
+    DEFAULT_LIST_FILES_CACHE_TTL, DEFAULT_METADATA_CACHE_LIMIT,
 };
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{
@@ -103,7 +103,6 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_execution::cache::file_statistics_cache::DEFAULT_FILE_STATISTICS_MEMORY_LIMIT;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
