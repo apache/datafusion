@@ -55,6 +55,11 @@
 //!   pass only adds `SortExec` where the child doesn't already satisfy the
 //!   ordering requirement, naturally placing sorts at the deepest valid position.
 
+// Internal implementation modules. Re-exported from `crate` root for tests
+// in `core/tests/physical_optimizer/{enforce_distribution,enforce_sorting}.rs`.
+pub mod enforce_distribution;
+pub mod enforce_sorting;
+
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
@@ -63,10 +68,6 @@ use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
-
-// Internal functions used directly instead of calling EnforceDistribution/EnforceSorting
-// as opaque boxes. This gives us control over the pass ordering and enables
-// future merging into a true single-pass architecture.
 
 /// Optimizer rule that enforces both distribution and sorting requirements.
 ///
@@ -93,7 +94,7 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Phase 1: Join key reordering (top-down, from EnforceDistribution)
-        use crate::enforce_distribution::{
+        use super::enforce_distribution::{
             PlanWithKeyRequirements, adjust_input_keys_ordering,
         };
         let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
@@ -101,15 +102,15 @@ impl PhysicalOptimizerRule for EnsureRequirements {
             let ctx = PlanWithKeyRequirements::new_default(plan);
             ctx.transform_down(adjust_input_keys_ordering).data()?.plan
         } else {
-            use crate::enforce_distribution::reorder_join_keys_to_inputs;
+            use super::enforce_distribution::reorder_join_keys_to_inputs;
             plan.transform_up(|p| Ok(Transformed::yes(reorder_join_keys_to_inputs(p)?)))
                 .data()?
         };
 
         // Phase 2: Combined distribution + sorting enforcement (single bottom-up pass)
         // For each node: distribution first, then sorting.
-        use crate::enforce_distribution::{DistributionContext, ensure_distribution};
-        use crate::enforce_sorting::{PlanWithCorrespondingSort, ensure_sorting};
+        use super::enforce_distribution::{DistributionContext, ensure_distribution};
+        use super::enforce_sorting::{PlanWithCorrespondingSort, ensure_sorting};
 
         // Step 2a: Distribution enforcement (bottom-up)
         let dist_ctx = DistributionContext::new_default(plan);
@@ -123,7 +124,7 @@ impl PhysicalOptimizerRule for EnsureRequirements {
 
         // Phase 3: Optimization passes
         // 3a: Parallelize sorts (Coalesce+Sort → SPM+Sort)
-        use crate::enforce_sorting::{
+        use super::enforce_sorting::{
             PlanWithCorrespondingCoalescePartitions, parallelize_sorts,
             replace_with_partial_sort,
         };
@@ -135,7 +136,7 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         };
 
         // 3b: Order-preserving variants
-        use crate::enforce_sorting::replace_with_order_preserving_variants::{
+        use super::enforce_sorting::replace_with_order_preserving_variants::{
             OrderPreservationContext, replace_with_order_preserving_variants,
         };
         let ctx = OrderPreservationContext::new_default(plan);
@@ -147,7 +148,7 @@ impl PhysicalOptimizerRule for EnsureRequirements {
             .plan;
 
         // 3c: Sort pushdown (distribution-aware)
-        use crate::enforce_sorting::sort_pushdown::{
+        use super::enforce_sorting::sort_pushdown::{
             SortPushDown, assign_initial_requirements, pushdown_sorts,
         };
         let mut sort_pushdown = SortPushDown::new_default(plan);
