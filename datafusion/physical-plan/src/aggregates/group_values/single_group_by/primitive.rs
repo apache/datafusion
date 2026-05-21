@@ -24,6 +24,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
@@ -207,9 +208,7 @@ where
                     Some(_) => self.null_group.take(),
                     None => None,
                 };
-                let mut split = self.values.split_off(n);
-                std::mem::swap(&mut self.values, &mut split);
-                build_primitive(split, null_group)
+                build_primitive(split_vec_min_alloc(&mut self.values, n), null_group)
             }
         };
 
