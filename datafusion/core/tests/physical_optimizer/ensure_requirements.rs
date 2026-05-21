@@ -631,8 +631,16 @@ fn test_idempotent_projection_over_multi_partition_with_single_partition_require
     assert_idempotent(output_req);
 }
 
-/// Idempotency: `SPM → Sort(preserve=true) → multi-partition`.
-/// This is the topology that caused `test_pushdown_through_spm` to fail.
+/// Regression for #21973 (the issue this PR fixes).
+///
+/// Topology: `SPM → Sort(preserve=true) → multi-partition`. Under the old
+/// two-rule pipeline `EnforceSorting::pushdown_sorts` could mutate
+/// `preserve_partitioning` after `EnforceDistribution` had settled
+/// distribution, so pass 2 could regress this parallel plan into a serial
+/// one. This is the exact topology that caused
+/// [`test_pushdown_through_spm`](../enforce_sorting.rs) to fail before this
+/// PR; `EnsureRequirements` must keep the SPM-over-parallel-sort shape
+/// stable across passes.
 ///
 /// Also acts as the "no extra SPM when already optimal" check — the
 /// input plan already contains exactly one `SortPreservingMergeExec`,
@@ -640,7 +648,7 @@ fn test_idempotent_projection_over_multi_partition_with_single_partition_require
 /// this property, but on this input it is implied by idempotency
 /// combined with the SPM-count assertion).
 #[test]
-fn test_idempotent_spm_sort_multi_partition() {
+fn test_issue_21973_idempotent_spm_sort_multi_partition() {
     let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(10));
     let sort_expr = sort_expr_on("a", 0, true, true);
 
@@ -666,6 +674,82 @@ fn test_idempotent_spm_sort_multi_partition() {
     );
 
     assert_idempotent(limit);
+}
+
+/// Regression for #21973: the `parallelize_sorts` rewrite path.
+///
+/// Input: `Sort(DESC) ← CoalescePartitionsExec ← multi-partition`. The first
+/// pass must rewrite this into a parallel plan
+/// `SortPreservingMergeExec ← Sort(preserve=true) ← multi-partition`, and
+/// subsequent passes must keep that parallel shape. Under the old two-rule
+/// pipeline `pushdown_sorts` could regress this back into a serial sort.
+///
+/// Runs 3 passes (one more than the standard idempotency check) and asserts
+/// the parallel plan structure survives each one.
+#[test]
+fn test_issue_21973_parallel_sort_survives_multiple_passes() {
+    let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(8));
+    let coalesce: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(source));
+
+    let sort_expr = sort_expr_on("a", 0, true, true);
+    let sort: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(sort_expr, coalesce));
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
+
+    let config = ConfigOptions::default();
+
+    let p1 = EnsureRequirements::new()
+        .optimize(Arc::clone(&limit), &config)
+        .expect("pass 1");
+    let s1 = plan_string(&p1);
+
+    let p2 = EnsureRequirements::new()
+        .optimize(Arc::clone(&p1), &config)
+        .expect("pass 2");
+    let s2 = plan_string(&p2);
+
+    let p3 = EnsureRequirements::new()
+        .optimize(Arc::clone(&p2), &config)
+        .expect("pass 3");
+    let s3 = plan_string(&p3);
+
+    // The parallel-sort shape must appear after pass 1 and survive every
+    // subsequent pass. Specifically: SortPreservingMergeExec on top of a
+    // Sort with preserve_partitioning=true (no CoalescePartitionsExec).
+    for (i, plan_str) in [&s1, &s2, &s3].iter().enumerate() {
+        assert!(
+            plan_str.contains("SortPreservingMergeExec"),
+            "pass {} regressed to serial: missing SortPreservingMergeExec:\n{plan_str}",
+            i + 1
+        );
+        assert!(
+            plan_str.contains("preserve_partitioning=[true]"),
+            "pass {} regressed to serial: Sort lost preserve_partitioning=true (#21973):\n{plan_str}",
+            i + 1
+        );
+        assert!(
+            !plan_str.contains("CoalescePartitionsExec"),
+            "pass {} regressed to serial: CoalescePartitionsExec re-introduced (#21973):\n{plan_str}",
+            i + 1
+        );
+    }
+
+    assert_eq!(
+        s1, s2,
+        "not idempotent between pass 1 and 2 (#21973):\n{s1}\nvs\n{s2}"
+    );
+    assert_eq!(
+        s2, s3,
+        "not idempotent between pass 2 and 3 (#21973):\n{s2}\nvs\n{s3}"
+    );
+
+    // All passes must produce sanity-checkable plans.
+    for (i, p) in [p1, p2, p3].into_iter().enumerate() {
+        SanityCheckPlan::new()
+            .optimize(p, &config)
+            .unwrap_or_else(|e| {
+                panic!("SanityCheckPlan failed on pass {}: {e:?}", i + 1)
+            });
+    }
 }
 
 /// Idempotency: Sort → Aggregate → Sort → Aggregate pattern (#18989).
