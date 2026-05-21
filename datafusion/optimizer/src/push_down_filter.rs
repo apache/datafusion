@@ -784,7 +784,6 @@ impl OptimizerRule for PushDownFilter {
         let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));
         };
-        let plan_schema = Arc::clone(filter.input.schema());
 
         let predicate = split_conjunction_owned(filter.predicate.clone());
         let old_predicate_len = predicate.len();
