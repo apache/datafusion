@@ -20,31 +20,32 @@
 mod early_stop;
 mod encryption;
 
-use self::early_stop::EarlyStoppingStream;
 #[cfg(feature = "parquet_encryption")]
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::page_filter::PagePruningAccessPlanFilter;
-use crate::push_decoder::{DecoderBuilderConfig, PushDecoderStreamState};
+use crate::push_decoder::DecoderBuilderConfig;
 use crate::row_filter::{RowFilterGenerator, build_projection_read_plan};
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
     Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions,
 };
-use arrow::array::RecordBatch;
+use arrow::array::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 use arrow::datatypes::DataType;
-use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
-use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_datasource::morsel::{
+    Morsel, MorselPlan, MorselPlanner, MorselStream, Morselizer,
+};
+use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::mem;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use arrow::datatypes::{SchemaRef, TimeUnit};
+use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
@@ -57,7 +58,8 @@ use datafusion_physical_expr_common::physical_expr::{
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricCategory,
+    PruningMetrics,
 };
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
@@ -65,12 +67,16 @@ use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
+use futures::{FutureExt, future::BoxFuture};
 use log::debug;
+use parquet::DecodeResult;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
+};
 use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::push_decoder::ParquetPushDecoder;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
@@ -195,10 +201,9 @@ impl Morselizer for ParquetMorselizer {
 /// PruneWithBloomFilters
 ///        |
 ///        v
-///   BuildStream
+///   BuildDecoder
 ///        |
-///        v
-///       Done
+///      Done
 /// ```
 ///
 /// Note: `LoadEncryption` is only present when the `parquet_encryption` feature is
@@ -223,18 +228,15 @@ enum ParquetOpenState {
     PrepareFilters(Box<MetadataLoadedParquetOpen>),
     /// Loading [Parquet Page Index](https://parquet.apache.org/docs/file-format/pageindex/)
     LoadPageIndex(BoxFuture<'static, Result<FiltersPreparedParquetOpen>>),
-    /// Pruning Row Groups
+    /// Pruning Row Groups with RowGroup and PageIndex statistics
     PruneWithStatistics(Box<FiltersPreparedParquetOpen>),
     /// Loading bloom filters required for row-group pruning
     LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
     /// Pruning with preloaded Bloom Filters
     PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
-    /// Builds the final reader stream
-    ///
-    /// TODO: split state as this currently does both I/O and CPU work.
-    BuildStream(Box<RowGroupsPrunedParquetOpen>),
-    /// Terminal state: the final opened stream is ready to return.
-    Ready(BoxStream<'static, Result<RecordBatch>>),
+    /// Building and advancing the parquet push decoder until the next
+    /// reader-backed morsel or I/O boundary is discovered.
+    BuildDecoder(Box<ParquetBuildDecoderState>),
     /// Terminal state: reading complete
     Done,
 }
@@ -252,8 +254,7 @@ impl fmt::Debug for ParquetOpenState {
             ParquetOpenState::PruneWithStatistics(_) => "PruneWithStatistics",
             ParquetOpenState::LoadBloomFilters(_) => "LoadBloomFilters",
             ParquetOpenState::PruneWithBloomFilters(_) => "PruneWithBloomFilters",
-            ParquetOpenState::BuildStream(_) => "BuildStream",
-            ParquetOpenState::Ready(_) => "Ready",
+            ParquetOpenState::BuildDecoder(_) => "BuildDecoder",
             ParquetOpenState::Done => "Done",
         };
         f.write_str(state)
@@ -400,13 +401,16 @@ impl ParquetOpenState {
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(ParquetOpenState::LoadBloomFilters(future))
             }
-            ParquetOpenState::PruneWithBloomFilters(loaded) => Ok(
-                ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
-            ),
-            ParquetOpenState::BuildStream(prepared) => {
-                Ok(ParquetOpenState::Ready(prepared.build_stream()?))
+            ParquetOpenState::PruneWithBloomFilters(loaded) => {
+                Ok(ParquetOpenState::BuildDecoder(Box::new(
+                    ParquetBuildDecoderState::NotStarted(Box::new(
+                        loaded.prune_bloom_filters(),
+                    )),
+                )))
             }
-            ParquetOpenState::Ready(stream) => Ok(ParquetOpenState::Ready(stream)),
+            ParquetOpenState::BuildDecoder(state) => {
+                Ok(ParquetOpenState::BuildDecoder(state))
+            }
             ParquetOpenState::Done => {
                 panic!("ParquetOpenFuture polled after completion");
             }
@@ -416,12 +420,12 @@ impl ParquetOpenState {
 
 /// Implements the Morsel API
 struct ParquetStreamMorsel {
-    stream: BoxStream<'static, Result<RecordBatch>>,
+    reader: Box<dyn RecordBatchReader + Send>,
 }
 
 impl ParquetStreamMorsel {
-    fn new(stream: BoxStream<'static, Result<RecordBatch>>) -> Self {
-        Self { stream }
+    fn new(reader: Box<dyn RecordBatchReader + Send>) -> Self {
+        Self { reader }
     }
 }
 
@@ -433,8 +437,8 @@ impl fmt::Debug for ParquetStreamMorsel {
 }
 
 impl Morsel for ParquetStreamMorsel {
-    fn into_stream(self: Box<Self>) -> BoxStream<'static, Result<RecordBatch>> {
-        self.stream
+    fn into_stream(self: Box<Self>) -> Result<MorselStream> {
+        Ok(MorselStream::Sync(self.reader))
     }
 }
 
@@ -522,11 +526,7 @@ impl MorselPlanner for ParquetMorselPlanner {
                     )))
                 })))
             }
-            ParquetOpenState::Ready(stream) => {
-                let morsels: Vec<Box<dyn Morsel>> =
-                    vec![Box::new(ParquetStreamMorsel::new(stream))];
-                Ok(Some(MorselPlan::new().with_morsels(morsels)))
-            }
+            ParquetOpenState::BuildDecoder(state) => state.plan(),
             ParquetOpenState::Done => Ok(None),
             cpu_state => Ok(Some(
                 MorselPlan::new()
@@ -1066,8 +1066,8 @@ impl BloomFiltersLoadedParquetOpen {
 }
 
 impl RowGroupsPrunedParquetOpen {
-    /// Build the final parquet stream once all pruning work is complete.
-    fn build_stream(self) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+    /// Build the decoder-backed planner state once all pruning work is complete.
+    fn build_decoder(self) -> Result<ParquetDecoderPlannerState> {
         let RowGroupsPrunedParquetOpen {
             prepared,
             mut row_groups,
@@ -1238,35 +1238,351 @@ impl RowGroupsPrunedParquetOpen {
             .projection
             .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
         let projector = projection.make_projector(&stream_schema)?;
-        let output_schema = Arc::clone(&prepared.output_schema);
-        let files_ranges_pruned_statistics =
-            prepared.file_metrics.files_ranges_pruned_statistics.clone();
-        let stream = PushDecoderStreamState {
+        let file_pruner = prepared.file_pruner.map(|file_pruner| {
+            Arc::new(SharedFilePruner::new(
+                file_pruner,
+                prepared.file_metrics.files_ranges_pruned_statistics.clone(),
+            ))
+        });
+        let remaining_limit = remaining_limit.map(|n| Arc::new(Mutex::new(n)));
+
+        Ok(ParquetDecoderPlannerState {
             decoder,
             pending_decoders,
-            remaining_limit,
             reader: prepared.async_file_reader,
-            projector,
-            output_schema,
-            replace_schema,
-            arrow_reader_metrics,
-            predicate_cache_inner_records,
-            predicate_cache_records,
-            baseline_metrics: prepared.baseline_metrics,
-        }
-        .into_stream();
-
-        // Wrap the stream so a dynamic filter can stop the file scan early.
-        if let Some(file_pruner) = prepared.file_pruner {
-            Ok(EarlyStoppingStream::new(
-                stream,
+            context: Arc::new(ParquetDecoderContext {
+                projector: Arc::new(projector),
+                output_schema: Arc::clone(&prepared.output_schema),
+                replace_schema,
+                arrow_reader_metrics,
+                predicate_cache_inner_records,
+                predicate_cache_records,
+                baseline_metrics: prepared.baseline_metrics,
                 file_pruner,
-                files_ranges_pruned_statistics,
-            )
-            .boxed())
-        } else {
-            Ok(stream)
+                remaining_limit,
+            }),
+        })
+    }
+}
+
+/// State carried by [`ParquetOpenState::BuildDecoder`].
+///
+/// The first time this state is planned it finishes CPU-only decoder
+/// construction. Subsequent calls keep the planner in `BuildDecoder` while it
+/// repeatedly asks `ParquetPushDecoder::try_next_reader` for either a ready
+/// reader-backed morsel or the next I/O boundary.
+enum ParquetBuildDecoderState {
+    NotStarted(Box<RowGroupsPrunedParquetOpen>),
+    Ready(Box<ParquetDecoderPlannerState>),
+}
+
+impl ParquetBuildDecoderState {
+    fn plan(mut self: Box<Self>) -> Result<Option<MorselPlan>> {
+        loop {
+            match *self {
+                Self::NotStarted(prepared) => {
+                    self = Box::new(Self::Ready(Box::new(prepared.build_decoder()?)));
+                }
+                Self::Ready(state) => return state.plan(),
+            }
         }
+    }
+}
+
+/// Shared decode/projection context reused by all morsels for one parquet file.
+///
+/// The planner can split a file into multiple reader-backed morsels, but the
+/// projection logic, metrics plumbing, and optional late file-pruning behavior
+/// must remain consistent across all of them. This context holds that shared
+/// immutable state.
+struct ParquetDecoderContext {
+    projector: Arc<Projector>,
+    output_schema: Arc<Schema>,
+    replace_schema: bool,
+    arrow_reader_metrics: ArrowReaderMetrics,
+    predicate_cache_inner_records: Gauge,
+    predicate_cache_records: Gauge,
+    baseline_metrics: BaselineMetrics,
+    file_pruner: Option<Arc<SharedFilePruner>>,
+    /// Global remaining row limit shared across all reader morsels for this
+    /// file. Only set when the scan is split across multiple decoders; for
+    /// single-decoder scans the limit is enforced inside the decoder itself.
+    remaining_limit: Option<Arc<Mutex<usize>>>,
+}
+
+impl ParquetDecoderContext {
+    /// Returns true when a global remaining limit has been set and reached zero.
+    fn remaining_limit_exhausted(&self) -> bool {
+        self.remaining_limit
+            .as_ref()
+            .map(|limit| *limit.lock().expect("remaining_limit lock poisoned") == 0)
+            .unwrap_or(false)
+    }
+
+    fn decode_batch(
+        &self,
+        batch: std::result::Result<RecordBatch, arrow::error::ArrowError>,
+    ) -> Result<Option<RecordBatch>> {
+        let mut timer = self.baseline_metrics.elapsed_compute().timer();
+        self.copy_arrow_reader_metrics();
+        let batch = self.project_batch(&batch?)?;
+        // Apply the global limit shared across all reader morsels for this file.
+        let batch = if let Some(limit) = &self.remaining_limit {
+            let mut remaining =
+                limit.lock().expect("remaining_limit lock poisoned");
+            if *remaining == 0 {
+                timer.stop();
+                return Ok(None);
+            }
+            if batch.num_rows() > *remaining {
+                let sliced = batch.slice(0, *remaining);
+                *remaining = 0;
+                sliced
+            } else {
+                *remaining -= batch.num_rows();
+                batch
+            }
+        } else {
+            batch
+        };
+        timer.stop();
+
+        // Re-check dynamic file pruning after each decoded batch so a filter
+        // that became selective mid-scan can terminate the rest of the file.
+        if let Some(file_pruner) = &self.file_pruner
+            && file_pruner.should_prune()?
+        {
+            return Ok(None);
+        }
+
+        Ok(Some(batch))
+    }
+
+    fn copy_arrow_reader_metrics(&self) {
+        if let Some(v) = self.arrow_reader_metrics.records_read_from_inner() {
+            self.predicate_cache_inner_records.set(v);
+        }
+        if let Some(v) = self.arrow_reader_metrics.records_read_from_cache() {
+            self.predicate_cache_records.set(v);
+        }
+    }
+
+    fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let mut batch = self.projector.project_batch(batch)?;
+        if self.replace_schema {
+            // Ensure the output batch has the expected schema.
+            // This handles things like schema level and field level metadata, which may not be present
+            // in the physical file schema.
+            // It is also possible for nullability to differ; some writers create files with
+            // OPTIONAL fields even when there are no nulls in the data.
+            // In these cases it may make sense for the logical schema to be `NOT NULL`.
+            // RecordBatch::try_new_with_options checks that if the schema is NOT NULL
+            // the array cannot contain nulls, amongst other checks.
+            let (_stream_schema, arrays, num_rows) = batch.into_parts();
+            let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
+            batch = RecordBatch::try_new_with_options(
+                Arc::clone(&self.output_schema),
+                arrays,
+                &options,
+            )?;
+        }
+        Ok(batch)
+    }
+}
+
+/// Synchronous reader returned from parquet morsels.
+///
+/// The underlying parquet reader is already fully I/O-ready. This wrapper keeps
+/// the CPU-only post-processing that DataFusion still needs for each batch:
+/// expression projection, schema replacement, metrics propagation, and optional
+/// late file pruning.
+struct ProjectedParquetRecordBatchReader {
+    reader: ParquetRecordBatchReader,
+    context: Arc<ParquetDecoderContext>,
+    done: bool,
+}
+
+impl Iterator for ProjectedParquetRecordBatchReader {
+    type Item = arrow::error::Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        match self.reader.next() {
+            Some(batch) => match self.context.decode_batch(batch) {
+                Ok(Some(batch)) => Some(Ok(batch)),
+                Ok(None) => {
+                    self.done = true;
+                    None
+                }
+                Err(err) => {
+                    self.done = true;
+                    Some(Err(err.into()))
+                }
+            },
+            None => {
+                self.done = true;
+                None
+            }
+        }
+    }
+}
+
+impl RecordBatchReader for ProjectedParquetRecordBatchReader {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.context.output_schema)
+    }
+}
+
+/// Planner state after parquet setup and pruning have completed.
+///
+/// This is the parquet-specific bridge between the existing morsel API and the
+/// push decoder's `try_next_reader` API. Each call either produces one
+/// reader-backed morsel, discovers the next I/O boundary, or finishes the
+/// file. The planner itself stays in `BuildDecoder` the whole time.
+struct ParquetDecoderPlannerState {
+    decoder: ParquetPushDecoder,
+    /// Additional decoders to process after the current one finishes.
+    /// Used when fully matched row groups split the scan into consecutive
+    /// runs with different filter configurations, maintaining original order.
+    pending_decoders: VecDeque<ParquetPushDecoder>,
+    reader: Box<dyn AsyncFileReader>,
+    context: Arc<ParquetDecoderContext>,
+}
+
+impl ParquetDecoderPlannerState {
+    fn plan(mut self: Box<Self>) -> Result<Option<MorselPlan>> {
+        loop {
+            // If a global remaining limit is set and exhausted, the scan is done.
+            if self.context.remaining_limit_exhausted() {
+                return Ok(None);
+            }
+            match self.decoder.try_next_reader()? {
+                DecodeResult::NeedsData(ranges) => {
+                    return if self.should_prune()? {
+                        Ok(None)
+                    } else {
+                        Ok(Some(self.schedule_io(ranges)))
+                    };
+                }
+                DecodeResult::Data(reader) => {
+                    if self.should_prune()? {
+                        return Ok(None);
+                    }
+                    let morsels: Vec<Box<dyn Morsel>> =
+                        vec![Box::new(ParquetStreamMorsel::new(Box::new(
+                            ProjectedParquetRecordBatchReader {
+                                reader,
+                                context: Arc::clone(&self.context),
+                                done: false,
+                            },
+                        )))];
+                    return Ok(Some(
+                        MorselPlan::new().with_morsels(morsels).with_planners(vec![
+                            Box::new(ParquetMorselPlanner {
+                                state: ParquetOpenState::BuildDecoder(Box::new(
+                                    ParquetBuildDecoderState::Ready(self),
+                                )),
+                            }),
+                        ]),
+                    ));
+                }
+                DecodeResult::Finished => {
+                    // Switch to the next pending decoder if any (multi-run scan),
+                    // otherwise the file is done.
+                    if let Some(next) = self.pending_decoders.pop_front() {
+                        self.decoder = next;
+                        continue;
+                    }
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
+    fn should_prune(&self) -> Result<bool> {
+        if let Some(file_pruner) = &self.context.file_pruner {
+            file_pruner.should_prune()
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn schedule_io(self: Box<Self>, ranges: Vec<std::ops::Range<u64>>) -> MorselPlan {
+        MorselPlan::new().with_pending_planner(self.into_pending_planner(ranges))
+    }
+
+    async fn into_pending_planner(
+        self: Box<Self>,
+        ranges: Vec<std::ops::Range<u64>>,
+    ) -> Result<Box<dyn MorselPlanner>> {
+        let state = self.fetch_ranges(ranges).await?;
+        Ok(Box::new(ParquetMorselPlanner {
+            state: ParquetOpenState::BuildDecoder(Box::new(
+                ParquetBuildDecoderState::Ready(state),
+            )),
+        }) as Box<dyn MorselPlanner>)
+    }
+
+    async fn fetch_ranges(
+        mut self: Box<Self>,
+        ranges: Vec<std::ops::Range<u64>>,
+    ) -> Result<Box<Self>> {
+        let data = self.reader.get_byte_ranges(ranges.clone()).await?;
+        self.decoder.push_ranges(ranges, data)?;
+        Ok(self)
+    }
+}
+
+impl fmt::Debug for ParquetDecoderPlannerState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetDecoderPlannerState")
+            .finish_non_exhaustive()
+    }
+}
+
+struct SharedFilePruner {
+    state: Mutex<SharedFilePrunerState>,
+    files_ranges_pruned_statistics: PruningMetrics,
+}
+
+struct SharedFilePrunerState {
+    file_pruner: FilePruner,
+    pruned: bool,
+}
+
+impl SharedFilePruner {
+    fn new(
+        file_pruner: FilePruner,
+        files_ranges_pruned_statistics: PruningMetrics,
+    ) -> Self {
+        Self {
+            state: Mutex::new(SharedFilePrunerState {
+                file_pruner,
+                pruned: false,
+            }),
+            files_ranges_pruned_statistics,
+        }
+    }
+
+    fn should_prune(&self) -> Result<bool> {
+        let mut state = self.state.lock().expect("shared file pruner lock poisoned");
+        if state.pruned {
+            return Ok(true);
+        }
+
+        // Multiple morsels for the same file can consult this pruner. Once a
+        // dynamic filter proves the file can be skipped, remember that result
+        // and adjust the file-level pruning metrics exactly once.
+        if state.file_pruner.should_prune()? {
+            self.files_ranges_pruned_statistics.add_pruned(1);
+            self.files_ranges_pruned_statistics.subtract_matched(1);
+            state.pruned = true;
+        }
+
+        Ok(state.pruned)
     }
 }
 
@@ -1428,7 +1744,7 @@ mod test {
         ColumnStatistics, ScalarValue, Statistics, internal_err, record_batch,
         stats::Precision,
     };
-    use datafusion_datasource::morsel::{Morsel, Morselizer};
+    use datafusion_datasource::morsel::{Morsel, MorselPlan, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
@@ -1628,7 +1944,7 @@ mod test {
     }
 
     /// Test helper that drives a [`ParquetMorselizer`] to completion and returns
-    /// the first stream morsel it produces.
+    /// a stream containing the output from all morsels in logical order.
     ///
     /// This mirrors how `FileStream` consumes the morsel APIs: it repeatedly
     /// plans CPU work, awaits any discovered I/O futures, and feeds the planner
@@ -1639,14 +1955,27 @@ mod test {
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         let mut planners = VecDeque::from([morselizer.plan_file(file)?]);
         let mut morsels: VecDeque<Box<dyn Morsel>> = VecDeque::new();
+        let mut batches = Vec::new();
 
         loop {
             if let Some(morsel) = morsels.pop_front() {
-                return Ok(Box::pin(morsel.into_stream()));
+                match morsel.into_stream()? {
+                    MorselStream::Async(mut stream) => {
+                        while let Some(batch) = stream.next().await {
+                            batches.push(batch);
+                        }
+                    }
+                    MorselStream::Sync(reader) => {
+                        for batch in reader {
+                            batches.push(Ok(batch?));
+                        }
+                    }
+                };
+                continue;
             }
 
             let Some(planner) = planners.pop_front() else {
-                return Ok(Box::pin(futures::stream::empty()));
+                return Ok(Box::pin(futures::stream::iter(batches)));
             };
 
             if let Some(mut plan) = planner.plan()? {
@@ -1659,6 +1988,39 @@ mod test {
                 }
 
                 if morsels.is_empty() && planners.is_empty() {
+                    return internal_err!("planner returned an empty morsel plan");
+                }
+            }
+        }
+    }
+
+    /// Drives planning until the first plan that yields at least one morsel.
+    async fn first_morsel_plan(
+        morselizer: &ParquetMorselizer,
+        file: PartitionedFile,
+    ) -> Result<MorselPlan> {
+        let mut planners = VecDeque::from([morselizer.plan_file(file)?]);
+
+        loop {
+            let Some(planner) = planners.pop_front() else {
+                return internal_err!("planner finished without producing a morsel");
+            };
+
+            if let Some(mut plan) = planner.plan()? {
+                let morsels = plan.take_morsels();
+                if !morsels.is_empty() {
+                    plan = plan.with_morsels(morsels);
+                    return Ok(plan);
+                }
+
+                planners.extend(plan.take_ready_planners());
+
+                if let Some(pending_planner) = plan.take_pending_planner() {
+                    planners.push_front(pending_planner.await?);
+                    continue;
+                }
+
+                if planners.is_empty() {
                     return internal_err!("planner returned an empty morsel plan");
                 }
             }
@@ -1874,6 +2236,46 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_first_parquet_morsel_returns_sync_reader_and_continues_build_decoder() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(("a", Int32, vec![1, 2, 3, 4, 5, 6])).unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(2))
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "prefetch.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+
+        let file = PartitionedFile::new("prefetch.parquet", data_size as u64);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_projection_indices(&[0])
+            .with_reverse_row_groups(false)
+            .build();
+
+        let mut plan = first_morsel_plan(&opener, file).await.unwrap();
+        let mut morsels = plan.take_morsels();
+        assert_eq!(morsels.len(), 1, "expected one ready parquet morsel");
+        match morsels.pop().unwrap().into_stream().unwrap() {
+            MorselStream::Sync(_) => {}
+            MorselStream::Async(_) => {
+                panic!("parquet morsel should now expose a sync reader")
+            }
+        }
+        assert!(
+            !plan.take_ready_planners().is_empty(),
+            "first parquet morsel plan should keep BuildDecoder ready to continue"
+        );
     }
 
     #[tokio::test]

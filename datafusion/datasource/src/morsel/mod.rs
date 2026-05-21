@@ -32,7 +32,7 @@ pub(crate) mod mocks;
 
 use crate::PartitionedFile;
 pub(crate) use adapters::FileOpenerMorselizer;
-use arrow::array::RecordBatch;
+use arrow::array::{RecordBatch, RecordBatchReader};
 use datafusion_common::Result;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -41,6 +41,25 @@ use std::fmt::Debug;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+/// Return value of [`Morsel::into_stream`]
+pub enum MorselStream {
+    /// An `async` stream of [`RecordBatch`]es
+    ///
+    /// For maximum performance, this stream should *only* do I/O operations and
+    /// not CPU bound work, but the trait does not enforce this.
+    ///
+    /// Implementers should prefer returning [`Self::Sync`] when possible to
+    /// ensure IO and CPU are separated more completely.
+    Async(BoxStream<'static, Result<RecordBatch>>),
+    /// A [`RecordBatchReader`] that does not require any more I/O to produce
+    /// batches.
+    ///
+    /// Note: this API is explicitly not `async` so that it is clear the morsel
+    /// has all the necessary data to proceed and does not require any more I/O
+    /// work (such as reading from the file)
+    Sync(Box<dyn RecordBatchReader + Send>),
+}
+
 /// A Morsel of work ready to resolve to a stream of [`RecordBatch`]es.
 ///
 /// This represents a single morsel of work that is ready to be processed. It
@@ -48,10 +67,7 @@ use std::task::{Context, Poll};
 /// into a stream of [`RecordBatch`]es for processing by the execution engine.
 pub trait Morsel: Send + Debug {
     /// Consume this morsel and produce a stream of [`RecordBatch`]es for processing.
-    ///
-    /// Note: This may do CPU work to decode already-loaded data, but should not
-    /// do any I/O work such as reading from the file.
-    fn into_stream(self: Box<Self>) -> BoxStream<'static, Result<RecordBatch>>;
+    fn into_stream(self: Box<Self>) -> Result<MorselStream>;
 }
 
 /// A Morselizer takes a single [`PartitionedFile`] and creates the initial planner
