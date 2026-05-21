@@ -600,6 +600,8 @@ impl Optimizer {
 
         let starting_schema = Arc::clone(new_plan.schema());
 
+        let mut plan_version = 0usize;
+        let mut rule_no_op_versions = vec![None; self.rules.len()];
         let mut i = 0;
         while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
@@ -612,7 +614,17 @@ impl Optimizer {
             // via ownership-based transform_down.
             let has_subqueries = plan_has_subqueries(&new_plan);
 
-            for rule in &self.rules {
+            for (rule_idx, rule) in self.rules.iter().enumerate() {
+                if rule_no_op_versions[rule_idx] == Some(plan_version) {
+                    debug!(
+                        "Skipping optimizer rule '{}' (pass {}) because plan has not changed since previous no-op",
+                        rule.name(),
+                        i
+                    );
+                    observer(&new_plan, rule.as_ref());
+                    continue;
+                }
+
                 // If skipping failed rules, copy plan before attempting to rewrite
                 // as rewriting is destructive
                 let prev_plan = options
@@ -690,8 +702,11 @@ impl Optimizer {
                         new_plan = data;
                         observer(&new_plan, rule.as_ref());
                         if transformed {
+                            plan_version += 1;
+                            rule_no_op_versions[rule_idx] = None;
                             log_plan(rule.name(), &new_plan);
                         } else {
+                            rule_no_op_versions[rule_idx] = Some(plan_version);
                             debug!(
                                 "Plan unchanged by optimizer rule '{}' (pass {})",
                                 rule.name(),
@@ -710,6 +725,7 @@ impl Optimizer {
                             rule.name(),
                             e
                         );
+                        rule_no_op_versions[rule_idx] = None;
                         new_plan = orig_plan;
                     }
                     // OptimizerRule was unsuccessful, but skipped failed rules is off, return error
