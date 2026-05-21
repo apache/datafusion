@@ -17,6 +17,7 @@
 
 //! Aggregates functionalities
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
@@ -46,7 +47,8 @@ use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
+    Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err,
+    internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
@@ -413,7 +415,7 @@ impl PhysicalGroupBy {
     fn group_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = Vec::with_capacity(self.num_group_exprs());
         for ((expr, name), group_expr_nullable) in
-            self.expr.iter().zip(self.exprs_nullable().into_iter())
+            self.expr.iter().zip(self.exprs_nullable())
         {
             fields.push(
                 Field::new(
@@ -892,6 +894,47 @@ impl AggregateExec {
         &self.filter_expr
     }
 
+    /// Returns the dynamic filter expression for this aggregate, if set.
+    pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
+        self.dynamic_filter.as_ref().map(|df| &df.filter)
+    }
+
+    /// Replace the dynamic filter expression. This method errors if the aggregate does not
+    /// support dynamic filtering or if the filter expression is incompatible with this
+    /// [`AggregateExec`].
+    pub fn with_dynamic_filter_expr(
+        mut self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        // If there is no dynamic filter state initialized via `try_new`, then
+        // we can safely assume that the aggregate does not support dynamic filtering.
+        let Some(dyn_filter) = self.dynamic_filter.as_ref() else {
+            return internal_err!("Aggregate does not support dynamic filtering");
+        };
+
+        // Validate that the filter is compatible with the aggregation columns.
+        let cols = self.cols_for_dynamic_filter(&dyn_filter.supported_accumulators_info);
+        if cols.len() != filter.children().len() {
+            return internal_err!(
+                "Dynamic filter expression is incompatible with aggregate due to mismatched number of columns"
+            );
+        }
+        for (col, child) in cols.iter().zip(filter.children()) {
+            if !col.eq(child) {
+                return internal_err!(
+                    "Dynamic filter expression is incompatible with aggregate due to mismatched column references {col} != {child}"
+                );
+            }
+        }
+
+        // Overwrite our filter
+        self.dynamic_filter = Some(Arc::new(AggrDynFilter {
+            filter,
+            supported_accumulators_info: dyn_filter.supported_accumulators_info.clone(),
+        }));
+        Ok(self)
+    }
+
     /// Input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -1284,6 +1327,28 @@ impl AggregateExec {
         }
     }
 
+    // Collect column references for the dynamic filter expression from the supported accumulators.
+    fn cols_for_dynamic_filter(
+        &self,
+        supported_accumulators_info: &[PerAccumulatorDynFilter],
+    ) -> Vec<Arc<dyn PhysicalExpr>> {
+        let all_cols: Vec<Arc<dyn PhysicalExpr>> = supported_accumulators_info
+            .iter()
+            .filter_map(|info| {
+                // This should always be true due to how the supported accumulators
+                // are constructed. See `init_dynamic_filter` for more details.
+                if let [arg] = &self.aggr_expr[info.aggr_index].expressions().as_slice()
+                    && arg.is::<Column>()
+                {
+                    return Some(Arc::clone(arg));
+                }
+                None
+            })
+            .collect();
+        debug_assert!(all_cols.len() == supported_accumulators_info.len());
+        all_cols
+    }
+
     /// Calculate scaled byte size based on row count ratio.
     /// Returns `Precision::Absent` if input statistics are insufficient.
     /// Returns `Precision::Inexact` with the scaled value otherwise.
@@ -1374,7 +1439,7 @@ impl DisplayAs for AggregateExec {
                 let a: Vec<String> = self
                     .aggr_expr
                     .iter()
-                    .map(|agg| agg.name().to_string())
+                    .map(|agg| format_aggregate_exec_expr(agg).to_string())
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
                 if let Some(config) = self.limit_options {
@@ -1428,7 +1493,7 @@ impl DisplayAs for AggregateExec {
                 let a: Vec<String> = self
                     .aggr_expr
                     .iter()
-                    .map(|agg| agg.human_display().to_string())
+                    .map(|agg| format_tree_aggregate_expr(agg).to_string())
                     .collect();
                 writeln!(f, "mode={:?}", self.mode)?;
                 if !g.is_empty() {
@@ -1444,6 +1509,29 @@ impl DisplayAs for AggregateExec {
         }
         Ok(())
     }
+}
+
+fn format_aggregate_exec_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
+    match agg.human_display_alias() {
+        Some(_) => format_human_display(agg.human_display(), agg.human_display_alias())
+            .unwrap_or_else(|| Cow::Borrowed(agg.name())),
+        None => Cow::Borrowed(agg.name()),
+    }
+}
+
+fn format_tree_aggregate_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
+    format_human_display(agg.human_display(), agg.human_display_alias())
+        .unwrap_or_else(|| Cow::Borrowed(agg.name()))
+}
+
+fn format_human_display<'a>(
+    human_display: Option<&'a str>,
+    alias: Option<&'a str>,
+) -> Option<Cow<'a, str>> {
+    human_display.map(|human_display| match alias {
+        Some(alias) => Cow::Owned(format!("{human_display} as {alias}")),
+        None => Cow::Borrowed(human_display),
+    })
 }
 
 impl ExecutionPlan for AggregateExec {
@@ -2063,11 +2151,11 @@ fn evaluate_optional(
 /// The integer type is chosen to be the smallest `UInt8 / UInt16 / UInt32 /
 /// UInt64` that can represent both parts.  It matches the type returned by
 /// [`Aggregate::grouping_id_type`].
-fn group_id_array(
+pub(crate) fn group_id_array(
     group: &[bool],
     ordinal: usize,
     max_ordinal: usize,
-    batch: &RecordBatch,
+    num_rows: usize,
 ) -> Result<ArrayRef> {
     let n = group.len();
     if n > 64 {
@@ -2087,7 +2175,6 @@ fn group_id_array(
         (acc << 1) | if is_null { 1 } else { 0 }
     });
     let full_id = semantic_id | ((ordinal as u64) << n);
-    let num_rows = batch.num_rows();
     if total_bits <= 8 {
         Ok(Arc::new(UInt8Array::from(vec![full_id as u8; num_rows])))
     } else if total_bits <= 16 {
@@ -2106,7 +2193,7 @@ fn group_id_array(
 /// ordinal 0, the second gets 1, and so on.  If the same `Vec<bool>` appears
 /// three times the ordinals are 0, 1, 2 and this function returns 2.
 /// Returns 0 when no grouping set is duplicated.
-fn max_duplicate_ordinal(groups: &[Vec<bool>]) -> usize {
+pub(crate) fn max_duplicate_ordinal(groups: &[Vec<bool>]) -> usize {
     let mut counts: HashMap<&[bool], usize> = HashMap::new();
     for group in groups {
         *counts.entry(group).or_insert(0) += 1;
@@ -2160,7 +2247,7 @@ pub fn evaluate_group_by(
                     group,
                     current_ordinal,
                     max_ordinal,
-                    batch,
+                    batch.num_rows(),
                 )?);
             }
             Ok(group_values)
@@ -2177,6 +2264,7 @@ mod tests {
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
     use crate::common::collect;
+    use crate::empty::EmptyExec;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::metrics::MetricValue;
@@ -2202,6 +2290,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
     use datafusion_functions_aggregate::median::median_udaf;
+    use datafusion_functions_aggregate::min_max::min_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
@@ -3022,6 +3111,147 @@ mod tests {
             .map(Arc::new)
     }
 
+    fn first_value_agg_expr(
+        schema: &SchemaRef,
+        column: &str,
+        alias: &str,
+        human_display: Option<&str>,
+        human_display_alias: Option<&str>,
+    ) -> Result<AggregateFunctionExpr> {
+        let mut builder =
+            AggregateExprBuilder::new(first_value_udaf(), vec![col(column, schema)?])
+                .order_by(vec![PhysicalSortExpr {
+                    expr: col(column, schema)?,
+                    options: SortOptions::new(false, false),
+                }])
+                .schema(Arc::clone(schema))
+                .alias(alias);
+
+        if let Some(human_display) = human_display {
+            builder = builder.human_display(human_display);
+        }
+        if let Some(human_display_alias) = human_display_alias {
+            builder = builder.human_display_alias(human_display_alias);
+        }
+
+        builder.build()
+    }
+
+    #[test]
+    fn test_reverse_expr_preserves_aliased_human_display() -> Result<()> {
+        let schema = create_test_schema()?;
+        let agg = first_value_agg_expr(
+            &schema,
+            "b",
+            "agg",
+            Some("first_value(b) ORDER BY [b ASC NULLS LAST]"),
+            Some("agg"),
+        )?;
+
+        let reversed = agg.reverse_expr().expect("expected reverse expr");
+
+        assert_eq!(reversed.name(), "agg");
+        assert_eq!(reversed.human_display_alias(), Some("agg"));
+        assert_eq!(
+            format_tree_aggregate_expr(&reversed),
+            "last_value(b) ORDER BY [b DESC NULLS FIRST] as agg"
+        );
+        assert_eq!(
+            reversed.human_display(),
+            Some("last_value(b) ORDER BY [b DESC NULLS FIRST]")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reverse_expr_does_not_rewrite_column_names_in_human_display() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "first_value_col",
+            DataType::Int32,
+            true,
+        )]));
+        let agg = first_value_agg_expr(
+            &schema,
+            "first_value_col",
+            "agg",
+            Some(
+                "first_value(first_value_col) ORDER BY [first_value_col ASC NULLS LAST]",
+            ),
+            Some("agg"),
+        )?;
+
+        let reversed = agg.reverse_expr().expect("expected reverse expr");
+
+        assert_eq!(reversed.name(), "agg");
+        assert_eq!(
+            reversed.human_display(),
+            Some(
+                "last_value(first_value_col) ORDER BY [first_value_col DESC NULLS FIRST]"
+            )
+        );
+        assert_eq!(
+            format_tree_aggregate_expr(&reversed),
+            "last_value(first_value_col) ORDER BY [first_value_col DESC NULLS FIRST] as agg"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_human_display_is_treated_as_absent() -> Result<()> {
+        let schema = create_test_schema()?;
+        let agg = first_value_agg_expr(&schema, "b", "agg", Some(""), None)?;
+
+        assert_eq!(agg.human_display(), None);
+        assert_eq!(format_tree_aggregate_expr(&agg), "agg");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_human_display_alias_must_match_name() -> Result<()> {
+        let schema = create_test_schema()?;
+        let error = first_value_agg_expr(
+            &schema,
+            "b",
+            "agg",
+            Some("first_value(b) ORDER BY [b ASC NULLS LAST]"),
+            Some("other_alias"),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("aggregate human_display_alias must match")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reverse_expr_preserves_non_aliased_display_path() -> Result<()> {
+        let schema = create_test_schema()?;
+        let agg = first_value_agg_expr(
+            &schema,
+            "b",
+            "first_value(b) ORDER BY [b ASC NULLS LAST]",
+            None,
+            None,
+        )?;
+
+        let reversed = agg.reverse_expr().expect("expected reverse expr");
+
+        assert_eq!(
+            reversed.name(),
+            "last_value(b) ORDER BY [b DESC NULLS FIRST]"
+        );
+        assert_eq!(reversed.human_display(), None);
+
+        Ok(())
+    }
+
     // This function constructs the physical plan below,
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
@@ -3682,13 +3912,10 @@ mod tests {
         // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
             Arc::new(
-                AggregateExprBuilder::new(
-                    datafusion_functions_aggregate::min_max::min_udaf(),
-                    vec![col("b", &schema)?],
-                )
-                .schema(Arc::clone(&schema))
-                .alias("MIN(b)")
-                .build()?,
+                AggregateExprBuilder::new(min_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("MIN(b)")
+                    .build()?,
             ),
             Arc::new(
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
@@ -3827,13 +4054,10 @@ mod tests {
         // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
             Arc::new(
-                AggregateExprBuilder::new(
-                    datafusion_functions_aggregate::min_max::min_udaf(),
-                    vec![col("b", &schema)?],
-                )
-                .schema(Arc::clone(&schema))
-                .alias("MIN(b)")
-                .build()?,
+                AggregateExprBuilder::new(min_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("MIN(b)")
+                    .build()?,
             ),
             Arc::new(
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
@@ -4779,6 +5003,120 @@ mod tests {
             +---+--------+
         ");
 
+        Ok(())
+    }
+
+    /// Test that [`AggregateExec::with_dynamic_filter_expr`] overrides the existing dynamic filter
+    #[test]
+    fn test_with_dynamic_filter() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Partial min aggregate supports dynamic filtering
+        let agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min_a")
+                    .build()?,
+            )],
+            vec![None],
+            child,
+            Arc::clone(&schema),
+        )?;
+
+        // Assertion 1: A filter with the same children can override the existing
+        // dynamic filter.
+        let new_df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![col("a", &schema)?],
+            lit(false),
+        ));
+        let agg = agg.with_dynamic_filter_expr(Arc::clone(&new_df))?;
+
+        // The aggregate's filter should now resolve to the new inner expression.
+        let swapped = agg
+            .dynamic_filter_expr()
+            .expect("should still have dynamic filter")
+            .current()?;
+        assert_eq!(format!("{swapped}"), format!("{}", lit(false)));
+
+        // Assertion 2: A filter that has been through `PhysicalExpr::with_new_children`
+        // should still be accepted when the new children are equivalent to the originals.
+        let new_df_as_pexpr: Arc<dyn PhysicalExpr> =
+            Arc::<DynamicFilterPhysicalExpr>::clone(&new_df);
+        let remapped_pexpr =
+            new_df_as_pexpr.with_new_children(vec![col("a", &schema)?])?;
+        let Ok(remapped_df) = (remapped_pexpr as Arc<dyn std::any::Any + Send + Sync>)
+            .downcast::<DynamicFilterPhysicalExpr>()
+        else {
+            panic!("should be DynamicFilterPhysicalExpr after with_new_children");
+        };
+        // Hard to assert this because the filter is identical. No error means
+        // the filter was accepted. That's a good enough assertion for now.
+        let _agg = agg.with_dynamic_filter_expr(remapped_df)?;
+        Ok(())
+    }
+
+    /// Test that [`AggregateExec::with_dynamic_filter_expr`] errors when the aggregate does not support dynamic filtering
+    #[test]
+    fn test_with_dynamic_filter_error_unsupported() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Final mode with a group-by does not support dynamic filters.
+        let agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum_b")
+                    .build()?,
+            )],
+            vec![None],
+            child,
+            Arc::clone(&schema),
+        )?;
+        assert!(agg.dynamic_filter_expr().is_none());
+
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![col("a", &schema)?],
+            lit(true),
+        ));
+        assert!(agg.with_dynamic_filter_expr(df).is_err());
+        Ok(())
+    }
+
+    /// Test that [`AggregateExec::with_dynamic_filter_expr`] errors when the column is not in the schema
+    #[test]
+    fn test_with_dynamic_filter_error_column_mismatch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min_a")
+                    .build()?,
+            )],
+            vec![None],
+            child,
+            Arc::clone(&schema),
+        )?;
+
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("bad", 99)) as _],
+            lit(true),
+        ));
+        assert!(agg.with_dynamic_filter_expr(df).is_err());
         Ok(())
     }
 }

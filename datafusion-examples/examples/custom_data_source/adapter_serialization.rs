@@ -275,6 +275,7 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Try to parse as our extension payload
         if let Ok(payload) = serde_json::from_slice::<ExtensionPayload>(buf)
@@ -303,6 +304,7 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
         &self,
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         // We don't need this for the example - adapter wrapping happens in
         // `execution_plan_to_proto` instead.

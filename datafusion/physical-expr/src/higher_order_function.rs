@@ -337,9 +337,22 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                         .map(|(name, param)| param.renamed(name.as_str()))
                         .collect();
 
+                    // lambda.projection may include indexes of nested lambda variables not present on this batch
+                    let projection = lambda
+                        .projection()
+                        .iter()
+                        .copied()
+                        .filter(|i| *i < batch.num_columns())
+                        .collect::<Vec<_>>();
+
                     Ok(ValueOrLambda::Lambda(LambdaArgument::new(
                         params,
-                        Arc::clone(lambda.body()),
+                        Arc::clone(lambda.projected_body()),
+                        if projection.is_empty() {
+                            None
+                        } else {
+                            Some(batch.project(&projection)?)
+                        },
                     )))
                 }
                 ArgSlot::Value => {
@@ -553,9 +566,10 @@ mod tests {
             args: HigherOrderFunctionArgs,
         ) -> Result<ColumnarValue> {
             match &args.args[0] {
-                ValueOrLambda::Lambda(lambda) => {
-                    lambda.evaluate(&[&|| Ok(Arc::new(NullArray::new(args.number_rows)))])
-                }
+                ValueOrLambda::Lambda(lambda) => lambda.evaluate(
+                    &[&|| Ok(Arc::new(NullArray::new(args.number_rows)))],
+                    |arrays| Ok(arrays.to_vec()),
+                ),
                 ValueOrLambda::Value(value) => Ok(value.clone()),
             }
         }

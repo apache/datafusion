@@ -903,12 +903,32 @@ impl HashJoinExec {
     }
 
     /// Get the dynamic filter expression for testing purposes.
-    /// Returns `None` if no dynamic filter has been set.
-    ///
-    /// This method is intended for testing only and should not be used in production code.
-    #[doc(hidden)]
-    pub fn dynamic_filter_for_test(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
+    /// Returns the dynamic filter expression for this hash join, if set.
+    pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
+    }
+
+    /// Set the dynamic filter on this hash join.
+    ///
+    /// Resets any internal state that depends on any existing dynamic filter.
+    ///
+    /// Validates that the filter's children reference valid columns in
+    /// the probe (right) side's schema.
+    pub fn with_dynamic_filter_expr(
+        mut self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        let probe_schema = self.right.schema();
+        for child in filter.children() {
+            child.data_type(&probe_schema)?;
+        }
+        self.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter,
+            // Initialize with an empty accumulator which will be lazily populated
+            // during execution.
+            build_accumulator: OnceLock::new(),
+        });
+        Ok(self)
     }
 
     /// Calculate order preservation flags for this hash join.
@@ -6373,5 +6393,70 @@ mod tests {
         assert_eq!(lr_is_preserved(JoinType::RightSemi), (true, true));
         assert_eq!(lr_is_preserved(JoinType::RightAnti), (true, true));
         assert_eq!(lr_is_preserved(JoinType::RightMark), (false, true));
+    }
+
+    #[test]
+    fn test_with_dynamic_filter() -> Result<()> {
+        let (_, _, on) = build_schema_and_on()?;
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        assert!(join.dynamic_filter_expr().is_none());
+
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("b1", 1)) as _],
+            lit(true),
+        ));
+        let join = join.with_dynamic_filter_expr(Arc::clone(&df))?;
+
+        let restored = join
+            .dynamic_filter_expr()
+            .expect("should have dynamic filter");
+        assert_eq!(
+            restored
+                .expression_id()
+                .expect("DynamicFilterPhysicalExpr always has an expression_id"),
+            df.expression_id()
+                .expect("DynamicFilterPhysicalExpr always has an expression_id"),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter_rejects_invalid_columns() -> Result<()> {
+        let (_, _, on) = build_schema_and_on()?;
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        // Column index 99 is out of bounds for the right (probe) side schema.
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("bad", 99)) as _],
+            lit(true),
+        ));
+        assert!(join.with_dynamic_filter_expr(df).is_err());
+        Ok(())
     }
 }

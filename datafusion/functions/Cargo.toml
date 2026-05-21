@@ -249,6 +249,10 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "overlay"
+
+[[bench]]
+harness = false
 name = "random"
 required-features = ["math_expressions"]
 

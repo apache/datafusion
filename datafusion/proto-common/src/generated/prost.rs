@@ -900,6 +900,12 @@ pub struct ParquetOptions {
     pub max_predicate_cache_size_opt: ::core::option::Option<
         parquet_options::MaxPredicateCacheSizeOpt,
     >,
+    /// Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
+    /// is set. When `Some`, INT96 columns coerce to
+    /// `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+    /// `Timestamp(<coerce_int96>, None)`. No effect when `coerce_int96` is unset.
+    #[prost(oneof = "parquet_options::CoerceInt96TzOpt", tags = "36")]
+    pub coerce_int96_tz_opt: ::core::option::Option<parquet_options::CoerceInt96TzOpt>,
 }
 /// Nested message and enum types in `ParquetOptions`.
 pub mod parquet_options {
@@ -957,6 +963,15 @@ pub mod parquet_options {
     pub enum MaxPredicateCacheSizeOpt {
         #[prost(uint64, tag = "33")]
         MaxPredicateCacheSize(u64),
+    }
+    /// Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
+    /// is set. When `Some`, INT96 columns coerce to
+    /// `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+    /// `Timestamp(<coerce_int96>, None)`. No effect when `coerce_int96` is unset.
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum CoerceInt96TzOpt {
+        #[prost(string, tag = "36")]
+        CoerceInt96Tz(::prost::alloc::string::String),
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1309,6 +1324,38 @@ impl PrecisionInfo {
             "EXACT" => Some(Self::Exact),
             "INEXACT" => Some(Self::Inexact),
             "ABSENT" => Some(Self::Absent),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ExplainFormat {
+    Indent = 0,
+    Tree = 1,
+    Pgjson = 2,
+    Graphviz = 3,
+}
+impl ExplainFormat {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Indent => "EXPLAIN_FORMAT_INDENT",
+            Self::Tree => "EXPLAIN_FORMAT_TREE",
+            Self::Pgjson => "EXPLAIN_FORMAT_PGJSON",
+            Self::Graphviz => "EXPLAIN_FORMAT_GRAPHVIZ",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "EXPLAIN_FORMAT_INDENT" => Some(Self::Indent),
+            "EXPLAIN_FORMAT_TREE" => Some(Self::Tree),
+            "EXPLAIN_FORMAT_PGJSON" => Some(Self::Pgjson),
+            "EXPLAIN_FORMAT_GRAPHVIZ" => Some(Self::Graphviz),
             _ => None,
         }
     }

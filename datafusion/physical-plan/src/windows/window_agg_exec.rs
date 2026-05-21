@@ -24,6 +24,7 @@ use std::task::{Context, Poll};
 use super::utils::create_schema;
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::stream::EmptyRecordBatchStream;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
     window_equivalence_properties,
@@ -444,6 +445,10 @@ impl WindowAggStream {
                 }
                 Some(Err(e)) => Err(e),
                 None => {
+                    // Release the input pipeline's resources before computing
+                    // the final aggregates.
+                    let input_schema = self.input.schema();
+                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                     let Some(result) = self.compute_aggregates()? else {
                         return Poll::Ready(None);
                     };

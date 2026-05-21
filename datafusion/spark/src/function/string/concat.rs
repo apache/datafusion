@@ -127,7 +127,7 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
     }
 
     // Step 1: Check for NULL mask in incoming args
-    let null_mask = compute_null_mask(&arg_values, number_rows)?;
+    let null_mask = compute_null_mask(&arg_values);
 
     // If all scalars and any is NULL, return NULL immediately
     if matches!(null_mask, NullMaskResolution::ReturnNull) {
