@@ -63,7 +63,13 @@ Field rules:
 - **Codec field** (`FFI_LogicalExtensionCodec` / `FFI_PhysicalExtensionCodec`) only if the trait moves `Expr`s / `LogicalPlan`s / `ExecutionPlan`s across the boundary.
 - **Method function pointers are private by default.** Mark `pub` only if a downstream library needs to invoke them directly (rare — typically only `version`, `library_marker_id`, embedded codecs are `pub`).
 - **`version: super::version` is mandatory.** Consumers gate compatibility on it.
-- **`library_marker_id: crate::get_library_marker_id` is mandatory.** Powers local-bypass.
+- **`library_marker_id: crate::get_library_marker_id` is mandatory *when the wrapper uses the standard `ForeignX` adapter pattern*.** Two flavors exist:
+  - **Arc-backed (immutable / shareable traits — `TableProvider`, `ExecutionPlan`, all UDFs, codecs):** consumer-side `From<&FFI_X> for Arc<dyn X>` consults the marker to choose `Arc::clone(inner)` vs `Arc::new(ForeignX(...))`.
+  - **Box-backed (mutable / move-only traits — `Accumulator`, `GroupsAccumulator`, `PartitionEvaluator`):** consumer-side `From<FFI_X> for Box<dyn X>` consults the marker to take the inner `Box` directly vs `Box::new(ForeignX(...))`. Producer-side `From<Box<dyn X>> for FFI_X` *also* uses an `is::<ForeignX>()` downcast as an additional re-wrap bypass; the marker check covers the reverse direction.
+
+  The field is dead ABI surface — and must be omitted with a one-line module-doc rationale — only when **neither** flavor applies: no `ForeignX` adapter, no reverse `From<FFI_X> for {Arc,Box}<dyn X>`, and the trait is impl'd directly on `FFI_X`. Canonical example: `FFI_RecordBatchStream` (`impl RecordBatchStream for FFI_RecordBatchStream` at `record_batch_stream.rs:149`, no `ForeignRecordBatchStream`, no reverse `From`).
+
+  Before flagging a missing `library_marker_id` as a gap, run all three greps on the wrapper file: `Foreign<wrapper-name>`, `From<&?FFI_X> for Arc<`, `From<FFI_X> for Box<`. Hit on any → marker is required and its absence is a real gap. Zero hits on all three → marker is intentionally not needed, not a gap.
 - **`Send`/`Sync` bounds match the wrapped trait** (rule 4). Most wrappers want both; `Send`-only for streams / mutable traits.
 
 ### 2. `PrivateData` shape
@@ -267,7 +273,7 @@ Common severity classes seen on the label today:
 - **DML / optimizer-relevant defaults silently lost** — e.g. `delete_from`/`update`/`truncate` on table providers, distribution / ordering / pushdown on execution plans, `value_from_stats` on aggregates. These demote producer capability on the foreign side.
 - **SQL surface area silently absent** — naming hooks (`display_name`, `schema_name`, `documentation`), null-handling and within-group clauses on UDAFs, etc.
 - **Performance regressions, not correctness** — e.g. `memoize` on partition evaluators.
-- **Open design questions** — e.g. whether `FFI_RecordBatchStream` needs `library_marker_id` at all.
+- **Open design questions** — none currently tracked. (Historical entry: whether `FFI_RecordBatchStream` needs `library_marker_id` — resolved no, it impls the trait directly on `FFI_X` with no `Foreign` adapter and no reverse `From`, so the marker has no consultation site. See `library_marker_id` rule in §"Method coverage".)
 
 When in doubt, open the label query; do not assume the list above is exhaustive. Wrappers without an open issue are **not** certified complete — re-enumerate the trait surface (see "How to audit a wrapper's coverage" below) whenever you audit one; upstream trait drift can introduce new defaulted methods at any time and silently re-open the silent-override-loss bug class.
 
@@ -329,8 +335,8 @@ If a method's body is non-trivial, the consumer-side default is non-trivial too.
 When reviewing a PR that touches `datafusion/ffi/`:
 
 1. **Trait coverage.** Pull up the underlying trait. List its methods. Confirm every non-defaulted method has a function pointer. For each *defaulted* method, ask whether a real-world producer would override it — if yes, the PR must either plumb it through as a plain `unsafe extern "C" fn` (let dynamic dispatch on `Arc<dyn Trait>` pick override-or-default) or explicitly justify the omission in a comment. Reserve `Option<fn>` for the capability-flag pattern described in §"Method coverage" — do not use it just because the trait has a default.
-2. **Layout fields.** `clone`, `release`, `version`, `private_data`, `library_marker_id` all present?
-3. **Marker-id bypass** in `From<&FFI_X>`?
+2. **Layout fields.** `clone`, `release`, `version`, `private_data` all present? `library_marker_id` present **iff** wrapper has a `ForeignX` adapter and a reverse `From<&?FFI_X> for {Arc,Box}<dyn X>` consultation site (Arc-backed for shareable traits, Box-backed for `&mut self` traits); if the trait is impl'd directly on `FFI_X` (no `ForeignX`, no reverse `From`), `library_marker_id` is dead surface and must be omitted with a one-line rationale.
+3. **Marker-id bypass** in `From<&FFI_X>` (where applicable per rule 2)?
 4. **Round-trip downcast** in the constructor?
 5. **`Drop` calling `release`**, and `release` nulling the pointer?
 6. **`Send`/`Sync` unsafe impls** match the wrapped trait's bounds (rule 4), and `FFI_X` + `ForeignX` agree?
