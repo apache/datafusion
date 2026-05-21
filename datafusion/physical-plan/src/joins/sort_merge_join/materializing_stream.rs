@@ -1707,18 +1707,20 @@ impl MaterializingSortMergeJoinStream {
         let num_right_cols = self.buffered_schema.fields().len();
 
         // Read each source batch once (spilled batches require disk I/O).
-        let source_data: Vec<RecordBatch> = source_batches
+        let source_data_result: Result<Vec<RecordBatch>> = source_batches
             .iter()
             .map(|&idx| {
                 let bb = &self.buffered_data.batches[idx];
                 match &bb.batch {
-                    BufferedBatchState::InMemory(batch) => batch.clone(),
+                    BufferedBatchState::InMemory(batch) => Ok(batch.clone()),
                     BufferedBatchState::Spilled(_) => {
-                        unreachable!("Batches were unspilled")
+                        internal_err!("Buffered batch should have been unspilled before fetching columns")
                     }
                 }
             })
             .collect();
+
+        let source_data = source_data_result?;
 
         let mut right_columns = Vec::with_capacity(num_right_cols);
         for col_idx in 0..num_right_cols {

@@ -256,9 +256,11 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     inner_key_buffer: Vec<RecordBatch>,
     inner_key_spill: Option<RefCountedTempFile>,
 
-    //Track the active spill_stream
+    // Track the active spill_stream
     spill_stream: Option<SendableRecordBatchStream>,
-    //Prevents wiping out the buffer if we yield while evaluating the filter
+    // Whether the active spill stream has produced any batches yet.
+    spill_stream_has_data: bool,
+    // Prevents wiping out the buffer if we yield while evaluating the filter
     inner_group_buffered: bool,
 
     // True when buffer_inner_key_group returned Pending after partially
@@ -374,6 +376,7 @@ impl BitwiseSortMergeJoinStream {
             inner_key_buffer: vec![],
             inner_key_spill: None,
             spill_stream: None,
+            spill_stream_has_data: false,
             inner_group_buffered: false,
             buffering_inner_pending: false,
             pending_boundary: None,
@@ -473,6 +476,7 @@ impl BitwiseSortMergeJoinStream {
         self.inner_key_buffer.clear();
         self.inner_key_spill = None;
         self.spill_stream = None;
+        self.spill_stream_has_data = false;
         self.inner_group_buffered = false;
         self.inner_buffer_size = 0;
     }
@@ -809,6 +813,7 @@ impl BitwiseSortMergeJoinStream {
                 let stream = self.spill_stream.as_mut().unwrap();
                 match ready!(stream.poll_next_unpin(cx)) {
                     Some(Ok(inner_slice)) => {
+                        self.spill_stream_has_data = true;
                         matched_count = eval_filter_for_inner_slice(
                             self.outer_is_left,
                             filter,
@@ -826,6 +831,9 @@ impl BitwiseSortMergeJoinStream {
                     }
                     None => {
                         self.spill_stream = None;
+                        if !self.spill_stream_has_data {
+                            return Poll::Ready(internal_err!("Spill file was empty"));
+                        }
                         break;
                     }
                 }
