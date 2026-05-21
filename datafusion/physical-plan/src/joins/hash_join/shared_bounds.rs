@@ -28,16 +28,17 @@ use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
-    HashExpr, HashTableLookupExpr, SeededRandomState,
+    HashTableLookupExpr, MultiMapLookupExpr, SeededRandomState,
 };
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
+use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, ScalarValue, SharedResult};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
+    BinaryExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
@@ -60,84 +61,83 @@ impl ColumnBounds {
     }
 }
 
-/// Represents the bounds for all join key columns from a single partition.
-/// This contains the min/max values computed from one partition's build-side data.
+/// Min/max bounds for join key columns, indexed by join key expression index.
+///
+/// A `None` slot marks a column with no usable bounds — e.g. one dropped from
+/// a global envelope because it was not totally ordered across partitions. The
+/// slot is kept (rather than removed) so that every later column keeps its
+/// join-key index; [`create_bounds_predicate`] pairs bounds with `on_right`
+/// positionally. Per-partition bounds built via [`PartitionBounds::new`] are
+/// always fully populated.
 #[derive(Debug, Clone)]
 pub(crate) struct PartitionBounds {
-    /// Min/max bounds for each join key column in this partition.
-    /// Index corresponds to the join key expression index.
-    column_bounds: Vec<ColumnBounds>,
+    column_bounds: Vec<Option<ColumnBounds>>,
 }
 
 impl PartitionBounds {
+    /// Build from dense per-partition bounds, where every column has bounds.
     pub(crate) fn new(column_bounds: Vec<ColumnBounds>) -> Self {
-        Self { column_bounds }
+        Self {
+            column_bounds: column_bounds.into_iter().map(Some).collect(),
+        }
     }
 
     pub(crate) fn get_column_bounds(&self, index: usize) -> Option<&ColumnBounds> {
-        self.column_bounds.get(index)
+        self.column_bounds.get(index).and_then(Option::as_ref)
     }
 }
 
-/// Creates a membership predicate for filter pushdown.
-///
-/// If `inlist_values` is provided (for small build sides), creates an InList expression.
-/// Otherwise, creates a HashTableLookup expression (for large build sides).
-///
-/// Supports both single-column and multi-column joins using struct expressions.
-fn create_membership_predicate(
+/// Build a `IN (SET)` predicate over `on_right` from a deduplicated build-side
+/// array. Single-column joins compare scalars directly; multi-column joins
+/// wrap the right-hand columns in a `struct(...)` to match the build side's
+/// shape.
+fn create_inlist_predicate(
     on_right: &[PhysicalExprRef],
-    pushdown: PushdownStrategy,
-    random_state: &SeededRandomState,
+    in_list_array: ArrayRef,
     schema: &Schema,
-) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-    match pushdown {
-        // Use InList expression for small build sides
-        PushdownStrategy::InList(in_list_array) => {
-            // Build the expression to compare against
-            let expr = if on_right.len() == 1 {
-                // Single column: col IN (val1, val2, ...)
-                Arc::clone(&on_right[0])
-            } else {
-                let fields = build_struct_fields(
-                    on_right
-                        .iter()
-                        .map(|r| r.data_type(schema))
-                        .collect::<Result<Vec<_>>>()?
-                        .as_ref(),
-                )?;
-
-                // The return field name and the function field name don't really matter here.
-                let return_field =
-                    Arc::new(Field::new("struct", DataType::Struct(fields), true));
-
-                Arc::new(ScalarFunctionExpr::new(
-                    "struct",
-                    struct_func(),
-                    on_right.to_vec(),
-                    return_field,
-                    Arc::new(ConfigOptions::default()),
-                )) as Arc<dyn PhysicalExpr>
-            };
-
-            // Use InListExpr::try_new_from_array() to build an InList with static_filter optimization (hash-based lookup)
-            Ok(Some(Arc::new(InListExpr::try_new_from_array(
-                expr,
-                in_list_array,
-                false,
-                schema,
-            )?)))
-        }
-        // Use hash table lookup for large build sides
-        PushdownStrategy::Map(hash_map) => Ok(Some(Arc::new(HashTableLookupExpr::new(
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let expr = if on_right.len() == 1 {
+        Arc::clone(&on_right[0])
+    } else {
+        let fields = build_struct_fields(
+            on_right
+                .iter()
+                .map(|r| r.data_type(schema))
+                .collect::<Result<Vec<_>>>()?
+                .as_ref(),
+        )?;
+        let return_field = Arc::new(Field::new("struct", DataType::Struct(fields), true));
+        Arc::new(ScalarFunctionExpr::new(
+            "struct",
+            struct_func(),
             on_right.to_vec(),
-            random_state.clone(),
-            hash_map,
-            "hash_lookup".to_string(),
-        )) as Arc<dyn PhysicalExpr>)),
-        // Empty partition - should not create a filter for this
-        PushdownStrategy::Empty => Ok(None),
-    }
+            return_field,
+            Arc::new(ConfigOptions::default()),
+        )) as Arc<dyn PhysicalExpr>
+    };
+
+    Ok(Arc::new(InListExpr::try_new_from_array(
+        expr,
+        in_list_array,
+        false,
+        schema,
+    )?))
+}
+
+/// Build a single-map `hash_lookup` predicate over `on_right` against `map`.
+/// Used by the CollectLeft path; the Partitioned path emits
+/// [`MultiMapLookupExpr`] over multiple maps instead.
+fn create_hash_lookup_predicate(
+    on_right: &[PhysicalExprRef],
+    map: Arc<Map>,
+    random_state: &SeededRandomState,
+) -> Arc<dyn PhysicalExpr> {
+    Arc::new(HashTableLookupExpr::new(
+        on_right.to_vec(),
+        random_state.clone(),
+        map,
+        "hash_lookup".to_string(),
+    ))
 }
 
 /// Creates a bounds predicate from partition bounds.
@@ -203,6 +203,69 @@ fn combine_membership_and_bounds(
     }
 }
 
+/// Compute the global (envelope) min/max bounds across a set of partition bounds.
+///
+/// For each join-key column, returns the smallest min and largest max seen
+/// across partitions. A column that is not totally ordered across partitions
+/// (e.g. a mixed-type comparison where `partial_cmp` yields `None`) becomes a
+/// `None` slot: dropped from the envelope but keeping its index, so the
+/// surviving columns stay aligned with `on_right`. Returns `None` when there
+/// are no partitions, the partitions disagree on column count, or no column
+/// survives.
+fn compute_global_bounds(per_partition: &[&PartitionBounds]) -> Option<PartitionBounds> {
+    let mut iter = per_partition.iter();
+    let first = iter.next()?;
+    let mut acc: Vec<Option<ColumnBounds>> = first.column_bounds.clone();
+
+    for partition in iter {
+        if partition.column_bounds.len() != acc.len() {
+            return None;
+        }
+        for (slot, incoming) in acc.iter_mut().zip(partition.column_bounds.iter()) {
+            let Some(existing) = slot.as_mut() else {
+                continue; // already dropped by an earlier partition
+            };
+            let Some(cb) = incoming else {
+                *slot = None;
+                continue;
+            };
+            match (
+                cb.min.partial_cmp(&existing.min),
+                cb.max.partial_cmp(&existing.max),
+            ) {
+                (Some(min_ord), Some(max_ord)) => {
+                    if min_ord == std::cmp::Ordering::Less {
+                        existing.min = cb.min.clone();
+                    }
+                    if max_ord == std::cmp::Ordering::Greater {
+                        existing.max = cb.max.clone();
+                    }
+                }
+                // Not totally ordered: drop just this column, keep the slot
+                // so later columns stay at their join-key index.
+                _ => *slot = None,
+            }
+        }
+    }
+
+    if acc.iter().all(Option::is_none) {
+        return None;
+    }
+    Some(PartitionBounds { column_bounds: acc })
+}
+
+/// Concatenate per-partition InList arrays into a single array. Returns `None`
+/// if data types disagree across partitions or if `arrow::compute::concat`
+/// fails (e.g. unsupported types).
+fn merge_inlist_arrays(arrays: &[ArrayRef]) -> Option<ArrayRef> {
+    let first = arrays.first()?;
+    if arrays.iter().any(|a| a.data_type() != first.data_type()) {
+        return None;
+    }
+    let array_refs: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+    concat(&array_refs).ok()
+}
+
 /// Coordinates build-side information collection across multiple partitions
 ///
 /// This structure collects information from the build side (hash tables and/or bounds) and
@@ -250,22 +313,59 @@ pub(crate) struct SharedBuildAccumulator {
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter expressions
     on_right: Vec<PhysicalExprRef>,
-    /// Random state for partitioning (RepartitionExec's hash function with 0,0,0,0 seeds)
-    /// Used for PartitionedHashLookupPhysicalExpr
-    repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
+    /// Maximum distinct entries the cross-partition merged InList may
+    /// contain before we fall back to `multi_hash_lookup`. Sourced from
+    /// `optimizer.hash_join_inlist_pushdown_max_distinct_values` so the
+    /// same threshold caps both per-partition and cross-partition InList
+    /// pushdown.
+    inlist_max_distinct_values: usize,
 }
 
-/// Strategy for filter pushdown (decided at collection time)
-#[derive(Clone)]
-pub(crate) enum PushdownStrategy {
-    /// Use InList for small build sides (< 128MB)
-    InList(ArrayRef),
-    /// Use map lookup for large build sides
-    Map(Arc<Map>),
-    /// There was no data in this partition, do not build a dynamic filter for it
-    Empty,
+/// Build-side data needed to construct a dynamic filter for one partition.
+///
+/// `map` is always set for non-empty partitions (the join's hash table is
+/// built unconditionally). `inlist` is additionally set when the build side
+/// fit under both the per-partition InList caps
+/// (`hash_join_inlist_pushdown_max_size` /
+/// `hash_join_inlist_pushdown_max_distinct_values`) — that's our signal that
+/// the partition's keys are small enough to participate in parquet stats /
+/// bloom-filter pruning at the scan when collapsed across partitions.
+#[derive(Clone, Default)]
+pub(crate) struct PushdownStrategy {
+    /// Hash table for the partition's build side. `None` if the partition was
+    /// empty.
+    pub(crate) map: Option<Arc<Map>>,
+    /// Concatenable array of build-side join keys (single column or struct
+    /// of columns). `Some` when the build side was small enough for the
+    /// InList pushdown; otherwise `None` and the filter falls back to
+    /// `hash_lookup` / `multi_hash_lookup`.
+    pub(crate) inlist: Option<ArrayRef>,
+}
+
+impl PushdownStrategy {
+    pub(crate) fn empty() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn from_map(map: Arc<Map>) -> Self {
+        Self {
+            map: Some(map),
+            inlist: None,
+        }
+    }
+
+    pub(crate) fn from_map_and_inlist(map: Arc<Map>, inlist: ArrayRef) -> Self {
+        Self {
+            map: Some(map),
+            inlist: Some(inlist),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.map.is_none()
+    }
 }
 
 /// Build-side data reported by a single partition
@@ -357,7 +457,7 @@ impl SharedBuildAccumulator {
         right_child: &dyn ExecutionPlan,
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
-        repartition_random_state: SeededRandomState,
+        inlist_max_distinct_values: usize,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -402,8 +502,8 @@ impl SharedBuildAccumulator {
             completion_notify: Notify::new(),
             dynamic_filter,
             on_right,
-            repartition_random_state,
             probe_schema: right_child.schema(),
+            inlist_max_distinct_values,
         }
     }
 
@@ -567,15 +667,10 @@ impl SharedBuildAccumulator {
         match finalize_input {
             FinalizeInput::CollectLeft(partition) => match partition {
                 PartitionStatus::Reported(partition_data) => {
-                    let membership_expr = create_membership_predicate(
-                        &self.on_right,
-                        partition_data.pushdown.clone(),
-                        &HASH_JOIN_SEED,
-                        self.probe_schema.as_ref(),
-                    )?;
+                    let membership_expr =
+                        self.collect_left_membership(&partition_data.pushdown)?;
                     let bounds_expr =
                         create_bounds_predicate(&self.on_right, &partition_data.bounds);
-
                     if let Some(filter_expr) =
                         combine_membership_and_bounds(membership_expr, bounds_expr)
                     {
@@ -594,50 +689,18 @@ impl SharedBuildAccumulator {
                 }
             },
             FinalizeInput::Partitioned(partitions) => {
-                let num_partitions = partitions.len();
-                let routing_hash_expr = Arc::new(HashExpr::new(
-                    self.on_right.clone(),
-                    self.repartition_random_state.clone(),
-                    "hash_repartition".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let modulo_expr = Arc::new(BinaryExpr::new(
-                    routing_hash_expr,
-                    Operator::Modulo,
-                    lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let mut real_branches = Vec::new();
-                let mut empty_partition_ids = Vec::new();
+                let mut real_partitions: Vec<&PartitionData> = Vec::new();
                 let mut has_canceled_unknown = false;
-
-                for (partition_id, partition) in partitions.iter().enumerate() {
+                for partition in partitions.iter() {
                     match partition {
                         PartitionStatus::Reported(partition)
-                            if matches!(partition.pushdown, PushdownStrategy::Empty) =>
+                            if partition.pushdown.is_empty() =>
                         {
-                            empty_partition_ids.push(partition_id);
+                            // Empty partitions contribute neither a map nor
+                            // an InList; nothing to add to the filter.
                         }
                         PartitionStatus::Reported(partition) => {
-                            let membership_expr = create_membership_predicate(
-                                &self.on_right,
-                                partition.pushdown.clone(),
-                                &HASH_JOIN_SEED,
-                                self.probe_schema.as_ref(),
-                            )?;
-                            let bounds_expr = create_bounds_predicate(
-                                &self.on_right,
-                                &partition.bounds,
-                            );
-                            let then_expr = combine_membership_and_bounds(
-                                membership_expr,
-                                bounds_expr,
-                            )
-                            .unwrap_or_else(|| lit(true));
-                            real_branches.push((
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                then_expr,
-                            ));
+                            real_partitions.push(partition);
                         }
                         PartitionStatus::CanceledUnknown => {
                             has_canceled_unknown = true;
@@ -650,46 +713,165 @@ impl SharedBuildAccumulator {
                     }
                 }
 
-                let filter_expr = if has_canceled_unknown {
-                    let mut when_then_branches = empty_partition_ids
-                        .into_iter()
-                        .map(|partition_id| {
-                            (
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                lit(false),
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    when_then_branches.extend(real_branches);
-
-                    if when_then_branches.is_empty() {
-                        lit(true)
-                    } else {
-                        Arc::new(CaseExpr::try_new(
-                            Some(modulo_expr),
-                            when_then_branches,
-                            Some(lit(true)),
-                        )?) as Arc<dyn PhysicalExpr>
-                    }
-                } else if real_branches.is_empty() {
-                    lit(false)
-                } else if real_branches.len() == 1
-                    && empty_partition_ids.len() + 1 == num_partitions
-                {
-                    Arc::clone(&real_branches[0].1)
-                } else {
-                    Arc::new(CaseExpr::try_new(
-                        Some(modulo_expr),
-                        real_branches,
-                        Some(lit(false)),
-                    )?) as Arc<dyn PhysicalExpr>
-                };
-
+                let filter_expr = self
+                    .build_partitioned_filter(&real_partitions, has_canceled_unknown)?;
                 self.dynamic_filter.update(filter_expr)?;
             }
         }
 
         Ok(())
+    }
+
+    /// CollectLeft has a single shared build side, so we always have one
+    /// `Map`. We prefer the InList expression when it's available (the build
+    /// side fit under the InList caps) because it's directly representable in
+    /// parquet stats / bloom-filter pruning at the scan; otherwise fall back
+    /// to a single `hash_lookup` against the map.
+    fn collect_left_membership(
+        &self,
+        pushdown: &PushdownStrategy,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        if let Some(arr) = &pushdown.inlist {
+            return Ok(Some(create_inlist_predicate(
+                &self.on_right,
+                Arc::clone(arr),
+                self.probe_schema.as_ref(),
+            )?));
+        }
+        Ok(pushdown.map.as_ref().map(|map| {
+            create_hash_lookup_predicate(&self.on_right, Arc::clone(map), &HASH_JOIN_SEED)
+        }))
+    }
+
+    /// Build the dynamic filter for `PartitionMode::Partitioned`. Emits
+    /// one of:
+    ///
+    /// ```text
+    /// global_minmax AND merged_in_list
+    /// global_minmax AND multi_hash_lookup
+    /// ```
+    ///
+    /// independent of how the build side was repartitioned. The two
+    /// membership shapes are alternatives, not combined — see below.
+    ///
+    /// * `global_minmax` — envelope of every partition's per-column min/max.
+    ///   Cheap short-circuit and the only piece visible to scan-level
+    ///   `pruning_predicate` extraction.
+    /// * `merged_in_list` — concatenated, deduplicated build keys when every
+    ///   reported partition contributed an `InList` array and the
+    ///   cross-partition union fits under
+    ///   `optimizer.hash_join_inlist_pushdown_max_distinct_values`. A small
+    ///   `IN (SET)` participates in parquet stats / bloom-filter pruning,
+    ///   which `multi_hash_lookup` does not. When present it fully replaces
+    ///   the lookup.
+    /// * `multi_hash_lookup` — hashes the join keys once and ORs
+    ///   `contain_hashes()` across every partition's hash table.
+    ///
+    /// `has_canceled_unknown` partitions short-circuit to `lit(true)`: we
+    /// don't have their maps, so we cannot include them in the lookup, and
+    /// the query is being torn down anyway.
+    fn build_partitioned_filter(
+        &self,
+        real_partitions: &[&PartitionData],
+        has_canceled_unknown: bool,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if has_canceled_unknown {
+            return Ok(lit(true));
+        }
+        if real_partitions.is_empty() {
+            return Ok(lit(false));
+        }
+
+        let bounds_refs: Vec<&PartitionBounds> =
+            real_partitions.iter().map(|p| &p.bounds).collect();
+        let global_bounds_expr = compute_global_bounds(&bounds_refs)
+            .as_ref()
+            .and_then(|b| create_bounds_predicate(&self.on_right, b));
+
+        // The merged InList covers the union of every partition's
+        // build-side keys, so when it fires it stands alone — there is no
+        // need to also AND a `multi_hash_lookup` (which would just probe
+        // the same data via a different structure).
+        let membership_expr =
+            if let Some(merged) = self.try_build_merged_inlist(real_partitions)? {
+                Some(merged)
+            } else {
+                let maps: Vec<Arc<Map>> = real_partitions
+                    .iter()
+                    .filter_map(|p| p.pushdown.map.clone())
+                    .collect();
+                if maps.is_empty() {
+                    // Defensive: every reported (non-empty) partition is
+                    // supposed to carry a Map. If none do, we have no
+                    // membership predicate to AND with the bounds, so the
+                    // final filter is `global_minmax` alone — or
+                    // `lit(true)` if global bounds were also unavailable.
+                    None
+                } else {
+                    Some(Arc::new(MultiMapLookupExpr::new(
+                        self.on_right.clone(),
+                        HASH_JOIN_SEED.clone(),
+                        maps,
+                        "multi_hash_lookup".to_string(),
+                    )) as Arc<dyn PhysicalExpr>)
+                }
+            };
+
+        Ok(
+            combine_membership_and_bounds(membership_expr, global_bounds_expr)
+                .unwrap_or_else(|| lit(true)),
+        )
+    }
+
+    /// If every reported partition contributed an InList array, concatenate
+    /// them, deduplicate by scalar value, and gate on the
+    /// `inlist_max_distinct_values` cap. Returns the merged
+    /// `(struct(...))? IN (SET) ([…])` predicate built over the
+    /// deduplicated keys when the cap is satisfied; `None` otherwise.
+    ///
+    /// Per-partition arrays carry duplicates — each partition ships its raw
+    /// build-side join keys, dedup happens here. The dedup walk early-aborts
+    /// the moment we cross the cap, so the cost stays bounded by
+    /// `O(rows-until-cap+1-distinct-found)` rather than total input size.
+    fn try_build_merged_inlist(
+        &self,
+        real_partitions: &[&PartitionData],
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let cap = self.inlist_max_distinct_values;
+        let mut arrays: Vec<ArrayRef> = Vec::with_capacity(real_partitions.len());
+        for p in real_partitions {
+            let Some(arr) = &p.pushdown.inlist else {
+                return Ok(None);
+            };
+            arrays.push(Arc::clone(arr));
+        }
+        let Some(merged) = merge_inlist_arrays(&arrays) else {
+            return Ok(None);
+        };
+        // Walk the merged array once, recording the first index of each
+        // distinct ScalarValue. If we cross the cap we abort early without
+        // materialising a longer index list. `arrow::compute::take` then
+        // produces the deduplicated array (in first-seen order, matching the
+        // shape `InListExpr::try_new_from_array` expects).
+        let mut seen = std::collections::HashSet::with_capacity(cap.saturating_add(1));
+        let mut indices: Vec<u32> = Vec::with_capacity(cap.min(merged.len()));
+        for i in 0..merged.len() {
+            let scalar = ScalarValue::try_from_array(merged.as_ref(), i)?;
+            if seen.insert(scalar) {
+                if indices.len() >= cap {
+                    // One more distinct value would exceed the cap.
+                    return Ok(None);
+                }
+                indices.push(i as u32);
+            }
+        }
+        let idx_array = arrow::array::UInt32Array::from(indices);
+        let deduped = arrow::compute::take(merged.as_ref(), &idx_array, None)?;
+        Ok(Some(create_inlist_predicate(
+            &self.on_right,
+            deduped,
+            self.probe_schema.as_ref(),
+        )?))
     }
 }
 
@@ -721,8 +903,8 @@ mod tests {
             completion_notify: Notify::new(),
             dynamic_filter,
             on_right: vec![],
-            repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema,
+            inlist_max_distinct_values: 20,
         }
     }
 
@@ -756,7 +938,7 @@ mod tests {
                 &mut guard,
                 PartitionBuildData::Partitioned {
                     partition_id: 0,
-                    pushdown: PushdownStrategy::Empty,
+                    pushdown: PushdownStrategy::empty(),
                     bounds: PartitionBounds::new(vec![]),
                 },
             )
@@ -793,5 +975,118 @@ mod tests {
         let (partitions, completed) = partitioned_state(&acc);
         assert!(matches!(partitions[0], PartitionStatus::CanceledUnknown));
         assert_eq!(completed, 1);
+    }
+
+    #[test]
+    fn compute_global_bounds_takes_envelope() {
+        let p1 = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(Some(5)),
+            ScalarValue::Int32(Some(10)),
+        )]);
+        let p2 = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(Some(3)),
+            ScalarValue::Int32(Some(7)),
+        )]);
+        let p3 = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(Some(8)),
+            ScalarValue::Int32(Some(20)),
+        )]);
+        let global = compute_global_bounds(&[&p1, &p2, &p3]).unwrap();
+        let cb = global.get_column_bounds(0).unwrap();
+        assert_eq!(cb.min, ScalarValue::Int32(Some(3)));
+        assert_eq!(cb.max, ScalarValue::Int32(Some(20)));
+    }
+
+    /// Regression test for the column-index misalignment bug.
+    ///
+    /// When a *middle* join-key column is incomparable across partitions, it
+    /// must be dropped *in place* (its index left as a gap) so that every
+    /// later column keeps its join-key index. `create_bounds_predicate` pairs
+    /// each surviving column with `on_right` positionally; a column that
+    /// shifted index would be filtered against the wrong probe expression — a
+    /// silent wrong-results bug.
+    #[test]
+    fn compute_global_bounds_keeps_index_alignment_when_middle_column_dropped() {
+        let p1 = PartitionBounds::new(vec![
+            ColumnBounds::new(ScalarValue::Int32(Some(5)), ScalarValue::Int32(Some(10))),
+            ColumnBounds::new(ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))),
+            ColumnBounds::new(
+                ScalarValue::Int32(Some(100)),
+                ScalarValue::Int32(Some(200)),
+            ),
+        ]);
+        let p2 = PartitionBounds::new(vec![
+            ColumnBounds::new(ScalarValue::Int32(Some(3)), ScalarValue::Int32(Some(20))),
+            // Column 1 is incomparable with p1's column 1 (different
+            // ScalarValue variant -> partial_cmp returns None).
+            ColumnBounds::new(
+                ScalarValue::Utf8(Some("a".to_string())),
+                ScalarValue::Utf8(Some("z".to_string())),
+            ),
+            ColumnBounds::new(
+                ScalarValue::Int32(Some(50)),
+                ScalarValue::Int32(Some(300)),
+            ),
+        ]);
+        let global = compute_global_bounds(&[&p1, &p2]).unwrap();
+
+        // Column 0 merges normally and stays at index 0.
+        let c0 = global.get_column_bounds(0).unwrap();
+        assert_eq!(c0.min, ScalarValue::Int32(Some(3)));
+        assert_eq!(c0.max, ScalarValue::Int32(Some(20)));
+        // Column 1 is incomparable and dropped.
+        assert!(global.get_column_bounds(1).is_none());
+        // Column 2 still merges, and critically stays at index 2 — the buggy
+        // `flatten()` shifted its bounds into index 1.
+        let c2 = global.get_column_bounds(2).unwrap();
+        assert_eq!(c2.min, ScalarValue::Int32(Some(50)));
+        assert_eq!(c2.max, ScalarValue::Int32(Some(300)));
+    }
+
+    /// When one partition's bounds for a column cannot be ordered against
+    /// another's (different ScalarValue variants → `partial_cmp` returns
+    /// `None`), that column is dropped from the global envelope (its index
+    /// becomes a `None` slot) while orderable columns continue to widen
+    /// normally.
+    #[test]
+    fn compute_global_bounds_drops_incomparable_column() {
+        let p1 = PartitionBounds::new(vec![
+            ColumnBounds::new(ScalarValue::Int32(Some(5)), ScalarValue::Int32(Some(10))),
+            ColumnBounds::new(ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))),
+        ]);
+        let p2 = PartitionBounds::new(vec![
+            ColumnBounds::new(ScalarValue::Int32(Some(3)), ScalarValue::Int32(Some(20))),
+            // Column 1 has a different ScalarValue variant from p1's
+            // column 1; partial_cmp returns None and the column must
+            // drop out of the global envelope.
+            ColumnBounds::new(
+                ScalarValue::Utf8(Some("a".to_string())),
+                ScalarValue::Utf8(Some("z".to_string())),
+            ),
+        ]);
+        let global = compute_global_bounds(&[&p1, &p2]).unwrap();
+        // The orderable column survives at its index; the incomparable one
+        // is a `None` slot.
+        assert!(global.get_column_bounds(1).is_none());
+        let cb = global.get_column_bounds(0).unwrap();
+        assert_eq!(cb.min, ScalarValue::Int32(Some(3)));
+        assert_eq!(cb.max, ScalarValue::Int32(Some(20)));
+    }
+
+    /// If the only column is incomparable across partitions, the global
+    /// envelope has no surviving column and the function returns `None`
+    /// — there are no bounds to filter on, and the caller must fall
+    /// back to a membership-only filter.
+    #[test]
+    fn compute_global_bounds_none_when_all_columns_incomparable() {
+        let p1 = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(Some(5)),
+            ScalarValue::Int32(Some(10)),
+        )]);
+        let p2 = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Utf8(Some("a".to_string())),
+            ScalarValue::Utf8(Some("z".to_string())),
+        )]);
+        assert!(compute_global_bounds(&[&p1, &p2]).is_none());
     }
 }

@@ -18,7 +18,11 @@
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
 pub use exec::{HashJoinExec, HashJoinExecBuilder};
-pub use partitioned_hash_eval::{HashExpr, HashTableLookupExpr, SeededRandomState};
+#[expect(deprecated)]
+pub use partitioned_hash_eval::HashExpr;
+pub use partitioned_hash_eval::{
+    HashTableLookupExpr, MultiMapLookupExpr, SeededRandomState,
+};
 
 mod exec;
 mod inlist_builder;

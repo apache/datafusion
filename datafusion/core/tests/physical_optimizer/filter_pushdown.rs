@@ -1072,7 +1072,11 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         .await
         .unwrap();
 
-    // Now check what our filter looks like
+    // The dynamic filter for a `Partitioned` hash join with a small enough
+    // cross-partition InList collapses to a single global `struct(...) IN
+    // (SET) ([...])`. The two `#[cfg]` arms differ only in the order of the
+    // InList elements, which is determined by partition-iteration order
+    // (normal repartition vs. the `force_hash_collisions` collapse).
     #[cfg(not(feature = "force_hash_collisions"))]
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),
@@ -1083,14 +1087,10 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}, {c0:aa,c1:ba}]) ]
     "
     );
 
-    // When hash collisions force all data into a single partition, we optimize away the CASE expression.
-    // This avoids calling create_hashes() for every row on the probe side, since hash % 1 == 0 always,
-    // meaning the WHEN 0 branch would always match. This optimization is also important for primary key
-    // joins or any scenario where all build-side data naturally lands in one partition.
     #[cfg(feature = "force_hash_collisions")]
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),
@@ -2572,11 +2572,17 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         .await
         .unwrap();
 
-    // Verify that hash_lookup is used instead of IN (SET)
+    // The dynamic filter for an all-Map Partitioned hash join uses a single
+    // shared `multi_hash_lookup` over every partition's hash table. There is
+    // no per-row `hash_repartition` routing.
     let plan_str = format_plan_for_test(&plan).to_string();
     assert!(
-        plan_str.contains("hash_lookup"),
-        "Expected hash_lookup in plan but got: {plan_str}"
+        plan_str.contains("multi_hash_lookup"),
+        "Expected multi_hash_lookup in plan but got: {plan_str}"
+    );
+    assert!(
+        !plan_str.contains("hash_repartition"),
+        "Expected no routing hash_repartition in plan but got: {plan_str}"
     );
     assert!(
         !plan_str.contains("IN (SET)"),
