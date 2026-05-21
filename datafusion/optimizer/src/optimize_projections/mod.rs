@@ -148,6 +148,9 @@ fn optimize_projections(
             // `aggregate.aggr_expr`:
             let (group_by_reqs, aggregate_reqs) = indices.split_off(n_group_exprs);
 
+            let original_group_expr_len = aggregate.group_expr.len();
+            let original_aggr_expr_len = aggregate.aggr_expr.len();
+
             // Get absolutely necessary GROUP BY fields.
             //
             // When the input has no functional dependencies, we can
@@ -197,13 +200,16 @@ fn optimize_projections(
                 )));
             }
 
+            let aggregate_changed = new_group_bys.len() != original_group_expr_len
+                || new_aggr_expr.len() != original_aggr_expr_len;
+
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let schema = aggregate.input.schema();
             let necessary_indices =
                 RequiredIndices::new().with_exprs(schema, all_exprs_iter);
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
 
-            return optimize_projections(
+            let rebuilt = optimize_projections(
                 Arc::unwrap_or_clone(aggregate.input),
                 config,
                 necessary_indices,
@@ -224,11 +230,15 @@ fn optimize_projections(
                     new_aggr_expr,
                 )
                 .map(LogicalPlan::Aggregate)
-            })?
-            .transform_data(|plan| optimize_subqueries(plan, config));
+            })?;
+
+            let combined = Transformed::new_transformed(
+                rebuilt.data,
+                rebuilt.transformed || aggregate_changed,
+            );
+            return combined.transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::Window(window) => {
-            let original_window = window.clone();
             let input_schema = Arc::clone(window.input.schema());
             // Split parent requirements to child and window expression sections:
             let n_input_fields = input_schema.fields().len();
@@ -245,8 +255,14 @@ fn optimize_projections(
             // parent or window expression requirements.
             let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
 
+            let Window {
+                input,
+                window_expr: original_window_expr,
+                schema: original_schema,
+            } = window;
+
             let transformed_input = optimize_projections(
-                Arc::unwrap_or_clone(window.input),
+                Arc::unwrap_or_clone(input),
                 config,
                 required_indices.clone(),
             )?;
@@ -270,7 +286,11 @@ fn optimize_projections(
                         .map(LogicalPlan::Window)
                         .map(Transformed::yes)?
                 } else {
-                    Transformed::no(LogicalPlan::Window(original_window))
+                    Transformed::no(LogicalPlan::Window(Window {
+                        input: Arc::new(projected_input.data),
+                        window_expr: original_window_expr,
+                        schema: original_schema,
+                    }))
                 }
             };
 
@@ -278,28 +298,33 @@ fn optimize_projections(
                 .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::TableScan(table_scan) => {
-            let original_scan = table_scan.clone();
-            let TableScan {
-                table_name,
-                source,
-                projection,
-                filters,
-                fetch,
-                projected_schema: _,
-            } = table_scan;
-
             // Get indices referred to in the original (schema with all fields)
             // given projected indices.
-            let projection = match &projection {
+            let new_projection = match &table_scan.projection {
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
-            let new_scan =
-                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
-            if new_scan == original_scan {
-                return Ok(Transformed::no(LogicalPlan::TableScan(original_scan)));
+            if table_scan.projection.as_ref() == Some(&new_projection) {
+                // Projection unchanged; return the original scan so we preserve
+                // its `projected_schema` (which may carry metadata a fresh
+                // `try_new` would not reproduce).
+                return Ok(Transformed::no(LogicalPlan::TableScan(table_scan)));
             }
 
+            let TableScan {
+                table_name,
+                source,
+                filters,
+                fetch,
+                ..
+            } = table_scan;
+            let new_scan = TableScan::try_new(
+                table_name,
+                source,
+                Some(new_projection),
+                filters,
+                fetch,
+            )?;
             return Transformed::yes(LogicalPlan::TableScan(new_scan))
                 .transform_data(|plan| optimize_subqueries(plan, config));
         }

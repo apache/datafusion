@@ -17,6 +17,7 @@
 
 //! [`OptimizeUnions`]: removes `Union` nodes in the logical plan.
 use crate::optimizer::ApplyOrder;
+use crate::utils::transformed_if_changed;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
@@ -99,17 +100,6 @@ impl OptimizerRule for OptimizeUnions {
             }
             _ => Ok(Transformed::no(plan)),
         }
-    }
-}
-
-fn transformed_if_changed(
-    original_plan: LogicalPlan,
-    new_plan: LogicalPlan,
-) -> Transformed<LogicalPlan> {
-    if new_plan == original_plan {
-        Transformed::no(original_plan)
-    } else {
-        Transformed::yes(new_plan)
     }
 }
 

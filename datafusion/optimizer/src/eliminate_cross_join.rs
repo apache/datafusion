@@ -16,6 +16,7 @@
 // under the License.
 
 //! [`EliminateCrossJoin`] converts `CROSS JOIN` to `INNER JOIN` if join predicates are available.
+use crate::utils::transformed_if_changed;
 use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
@@ -209,17 +210,6 @@ impl OptimizerRule for EliminateCrossJoin {
 
     fn name(&self) -> &str {
         "eliminate_cross_join"
-    }
-}
-
-fn transformed_if_changed(
-    original_plan: LogicalPlan,
-    new_plan: LogicalPlan,
-) -> Transformed<LogicalPlan> {
-    if new_plan == original_plan {
-        Transformed::no(original_plan)
-    } else {
-        Transformed::yes(new_plan)
     }
 }
 

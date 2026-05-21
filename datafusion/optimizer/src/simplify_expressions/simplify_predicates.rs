@@ -47,8 +47,6 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
         return Ok(predicates);
     }
 
-    let original_predicates = predicates.clone();
-
     // Group predicates by their column reference
     let mut column_predicates: BTreeMap<Column, Vec<Expr>> = BTreeMap::new();
     let mut other_predicates = Vec::new();
@@ -88,15 +86,7 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
         result.extend(simplified);
     }
 
-    let mut ordered_result = Vec::with_capacity(result.len());
-    for predicate in original_predicates {
-        if let Some(index) = result.iter().position(|p| p == &predicate) {
-            ordered_result.push(result.remove(index));
-        }
-    }
-    ordered_result.extend(result);
-
-    Ok(ordered_result)
+    Ok(result)
 }
 
 /// Simplifies predicates related to a single column.

@@ -19,6 +19,7 @@
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::HashSet;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, get_required_sort_exprs_indices, internal_err};
 use datafusion_expr::logical_plan::LogicalPlan;
@@ -66,17 +67,19 @@ impl OptimizerRule for EliminateDuplicatedExpr {
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Sort(sort) => {
-                let original_plan = LogicalPlan::Sort(sort.clone());
-                let unique_exprs: Vec<_> = sort
+                let original_len = sort.expr.len();
+                let dedup_exprs: Vec<_> = sort
                     .expr
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .map(SortExprWrapper)
                     .collect::<IndexSet<_>>()
                     .into_iter()
                     .map(|wrapper| wrapper.0)
                     .collect();
+                let dedupe_changed = dedup_exprs.len() != original_len;
 
-                let sort_expr_names = unique_exprs
+                let sort_expr_names = dedup_exprs
                     .iter()
                     .map(|sort_expr| sort_expr.expr.schema_name().to_string())
                     .collect::<Vec<_>>();
@@ -84,14 +87,21 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     sort.input.schema().as_ref(),
                     &sort_expr_names,
                 );
+                let fd_will_prune = required_indices.len() < dedup_exprs.len();
 
-                let unique_exprs = if required_indices.len() < unique_exprs.len() {
+                if !dedupe_changed && !fd_will_prune {
+                    // No duplicates and no FD pruning; return original sort
+                    // unchanged so we don't disturb its schema.
+                    return Ok(Transformed::no(LogicalPlan::Sort(sort)));
+                }
+
+                let unique_exprs = if fd_will_prune {
                     required_indices
                         .into_iter()
-                        .map(|idx| unique_exprs[idx].clone())
+                        .map(|idx| dedup_exprs[idx].clone())
                         .collect()
                 } else {
-                    unique_exprs
+                    dedup_exprs
                 };
 
                 if unique_exprs.is_empty() {
@@ -100,16 +110,25 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     );
                 }
 
-                let new_plan = LogicalPlan::Sort(Sort {
+                Ok(Transformed::yes(LogicalPlan::Sort(Sort {
                     expr: unique_exprs,
                     input: sort.input,
                     fetch: sort.fetch,
-                });
-
-                Ok(transformed_if_changed(original_plan, new_plan))
+                })))
             }
             LogicalPlan::Aggregate(agg) => {
-                let original_plan = LogicalPlan::Aggregate(agg.clone());
+                let has_duplicate = {
+                    let mut seen = HashSet::with_capacity(agg.group_expr.len());
+                    agg.group_expr.iter().any(|e| !seen.insert(e))
+                };
+
+                if !has_duplicate {
+                    // Returning the original aggregate preserves its schema —
+                    // `Aggregate::try_new` would recompute it and may produce a
+                    // differing (but semantically equivalent) plan.
+                    return Ok(Transformed::no(LogicalPlan::Aggregate(agg)));
+                }
+
                 let unique_exprs: Vec<Expr> = agg
                     .group_expr
                     .into_iter()
@@ -119,24 +138,13 @@ impl OptimizerRule for EliminateDuplicatedExpr {
 
                 Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr)
                     .map(LogicalPlan::Aggregate)
-                    .map(|plan| transformed_if_changed(original_plan, plan))
+                    .map(Transformed::yes)
             }
             _ => Ok(Transformed::no(plan)),
         }
     }
     fn name(&self) -> &str {
         "eliminate_duplicated_expr"
-    }
-}
-
-fn transformed_if_changed(
-    original_plan: LogicalPlan,
-    new_plan: LogicalPlan,
-) -> Transformed<LogicalPlan> {
-    if new_plan == original_plan {
-        Transformed::no(original_plan)
-    } else {
-        Transformed::yes(new_plan)
     }
 }
 

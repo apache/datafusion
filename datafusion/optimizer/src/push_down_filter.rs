@@ -48,6 +48,7 @@ use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{
     ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
+    transformed_if_changed,
 };
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::ExpressionPlacement;
@@ -610,17 +611,6 @@ fn push_down_join(
         .map(|new_plan| transformed_if_changed(original_plan, new_plan.data))
 }
 
-fn transformed_if_changed(
-    original_plan: LogicalPlan,
-    new_plan: LogicalPlan,
-) -> Transformed<LogicalPlan> {
-    if new_plan == original_plan {
-        Transformed::no(original_plan)
-    } else {
-        Transformed::yes(new_plan)
-    }
-}
-
 /// Extracts any equi-join join predicates from the given filter expressions.
 ///
 /// Parameters
@@ -846,10 +836,12 @@ impl OptimizerRule for PushDownFilter {
 
         let predicate = split_conjunction_owned(filter.predicate.clone());
         let old_predicate_len = predicate.len();
-        let new_predicates = with_debug_timing("simplify_predicates", || {
-            simplify_predicates(predicate.clone())
-        })?;
-        let predicate_changed = predicate != new_predicates;
+        let new_predicates =
+            with_debug_timing("simplify_predicates", || simplify_predicates(predicate))?;
+        // `simplify_predicates` only changes content via merging redundant
+        // predicates, which always reduces the count. Order-only differences
+        // (BTreeMap iteration) don't count as a real change.
+        let predicate_changed = old_predicate_len != new_predicates.len();
         if log_enabled!(Level::Debug) {
             debug!(
                 "push_down_filter: simplify_predicates old_count={}, new_count={}",

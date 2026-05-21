@@ -24,7 +24,7 @@ use arrow::array::{Array, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::TableReference;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::{TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -36,6 +36,23 @@ use std::sync::Arc;
 /// Re-export of `NamesPreserver` for backwards compatibility,
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
+
+/// Returns `Transformed::yes(new_plan)` if `new_plan != original_plan`,
+/// otherwise `Transformed::no(original_plan)`.
+///
+/// Used by optimizer rules that cannot cheaply tell up-front whether they
+/// actually changed the plan. Accurate `Transformed::yes`/`no` reporting is
+/// required for the optimizer's no-op skip mechanism (see `Optimizer::optimize`).
+pub(crate) fn transformed_if_changed(
+    original_plan: LogicalPlan,
+    new_plan: LogicalPlan,
+) -> Transformed<LogicalPlan> {
+    if new_plan == original_plan {
+        Transformed::no(original_plan)
+    } else {
+        Transformed::yes(new_plan)
+    }
+}
 
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(

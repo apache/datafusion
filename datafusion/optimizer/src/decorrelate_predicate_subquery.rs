@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::decorrelate::PullUpCorrelatedExpr;
 use crate::optimizer::ApplyOrder;
-use crate::utils::replace_qualified_name;
+use crate::utils::{replace_qualified_name, transformed_if_changed};
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
@@ -136,17 +136,6 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
-    }
-}
-
-fn transformed_if_changed(
-    original_plan: LogicalPlan,
-    new_plan: LogicalPlan,
-) -> Transformed<LogicalPlan> {
-    if new_plan == original_plan {
-        Transformed::no(original_plan)
-    } else {
-        Transformed::yes(new_plan)
     }
 }
 

@@ -681,24 +681,7 @@ impl Optimizer {
                 }
                 .and_then(|tnr| {
                     #[cfg(debug_assertions)]
-                    {
-                        let plan_changed = input_plan.ne(&tnr.data);
-                        if tnr.transformed {
-                            debug_assert!(
-                                plan_changed,
-                                "Optimizer rule '{}' returned Transformed::yes but did not change the plan\ninput:\n{input_plan}\noutput:\n{}",
-                                rule.name(),
-                                tnr.data,
-                            );
-                        } else {
-                            debug_assert!(
-                                !plan_changed,
-                                "Optimizer rule '{}' returned Transformed::no but changed the plan\ninput:\n{input_plan}\noutput:\n{}",
-                                rule.name(),
-                                tnr.data,
-                            );
-                        }
-                    }
+                    assert_transformed_matches_plan(rule.name(), &input_plan, &tnr);
 
                     // run checks optimizer invariant checks, per optimizer rule applied
                     assert_valid_optimization(&tnr.data, &starting_schema)
@@ -803,6 +786,33 @@ fn assert_valid_optimization(
     assert_expected_schema(prev_schema, plan)?;
 
     Ok(())
+}
+
+/// Debug-only check that the rule's `Transformed::yes`/`no` flag matches
+/// whether the plan was actually changed.
+///
+/// The no-op skip mechanism in `Optimizer::optimize` relies on this contract;
+/// a lying rule will silently produce incorrect plans.
+#[cfg(debug_assertions)]
+fn assert_transformed_matches_plan(
+    rule_name: &str,
+    input_plan: &LogicalPlan,
+    result: &Transformed<LogicalPlan>,
+) {
+    let plan_changed = input_plan.ne(&result.data);
+    if result.transformed {
+        debug_assert!(
+            plan_changed,
+            "Optimizer rule '{rule_name}' returned Transformed::yes but did not change the plan\ninput:\n{input_plan}\noutput:\n{}",
+            result.data,
+        );
+    } else {
+        debug_assert!(
+            !plan_changed,
+            "Optimizer rule '{rule_name}' returned Transformed::no but changed the plan\ninput:\n{input_plan}\noutput:\n{}",
+            result.data,
+        );
+    }
 }
 
 #[cfg(test)]
