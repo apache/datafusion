@@ -328,7 +328,6 @@ impl TreeNode for LogicalPlan {
                 name,
                 static_term,
                 recursive_term,
-                schema,
                 is_distinct,
             }) => (static_term, recursive_term).map_elements(f)?.update_data(
                 |(static_term, recursive_term)| {
@@ -336,7 +335,6 @@ impl TreeNode for LogicalPlan {
                         name,
                         static_term,
                         recursive_term,
-                        schema,
                         is_distinct,
                     })
                 },

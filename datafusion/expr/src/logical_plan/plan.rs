@@ -54,6 +54,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::metadata::check_metadata_with_storage_equal;
+use datafusion_common::recursive_schema::recursive_query_output_schema;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -353,7 +354,11 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
-            LogicalPlan::RecursiveQuery(RecursiveQuery { schema, .. }) => schema,
+            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
+                // The static term is coerced to the recursive output schema when
+                // building a RecursiveQuery.
+                static_term.schema()
+            }
         }
     }
 
@@ -737,7 +742,33 @@ impl LogicalPlan {
                 };
                 Ok(LogicalPlan::Distinct(distinct))
             }
-            LogicalPlan::RecursiveQuery(_) => Ok(self),
+            LogicalPlan::RecursiveQuery(RecursiveQuery {
+                name,
+                static_term,
+                recursive_term,
+                is_distinct,
+            }) => {
+                let output_schema = recursive_query_output_schema(
+                    static_term.schema(),
+                    recursive_term.schema(),
+                )?;
+                if output_schema == *static_term.schema() {
+                    Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
+                        name,
+                        static_term,
+                        recursive_term,
+                        is_distinct,
+                    }))
+                } else {
+                    LogicalPlanBuilder::from(Arc::unwrap_or_clone(static_term))
+                        .to_recursive_query(
+                            name,
+                            Arc::unwrap_or_clone(recursive_term),
+                            is_distinct,
+                        )?
+                        .build()
+                }
+            }
             LogicalPlan::Analyze(_) => Ok(self),
             LogicalPlan::Explain(_) => Ok(self),
             LogicalPlan::TableScan(_) => Ok(self),
@@ -1073,20 +1104,13 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Distinct(distinct))
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
-                name,
-                schema,
-                is_distinct,
-                ..
+                name, is_distinct, ..
             }) => {
                 self.assert_no_expressions(expr)?;
                 let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                    name: name.clone(),
-                    static_term: Arc::new(static_term),
-                    recursive_term: Arc::new(recursive_term),
-                    schema: Arc::clone(schema),
-                    is_distinct: *is_distinct,
-                }))
+                LogicalPlanBuilder::from(static_term)
+                    .to_recursive_query(name.clone(), recursive_term, *is_distinct)?
+                    .build()
             }
             LogicalPlan::Analyze(a) => {
                 self.assert_no_expressions(expr)?;
@@ -2247,7 +2271,7 @@ impl PartialOrd for EmptyRelation {
 ///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
@@ -2256,31 +2280,9 @@ pub struct RecursiveQuery {
     /// The recursive term (evaluated on the contents of the working table until
     /// it returns an empty set)
     pub recursive_term: Arc<LogicalPlan>,
-    /// Output schema for the recursive query. This preserves the static term's
-    /// names, types, and metadata, with nullability widened by the recursive term.
-    pub schema: DFSchemaRef,
     /// Should the output of the recursive term be deduplicated (`UNION`) or
     /// not (`UNION ALL`).
     pub is_distinct: bool,
-}
-
-// Manual implementation needed because of `schema` field.
-impl PartialOrd for RecursiveQuery {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        (
-            &self.name,
-            &self.static_term,
-            &self.recursive_term,
-            self.is_distinct,
-        )
-            .partial_cmp(&(
-                &other.name,
-                &other.static_term,
-                &other.recursive_term,
-                other.is_distinct,
-            ))
-            .filter(|cmp| *cmp != Ordering::Equal || self == other)
-    }
 }
 
 /// Values expression. See
