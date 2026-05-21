@@ -235,6 +235,52 @@ SELECT * FROM t WHERE a IS NULL
 ----
 NULL
 
+# deduplicating recursive CTE must preserve widened nullability for outer filters.
+query I
+WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t WHERE a IS NULL
+----
+NULL
+
+# recursive output nullability must be tracked per column, not just for the
+# first column.
+query II rowsort
+WITH RECURSIVE t(a, b) AS (
+  SELECT 0 AS a, 0 AS b
+  UNION ALL
+  SELECT b AS a, CAST(NULL AS INT) AS b FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t WHERE b IS NULL
+----
+0 NULL
+NULL NULL
+
+# recursive output nullability must survive recursive term type coercion.
+query I
+WITH RECURSIVE t(a) AS (
+  SELECT 1::INT AS a
+  UNION ALL
+  SELECT CAST(NULL AS BIGINT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t WHERE a IS NULL
+----
+NULL
+
+# DESCRIBE should expose the widened recursive output nullability.
+query TTT
+DESCRIBE WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t
+----
+a Int64 YES
+
 # deduplicating recursive CTE with two variables works
 query II
 WITH RECURSIVE ranges AS (
