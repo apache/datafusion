@@ -32,7 +32,7 @@ Trigger this skill any time the work touches `datafusion/ffi/`:
 
 ## The standard wrapper shape
 
-A new `FFI_X` for trait `X` must follow this template. Use `FFI_TableProvider` (src/table_provider.rs) and `FFI_CatalogProvider` (src/catalog_provider.rs) as canonical references.
+A new `FFI_X` for trait `X` must follow this template. Use `FFI_CatalogProvider` (`src/catalog_provider.rs`) as the canonical reference — it shows the full shape (codec field, nested FFI types, `FFI_Option`/`FFI_Result` returns, Arc-backed `PrivateData`) without async or capability-flag noise. `FFI_TableProvider` (`src/table_provider.rs`) covers async (`scan`, `FFI_SessionRef`, `FfiFuture`) and the one `Option<fn>` capability flag (`supports_filters_pushdown`).
 
 ### 1. The `FFI_X` struct
 
@@ -40,17 +40,8 @@ A new `FFI_X` for trait `X` must follow this template. Use `FFI_TableProvider` (
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_X {
-    // One unsafe extern "C" fn per trait method (see § "Method coverage" below).
-    // Always populate this — calling through `Arc<dyn Trait>` dispatches to the
-    // override if there is one, else to the trait default. The producer side
-    // gets the right answer either way without the consumer needing to know.
     some_method: unsafe extern "C" fn(this: &Self, ...) -> FFI_Result<...>,
-
-    // `Option<fn>` is the capability-flag exception — see § "Method coverage".
-    // Crate uses it exactly once: `FFI_TableProvider::supports_filters_pushdown`.
     optional_method: Option<unsafe extern "C" fn(&Self, ...) -> FFI_Result<...>>,
-
-    // Codec only if the trait moves Exprs/Plans across the boundary.
     pub logical_codec: FFI_LogicalExtensionCodec,
 
     clone: unsafe extern "C" fn(&Self) -> Self,
@@ -61,17 +52,19 @@ pub struct FFI_X {
     pub library_marker_id: extern "C" fn() -> usize,
 }
 
-// Pick bounds to match the wrapped trait (see rule 4).
-// Most wrappers want both; `Send`-only for streams / mutable traits.
 unsafe impl Send for FFI_X {}
 unsafe impl Sync for FFI_X {}
 ```
 
-Notes:
+Field rules:
 
-- Method function pointers are private by default. Mark `pub` only if a downstream library needs to invoke them directly (rare — usually only `version`, `library_marker_id`, embedded codecs are public).
-- `version: super::version` is mandatory. Consumers gate compatibility on it.
-- `library_marker_id: crate::get_library_marker_id` is mandatory. It powers local-bypass.
+- **One `unsafe extern "C" fn` per trait method.** Always populate — `Arc<dyn Trait>` dispatch picks override-or-default at call time, so the producer side gets the right answer without the consumer needing to know. See § "Method coverage".
+- **`Option<fn>` is the capability-flag exception**, not a template. Crate uses it exactly once: `FFI_TableProvider::supports_filters_pushdown`. See § "Method coverage".
+- **Codec field** (`FFI_LogicalExtensionCodec` / `FFI_PhysicalExtensionCodec`) only if the trait moves `Expr`s / `LogicalPlan`s / `ExecutionPlan`s across the boundary.
+- **Method function pointers are private by default.** Mark `pub` only if a downstream library needs to invoke them directly (rare — typically only `version`, `library_marker_id`, embedded codecs are `pub`).
+- **`version: super::version` is mandatory.** Consumers gate compatibility on it.
+- **`library_marker_id: crate::get_library_marker_id` is mandatory.** Powers local-bypass.
+- **`Send`/`Sync` bounds match the wrapped trait** (rule 4). Most wrappers want both; `Send`-only for streams / mutable traits.
 
 ### 2. `PrivateData` shape
 
@@ -341,7 +334,7 @@ When reviewing a PR that touches `datafusion/ffi/`:
 ## References
 
 - Crate README: `datafusion/ffi/README.md` — vocabulary + memory-model rationale.
-- Canonical wrappers to model after: `src/table_provider.rs`, `src/catalog_provider.rs`.
+- Canonical wrapper to model after: `src/catalog_provider.rs`. Async + capability-flag variants: `src/table_provider.rs`.
 - Mutable-trait variant: `src/udaf/accumulator.rs` (`Box<dyn Accumulator>`).
 - Optional-method pattern: `FFI_TableProvider::supports_filters_pushdown`.
 - Codec wiring: `src/proto/logical_extension_codec.rs`, `src/proto/physical_extension_codec.rs`.
