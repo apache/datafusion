@@ -75,7 +75,7 @@ in multiple phases.
 | 3     | `join_selection`               | -                       | Chooses join implementation, build side, and partition mode from statistics and stream properties.                               |
 | 4     | `LimitedDistinctAggregation`   | -                       | Pushes limit hints into grouped distinct-style aggregations when only a small result is needed.                                  |
 | 5     | `FilterPushdown`               | pre-optimization phase  | Pushes supported physical filters down toward data sources before distribution and sorting are enforced.                         |
-| 6     | `EnsureRequirements`           | -                       | Enforces both distribution and sorting requirements in a single idempotent rule (replaces EnforceDistribution + EnforceSorting). |
+| 6     | `EnsureRequirements`           | -                       | Enforces both distribution and sorting requirements in a single idempotent rule.                                                 |
 | 7     | `CombinePartialFinalAggregate` | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.                                 |
 | 8     | `OptimizeAggregateOrder`       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                                         |
 | 9     | `WindowTopN`                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution.                                       |
