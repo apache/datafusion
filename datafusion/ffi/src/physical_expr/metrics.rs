@@ -59,7 +59,7 @@ pub struct FFI_MetricsSet {
 pub struct FFI_Metric {
     pub value: FFI_MetricValue,
     pub labels: SVec<FFI_Label>,
-    pub partition: FFI_Option<u64>,
+    pub partition: FFI_Option<usize>,
     pub metric_type: FFI_MetricType,
     pub metric_category: FFI_Option<FFI_MetricCategory>,
 }
@@ -203,7 +203,7 @@ impl From<&Metric> for FFI_Metric {
         Self {
             value: FFI_MetricValue::from(m.value()),
             labels: m.labels().iter().map(FFI_Label::from).collect(),
-            partition: m.partition().map(|p| p as u64).into(),
+            partition: m.partition().into(),
             metric_type: m.metric_type().into(),
             metric_category: m.metric_category().map(FFI_MetricCategory::from).into(),
         }
@@ -213,14 +213,10 @@ impl From<&Metric> for FFI_Metric {
 impl From<FFI_Metric> for Metric {
     fn from(m: FFI_Metric) -> Self {
         let labels: Vec<Label> = m.labels.into_iter().map(Label::from).collect();
-        let partition: Option<u64> = m.partition.into();
+        let partition: Option<usize> = m.partition.into();
         let category: Option<FFI_MetricCategory> = m.metric_category.into();
-        let mut metric = Metric::new_with_labels(
-            m.value.into(),
-            partition.map(|p| p as usize),
-            labels,
-        )
-        .with_type(m.metric_type.into());
+        let mut metric = Metric::new_with_labels(m.value.into(), partition, labels)
+            .with_type(m.metric_type.into());
         if let Some(c) = category {
             metric = metric.with_category(c.into());
         }

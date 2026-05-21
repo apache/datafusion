@@ -908,6 +908,16 @@ config_namespace! {
         /// nanosecond resolution.
         pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
 
+        /// (reading) Optional timezone applied to INT96 columns when `coerce_int96`
+        /// is set. When `Some`, INT96 columns coerce to
+        /// `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+        /// `Timestamp(<coerce_int96>, None)`. Spark and other systems write INT96
+        /// values as UTC-adjusted instants, so callers that need the resulting
+        /// Arrow type to be timezone-aware (e.g. for Spark `TimestampType`
+        /// semantics) should set this to `"UTC"`. No effect when `coerce_int96`
+        /// is `None`.
+        pub coerce_int96_tz: Option<String>, default = None
+
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
@@ -1348,6 +1358,13 @@ config_namespace! {
         /// closer to the leaf table scans, and push those projections down
         /// towards the leaf nodes.
         pub enable_leaf_expression_pushdown: bool, default = true
+
+        /// When set to true, the logical optimizer will rewrite `UNION DISTINCT` branches that
+        /// read from the same source and differ only by filter predicates into a single branch
+        /// with a combined filter. This optimization is conservative and only applies when the
+        /// branches share the same source and compatible wrapper nodes such as identical
+        /// projections or aliases.
+        pub enable_unions_to_filter: bool, default = false
     }
 }
 
