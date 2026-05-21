@@ -398,7 +398,7 @@ fn array_remove_dispatch_scalar(
             let list_array = array.as_list::<i64>();
             general_remove_with_scalar::<i64>(list_array, needle, arr_n)
         }
-        array_type => exec_err!("array_remove does not support type '{array_type}'."),
+        array_type => exec_err!("array_remove/array_remove_n/array_remove_all does not support type '{array_type}'."),
     }
 }
 
@@ -550,7 +550,13 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
             );
         }
     };
-    let original_data = list_array.values().to_data();
+
+    let list_offsets = list_array.offsets();
+    let first_offset = list_offsets[0].to_usize().unwrap();
+    let last_offset = list_offsets[list_offsets.len() - 1].to_usize().unwrap();
+    let values_range_len = last_offset - first_offset;
+    let values_slice = list_array.values().slice(first_offset, values_range_len);
+    let original_data = values_slice.to_data();
     let mut offsets = Vec::<OffsetSize>::with_capacity(list_array.len() + 1);
     offsets.push(OffsetSize::zero());
 
@@ -562,15 +568,19 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
     let nulls = list_array.nulls().cloned();
     let keep_mask =
         arrow_ord::cmp::distinct(list_array.values(), &Scalar::new(Arc::clone(needle)))?;
+    let remove_bits = match keep_mask.nulls() {
+        Some(validity) => !(&(keep_mask.values() & validity.inner())),
+        None => !keep_mask.values(),
+    };
 
-    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+    for (row_index, offset_window) in list_offsets.windows(2).enumerate() {
         if nulls.as_ref().is_some_and(|nulls| nulls.is_null(row_index)) {
             offsets.push(offsets[row_index]);
             continue;
         }
 
-        let start = offset_window[0].to_usize().unwrap();
-        let end = offset_window[1].to_usize().unwrap();
+        let start = offset_window[0].to_usize().unwrap() - first_offset;
+        let end = offset_window[1].to_usize().unwrap() - first_offset;
 
         let n = arr_n[row_index];
 
@@ -580,35 +590,40 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
             continue;
         }
 
-        let eq_array = keep_mask.slice(start, end - start);
-        let num_to_remove = eq_array.false_count();
+        let row_len = end - start;
+        let row_remove_bits = remove_bits.slice(first_offset + start, row_len);
+        let num_to_remove = row_remove_bits.count_set_bits();
 
         if num_to_remove == 0 {
             mutable.extend(0, start, end);
-            offsets.push(offsets[row_index] + OffsetSize::usize_as(end - start));
+            offsets.push(offsets[row_index] + OffsetSize::usize_as(row_len));
             continue;
         }
 
-        let max_removals = n.min(num_to_remove as i64);
-        let mut removed = 0i64;
+        let max_removals = n.min(num_to_remove as i64) as usize;
+
+        // Iterate only over the positions that need removal using set_indices,
+        // which is more efficient than scanning every bit.
+        let mut removed = 0usize;
         let mut copied = 0usize;
-        let mut pending_batch_to_retain: Option<usize> = None;
-        for (i, keep) in eq_array.iter().enumerate() {
-            if keep == Some(false) && removed < max_removals {
-                if let Some(bs) = pending_batch_to_retain {
-                    mutable.extend(0, start + bs, start + i);
-                    copied += i - bs;
-                    pending_batch_to_retain = None;
-                }
-                removed += 1;
-            } else if pending_batch_to_retain.is_none() {
-                pending_batch_to_retain = Some(i);
+        let mut prev_end = start; // end of last copied range (absolute index into values_slice)
+        for remove_pos in row_remove_bits.set_indices() {
+            let abs_pos = start + remove_pos;
+            // Copy the range before this removal position
+            if abs_pos > prev_end {
+                mutable.extend(0, prev_end, abs_pos);
+                copied += abs_pos - prev_end;
+            }
+            prev_end = abs_pos + 1;
+            removed += 1;
+            if removed == max_removals {
+                break;
             }
         }
-
-        if let Some(bs) = pending_batch_to_retain {
-            mutable.extend(0, start + bs, end);
-            copied += end - start - bs;
+        // Copy the remaining tail after the last removal
+        if prev_end < end {
+            mutable.extend(0, prev_end, end);
+            copied += end - prev_end;
         }
 
         offsets.push(offsets[row_index] + OffsetSize::usize_as(copied));
