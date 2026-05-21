@@ -32,7 +32,7 @@ use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "Math Functions"),
-    description = "Factorial. Returns 1 if value is less than 2.",
+    description = "Factorial of a non-negative integer. Errors if the argument is negative or the result overflows.",
     syntax_example = "factorial(numeric_expression)",
     sql_example = r#"```sql
 > SELECT factorial(5);
@@ -143,7 +143,7 @@ const FACTORIALS: [i64; 21] = [
 
 fn compute_factorial(n: i64) -> Result<i64> {
     if n < 0 {
-        Ok(1)
+        exec_err!("factorial of a negative number is undefined")
     } else if n < FACTORIALS.len() as i64 {
         Ok(FACTORIALS[n as usize])
     } else {
