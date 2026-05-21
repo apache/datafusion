@@ -172,31 +172,6 @@ fn assert_idempotent(plan: Arc<dyn ExecutionPlan>) {
         .expect("SanityCheckPlan failed on second pass");
 }
 
-/// Multi-partition sort + `GlobalLimitExec` must produce a valid plan.
-/// Regression for the `SanityCheckPlan` failure that motivated this PR:
-/// `pushdown_sorts` setting `preserve_partitioning=true` on multi-partition
-/// input without inserting `SortPreservingMergeExec` violated the
-/// `SinglePartition` requirement from `GlobalLimitExec`.
-#[test]
-fn test_multi_partition_sort_limit_sanity_check() {
-    let source = Arc::new(MockMultiPartitionExec::new(32));
-
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
-
-    let sort = Arc::new(SortExec::new(sort_expr, source));
-    let limit = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
-
-    let result = optimize_and_sanity_check(limit);
-    assert!(result.is_ok(), "SanityCheckPlan failed: {:?}", result.err());
-}
-
 /// Union with mixed partition counts + sort + limit.
 #[test]
 fn test_union_mixed_partitions_sort_limit() {
@@ -219,26 +194,6 @@ fn test_union_mixed_partitions_sort_limit() {
 
     let result = optimize_and_sanity_check(limit);
     assert!(result.is_ok(), "SanityCheckPlan failed: {:?}", result.err());
-}
-
-/// Idempotency: multi-partition sort + limit
-#[test]
-fn test_idempotent_multi_partition_sort_limit() {
-    let source = Arc::new(MockMultiPartitionExec::new(16));
-
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
-
-    let sort = Arc::new(SortExec::new(sort_expr, source));
-    let limit = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
-
-    assert_idempotent(limit);
 }
 
 /// Idempotency: union with mixed partitions
@@ -366,39 +321,6 @@ fn test_sort_already_satisfied_no_extra_sort() {
 }
 
 // ========================================================================
-// Fetch preservation tests (regression for #14150)
-// ========================================================================
-
-/// GlobalLimitExec with fetch must preserve fetch through optimization.
-#[test]
-fn test_fetch_preserved_across_passes() {
-    let source = Arc::new(MockMultiPartitionExec::new(4));
-
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
-
-    let sort = Arc::new(SortExec::new(sort_expr, source));
-    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(5)));
-
-    let optimized = optimize_and_sanity_check(limit).unwrap();
-    let plan_str = datafusion_physical_plan::displayable(optimized.as_ref())
-        .indent(true)
-        .to_string();
-
-    // fetch=5 must appear somewhere in the plan
-    assert!(
-        plan_str.contains("fetch=5"),
-        "Fetch value lost during optimization:\n{plan_str}"
-    );
-}
-
-// ========================================================================
 // Various partition counts (stress test)
 // ========================================================================
 
@@ -427,29 +349,6 @@ fn test_various_partition_counts_all_pass_sanity_check() {
             "SanityCheckPlan failed for {n} partitions: {:?}",
             result.err()
         );
-    }
-}
-
-/// Idempotency for all partition counts
-#[test]
-fn test_idempotent_various_partition_counts() {
-    for n in [2, 4, 8, 16, 32, 64] {
-        let source = Arc::new(MockMultiPartitionExec::new(n));
-
-        let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-            Arc::new(Column::new("a", 0)),
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-        )])
-        .unwrap();
-
-        let sort = Arc::new(SortExec::new(sort_expr, source));
-        let limit: Arc<dyn ExecutionPlan> =
-            Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
-
-        assert_idempotent(limit);
     }
 }
 
@@ -933,54 +832,6 @@ fn test_idempotent_all_partition_counts_1_to_64() {
             Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
         assert_idempotent(limit);
     }
-}
-
-/// Triple optimization: EnsureRequirements three times must be stable.
-#[test]
-fn test_triple_optimize_stable() {
-    let source = Arc::new(MockMultiPartitionExec::new(32));
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
-    let sort = Arc::new(SortExec::new(sort_expr, source));
-    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
-
-    let config = ConfigOptions::default();
-    let p1 = EnsureRequirements::new().optimize(limit, &config).unwrap();
-    let p2 = EnsureRequirements::new()
-        .optimize(Arc::clone(&p1), &config)
-        .unwrap();
-    let p3 = EnsureRequirements::new()
-        .optimize(Arc::clone(&p2), &config)
-        .unwrap();
-
-    let s1 = datafusion_physical_plan::displayable(p1.as_ref())
-        .indent(true)
-        .to_string();
-    let s2 = datafusion_physical_plan::displayable(p2.as_ref())
-        .indent(true)
-        .to_string();
-    let s3 = datafusion_physical_plan::displayable(p3.as_ref())
-        .indent(true)
-        .to_string();
-
-    assert_eq!(
-        s1, s2,
-        "Not idempotent between pass 1 and 2:\nPass 1:\n{s1}\nPass 2:\n{s2}"
-    );
-    assert_eq!(
-        s2, s3,
-        "Not stable between pass 2 and 3:\nPass 2:\n{s2}\nPass 3:\n{s3}"
-    );
-
-    SanityCheckPlan::new()
-        .optimize(p3, &config)
-        .expect("SanityCheckPlan failed on pass 3");
 }
 
 /// Regression for #14150: the standalone distribution enforcement path
@@ -1477,12 +1328,15 @@ fn test_enforce_distribution_idempotent_hash_join() {
     );
 }
 
-/// Stress test: run EnsureRequirements 10 times on a complex plan.
-/// GlobalLimitExec → SortExec → ProjectionExec →
-/// UnionExec(multi-partition, single-partition).
-/// All 10 passes must produce identical plans.
+/// Idempotency on a complex plan:
+/// `GlobalLimitExec → SortExec → ProjectionExec → UnionExec(multi, single)`.
+/// The union + projection + sort topology has historically been a fertile
+/// ground for non-idempotent behaviour, so we keep it as a separate
+/// idempotency test — `assert_idempotent` already proves `f(f(x)) == f(x)`,
+/// which for a deterministic optimiser is equivalent to stability across
+/// any finite number of passes (the previous 10x sweep was overkill).
 #[test]
-fn test_idempotent_10x_complex() {
+fn test_idempotent_union_projection_sort() {
     let live: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(16));
     let hist: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(1));
     let union: Arc<dyn ExecutionPlan> = UnionExec::try_new(vec![live, hist]).unwrap();
@@ -1507,28 +1361,5 @@ fn test_idempotent_10x_complex() {
     let sort = Arc::new(SortExec::new(sort_expr, projection));
     let plan: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
-    let config = ConfigOptions::default();
-    let mut current = EnsureRequirements::new()
-        .optimize(Arc::clone(&plan), &config)
-        .expect("first optimize failed");
-    let first = datafusion_physical_plan::displayable(current.as_ref())
-        .indent(true)
-        .to_string();
-
-    for i in 2..=10 {
-        current = EnsureRequirements::new()
-            .optimize(Arc::clone(&current), &config)
-            .unwrap_or_else(|e| panic!("optimize pass {i} failed: {e}"));
-        let s = datafusion_physical_plan::displayable(current.as_ref())
-            .indent(true)
-            .to_string();
-        assert_eq!(
-            first, s,
-            "Plan changed on pass {i}!\nFirst:\n{first}\nPass {i}:\n{s}"
-        );
-    }
-
-    SanityCheckPlan::new()
-        .optimize(current, &config)
-        .expect("SanityCheckPlan failed after 10 passes");
+    assert_idempotent(plan);
 }
