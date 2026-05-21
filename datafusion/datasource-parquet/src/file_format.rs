@@ -25,7 +25,7 @@ use std::sync::Arc;
 // Re-export so the historical `file_format::*` paths still resolve.
 #[expect(deprecated)]
 pub use crate::schema_coercion::{
-    apply_file_schema_type_coercions, coerce_file_schema_to_string_type,
+    Int96Coercer, apply_file_schema_type_coercions, coerce_file_schema_to_string_type,
     coerce_file_schema_to_view_type, coerce_int96_to_resolution,
     transform_binary_to_string, transform_schema_to_view,
 };
@@ -56,7 +56,9 @@ use datafusion_session::Session;
 
 use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
 use crate::reader::CachedParquetFileReaderFactory;
-use crate::source::{ParquetSource, parse_coerce_int96_string};
+use crate::source::{
+    ParquetSource, parse_coerce_int96_string, parse_coerce_int96_tz_string,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
@@ -333,6 +335,13 @@ impl FileFormat for ParquetFormat {
             Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
             None => None,
         };
+        let coerce_int96_tz = self
+            .options
+            .global
+            .coerce_int96_tz
+            .as_ref()
+            .map(|tz| parse_coerce_int96_tz_string(tz))
+            .transpose()?;
 
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
@@ -350,6 +359,7 @@ impl FileFormat for ParquetFormat {
                     .with_decryption_properties(file_decryption_properties)
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
                     .with_coerce_int96(coerce_int96)
+                    .with_coerce_int96_tz(coerce_int96_tz.clone())
                     .fetch_schema_with_location()
                     .await?;
                 Ok::<_, DataFusionError>(result)
