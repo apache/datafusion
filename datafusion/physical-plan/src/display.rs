@@ -75,7 +75,7 @@ pub enum DisplayFormatType {
     /// │    partition_sizes: [1]   │
     /// │          Parquet          │
     /// └───────────────────────────┘
-    ///  ```
+    /// ```
     TreeRender,
 }
 
