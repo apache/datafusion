@@ -266,23 +266,36 @@ Common severity classes seen on the label today:
 
 - **DML / optimizer-relevant defaults silently lost** — e.g. `delete_from`/`update`/`truncate` on table providers, distribution / ordering / pushdown on execution plans, `value_from_stats` on aggregates. These demote producer capability on the foreign side.
 - **SQL surface area silently absent** — naming hooks (`display_name`, `schema_name`, `documentation`), null-handling and within-group clauses on UDAFs, etc.
-- **Performance regressions, not correctness** — e.g. `memoize` on partition evaluators, `size` on groups accumulators.
+- **Performance regressions, not correctness** — e.g. `memoize` on partition evaluators.
 - **Open design questions** — e.g. whether `FFI_RecordBatchStream` needs `library_marker_id` at all.
 
-When in doubt, open the label query; do not assume the list above is exhaustive. Wrappers without an open issue are **not** certified complete — re-enumerate the trait surface (see "How to enumerate defaults" below) whenever you audit one; upstream trait drift can introduce new defaulted methods at any time and silently re-open the silent-override-loss bug class.
+When in doubt, open the label query; do not assume the list above is exhaustive. Wrappers without an open issue are **not** certified complete — re-enumerate the trait surface (see "How to audit a wrapper's coverage" below) whenever you audit one; upstream trait drift can introduce new defaulted methods at any time and silently re-open the silent-override-loss bug class.
+
+Conversely, an open issue under the `ffi` label is a **claim of a gap, not proof of one.** Past audits have filed false positives by enumerating gaps from memory rather than from current source (e.g. #22335 claimed `size` missing on `FFI_GroupsAccumulator` when it had been plumbed since PR #14775). Before acting on a listed gap — opening a fix PR, re-citing it in a new audit, or extending the list — run the dual-grep audit below and confirm the field is actually absent. If the issue is a false positive, close it as `not planned`, link the `file:line` of the existing plumbing, and remove the corresponding bullet from this skill.
 
 When *closing* a gap, add the fn pointer unconditionally — the wrapper body calls the trait method on the inner `Arc<dyn Trait>` and Rust's dynamic dispatch picks the producer's override or falls back to the default. Use `Option<fn>` only when the new method also gains a corresponding capability flag on the producer's `new()`. Either way the layout changes, so the PR is an ABI break: mark `api change`, do not back-port to `branch-<major>`, and the workspace major bump in the next release makes the `version()` extern surface the change to consumers at load time.
 
-### How to enumerate defaults
+### How to audit a wrapper's coverage
 
-For trait `X`:
+Every audit — opening an issue, filing a fix PR, or re-confirming a listed gap — must compare two sides drawn from current source. Never enumerate either side from memory or from a prior audit; trait surface and FFI struct both drift.
+
+**Side A — trait defaults (what could go missing):**
 
 ```bash
 # Find the trait definition
 grep -rn "pub trait X" datafusion/ --include='*.rs'
 
-# Inspect for `fn method(...) { default_body }` (the body marks it as a default)
+# Inspect for `fn method(...) { default_body }` — the body marks it as a default
 ```
+
+**Side B — FFI wrapper coverage (what is already plumbed):**
+
+```bash
+# List every fn-pointer field on the FFI struct
+grep -nE 'pub [a-z_]+: (unsafe )?extern "C" fn' datafusion/ffi/src/.../X.rs
+```
+
+Diff Side A against Side B. Any claim of a gap — in an issue body, audit summary, or PR description — must cite `file:line` for **both** the trait default and the FFI struct line where the field is (or is not). An issue body with only one side cited is incomplete and likely a false positive; reject it pending a re-grep.
 
 If a method's body is non-trivial, the consumer-side default is non-trivial too. Decide explicitly whether the FFI should let the consumer recompute the same default, or whether the producer's override is what should travel.
 
