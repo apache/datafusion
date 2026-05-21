@@ -45,7 +45,6 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err,
     internal_err, not_impl_err,
@@ -1579,36 +1578,6 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to group by expressions
-        let mut tnr = TreeNodeRecursion::Continue;
-        for expr in self.group_by.input_exprs() {
-            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-        }
-
-        // Apply to aggregate expressions
-        for aggr in self.aggr_expr.iter() {
-            for expr in aggr.expressions() {
-                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-            }
-        }
-
-        // Apply to filter expressions (FILTER WHERE clauses)
-        for filter in self.filter_expr.iter().flatten() {
-            tnr = tnr.visit_sibling(|| f(filter.as_ref()))?;
-        }
-
-        // Apply to dynamic filter expression if present
-        if let Some(dyn_filter) = &self.dynamic_filter {
-            tnr = tnr.visit_sibling(|| f(dyn_filter.filter.as_ref()))?;
-        }
-
-        Ok(tnr)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -2762,13 +2731,6 @@ mod tests {
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
 
         fn with_new_children(
