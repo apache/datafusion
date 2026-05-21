@@ -57,6 +57,7 @@ use datafusion_functions_table::generate_series::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
@@ -117,6 +118,58 @@ use crate::{convert_required, into_required};
 
 pub mod from_proto;
 pub mod to_proto;
+
+const HUMAN_DISPLAY_ALIAS_PREFIX: &str = "\u{1f}datafusion_human_display_alias_v1:";
+
+fn encode_human_display_alias(human_display: &str, alias: &str) -> String {
+    format!(
+        "{HUMAN_DISPLAY_ALIAS_PREFIX}{}:{alias}{human_display}",
+        alias.len()
+    )
+}
+
+fn split_human_display_alias<'a>(
+    human_display: &'a str,
+    name: &'a str,
+) -> (&'a str, Option<&'a str>) {
+    if let Some(encoded) = human_display.strip_prefix(HUMAN_DISPLAY_ALIAS_PREFIX)
+        && let Some((alias_len, encoded)) = encoded.split_once(':')
+        && let Ok(alias_len) = alias_len.parse::<usize>()
+        && let Some(alias) = encoded.get(..alias_len)
+        && let Some(human_display) = encoded.get(alias_len..)
+        && alias == name
+        && !human_display.is_empty()
+    {
+        return (human_display, Some(alias));
+    }
+
+    (human_display, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_human_display_alias_ignores_mismatched_alias() {
+        let encoded = encode_human_display_alias("sum(value)", "revenue");
+
+        assert_eq!(
+            split_human_display_alias(&encoded, "other"),
+            (encoded.as_str(), None)
+        );
+    }
+
+    #[test]
+    fn split_human_display_alias_keeps_malformed_prefix_literal() {
+        let display = format!("{HUMAN_DISPLAY_ALIAS_PREFIX}not-an-encoding");
+
+        assert_eq!(
+            split_human_display_alias(&display, "agg"),
+            (display.as_str(), None)
+        );
+    }
+}
 
 /// Context threaded through physical-plan deserialization.
 ///
@@ -616,7 +669,7 @@ impl protobuf::PhysicalPlanNode {
         }
 
         let mut buf: Vec<u8> = vec![];
-        match codec.try_encode(Arc::clone(&plan_clone), &mut buf) {
+        match codec.try_encode(Arc::clone(&plan_clone), &mut buf, proto_converter) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalPlanNode> = plan_clone
                     .children()
@@ -1259,15 +1312,28 @@ impl protobuf::PhysicalPlanNode {
                                         )?,
                                     };
 
-                                    AggregateExprBuilder::new(agg_udf, input_phy_expr)
-                                        .schema(Arc::clone(&physical_schema))
-                                        .alias(name)
-                                        .human_display(agg_node.human_display.clone())
-                                        .with_ignore_nulls(agg_node.ignore_nulls)
-                                        .with_distinct(agg_node.distinct)
-                                        .order_by(order_bys)
-                                        .build()
-                                        .map(Arc::new)
+                                    let (human_display, human_display_alias) =
+                                        split_human_display_alias(
+                                            &agg_node.human_display,
+                                            name,
+                                        );
+                                    let builder = AggregateExprBuilder::new(
+                                        agg_udf,
+                                        input_phy_expr,
+                                    )
+                                    .schema(Arc::clone(&physical_schema))
+                                    .alias(name)
+                                    .with_ignore_nulls(agg_node.ignore_nulls)
+                                    .with_distinct(agg_node.distinct)
+                                    .order_by(order_bys)
+                                    .human_display(human_display);
+                                    let builder = if let Some(alias) = human_display_alias
+                                    {
+                                        builder.human_display_alias(alias)
+                                    } else {
+                                        builder
+                                    };
+                                    builder.build().map(Arc::new)
                                 }
                             })
                             .transpose()?
@@ -1282,6 +1348,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let physical_schema_ref = Arc::clone(&physical_schema);
         let agg = AggregateExec::try_new(
             agg_mode,
             PhysicalGroupBy::new(group_expr, null_expr, groups, has_grouping_set),
@@ -1298,6 +1365,24 @@ impl protobuf::PhysicalPlanNode {
                 None => LimitOptions::new(limit),
             };
             agg.with_limit_options(Some(limit_options))
+        } else {
+            agg
+        };
+
+        let agg = if let Some(dynamic_filter_proto) = &hash_agg.dynamic_filter {
+            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
+                dynamic_filter_proto,
+                physical_schema_ref.as_ref(),
+                ctx,
+            )?;
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+                .downcast::<DynamicFilterPhysicalExpr>()
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "AggregateExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            agg.with_dynamic_filter_expr(df)?
         } else {
             agg
         };
@@ -1408,7 +1493,7 @@ impl protobuf::PhysicalPlanNode {
         } else {
             None
         };
-        Ok(Arc::new(HashJoinExec::try_new(
+        let mut hash_join = HashJoinExec::try_new(
             left,
             right,
             on,
@@ -1418,7 +1503,25 @@ impl protobuf::PhysicalPlanNode {
             partition_mode,
             null_equality.into(),
             hashjoin.null_aware,
-        )?))
+        )?;
+
+        if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
+            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
+                dynamic_filter_proto,
+                right_schema.as_ref(),
+                ctx,
+            )?;
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+                .downcast::<DynamicFilterPhysicalExpr>()
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "HashJoinExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            hash_join = hash_join.with_dynamic_filter_expr(df)?;
+        }
+
+        Ok(Arc::new(hash_join))
     }
 
     fn try_into_symmetric_hash_join_physical_plan(
@@ -1656,6 +1759,24 @@ impl protobuf::PhysicalPlanNode {
             .with_fetch(fetch)
             .with_preserve_partitioning(sort.preserve_partitioning);
 
+        let new_sort = if let Some(dynamic_filter_proto) = &sort.dynamic_filter {
+            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
+                dynamic_filter_proto,
+                new_sort.input().schema().as_ref(),
+                ctx,
+            )?;
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+                .downcast::<DynamicFilterPhysicalExpr>()
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            new_sort.with_dynamic_filter_expr(df)?
+        } else {
+            new_sort
+        };
+
         Ok(Arc::new(new_sort))
     }
 
@@ -1722,9 +1843,12 @@ impl protobuf::PhysicalPlanNode {
             .map(|i| proto_converter.proto_to_execution_plan(i, ctx))
             .collect::<Result<_>>()?;
 
-        let extension_node =
-            ctx.codec()
-                .try_decode(extension.node.as_slice(), &inputs, ctx.task_ctx())?;
+        let extension_node = ctx.codec().try_decode(
+            extension.node.as_slice(),
+            &inputs,
+            ctx.task_ctx(),
+            proto_converter,
+        )?;
 
         Ok(extension_node)
     }
@@ -2462,6 +2586,15 @@ impl protobuf::PhysicalPlanNode {
             PartitionMode::Auto => protobuf::PartitionMode::Auto,
         };
 
+        let dynamic_filter = exec
+            .dynamic_filter_expr()
+            .map(|df| {
+                let df_expr: Arc<dyn PhysicalExpr> =
+                    Arc::clone(df) as Arc<dyn PhysicalExpr>;
+                proto_converter.physical_expr_to_proto(&df_expr, codec)
+            })
+            .transpose()?;
+
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
                 protobuf::HashJoinExecNode {
@@ -2476,6 +2609,7 @@ impl protobuf::PhysicalPlanNode {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
                     null_aware: exec.null_aware,
+                    dynamic_filter,
                 },
             ))),
         })
@@ -2805,6 +2939,14 @@ impl protobuf::PhysicalPlanNode {
                     groups,
                     limit,
                     has_grouping_set: exec.group_expr().has_grouping_set(),
+                    dynamic_filter: exec
+                        .dynamic_filter_expr()
+                        .map(|df| {
+                            let df_expr: Arc<dyn PhysicalExpr> =
+                                Arc::clone(df) as Arc<dyn PhysicalExpr>;
+                            proto_converter.physical_expr_to_proto(&df_expr, codec)
+                        })
+                        .transpose()?,
                 },
             ))),
         })
@@ -3098,6 +3240,14 @@ impl protobuf::PhysicalPlanNode {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let dynamic_filter = exec
+            .dynamic_filter_expr()
+            .map(|df| {
+                let df_expr: Arc<dyn PhysicalExpr> = df as Arc<dyn PhysicalExpr>;
+                proto_converter.physical_expr_to_proto(&df_expr, codec)
+            })
+            .transpose()?;
+
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Sort(Box::new(
                 protobuf::SortExecNode {
@@ -3108,6 +3258,7 @@ impl protobuf::PhysicalPlanNode {
                         _ => -1,
                     },
                     preserve_partitioning: exec.preserve_partitioning(),
+                    dynamic_filter,
                 },
             ))),
         })
@@ -3704,9 +3855,15 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()>;
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()>;
 
     fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         not_impl_err!("PhysicalExtensionCodec is not provided for scalar function {name}")
@@ -3760,6 +3917,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
@@ -3768,6 +3926,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         &self,
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
@@ -4091,12 +4250,22 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.decode_protobuf(buf, |codec, data| codec.try_decode(data, inputs, ctx))
+        self.decode_protobuf(buf, |codec, data| {
+            codec.try_decode(data, inputs, ctx, proto_converter)
+        })
     }
 
-    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        self.encode_protobuf(buf, |codec, data| codec.try_encode(Arc::clone(&node), data))
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
+        self.encode_protobuf(buf, |codec, data| {
+            codec.try_encode(Arc::clone(&node), data, proto_converter)
+        })
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {

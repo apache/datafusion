@@ -6171,6 +6171,9 @@ impl serde::Serialize for ParquetOptions {
         if self.max_predicate_cache_size_opt.is_some() {
             len += 1;
         }
+        if self.coerce_int96_tz_opt.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetOptions", len)?;
         if self.enable_page_index {
             struct_ser.serialize_field("enablePageIndex", &self.enable_page_index)?;
@@ -6339,6 +6342,13 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.coerce_int96_tz_opt.as_ref() {
+            match v {
+                parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => {
+                    struct_ser.serialize_field("coerceInt96Tz", v)?;
+                }
+            }
+        }
         struct_ser.end()
     }
 }
@@ -6412,6 +6422,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "coerceInt96",
             "max_predicate_cache_size",
             "maxPredicateCacheSize",
+            "coerce_int96_tz",
+            "coerceInt96Tz",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6449,6 +6461,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             BloomFilterNdv,
             CoerceInt96,
             MaxPredicateCacheSize,
+            CoerceInt96Tz,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6503,6 +6516,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
                             "coerceInt96" | "coerce_int96" => Ok(GeneratedField::CoerceInt96),
                             "maxPredicateCacheSize" | "max_predicate_cache_size" => Ok(GeneratedField::MaxPredicateCacheSize),
+                            "coerceInt96Tz" | "coerce_int96_tz" => Ok(GeneratedField::CoerceInt96Tz),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6555,6 +6569,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut bloom_filter_ndv_opt__ = None;
                 let mut coerce_int96_opt__ = None;
                 let mut max_predicate_cache_size_opt__ = None;
+                let mut coerce_int96_tz_opt__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EnablePageIndex => {
@@ -6769,6 +6784,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             max_predicate_cache_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(x.0));
                         }
+                        GeneratedField::CoerceInt96Tz => {
+                            if coerce_int96_tz_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("coerceInt96Tz"));
+                            }
+                            coerce_int96_tz_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz);
+                        }
                     }
                 }
                 Ok(ParquetOptions {
@@ -6805,6 +6826,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
                     coerce_int96_opt: coerce_int96_opt__,
                     max_predicate_cache_size_opt: max_predicate_cache_size_opt__,
+                    coerce_int96_tz_opt: coerce_int96_tz_opt__,
                 })
             }
         }

@@ -258,7 +258,7 @@ impl ListingTableUrl {
         let full_prefix = if let Some(ref p) = prefix {
             let mut parts = self.prefix.parts().collect::<Vec<_>>();
             parts.extend(p.parts());
-            Path::from_iter(parts.into_iter())
+            Path::from_iter(parts)
         } else {
             self.prefix.clone()
         };

@@ -590,6 +590,75 @@ mod tests {
         assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(3)));
     }
 
+    /// Regression test for https://github.com/apache/datafusion/issues/22367.
+    ///
+    /// A leaf `PhysicalExpr` that is neither a `Literal` nor a `Column`
+    /// (nor volatile) must not be const-folded: it has no children to
+    /// derive constness from, and evaluating it against the dummy batch
+    /// produces a value unrelated to its real runtime semantics. Without
+    /// the zero-children guard, `all(empty)` would vacuously hold and the
+    /// node would be replaced with whatever scalar fell out of the dummy
+    /// evaluation. Verify the node is left untouched.
+    #[test]
+    fn test_no_simplify_opaque_leaf_expr() {
+        use arrow::array::ArrayRef;
+        use arrow::array::Int32Array;
+        use arrow::record_batch::RecordBatch;
+        use datafusion_expr_common::columnar_value::ColumnarValue;
+        use datafusion_physical_expr_common::physical_expr::PhysicalExpr as PhysicalExprTrait;
+        use std::fmt;
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        struct OpaqueLeaf;
+
+        impl fmt::Display for OpaqueLeaf {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "OpaqueLeaf")
+            }
+        }
+
+        impl PhysicalExprTrait for OpaqueLeaf {
+            fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+                Ok(DataType::Int32)
+            }
+            fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+                Ok(true)
+            }
+            fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+                // Simulate the broken FFI Column path: when handed a dummy
+                // batch, return whatever scalar happens to materialize. If
+                // the simplifier ever reaches this branch for a leaf node,
+                // the predicate has already been silently corrupted.
+                let arr: ArrayRef = Arc::new(Int32Array::from(vec![0; batch.num_rows()]));
+                Ok(ColumnarValue::Array(arr))
+            }
+            fn children(&self) -> Vec<&Arc<dyn PhysicalExprTrait>> {
+                vec![]
+            }
+            fn with_new_children(
+                self: Arc<Self>,
+                _children: Vec<Arc<dyn PhysicalExprTrait>>,
+            ) -> Result<Arc<dyn PhysicalExprTrait>> {
+                Ok(self)
+            }
+            fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "OpaqueLeaf")
+            }
+        }
+
+        let schema = Schema::empty();
+        let simplifier = PhysicalExprSimplifier::new(&schema);
+
+        let opaque: Arc<dyn PhysicalExpr> = Arc::new(OpaqueLeaf);
+        let result = simplifier.simplify(Arc::clone(&opaque)).unwrap();
+
+        assert!(
+            result.downcast_ref::<Literal>().is_none(),
+            "opaque leaf must not be rewritten to a Literal, got: {result}"
+        );
+        assert_eq!(&result, &opaque);
+    }
+
     #[test]
     fn test_simplify_literal_string_concat() {
         let schema = Schema::empty();
