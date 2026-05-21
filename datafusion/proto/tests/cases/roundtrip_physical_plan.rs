@@ -89,9 +89,9 @@ use datafusion::physical_plan::windows::{
     create_udwf_window_expr,
 };
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExprPartitioning, InputOrderMode,
-    Partitioning, PhysicalExpr, RangePartitioning, SendableRecordBatchStream,
-    SplitPoint, Statistics, displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
+    PhysicalExpr, RangePartitioning, SendableRecordBatchStream, SplitPoint, Statistics,
+    displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;

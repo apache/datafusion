@@ -649,52 +649,150 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
 
+    struct PartitioningTestFixture {
+        schema: SchemaRef,
+        cols: Vec<Arc<dyn PhysicalExpr>>,
+        eq_properties: EquivalenceProperties,
+    }
+
+    impl PartitioningTestFixture {
+        fn new(fields: Vec<(&str, DataType)>) -> Result<Self> {
+            let schema = Arc::new(Schema::new(
+                fields
+                    .iter()
+                    .map(|(name, data_type)| Field::new(*name, data_type.clone(), false))
+                    .collect::<Vec<_>>(),
+            ));
+            let cols = fields
+                .iter()
+                .map(|(name, _)| {
+                    Ok(Arc::new(Column::new_with_schema(name, &schema)?)
+                        as Arc<dyn PhysicalExpr>)
+                })
+                .collect::<Result<_>>()?;
+            let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+            Ok(Self {
+                schema,
+                cols,
+                eq_properties,
+            })
+        }
+
+        fn int64(names: &[&str]) -> Result<Self> {
+            Self::new(names.iter().map(|name| (*name, DataType::Int64)).collect())
+        }
+
+        fn col(&self, index: usize) -> Arc<dyn PhysicalExpr> {
+            Arc::clone(&self.cols[index])
+        }
+
+        fn cols(
+            &self,
+            indices: impl IntoIterator<Item = usize>,
+        ) -> Vec<Arc<dyn PhysicalExpr>> {
+            indices.into_iter().map(|index| self.col(index)).collect()
+        }
+
+        fn hash_partitioning(
+            &self,
+            indices: impl IntoIterator<Item = usize>,
+            partition_count: usize,
+        ) -> Partitioning {
+            Partitioning::Hash(self.cols(indices), partition_count)
+        }
+
+        fn hash_distribution(
+            &self,
+            indices: impl IntoIterator<Item = usize>,
+        ) -> Distribution {
+            Distribution::HashPartitioned(self.cols(indices))
+        }
+
+        fn range_sort_expr(
+            &self,
+            index: usize,
+            options: SortOptions,
+        ) -> PhysicalSortExpr {
+            PhysicalSortExpr::new(self.col(index), options)
+        }
+
+        fn range_ordering(
+            &self,
+            indices: impl IntoIterator<Item = usize>,
+        ) -> LexOrdering {
+            LexOrdering::new(
+                indices
+                    .into_iter()
+                    .map(|index| PhysicalSortExpr::new_default(self.col(index))),
+            )
+            .expect("ordering must not be empty")
+        }
+
+        fn range(
+            &self,
+            indices: impl IntoIterator<Item = usize>,
+            split_points: Vec<SplitPoint>,
+        ) -> RangePartitioning {
+            RangePartitioning::try_new(self.range_ordering(indices), split_points)
+                .expect("test range partitioning should be valid")
+        }
+
+        fn range_partitioning(
+            &self,
+            indices: impl IntoIterator<Item = usize>,
+            split_points: Vec<SplitPoint>,
+        ) -> Partitioning {
+            Partitioning::Range(self.range(indices, split_points))
+        }
+
+        fn range_partitioning_with_ordering(
+            &self,
+            ordering: LexOrdering,
+            split_points: Vec<SplitPoint>,
+        ) -> Partitioning {
+            Partitioning::Range(
+                RangePartitioning::try_new(ordering, split_points)
+                    .expect("test range partitioning should be valid"),
+            )
+        }
+    }
+
     #[test]
     fn partitioning_satisfy_distribution() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("column_1", DataType::Int64, false),
-            Field::new("column_2", DataType::Utf8, false),
-        ]));
-
-        let partition_exprs1: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(Column::new_with_schema("column_1", &schema).unwrap()),
-            Arc::new(Column::new_with_schema("column_2", &schema).unwrap()),
-        ];
-
-        let partition_exprs2: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(Column::new_with_schema("column_2", &schema).unwrap()),
-            Arc::new(Column::new_with_schema("column_1", &schema).unwrap()),
-        ];
+        let fixture = PartitioningTestFixture::new(vec![
+            ("column_1", DataType::Int64),
+            ("column_2", DataType::Utf8),
+        ])?;
 
         let distribution_types = vec![
             Distribution::UnspecifiedDistribution,
             Distribution::SinglePartition,
-            Distribution::HashPartitioned(partition_exprs1.clone()),
+            fixture.hash_distribution([0, 1]),
         ];
 
         let single_partition = Partitioning::UnknownPartitioning(1);
         let unspecified_partition = Partitioning::UnknownPartitioning(10);
         let round_robin_partition = Partitioning::RoundRobinBatch(10);
-        let hash_partition1 = Partitioning::Hash(partition_exprs1, 10);
-        let hash_partition2 = Partitioning::Hash(partition_exprs2, 10);
-        let eq_properties = EquivalenceProperties::new(schema);
+        let hash_partition1 = fixture.hash_partitioning([0, 1], 10);
+        let hash_partition2 = fixture.hash_partitioning([1, 0], 10);
 
         for distribution in distribution_types {
             let result = (
                 single_partition
-                    .satisfaction(&distribution, &eq_properties, true)
+                    .satisfaction(&distribution, &fixture.eq_properties, true)
                     .is_satisfied(),
                 unspecified_partition
-                    .satisfaction(&distribution, &eq_properties, true)
+                    .satisfaction(&distribution, &fixture.eq_properties, true)
                     .is_satisfied(),
                 round_robin_partition
-                    .satisfaction(&distribution, &eq_properties, true)
+                    .satisfaction(&distribution, &fixture.eq_properties, true)
                     .is_satisfied(),
                 hash_partition1
-                    .satisfaction(&distribution, &eq_properties, true)
+                    .satisfaction(&distribution, &fixture.eq_properties, true)
                     .is_satisfied(),
                 hash_partition2
-                    .satisfaction(&distribution, &eq_properties, true)
+                    .satisfaction(&distribution, &fixture.eq_properties, true)
                     .is_satisfied(),
             );
 
@@ -716,72 +814,41 @@ mod tests {
 
     #[test]
     fn test_partitioning_satisfy_by_subset() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-            Field::new("c", DataType::Int64, false),
-        ]));
-
-        let col_a: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("b", &schema)?);
-        let col_c: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("c", &schema)?);
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
 
         let test_cases = vec![
             (
                 "Hash([a]) vs Hash([a, b])",
-                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
-                Distribution::HashPartitioned(vec![
-                    Arc::clone(&col_a),
-                    Arc::clone(&col_b),
-                ]),
+                fixture.hash_partitioning([0], 4),
+                fixture.hash_distribution([0, 1]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([a]) vs Hash([a, b, c])",
-                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
-                Distribution::HashPartitioned(vec![
-                    Arc::clone(&col_a),
-                    Arc::clone(&col_b),
-                    Arc::clone(&col_c),
-                ]),
+                fixture.hash_partitioning([0], 4),
+                fixture.hash_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([a, b]) vs Hash([a, b, c])",
-                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
-                Distribution::HashPartitioned(vec![
-                    Arc::clone(&col_a),
-                    Arc::clone(&col_b),
-                    Arc::clone(&col_c),
-                ]),
+                fixture.hash_partitioning([0, 1], 4),
+                fixture.hash_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([b]) vs Hash([a, b, c])",
-                Partitioning::Hash(vec![Arc::clone(&col_b)], 4),
-                Distribution::HashPartitioned(vec![
-                    Arc::clone(&col_a),
-                    Arc::clone(&col_b),
-                    Arc::clone(&col_c),
-                ]),
+                fixture.hash_partitioning([1], 4),
+                fixture.hash_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([b, a]) vs Hash([a, b, c])",
-                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
-                Distribution::HashPartitioned(vec![
-                    Arc::clone(&col_a),
-                    Arc::clone(&col_b),
-                    Arc::clone(&col_c),
-                ]),
+                fixture.hash_partitioning([1, 0], 4),
+                fixture.hash_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -790,13 +857,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfaction(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfaction(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -808,48 +875,27 @@ mod tests {
 
     #[test]
     fn test_partitioning_current_superset() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-            Field::new("c", DataType::Int64, false),
-        ]));
-
-        let col_a: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("b", &schema)?);
-        let col_c: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("c", &schema)?);
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
 
         let test_cases = vec![
             (
                 "Hash([a, b]) vs Hash([a])",
-                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
-                Distribution::HashPartitioned(vec![Arc::clone(&col_a)]),
+                fixture.hash_partitioning([0, 1], 4),
+                fixture.hash_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([a, b, c]) vs Hash([a])",
-                Partitioning::Hash(
-                    vec![Arc::clone(&col_a), Arc::clone(&col_b), Arc::clone(&col_c)],
-                    4,
-                ),
-                Distribution::HashPartitioned(vec![Arc::clone(&col_a)]),
+                fixture.hash_partitioning([0, 1, 2], 4),
+                fixture.hash_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([a, b, c]) vs Hash([a, b])",
-                Partitioning::Hash(
-                    vec![Arc::clone(&col_a), Arc::clone(&col_b), Arc::clone(&col_c)],
-                    4,
-                ),
-                Distribution::HashPartitioned(vec![
-                    Arc::clone(&col_a),
-                    Arc::clone(&col_b),
-                ]),
+                fixture.hash_partitioning([0, 1, 2], 4),
+                fixture.hash_distribution([0, 1]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -858,13 +904,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfaction(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfaction(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -876,24 +922,12 @@ mod tests {
 
     #[test]
     fn test_partitioning_partial_overlap() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-            Field::new("c", DataType::Int64, false),
-        ]));
-
-        let col_a: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("b", &schema)?);
-        let col_c: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("c", &schema)?);
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
 
         let test_cases = vec![(
             "Partial overlap: Hash([a, c]) vs Hash([a, b])",
-            Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_c)], 4),
-            Distribution::HashPartitioned(vec![Arc::clone(&col_a), Arc::clone(&col_b)]),
+            fixture.hash_partitioning([0, 2], 4),
+            fixture.hash_distribution([0, 1]),
             PartitioningSatisfaction::NotSatisfied,
             PartitioningSatisfaction::NotSatisfied,
         )];
@@ -901,13 +935,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfaction(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfaction(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -919,35 +953,20 @@ mod tests {
 
     #[test]
     fn test_partitioning_no_overlap() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-            Field::new("c", DataType::Int64, false),
-        ]));
-
-        let col_a: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("b", &schema)?);
-        let col_c: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("c", &schema)?);
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
 
         let test_cases = vec![
             (
                 "Hash([a]) vs Hash([b, c])",
-                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
-                Distribution::HashPartitioned(vec![
-                    Arc::clone(&col_b),
-                    Arc::clone(&col_c),
-                ]),
+                fixture.hash_partitioning([0], 4),
+                fixture.hash_distribution([1, 2]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([a, b]) vs Hash([c])",
-                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
-                Distribution::HashPartitioned(vec![Arc::clone(&col_c)]),
+                fixture.hash_partitioning([0, 1], 4),
+                fixture.hash_distribution([2]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
@@ -956,13 +975,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfaction(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfaction(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -974,32 +993,20 @@ mod tests {
 
     #[test]
     fn test_partitioning_exact_match() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-        ]));
-
-        let col_a: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("b", &schema)?);
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
 
         let test_cases = vec![
             (
                 "Hash([a, b]) vs Hash([a, b])",
-                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
-                Distribution::HashPartitioned(vec![
-                    Arc::clone(&col_a),
-                    Arc::clone(&col_b),
-                ]),
+                fixture.hash_partitioning([0, 1], 4),
+                fixture.hash_distribution([0, 1]),
                 PartitioningSatisfaction::Exact,
                 PartitioningSatisfaction::Exact,
             ),
             (
                 "Hash([a]) vs Hash([a])",
-                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
-                Distribution::HashPartitioned(vec![Arc::clone(&col_a)]),
+                fixture.hash_partitioning([0], 4),
+                fixture.hash_distribution([0]),
                 PartitioningSatisfaction::Exact,
                 PartitioningSatisfaction::Exact,
             ),
@@ -1008,13 +1015,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfaction(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfaction(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -1026,32 +1033,20 @@ mod tests {
 
     #[test]
     fn test_partitioning_unknown() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-        ]));
-
-        let col_a: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("b", &schema)?);
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
         let unknown: Arc<dyn PhysicalExpr> = Arc::new(UnKnownColumn::new("dropped"));
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
         let test_cases = vec![
             (
                 "Hash([unknown]) vs Hash([a, b])",
                 Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
-                Distribution::HashPartitioned(vec![
-                    Arc::clone(&col_a),
-                    Arc::clone(&col_b),
-                ]),
+                fixture.hash_distribution([0, 1]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([a, b]) vs Hash([unknown])",
-                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
+                fixture.hash_partitioning([0, 1], 4),
                 Distribution::HashPartitioned(vec![Arc::clone(&unknown)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
@@ -1068,13 +1063,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfaction(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfaction(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -1086,23 +1081,19 @@ mod tests {
 
     #[test]
     fn test_partitioning_empty_hash() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
-
-        let col_a: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("a", &schema)?);
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let fixture = PartitioningTestFixture::int64(&["a"])?;
 
         let test_cases = vec![
             (
                 "Hash([]) vs Hash([a])",
                 Partitioning::Hash(vec![], 4),
-                Distribution::HashPartitioned(vec![Arc::clone(&col_a)]),
+                fixture.hash_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
                 "Hash([a]) vs Hash([])",
-                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                fixture.hash_partitioning([0], 4),
                 Distribution::HashPartitioned(vec![]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
@@ -1119,13 +1110,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfaction(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfaction(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -1144,32 +1135,6 @@ mod tests {
         )
     }
 
-    struct RangeTestFixture {
-        schema: SchemaRef,
-        col_a: Arc<dyn PhysicalExpr>,
-        col_b: Arc<dyn PhysicalExpr>,
-        eq_properties: EquivalenceProperties,
-    }
-
-    impl RangeTestFixture {
-        fn new() -> Result<Self> {
-            let schema = Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Int64, false),
-                Field::new("b", DataType::Int64, false),
-            ]));
-            let col_a = Arc::new(Column::new_with_schema("a", &schema)?);
-            let col_b = Arc::new(Column::new_with_schema("b", &schema)?);
-            let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-
-            Ok(Self {
-                schema,
-                col_a,
-                col_b,
-                eq_properties,
-            })
-        }
-    }
-
     fn assert_range_try_new_error(
         ordering: LexOrdering,
         split_points: Vec<SplitPoint>,
@@ -1183,12 +1148,10 @@ mod tests {
 
     #[test]
     fn test_range_partitioning_metadata() -> Result<()> {
-        let fixture = RangeTestFixture::new()?;
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
 
-        let range_partitioning = RangePartitioning::new(
-            [PhysicalSortExpr::new_default(Arc::clone(&fixture.col_a))].into(),
-            vec![int_split_point([10]), int_split_point([20])],
-        );
+        let range_partitioning =
+            fixture.range([0], vec![int_split_point([10]), int_split_point([20])]);
         assert_eq!(range_partitioning.ordering()[0].to_string(), "a@0 ASC");
         assert_eq!(
             range_partitioning.split_points(),
@@ -1207,14 +1170,9 @@ mod tests {
 
     #[test]
     fn test_range_partitioning_try_new_validates_split_points() -> Result<()> {
-        let fixture = RangeTestFixture::new()?;
-        let asc_a: LexOrdering =
-            [PhysicalSortExpr::new_default(Arc::clone(&fixture.col_a))].into();
-        let ordering_ab: LexOrdering = [
-            PhysicalSortExpr::new_default(Arc::clone(&fixture.col_a)),
-            PhysicalSortExpr::new_default(Arc::clone(&fixture.col_b)),
-        ]
-        .into();
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let asc_a = fixture.range_ordering([0]);
+        let ordering_ab = fixture.range_ordering([0, 1]);
 
         assert_range_try_new_error(
             ordering_ab.clone(),
@@ -1223,11 +1181,7 @@ mod tests {
         );
 
         RangePartitioning::try_new(
-            [PhysicalSortExpr::new(
-                Arc::clone(&fixture.col_a),
-                SortOptions::new(true, false),
-            )]
-            .into(),
+            [fixture.range_sort_expr(0, SortOptions::new(true, false))].into(),
             vec![int_split_point([20]), int_split_point([10])],
         )?;
 
@@ -1238,11 +1192,7 @@ mod tests {
         );
 
         assert_range_try_new_error(
-            [PhysicalSortExpr::new(
-                Arc::clone(&fixture.col_a),
-                SortOptions::new(false, false),
-            )]
-            .into(),
+            [fixture.range_sort_expr(0, SortOptions::new(false, false))].into(),
             vec![
                 SplitPoint::new(vec![ScalarValue::Int64(None)]),
                 int_split_point([10]),
@@ -1266,15 +1216,11 @@ mod tests {
 
     #[test]
     fn test_range_partitioning_project_preserves_or_degrades() -> Result<()> {
-        let fixture = RangeTestFixture::new()?;
-        let range_partitioning = Partitioning::Range(RangePartitioning::new(
-            [PhysicalSortExpr::new(
-                Arc::clone(&fixture.col_b),
-                SortOptions::new(true, false),
-            )]
-            .into(),
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let range_partitioning = fixture.range_partitioning_with_ordering(
+            [fixture.range_sort_expr(1, SortOptions::new(true, false))].into(),
             vec![int_split_point([10])],
-        ));
+        );
 
         let keep_b_mapping = ProjectionMapping::from_indices(&[1], &fixture.schema)?;
         let projected =
@@ -1297,23 +1243,17 @@ mod tests {
 
     #[test]
     fn test_range_partitioning_project_degrades_if_ordering_collapses() -> Result<()> {
-        let fixture = RangeTestFixture::new()?;
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
         let target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 0));
-        let range_partitioning = Partitioning::Range(RangePartitioning::new(
-            [
-                PhysicalSortExpr::new_default(Arc::clone(&fixture.col_a)),
-                PhysicalSortExpr::new_default(Arc::clone(&fixture.col_b)),
-            ]
-            .into(),
-            vec![int_split_point([10, 100])],
-        ));
+        let range_partitioning =
+            fixture.range_partitioning([0, 1], vec![int_split_point([10, 100])]);
         let mapping = ProjectionMapping::from_iter([
             (
-                Arc::clone(&fixture.col_a),
+                fixture.col(0),
                 ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
             ),
             (
-                Arc::clone(&fixture.col_b),
+                fixture.col(1),
                 ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
             ),
         ]);
@@ -1329,16 +1269,10 @@ mod tests {
 
     #[test]
     fn test_multi_partition_range_does_not_satisfy_hash_distribution() -> Result<()> {
-        let fixture = RangeTestFixture::new()?;
-        let range_partitioning = Partitioning::Range(RangePartitioning::new(
-            [
-                PhysicalSortExpr::new_default(Arc::clone(&fixture.col_a)),
-                PhysicalSortExpr::new_default(Arc::clone(&fixture.col_b)),
-            ]
-            .into(),
-            vec![int_split_point([10, 100])],
-        ));
-        let required = Distribution::HashPartitioned(vec![fixture.col_a, fixture.col_b]);
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let range_partitioning =
+            fixture.range_partitioning([0, 1], vec![int_split_point([10, 100])]);
+        let required = fixture.hash_distribution([0, 1]);
 
         assert_eq!(
             range_partitioning.satisfaction(&required, &fixture.eq_properties, false),
