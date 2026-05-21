@@ -201,7 +201,8 @@ impl Display for Partitioning {
 /// ```
 ///
 /// NOTE: Optimizer and execution behavior for this partitioning is intentionally
-/// not implemented and will be introduced incrementally.
+/// not implemented and will be introduced incrementally. See
+/// <https://github.com/apache/datafusion/issues/22395>.
 #[derive(Debug, Clone)]
 pub struct RangePartitioning {
     /// Ordered partitioning key.
@@ -486,7 +487,9 @@ impl Partitioning {
                     Partitioning::UnknownPartitioning(range.partition_count())
                 }
             }
-            _ => self.clone(),
+            Partitioning::RoundRobinBatch(_) | Partitioning::UnknownPartitioning(_) => {
+                self.clone()
+            }
         }
     }
 }
@@ -557,7 +560,7 @@ mod tests {
     use crate::projection::ProjectionTargets;
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
 
     #[test]
@@ -1055,14 +1058,38 @@ mod tests {
         )
     }
 
+    struct RangeTestFixture {
+        schema: SchemaRef,
+        col_a: Arc<dyn PhysicalExpr>,
+        col_b: Arc<dyn PhysicalExpr>,
+        eq_properties: EquivalenceProperties,
+    }
+
+    impl RangeTestFixture {
+        fn new() -> Result<Self> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("b", DataType::Int64, false),
+            ]));
+            let col_a = Arc::new(Column::new_with_schema("a", &schema)?);
+            let col_b = Arc::new(Column::new_with_schema("b", &schema)?);
+            let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+            Ok(Self {
+                schema,
+                col_a,
+                col_b,
+                eq_properties,
+            })
+        }
+    }
+
     #[test]
     fn test_range_partitioning_metadata() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
-        let col_a: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("a", &schema)?);
+        let fixture = RangeTestFixture::new()?;
 
         let range_partitioning = RangePartitioning::new(
-            [PhysicalSortExpr::new_default(Arc::clone(&col_a))].into(),
+            [PhysicalSortExpr::new_default(Arc::clone(&fixture.col_a))].into(),
             vec![int_split_point([10]), int_split_point([20])],
         );
         assert_eq!(range_partitioning.ordering()[0].to_string(), "a@0 ASC");
@@ -1083,27 +1110,27 @@ mod tests {
 
     #[test]
     fn test_range_partitioning_project_preserves_or_degrades() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-        ]));
-        let col_b: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("b", &schema)?);
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let fixture = RangeTestFixture::new()?;
         let range_partitioning = Partitioning::Range(RangePartitioning::new(
-            [PhysicalSortExpr::new(col_b, SortOptions::new(true, false))].into(),
+            [PhysicalSortExpr::new(
+                Arc::clone(&fixture.col_b),
+                SortOptions::new(true, false),
+            )]
+            .into(),
             vec![int_split_point([10])],
         ));
 
-        let keep_b_mapping = ProjectionMapping::from_indices(&[1], &schema)?;
-        let projected = range_partitioning.project(&keep_b_mapping, &eq_properties);
+        let keep_b_mapping = ProjectionMapping::from_indices(&[1], &fixture.schema)?;
+        let projected =
+            range_partitioning.project(&keep_b_mapping, &fixture.eq_properties);
         assert_eq!(
             projected.to_string(),
             "Range([b@0 DESC NULLS LAST], [(10)], 2)"
         );
 
-        let drop_b_mapping = ProjectionMapping::from_indices(&[0], &schema)?;
-        let projected = range_partitioning.project(&drop_b_mapping, &eq_properties);
+        let drop_b_mapping = ProjectionMapping::from_indices(&[0], &fixture.schema)?;
+        let projected =
+            range_partitioning.project(&drop_b_mapping, &fixture.eq_properties);
         let Partitioning::UnknownPartitioning(partition_count) = projected else {
             panic!("expected UnknownPartitioning, got {projected:?}");
         };
@@ -1114,36 +1141,28 @@ mod tests {
 
     #[test]
     fn test_range_partitioning_project_degrades_if_ordering_collapses() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-        ]));
-        let col_a: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("b", &schema)?);
+        let fixture = RangeTestFixture::new()?;
         let target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 0));
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
         let range_partitioning = Partitioning::Range(RangePartitioning::new(
             [
-                PhysicalSortExpr::new_default(Arc::clone(&col_a)),
-                PhysicalSortExpr::new_default(Arc::clone(&col_b)),
+                PhysicalSortExpr::new_default(Arc::clone(&fixture.col_a)),
+                PhysicalSortExpr::new_default(Arc::clone(&fixture.col_b)),
             ]
             .into(),
             vec![int_split_point([10, 100])],
         ));
         let mapping = ProjectionMapping::from_iter([
             (
-                Arc::clone(&col_a),
+                Arc::clone(&fixture.col_a),
                 ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
             ),
             (
-                Arc::clone(&col_b),
+                Arc::clone(&fixture.col_b),
                 ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
             ),
         ]);
 
-        let projected = range_partitioning.project(&mapping, &eq_properties);
+        let projected = range_partitioning.project(&mapping, &fixture.eq_properties);
         let Partitioning::UnknownPartitioning(partition_count) = projected else {
             panic!("expected UnknownPartitioning, got {projected:?}");
         };
@@ -1154,28 +1173,19 @@ mod tests {
 
     #[test]
     fn test_multi_partition_range_does_not_satisfy_hash_distribution() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-        ]));
-        let col_a: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new_with_schema("b", &schema)?);
-
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let fixture = RangeTestFixture::new()?;
         let range_partitioning = Partitioning::Range(RangePartitioning::new(
             [
-                PhysicalSortExpr::new_default(Arc::clone(&col_a)),
-                PhysicalSortExpr::new_default(Arc::clone(&col_b)),
+                PhysicalSortExpr::new_default(Arc::clone(&fixture.col_a)),
+                PhysicalSortExpr::new_default(Arc::clone(&fixture.col_b)),
             ]
             .into(),
             vec![int_split_point([10, 100])],
         ));
-        let required = Distribution::HashPartitioned(vec![col_a, col_b]);
+        let required = Distribution::HashPartitioned(vec![fixture.col_a, fixture.col_b]);
 
         assert_eq!(
-            range_partitioning.satisfaction(&required, &eq_properties, false),
+            range_partitioning.satisfaction(&required, &fixture.eq_properties, false),
             PartitioningSatisfaction::NotSatisfied
         );
 
