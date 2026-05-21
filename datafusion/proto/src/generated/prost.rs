@@ -388,6 +388,8 @@ pub struct JoinNode {
     pub null_equality: i32,
     #[prost(message, optional, boxed, tag = "8")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(bool, tag = "9")]
+    pub null_aware: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DistinctNode {
