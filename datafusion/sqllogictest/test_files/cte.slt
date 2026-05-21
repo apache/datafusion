@@ -842,7 +842,7 @@ logical_plan
 03)----Projection: Int64(1) AS val
 04)------EmptyRelation: rows=1
 05)----Projection: Int64(2) AS val
-06)------Cross Join: 
+06)------Cross Join:
 07)--------Filter: recursive_cte.val < Int64(2)
 08)----------TableScan: recursive_cte
 09)--------SubqueryAlias: sub_cte
@@ -852,14 +852,14 @@ physical_plan
 01)RecursiveQueryExec: name=recursive_cte, is_distinct=false
 02)--ProjectionExec: expr=[1 as val]
 03)----PlaceholderRowExec
-04)--ProjectionExec: expr=[2 as val]
-05)----CrossJoinExec
-06)------CoalescePartitionsExec
+04)--CoalescePartitionsExec
+05)----ProjectionExec: expr=[2 as val]
+06)------CrossJoinExec
 07)--------FilterExec: val@0 < 2
 08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)------------WorkTableExec: name=recursive_cte
-10)------ProjectionExec: expr=[2 as val]
-11)--------PlaceholderRowExec
+10)--------ProjectionExec: expr=[2 as val]
+11)----------PlaceholderRowExec
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different types
@@ -1045,7 +1045,7 @@ query TT
 explain SELECT * FROM j1, LATERAL (SELECT 1) AS j2;
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--TableScan: j1 projection=[a]
 03)--SubqueryAlias: j2
 04)----Projection: Int64(1)
