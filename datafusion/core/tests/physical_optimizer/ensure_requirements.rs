@@ -195,6 +195,22 @@ fn plan_string(plan: &Arc<dyn ExecutionPlan>) -> String {
         .to_string()
 }
 
+/// Run `EnsureRequirements`, assert `SanityCheckPlan` passes, and snapshot
+/// the resulting plan with `insta`. Use this for plan-shape tests so that
+/// updating an intentional plan change is a single `cargo insta accept`.
+macro_rules! assert_ensure_requirements_plan {
+    ($plan:expr, @ $snapshot:literal $(,)?) => {{
+        let config = ConfigOptions::default();
+        let optimized = EnsureRequirements::new()
+            .optimize($plan, &config)
+            .expect("EnsureRequirements::optimize failed");
+        SanityCheckPlan::new()
+            .optimize(Arc::clone(&optimized), &config)
+            .expect("SanityCheckPlan failed");
+        insta::assert_snapshot!(plan_string(&optimized), @ $snapshot);
+    }};
+}
+
 /// Union with mixed partition counts + sort + limit.
 #[test]
 fn test_union_mixed_partitions_sort_limit() {
@@ -206,10 +222,17 @@ fn test_union_mixed_partitions_sort_limit() {
     let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, union));
-    let limit = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
-    let result = optimize_and_sanity_check(limit);
-    assert!(result.is_ok(), "SanityCheckPlan failed: {:?}", result.err());
+    assert_ensure_requirements_plan!(limit, @r"
+    GlobalLimitExec: skip=0, fetch=21
+      SortPreservingMergeExec: [a@0 DESC]
+        UnionExec
+          SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
+            MockMultiPartitionExec
+          SortExec: expr=[a@0 DESC], preserve_partitioning=[false]
+            MockMultiPartitionExec
+    ");
 }
 
 /// Idempotency: union with mixed partitions
@@ -249,12 +272,13 @@ fn test_projection_over_multi_partition_sort_limit() {
     let sort = Arc::new(SortExec::new(sort_expr, projection));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
-    let result = optimize_and_sanity_check(Arc::clone(&limit));
-    assert!(
-        result.is_ok(),
-        "SanityCheckPlan failed for projection over multi-partition: {:?}",
-        result.err()
-    );
+    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    GlobalLimitExec: skip=0, fetch=21
+      SortPreservingMergeExec: [a@0 DESC]
+        SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
+          ProjectionExec: expr=[a@0 as a, b@1 as b]
+            MockMultiPartitionExec
+    ");
     assert_idempotent(limit);
 }
 
@@ -272,14 +296,13 @@ fn test_single_partition_no_unnecessary_spm() {
     let sort = Arc::new(SortExec::new(sort_expr, source));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
-    let optimized = optimize_and_sanity_check(limit).unwrap();
-    let plan_str = plan_string(&optimized);
-
-    // Single partition should not have SortPreservingMergeExec
-    assert!(
-        !plan_str.contains("SortPreservingMergeExec"),
-        "Unnecessary SortPreservingMergeExec for single partition:\n{plan_str}"
-    );
+    // Snapshot asserts the plan-shape property: no `SortPreservingMergeExec`
+    // is added on a single-partition source.
+    assert_ensure_requirements_plan!(limit, @r"
+    GlobalLimitExec: skip=0, fetch=10
+      SortExec: expr=[a@0 DESC], preserve_partitioning=[false]
+        MockMultiPartitionExec
+    ");
 }
 
 /// Source already has correct ordering → should not add SortExec.
@@ -293,15 +316,12 @@ fn test_sort_already_satisfied_no_extra_sort() {
     let sort = Arc::new(SortExec::new(sort_expr, source));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
-    let optimized = optimize_and_sanity_check(limit).unwrap();
-    let plan_str = plan_string(&optimized);
-
-    // Sort should be eliminated since source already satisfies ordering
-    // The plan should just be limit + source (or limit + local limit + source)
-    assert!(
-        !plan_str.contains("SortExec: expr=[a@0 ASC"),
-        "Unnecessary SortExec when ordering already satisfied:\n{plan_str}"
-    );
+    // Snapshot asserts the plan-shape property: no `SortExec` is added
+    // when the source already satisfies the ordering.
+    assert_ensure_requirements_plan!(limit, @r"
+    GlobalLimitExec: skip=0, fetch=10
+      MockMultiPartitionExec
+    ");
 }
 
 // ========================================================================
@@ -344,12 +364,12 @@ fn test_coalesce_then_sort_limit() {
     let sort = Arc::new(SortExec::new(sort_expr, coalesce));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
-    let result = optimize_and_sanity_check(Arc::clone(&limit));
-    assert!(
-        result.is_ok(),
-        "SanityCheckPlan failed for coalesce+sort: {:?}",
-        result.err()
-    );
+    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    GlobalLimitExec: skip=0, fetch=10
+      SortPreservingMergeExec: [a@0 DESC]
+        SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
+          MockMultiPartitionExec
+    ");
     assert_idempotent(limit);
 }
 
@@ -375,12 +395,13 @@ fn test_filter_over_multi_partition_sort_limit() {
     let sort = Arc::new(SortExec::new(sort_expr, filter));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
-    let result = optimize_and_sanity_check(Arc::clone(&limit));
-    assert!(
-        result.is_ok(),
-        "SanityCheckPlan failed for filter+sort+limit: {:?}",
-        result.err()
-    );
+    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    GlobalLimitExec: skip=0, fetch=21
+      SortPreservingMergeExec: [a@0 DESC]
+        SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
+          FilterExec: true
+            MockMultiPartitionExec
+    ");
     assert_idempotent(limit);
 }
 
@@ -401,12 +422,11 @@ fn test_repartition_sort_limit_idempotent() {
     let sort = Arc::new(SortExec::new(sort_expr, repartition));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
-    let result = optimize_and_sanity_check(Arc::clone(&limit));
-    assert!(
-        result.is_ok(),
-        "SanityCheckPlan failed for repartition+sort: {:?}",
-        result.err()
-    );
+    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    GlobalLimitExec: skip=0, fetch=10
+      SortExec: expr=[a@0 DESC], preserve_partitioning=[false]
+        MockMultiPartitionExec
+    ");
     assert_idempotent(limit);
 }
 
@@ -425,12 +445,12 @@ fn test_skip_and_fetch_multi_partition() {
     // skip=5, fetch=10
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 5, Some(10)));
 
-    let result = optimize_and_sanity_check(Arc::clone(&limit));
-    assert!(
-        result.is_ok(),
-        "SanityCheckPlan failed for skip+fetch: {:?}",
-        result.err()
-    );
+    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    GlobalLimitExec: skip=5, fetch=10
+      SortPreservingMergeExec: [a@0 DESC]
+        SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
+          MockMultiPartitionExec
+    ");
     assert_idempotent(limit);
 }
 
@@ -464,12 +484,12 @@ fn test_multi_column_sort_multi_partition() {
     let sort = Arc::new(SortExec::new(sort_expr, source));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
-    let result = optimize_and_sanity_check(Arc::clone(&limit));
-    assert!(
-        result.is_ok(),
-        "SanityCheckPlan failed for multi-column sort: {:?}",
-        result.err()
-    );
+    assert_ensure_requirements_plan!(Arc::clone(&limit), @r"
+    GlobalLimitExec: skip=0, fetch=21
+      SortPreservingMergeExec: [a@0 DESC, b@1 ASC NULLS LAST]
+        SortExec: expr=[a@0 DESC, b@1 ASC NULLS LAST], preserve_partitioning=[true]
+          MockMultiPartitionExec
+    ");
     assert_idempotent(limit);
 }
 
@@ -501,21 +521,14 @@ fn test_output_requirement_single_partition_over_multi_partition_source() {
         Some(21),
     ));
 
-    // Run EnsureRequirements (which composes distribution + sorting internally)
-    let config = ConfigOptions::default();
-    let optimized = EnsureRequirements::new()
-        .optimize(output_req, &config)
-        .expect("optimize failed");
-
-    let plan_str = plan_string(&optimized);
-
-    // SinglePartition must be satisfied (via SPM or Coalesce+Sort).
-    let sanity = SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config);
-    assert!(
-        sanity.is_ok(),
-        "SanityCheckPlan failed for SinglePartition + multi-partition source:\n{plan_str}\nError: {:?}",
-        sanity.err()
-    );
+    // SinglePartition must be satisfied (via SPM or Coalesce+Sort) — snapshot
+    // documents which one the optimizer chooses.
+    assert_ensure_requirements_plan!(output_req, @r"
+    OutputRequirementExec: order_by=[(a@0, desc)], dist_by=SinglePartition
+      SortPreservingMergeExec: [a@0 DESC], fetch=21
+        SortExec: TopK(fetch=21), expr=[a@0 DESC], preserve_partitioning=[true]
+          MockMultiPartitionExec
+    ");
 }
 
 /// Regression: `pushdown_sorts` pushes a sort through a `ProjectionExec`
@@ -549,21 +562,16 @@ fn test_sort_pushdown_through_projection_adds_spm() {
         Some(21),
     ));
 
-    let config = ConfigOptions::default();
-    let optimized = EnsureRequirements::new()
-        .optimize(output_req, &config)
-        .expect("optimize failed");
-
-    let plan_str = plan_string(&optimized);
-
     // SinglePartition must be satisfied. The final ensure_distribution pass
-    // adds CoalescePartitionsExec or SortPreservingMergeExec as needed.
-    let sanity = SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config);
-    assert!(
-        sanity.is_ok(),
-        "SanityCheckPlan failed for projection + multi-partition:\n{plan_str}\nError: {:?}",
-        sanity.err()
-    );
+    // adds CoalescePartitionsExec or SortPreservingMergeExec as needed — the
+    // snapshot documents which.
+    assert_ensure_requirements_plan!(output_req, @r"
+    OutputRequirementExec: order_by=[(a@0, desc)], dist_by=SinglePartition
+      SortPreservingMergeExec: [a@0 DESC], fetch=21
+        SortExec: TopK(fetch=21), expr=[a@0 DESC], preserve_partitioning=[true]
+          ProjectionExec: expr=[a@0 as a, b@1 as b]
+            MockMultiPartitionExec
+    ");
 }
 
 // ========================================================================
