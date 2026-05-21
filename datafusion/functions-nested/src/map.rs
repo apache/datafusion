@@ -25,8 +25,8 @@ use arrow::array::{
 };
 use arrow::buffer::Buffer;
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Field, Int8Type, Int16Type, Int32Type, Int64Type,
-    SchemaBuilder, ToByteSlice, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    DataType, Date32Type, Date64Type, Field, FieldRef, Int8Type, Int16Type, Int32Type,
+    Int64Type, SchemaBuilder, ToByteSlice, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
@@ -35,8 +35,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -63,7 +63,45 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
+#[cfg(test)]
 fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let [keys_arg, values_arg] = take_function_args("make_map", args)?;
+    let key_dt = match keys_arg.data_type() {
+        DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+            f.data_type().clone()
+        }
+        dt => dt,
+    };
+    let value_dt = match values_arg.data_type() {
+        DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+            f.data_type().clone()
+        }
+        dt => dt,
+    };
+    let entries: FieldRef = Arc::new(Field::new(
+        "entries",
+        DataType::Struct(
+            vec![
+                Field::new("key", key_dt, false),
+                Field::new("value", value_dt, true),
+            ]
+            .into(),
+        ),
+        false,
+    ));
+    make_map_batch_with_entries(args, entries)
+}
+
+/// Build a `MapArray` from `keys` and `values` argument lists, using
+/// `entries` as the resulting map's `Struct<key, value>` entries field.
+///
+/// `entries` carries the per-field metadata propagated from the input
+/// element fields, so each field-construction site below uses it directly
+/// to preserve Arrow extension types through `map(...)` calls.
+fn make_map_batch_with_entries(
+    args: &[ColumnarValue],
+    entries: FieldRef,
+) -> Result<ColumnarValue> {
     let [keys_arg, values_arg] = take_function_args("make_map", args)?;
 
     let can_evaluate_to_const = can_evaluate_to_const(args);
@@ -103,7 +141,13 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let values = get_first_array_ref(values_arg)?;
 
-    make_map_batch_internal(&keys, &values, can_evaluate_to_const, &keys_arg.data_type())
+    make_map_batch_internal(
+        &keys,
+        &values,
+        can_evaluate_to_const,
+        &keys_arg.data_type(),
+        entries,
+    )
 }
 
 fn validate_unique_primitive_keys<T: ArrowPrimitiveType>(array: &dyn Array) -> Result<()>
@@ -244,6 +288,7 @@ fn make_map_batch_internal(
     values: &ArrayRef,
     can_evaluate_to_const: bool,
     data_type: &DataType,
+    entries: FieldRef,
 ) -> Result<ColumnarValue> {
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
@@ -254,11 +299,13 @@ fn make_map_batch_internal(
     // 2. NULL maps present (keys.null_count() > 0) - fast path doesn't handle NULL list elements
     if !can_evaluate_to_const || keys.null_count() > 0 {
         return match data_type {
-            DataType::LargeList(..) => make_map_array_internal::<i64>(keys, values),
-            DataType::List(..) => make_map_array_internal::<i32>(keys, values),
+            DataType::LargeList(..) => {
+                make_map_array_internal::<i64>(keys, values, entries)
+            }
+            DataType::List(..) => make_map_array_internal::<i32>(keys, values, entries),
             DataType::FixedSizeList(..) => {
                 // FixedSizeList doesn't use OffsetSizeTrait, so handle it separately
-                make_map_array_from_fixed_size_list(keys, values)
+                make_map_array_from_fixed_size_list(keys, values, entries)
             }
             _ => exec_err!(
                 "Expected List, LargeList, or FixedSizeList, got {:?}",
@@ -267,8 +314,10 @@ fn make_map_batch_internal(
         };
     }
 
-    let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
-    let value_field = Arc::new(Field::new("value", values.data_type().clone(), true));
+    let (key_field, value_field) =
+        key_value_fields_from_entries(&entries, keys.data_type(), values.data_type());
+    let key_field = Arc::new(key_field);
+    let value_field = Arc::new(value_field);
     let mut entry_struct_buffer: VecDeque<(Arc<Field>, ArrayRef)> = VecDeque::new();
     let mut entry_offsets_buffer = VecDeque::new();
     entry_offsets_buffer.push_back(0);
@@ -280,14 +329,23 @@ fn make_map_batch_internal(
     let entry_struct: Vec<(Arc<Field>, ArrayRef)> = entry_struct_buffer.into();
     let entry_struct = StructArray::from(entry_struct);
 
-    let map_data_type = DataType::Map(
+    // The planning-time `entries` field may declare a struct shape that
+    // doesn't match the runtime `entry_struct` (e.g. when the key/value
+    // arguments are not list-shaped). In that case, fall back to building
+    // a fresh entries field from the runtime struct so the resulting
+    // MapArray is well-formed; otherwise use the planning-time field.
+    let entries_field = if let DataType::Struct(_) = entries.data_type()
+        && entries.data_type() == entry_struct.data_type()
+    {
+        entries
+    } else {
         Arc::new(Field::new(
             "entries",
             entry_struct.data_type().clone(),
             false,
-        )),
-        false,
-    );
+        ))
+    };
+    let map_data_type = DataType::Map(entries_field, false);
 
     let entry_offsets: Vec<u32> = entry_offsets_buffer.into();
     let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
@@ -398,8 +456,44 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [keys_arg, values_arg] = take_function_args(self.name(), args.arg_fields)?;
+
+        // Element fields preserve the input lists' element-field metadata
+        // (e.g. Arrow extension types). Override only the name and nullable
+        // flag to match the canonical map entries schema (key non-null,
+        // value nullable).
+        let key_field = get_element_field(keys_arg)?
+            .as_ref()
+            .clone()
+            .with_name("key")
+            .with_nullable(false);
+        let value_field = get_element_field(values_arg)?
+            .as_ref()
+            .clone()
+            .with_name("value")
+            .with_nullable(true);
+
+        let mut builder = SchemaBuilder::new();
+        builder.push(key_field);
+        builder.push(value_field);
+        let fields = builder.finish().fields;
+        let entries = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Map(entries, false),
+            false,
+        )))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_map_batch(&args.args)
+        let DataType::Map(entries, _) = args.return_field.data_type() else {
+            return datafusion_common::internal_err!(
+                "map return field must be DataType::Map, got {:?}",
+                args.return_field.data_type()
+            );
+        };
+        make_map_batch_with_entries(&args.args, Arc::clone(entries))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -417,6 +511,51 @@ fn get_element_type(data_type: &DataType) -> Result<&DataType> {
             data_type
         ),
     }
+}
+
+/// Like [`get_element_type`] but returns the full inner [`Field`] so callers
+/// can read its metadata (used to propagate Arrow extension types onto the
+/// resulting map's `key` / `value` fields).
+///
+/// `ListView` / `LargeListView` are included here so that whenever the
+/// runtime gains support for them as `map(...)` inputs, planning-time
+/// metadata propagation is already wired up.
+fn get_element_field(field: &FieldRef) -> Result<&FieldRef> {
+    match field.data_type() {
+        DataType::List(inner)
+        | DataType::LargeList(inner)
+        | DataType::FixedSizeList(inner, _)
+        | DataType::ListView(inner)
+        | DataType::LargeListView(inner) => Ok(inner),
+        dt => exec_err!(
+            "Expected list, large_list, fixed_size_list, list_view or large_list_view, got {:?}",
+            dt
+        ),
+    }
+}
+
+/// Extract `(key, value)` member fields from a map's `entries` struct field.
+///
+/// Falls back to bare key/value fields built from the supplied data types if
+/// the struct shape is unexpected, or member data types disagree (which can
+/// happen on the array path that flattens nested lists and on call sites
+/// that don't know the runtime key/value types ahead of time).
+fn key_value_fields_from_entries(
+    entries: &Field,
+    key_data_type: &DataType,
+    value_data_type: &DataType,
+) -> (Field, Field) {
+    if let DataType::Struct(fields) = entries.data_type()
+        && fields.len() == 2
+        && fields[0].data_type() == key_data_type
+        && fields[1].data_type() == value_data_type
+    {
+        return (fields[0].as_ref().clone(), fields[1].as_ref().clone());
+    }
+    (
+        Field::new("key", key_data_type.clone(), false),
+        Field::new("value", value_data_type.clone(), true),
+    )
 }
 
 /// Helper function to create MapArray from array of values to support arrays for Map scalar function
@@ -477,6 +616,7 @@ fn get_element_type(data_type: &DataType) -> Result<&DataType> {
 fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: &ArrayRef,
     values: &ArrayRef,
+    entries: FieldRef,
 ) -> Result<ColumnarValue> {
     // Save original data types and array length before list_to_arrays transforms them
     let keys_data_type = keys.data_type().clone();
@@ -497,6 +637,7 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
         &values_data_type,
         original_len,
         nulls_bitmap,
+        entries,
     )
 }
 
@@ -505,6 +646,7 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
 fn make_map_array_from_fixed_size_list(
     keys: &ArrayRef,
     values: &ArrayRef,
+    entries: FieldRef,
 ) -> Result<ColumnarValue> {
     // Save original data types and array length
     let keys_data_type = keys.data_type().clone();
@@ -525,6 +667,7 @@ fn make_map_array_from_fixed_size_list(
         &values_data_type,
         original_len,
         nulls_bitmap,
+        entries,
     )
 }
 fn list_to_arrays_skipping_null_rows<O: OffsetSizeTrait>(
@@ -571,6 +714,7 @@ fn build_map_array(
     values_data_type: &DataType,
     original_len: usize,
     nulls_bitmap: Option<arrow::buffer::NullBuffer>,
+    entries: FieldRef,
 ) -> Result<ColumnarValue> {
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
@@ -633,14 +777,12 @@ fn build_map_array(
         (flattened_keys, flattened_values)
     };
 
-    let fields = vec![
-        Arc::new(Field::new("key", flattened_keys.data_type().clone(), false)),
-        Arc::new(Field::new(
-            "value",
-            flattened_values.data_type().clone(),
-            true,
-        )),
-    ];
+    let (key_field, value_field) = key_value_fields_from_entries(
+        &entries,
+        flattened_keys.data_type(),
+        flattened_values.data_type(),
+    );
+    let fields = vec![Arc::new(key_field), Arc::new(value_field)];
 
     let struct_data = ArrayData::builder(DataType::Struct(fields.into()))
         .len(flattened_keys.len())
@@ -648,17 +790,22 @@ fn build_map_array(
         .add_child_data(flattened_values.to_data())
         .build()?;
 
-    let mut map_data_builder = ArrayData::builder(DataType::Map(
+    // See `make_map_batch_internal`: prefer the planning-time `entries`
+    // field (carries metadata), but fall back if the runtime struct shape
+    // disagrees.
+    let entries_field = if entries.data_type() == struct_data.data_type() {
+        entries
+    } else {
         Arc::new(Field::new(
             "entries",
             struct_data.data_type().clone(),
             false,
-        )),
-        false,
-    ))
-    .len(original_len) // Use the original number of rows, not the filtered count
-    .add_child_data(struct_data)
-    .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()));
+        ))
+    };
+    let mut map_data_builder = ArrayData::builder(DataType::Map(entries_field, false))
+        .len(original_len) // Use the original number of rows, not the filtered count
+        .add_child_data(struct_data)
+        .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()));
 
     // Add the nulls bitmap if present (to preserve NULL map values)
     if let Some(nulls) = nulls_bitmap {
@@ -672,6 +819,56 @@ fn build_map_array(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression test for #21982: `map(...)` must propagate the input list
+    /// elements' metadata onto the map's `key` and `value` fields. Uses
+    /// arbitrary key/value metadata since we're asserting metadata flow,
+    /// not extension-type semantics.
+    #[test]
+    fn map_preserves_key_value_field_metadata() -> Result<()> {
+        use datafusion_expr::ReturnFieldArgs;
+
+        let key_inner: FieldRef =
+            Arc::new(Field::new("e", DataType::Utf8, false).with_metadata(
+                std::collections::HashMap::from([("unit".to_string(), "ms".to_string())]),
+            ));
+        let value_inner: FieldRef =
+            Arc::new(Field::new("e", DataType::Int64, true).with_metadata(
+                std::collections::HashMap::from([(
+                    "source".to_string(),
+                    "sensor".to_string(),
+                )]),
+            ));
+        let keys: FieldRef = Arc::new(Field::new(
+            "k",
+            DataType::List(Arc::clone(&key_inner)),
+            true,
+        ));
+        let values: FieldRef = Arc::new(Field::new(
+            "v",
+            DataType::List(Arc::clone(&value_inner)),
+            true,
+        ));
+        let arg_fields = vec![keys, values];
+        let scalar_args: Vec<Option<&ScalarValue>> = vec![None, None];
+        let rf = MapFunc::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_args,
+        })?;
+        let DataType::Map(entries, _) = rf.data_type() else {
+            panic!("expected Map");
+        };
+        let DataType::Struct(fields) = entries.data_type() else {
+            panic!("expected entries struct");
+        };
+        assert_eq!(fields[0].metadata().get("unit"), Some(&"ms".to_string()));
+        assert_eq!(
+            fields[1].metadata().get("source"),
+            Some(&"sensor".to_string())
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_make_map_with_null_maps() {
         // Test that NULL map values (entire map is NULL) are correctly handled
