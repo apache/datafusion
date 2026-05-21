@@ -64,14 +64,15 @@ impl OptimizerRule for PushDownLimit {
         let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
             return Ok(Transformed::no(LogicalPlan::Limit(limit)));
         };
+        let original_plan = LogicalPlan::Limit(limit.clone());
 
         // Merge the Parent Limit and the Child Limit.
         if let LogicalPlan::Limit(child) = limit.input.as_ref() {
             let SkipType::Literal(child_skip) = child.get_skip_type()? else {
-                return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+                return Ok(Transformed::no(original_plan));
             };
             let FetchType::Literal(child_fetch) = child.get_fetch_type()? else {
-                return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+                return Ok(Transformed::no(original_plan));
             };
 
             let (skip, fetch) = combine_limit(skip, fetch, child_skip, child_fetch);
@@ -82,15 +83,16 @@ impl OptimizerRule for PushDownLimit {
             });
 
             // recursively reapply the rule on the new plan
-            return self.rewrite(plan, config);
+            let result = self.rewrite(plan, config)?;
+            return Ok(Transformed::new(result.data, true, result.tnr));
         }
 
         // no fetch to push, so return the original plan
         let Some(fetch) = fetch else {
-            return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+            return Ok(Transformed::no(original_plan));
         };
 
-        match Arc::unwrap_or_clone(limit.input) {
+        match Arc::unwrap_or_clone(Arc::clone(&limit.input)) {
             LogicalPlan::TableScan(mut scan) => {
                 let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
                 let new_fetch = scan
@@ -98,7 +100,7 @@ impl OptimizerRule for PushDownLimit {
                     .map(|x| min(x, rows_needed))
                     .or(Some(rows_needed));
                 if new_fetch == scan.fetch {
-                    original_limit(skip, fetch, LogicalPlan::TableScan(scan))
+                    Ok(Transformed::no(original_plan))
                 } else {
                     // push limit into the table scan itself
                     scan.fetch = scan
@@ -110,18 +112,36 @@ impl OptimizerRule for PushDownLimit {
             }
             LogicalPlan::Union(mut union) => {
                 // push limits to each input of the union
+                let mut transformed = false;
                 union.inputs = union
                     .inputs
                     .into_iter()
-                    .map(|input| make_arc_limit(0, fetch + skip, input))
-                    .collect();
-                transformed_limit(skip, fetch, LogicalPlan::Union(union))
+                    .map(|input| {
+                        push_limit_if_needed(input, fetch + skip).map(
+                            |(new_input, limit_pushed)| {
+                                transformed |= limit_pushed;
+                                new_input
+                            },
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if transformed {
+                    transformed_limit(skip, fetch, LogicalPlan::Union(union))
+                } else {
+                    Ok(Transformed::no(original_plan))
+                }
             }
 
-            LogicalPlan::Join(join) => Ok(push_down_join(join, fetch + skip)
-                .update_data(|join| {
-                    make_limit(skip, fetch, Arc::new(LogicalPlan::Join(join)))
-                })),
+            LogicalPlan::Join(join) => {
+                let pushed = push_down_join(join, fetch + skip)?;
+                if pushed.transformed {
+                    Ok(pushed.update_data(|join| {
+                        make_limit(skip, fetch, Arc::new(LogicalPlan::Join(join)))
+                    }))
+                } else {
+                    Ok(Transformed::no(original_plan))
+                }
+            }
 
             LogicalPlan::Sort(mut sort) => {
                 let new_fetch = {
@@ -130,7 +150,7 @@ impl OptimizerRule for PushDownLimit {
                 };
                 if new_fetch == sort.fetch {
                     if skip > 0 {
-                        original_limit(skip, fetch, LogicalPlan::Sort(sort))
+                        Ok(Transformed::no(original_plan))
                     } else {
                         Ok(Transformed::yes(LogicalPlan::Sort(sort)))
                     }
@@ -177,7 +197,7 @@ impl OptimizerRule for PushDownLimit {
 
                 transformed_limit(skip, fetch, new_extension)
             }
-            input => original_limit(skip, fetch, input),
+            _ => Ok(Transformed::no(original_plan)),
         }
     }
 
@@ -219,15 +239,6 @@ fn make_arc_limit(
     Arc::new(make_limit(skip, fetch, input))
 }
 
-/// Returns the original limit (non transformed)
-fn original_limit(
-    skip: usize,
-    fetch: usize,
-    input: LogicalPlan,
-) -> Result<Transformed<LogicalPlan>> {
-    Ok(Transformed::no(make_limit(skip, fetch, Arc::new(input))))
-}
-
 /// Returns the a transformed limit
 fn transformed_limit(
     skip: usize,
@@ -238,7 +249,7 @@ fn transformed_limit(
 }
 
 /// Adds a limit to the inputs of a join, if possible
-fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
+fn push_down_join(mut join: Join, limit: usize) -> Result<Transformed<Join>> {
     use JoinType::*;
 
     // Cross join is the special case of inner join where there is no join condition. see [LogicalPlanBuilder::cross_join]
@@ -257,15 +268,50 @@ fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
     };
 
     if left_limit.is_none() && right_limit.is_none() {
-        return Transformed::no(join);
+        return Ok(Transformed::no(join));
     }
+    let mut transformed = false;
     if let Some(limit) = left_limit {
-        join.left = make_arc_limit(0, limit, join.left);
+        let (left, limit_pushed) = push_limit_if_needed(join.left, limit)?;
+        join.left = left;
+        transformed |= limit_pushed;
     }
     if let Some(limit) = right_limit {
-        join.right = make_arc_limit(0, limit, join.right);
+        let (right, limit_pushed) = push_limit_if_needed(join.right, limit)?;
+        join.right = right;
+        transformed |= limit_pushed;
     }
-    Transformed::yes(join)
+    if transformed {
+        Ok(Transformed::yes(join))
+    } else {
+        Ok(Transformed::no(join))
+    }
+}
+
+fn push_limit_if_needed(
+    input: Arc<LogicalPlan>,
+    limit: usize,
+) -> Result<(Arc<LogicalPlan>, bool)> {
+    if plan_has_fetch_limit(input.as_ref(), limit)? {
+        return Ok((input, false));
+    }
+    Ok((make_arc_limit(0, limit, input), true))
+}
+
+fn plan_has_fetch_limit(plan: &LogicalPlan, limit: usize) -> Result<bool> {
+    match plan {
+        LogicalPlan::Limit(limit_plan) => match limit_plan.get_fetch_type()? {
+            FetchType::Literal(Some(fetch)) => Ok(fetch <= limit),
+            _ => Ok(false),
+        },
+        LogicalPlan::Projection(projection) => {
+            plan_has_fetch_limit(projection.input.as_ref(), limit)
+        }
+        LogicalPlan::SubqueryAlias(subquery_alias) => {
+            plan_has_fetch_limit(subquery_alias.input.as_ref(), limit)
+        }
+        _ => Ok(false),
+    }
 }
 
 #[cfg(test)]

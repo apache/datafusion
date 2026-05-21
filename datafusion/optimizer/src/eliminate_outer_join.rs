@@ -80,6 +80,7 @@ impl OptimizerRule for EliminateOuterJoin {
         match plan {
             LogicalPlan::Filter(mut filter) => match Arc::unwrap_or_clone(filter.input) {
                 LogicalPlan::Join(join) => {
+                    let original_join_type = join.join_type;
                     let mut non_nullable_cols: Vec<Column> = vec![];
 
                     extract_non_nullable_columns(
@@ -109,6 +110,11 @@ impl OptimizerRule for EliminateOuterJoin {
                     } else {
                         join.join_type
                     };
+
+                    if new_join_type == original_join_type {
+                        filter.input = Arc::new(LogicalPlan::Join(join));
+                        return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    }
 
                     let new_join = Arc::new(LogicalPlan::Join(Join {
                         left: join.left,

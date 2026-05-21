@@ -125,12 +125,12 @@ impl SimplifyExpressions {
         // Preserve expression names to avoid changing the schema of the plan.
         let name_preserver = NamePreserver::new(&plan);
         let mut rewrite_expr = |expr: Expr| {
+            let original_expr = expr.clone();
             let name = name_preserver.save(&expr);
             let expr = simplifier.simplify_with_cycle_count_transformed(expr)?.0;
-            Ok(Transformed::new_transformed(
-                name.restore(expr.data),
-                expr.transformed,
-            ))
+            let restored_expr = name.restore(expr.data);
+            let transformed = restored_expr != original_expr;
+            Ok(Transformed::new_transformed(restored_expr, transformed))
         };
 
         plan.map_expressions(|expr| {
@@ -174,33 +174,39 @@ impl SimplifyExpressions {
 fn rewrite_aggregate_non_aggregate_aggr_expr(
     plan: LogicalPlan,
 ) -> Result<Transformed<LogicalPlan>> {
-    let LogicalPlan::Aggregate(Aggregate {
-        input,
-        group_expr,
-        mut aggr_expr,
-        schema,
-        ..
-    }) = plan
-    else {
+    let LogicalPlan::Aggregate(mut aggregate) = plan else {
         return Ok(Transformed::no(plan));
     };
 
-    let rewrote_aggs = rewrite_multiple_linear_aggregates(&mut aggr_expr)?;
+    let rewrote_aggs = rewrite_multiple_linear_aggregates(&mut aggregate.aggr_expr)?;
 
     // Ensure that all Aggregate arguments are AggregateExpr
-    if aggr_expr.iter().all(is_top_level_aggregate_expr) {
+    if aggregate.aggr_expr.iter().all(is_top_level_aggregate_expr) {
+        if !rewrote_aggs {
+            return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
+        }
+
+        let Aggregate {
+            input,
+            group_expr,
+            aggr_expr,
+            schema,
+            ..
+        } = aggregate;
         let new_plan = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
             input, group_expr, aggr_expr, schema,
         )?);
-        return if !rewrote_aggs {
-            Ok(Transformed::no(new_plan))
-        } else {
-            Ok(Transformed::yes(new_plan))
-        };
+        return Ok(Transformed::yes(new_plan));
     }
 
     // Otherwise we need to add a Projection above Aggregate to calculate
     // the final output expressions.
+    let Aggregate {
+        input,
+        group_expr,
+        aggr_expr,
+        ..
+    } = aggregate;
 
     let inner_aggr_expr = find_aggregate_exprs(aggr_expr.iter());
     let inner_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(

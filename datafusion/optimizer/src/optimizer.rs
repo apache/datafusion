@@ -633,6 +633,8 @@ impl Optimizer {
                     .then(|| new_plan.clone());
 
                 let starting_schema = Arc::clone(new_plan.schema());
+                #[cfg(debug_assertions)]
+                let input_plan = new_plan.clone();
 
                 let result = match rule.apply_order() {
                     // optimizer handles recursion
@@ -678,6 +680,26 @@ impl Optimizer {
                     },
                 }
                 .and_then(|tnr| {
+                    #[cfg(debug_assertions)]
+                    {
+                        let plan_changed = input_plan.ne(&tnr.data);
+                        if tnr.transformed {
+                            debug_assert!(
+                                plan_changed,
+                                "Optimizer rule '{}' returned Transformed::yes but did not change the plan\ninput:\n{input_plan}\noutput:\n{}",
+                                rule.name(),
+                                tnr.data,
+                            );
+                        } else {
+                            debug_assert!(
+                                !plan_changed,
+                                "Optimizer rule '{}' returned Transformed::no but changed the plan\ninput:\n{input_plan}\noutput:\n{}",
+                                rule.name(),
+                                tnr.data,
+                            );
+                        }
+                    }
+
                     // run checks optimizer invariant checks, per optimizer rule applied
                     assert_valid_optimization(&tnr.data, &starting_schema)
                         .map_err(|e| e.context(format!("Check optimizer-specific invariants after optimizer rule: {}", rule.name())))?;
@@ -986,13 +1008,16 @@ mod tests {
 
         fn rewrite(
             &self,
-            _plan: LogicalPlan,
+            plan: LogicalPlan,
             _config: &dyn OptimizerConfig,
         ) -> Result<Transformed<LogicalPlan>> {
             let table_scan = test_table_scan()?;
-            Ok(Transformed::yes(
-                LogicalPlanBuilder::from(table_scan).build()?,
-            ))
+            let new_plan = LogicalPlanBuilder::from(table_scan).build()?;
+            if new_plan == plan {
+                Ok(Transformed::no(plan))
+            } else {
+                Ok(Transformed::yes(new_plan))
+            }
         }
     }
 

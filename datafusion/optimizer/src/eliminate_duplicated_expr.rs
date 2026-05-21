@@ -66,7 +66,7 @@ impl OptimizerRule for EliminateDuplicatedExpr {
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Sort(sort) => {
-                let len = sort.expr.len();
+                let original_plan = LogicalPlan::Sort(sort.clone());
                 let unique_exprs: Vec<_> = sort
                     .expr
                     .into_iter()
@@ -94,27 +94,22 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     unique_exprs
                 };
 
-                let transformed = if len != unique_exprs.len() {
-                    Transformed::yes
-                } else {
-                    Transformed::no
-                };
-
                 if unique_exprs.is_empty() {
                     return internal_err!(
                         "FD pruning unexpectedly removed all ORDER BY expressions"
                     );
                 }
 
-                Ok(transformed(LogicalPlan::Sort(Sort {
+                let new_plan = LogicalPlan::Sort(Sort {
                     expr: unique_exprs,
                     input: sort.input,
                     fetch: sort.fetch,
-                })))
+                });
+
+                Ok(transformed_if_changed(original_plan, new_plan))
             }
             LogicalPlan::Aggregate(agg) => {
-                let len = agg.group_expr.len();
-
+                let original_plan = LogicalPlan::Aggregate(agg.clone());
                 let unique_exprs: Vec<Expr> = agg
                     .group_expr
                     .into_iter()
@@ -122,20 +117,26 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     .into_iter()
                     .collect();
 
-                let transformed = if len != unique_exprs.len() {
-                    Transformed::yes
-                } else {
-                    Transformed::no
-                };
-
                 Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr)
-                    .map(|f| transformed(LogicalPlan::Aggregate(f)))
+                    .map(LogicalPlan::Aggregate)
+                    .map(|plan| transformed_if_changed(original_plan, plan))
             }
             _ => Ok(Transformed::no(plan)),
         }
     }
     fn name(&self) -> &str {
         "eliminate_duplicated_expr"
+    }
+}
+
+fn transformed_if_changed(
+    original_plan: LogicalPlan,
+    new_plan: LogicalPlan,
+) -> Transformed<LogicalPlan> {
+    if new_plan == original_plan {
+        Transformed::no(original_plan)
+    } else {
+        Transformed::yes(new_plan)
     }
 }
 

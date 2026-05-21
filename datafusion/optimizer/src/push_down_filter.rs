@@ -498,17 +498,25 @@ fn push_down_all_join(
         ));
     }
 
+    let mut transformed = false;
     if let Some(predicate) = conjunction(left_push) {
-        join.left = Arc::new(LogicalPlan::Filter(Filter::try_new(predicate, join.left)?));
+        let (left, filter_added) = add_filter_if_needed(join.left, predicate)?;
+        join.left = left;
+        transformed |= filter_added;
     }
     if let Some(predicate) = conjunction(right_push) {
-        join.right =
-            Arc::new(LogicalPlan::Filter(Filter::try_new(predicate, join.right)?));
+        let (right, filter_added) = add_filter_if_needed(join.right, predicate)?;
+        join.right = right;
+        transformed |= filter_added;
     }
 
     // Add any new join conditions as the non join predicates
     join_conditions.extend(on_filter_join_conditions);
-    join.filter = conjunction(join_conditions);
+    let new_join_filter = conjunction(join_conditions);
+    if new_join_filter != join.filter {
+        join.filter = new_join_filter;
+        transformed = true;
+    }
 
     // wrap the join on the filter whose predicates must be kept, if any
     let plan = LogicalPlan::Join(join);
@@ -517,13 +525,54 @@ fn push_down_all_join(
     } else {
         plan
     };
-    Ok(Transformed::yes(plan))
+    Ok(Transformed::new_transformed(plan, transformed))
+}
+
+fn add_filter_if_needed(
+    input: Arc<LogicalPlan>,
+    predicate: Expr,
+) -> Result<(Arc<LogicalPlan>, bool)> {
+    let mut predicates = split_conjunction_owned(predicate);
+
+    predicates.retain(|predicate| !input_already_has_filter(input.as_ref(), predicate));
+
+    let Some(predicate) = conjunction(predicates) else {
+        return Ok((input, false));
+    };
+
+    Ok((
+        Arc::new(LogicalPlan::Filter(Filter::try_new(predicate, input)?)),
+        true,
+    ))
+}
+
+fn input_already_has_filter(input: &LogicalPlan, predicate: &Expr) -> bool {
+    match input {
+        LogicalPlan::Filter(filter) => {
+            split_conjunction(&filter.predicate).contains(&predicate)
+        }
+        LogicalPlan::TableScan(scan) => scan.filters.iter().any(|f| f == predicate),
+        LogicalPlan::Projection(projection) => {
+            input_already_has_filter(projection.input.as_ref(), predicate)
+        }
+        _ => false,
+    }
 }
 
 fn push_down_join(
     join: Join,
     parent_predicate: Option<&Expr>,
 ) -> Result<Transformed<LogicalPlan>> {
+    let original_join_plan = LogicalPlan::Join(join.clone());
+    let original_plan = if let Some(predicate) = parent_predicate {
+        LogicalPlan::Filter(Filter::try_new(
+            predicate.clone(),
+            Arc::new(original_join_plan),
+        )?)
+    } else {
+        original_join_plan
+    };
+
     // Split the parent predicate into individual conjunctive parts.
     let predicates = parent_predicate
         .map_or_else(Vec::new, |pred| split_conjunction_owned(pred.clone()));
@@ -557,6 +606,18 @@ fn push_down_join(
     }
 
     push_down_all_join(predicates, inferred_join_predicates, join, on_filters)
+        .map(|new_plan| transformed_if_changed(original_plan, new_plan.data))
+}
+
+fn transformed_if_changed(
+    original_plan: LogicalPlan,
+    new_plan: LogicalPlan,
+) -> Transformed<LogicalPlan> {
+    if new_plan == original_plan {
+        Transformed::no(original_plan)
+    } else {
+        Transformed::yes(new_plan)
+    }
 }
 
 /// Extracts any equi-join join predicates from the given filter expressions.
@@ -786,8 +847,10 @@ impl OptimizerRule for PushDownFilter {
 
         let predicate = split_conjunction_owned(filter.predicate.clone());
         let old_predicate_len = predicate.len();
-        let new_predicates =
-            with_debug_timing("simplify_predicates", || simplify_predicates(predicate))?;
+        let new_predicates = with_debug_timing("simplify_predicates", || {
+            simplify_predicates(predicate.clone())
+        })?;
+        let predicate_changed = predicate != new_predicates;
         if log_enabled!(Level::Debug) {
             debug!(
                 "push_down_filter: simplify_predicates old_count={}, new_count={}",
@@ -795,7 +858,7 @@ impl OptimizerRule for PushDownFilter {
                 new_predicates.len()
             );
         }
-        if old_predicate_len != new_predicates.len() {
+        if predicate_changed {
             let Some(new_predicate) = conjunction(new_predicates) else {
                 // new_predicates is empty - remove the filter entirely
                 // Return the child plan without the filter
@@ -808,7 +871,10 @@ impl OptimizerRule for PushDownFilter {
         // below it would change semantics: the limit/offset should apply before
         // the filter, not after.
         if filter.input.fetch()?.is_some() || filter.input.skip()?.is_some() {
-            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+            return Ok(Transformed::new_transformed(
+                LogicalPlan::Filter(filter),
+                predicate_changed,
+            ));
         }
 
         match Arc::unwrap_or_clone(filter.input) {
@@ -829,7 +895,8 @@ impl OptimizerRule for PushDownFilter {
                     child_filter.input,
                 )?);
 
-                self.rewrite(new_filter, config)
+                let result = self.rewrite(new_filter, config)?;
+                Ok(Transformed::new(result.data, true, result.tnr))
             }
             LogicalPlan::Repartition(repartition) => {
                 let new_filter =
@@ -883,7 +950,10 @@ impl OptimizerRule for PushDownFilter {
                     }
                 } else {
                     filter.input = Arc::new(new_projection.data);
-                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                    Ok(Transformed::new_transformed(
+                        LogicalPlan::Filter(filter),
+                        predicate_changed,
+                    ))
                 }
             }
             LogicalPlan::Unnest(mut unnest) => {
@@ -931,7 +1001,10 @@ impl OptimizerRule for PushDownFilter {
                 // If no non-unnest predicates exist, early return
                 if non_unnest_predicates.is_empty() {
                     filter.input = Arc::new(LogicalPlan::Unnest(unnest));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new_transformed(
+                        LogicalPlan::Filter(filter),
+                        predicate_changed,
+                    ));
                 }
 
                 // Push down non-unnest filter predicate
@@ -1024,25 +1097,28 @@ impl OptimizerRule for PushDownFilter {
                     .collect::<Result<Vec<_>>>()?;
 
                 let agg_input = Arc::clone(&agg.input);
-                Transformed::yes(LogicalPlan::Aggregate(agg))
-                    .transform_data(|new_plan| {
-                        // If we have a filter to push, we push it down to the input of the aggregate
-                        if let Some(predicate) = conjunction(replaced_push_predicates) {
-                            let new_filter = make_filter(predicate, agg_input)?;
-                            insert_below(new_plan, new_filter)
-                        } else {
-                            Ok(Transformed::no(new_plan))
-                        }
-                    })?
-                    .map_data(|child_plan| {
-                        // if there are any remaining predicates we can't push, add them
-                        // back as a filter
-                        if let Some(predicate) = conjunction(keep_predicates) {
-                            make_filter(predicate, Arc::new(child_plan))
-                        } else {
-                            Ok(child_plan)
-                        }
-                    })
+                Transformed::new_transformed(
+                    LogicalPlan::Aggregate(agg),
+                    predicate_changed,
+                )
+                .transform_data(|new_plan| {
+                    // If we have a filter to push, we push it down to the input of the aggregate
+                    if let Some(predicate) = conjunction(replaced_push_predicates) {
+                        let new_filter = make_filter(predicate, agg_input)?;
+                        insert_below(new_plan, new_filter)
+                    } else {
+                        Ok(Transformed::no(new_plan))
+                    }
+                })?
+                .map_data(|child_plan| {
+                    // if there are any remaining predicates we can't push, add them
+                    // back as a filter
+                    if let Some(predicate) = conjunction(keep_predicates) {
+                        make_filter(predicate, Arc::new(child_plan))
+                    } else {
+                        Ok(child_plan)
+                    }
+                })
             }
             // Tries to push filters based on the partition key(s) of the window function(s) used.
             // Example:
@@ -1120,25 +1196,28 @@ impl OptimizerRule for PushDownFilter {
                 // optimizers, such as the one used by Postgres.
 
                 let window_input = Arc::clone(&window.input);
-                Transformed::yes(LogicalPlan::Window(window))
-                    .transform_data(|new_plan| {
-                        // If we have a filter to push, we push it down to the input of the window
-                        if let Some(predicate) = conjunction(push_predicates) {
-                            let new_filter = make_filter(predicate, window_input)?;
-                            insert_below(new_plan, new_filter)
-                        } else {
-                            Ok(Transformed::no(new_plan))
-                        }
-                    })?
-                    .map_data(|child_plan| {
-                        // if there are any remaining predicates we can't push, add them
-                        // back as a filter
-                        if let Some(predicate) = conjunction(keep_predicates) {
-                            make_filter(predicate, Arc::new(child_plan))
-                        } else {
-                            Ok(child_plan)
-                        }
-                    })
+                Transformed::new_transformed(
+                    LogicalPlan::Window(window),
+                    predicate_changed,
+                )
+                .transform_data(|new_plan| {
+                    // If we have a filter to push, we push it down to the input of the window
+                    if let Some(predicate) = conjunction(push_predicates) {
+                        let new_filter = make_filter(predicate, window_input)?;
+                        insert_below(new_plan, new_filter)
+                    } else {
+                        Ok(Transformed::no(new_plan))
+                    }
+                })?
+                .map_data(|child_plan| {
+                    // if there are any remaining predicates we can't push, add them
+                    // back as a filter
+                    if let Some(predicate) = conjunction(keep_predicates) {
+                        make_filter(predicate, Arc::new(child_plan))
+                    } else {
+                        Ok(child_plan)
+                    }
+                })
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
             LogicalPlan::TableScan(scan) => {
@@ -1185,6 +1264,7 @@ impl OptimizerRule for PushDownFilter {
                     .unique()
                     .cloned()
                     .collect();
+                let scan_filters_changed = new_scan_filters != scan.filters;
 
                 // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
                 // and also include volatile and subquery-containing filters
@@ -1201,20 +1281,27 @@ impl OptimizerRule for PushDownFilter {
                     ..scan
                 });
 
-                Transformed::yes(new_scan).transform_data(|new_scan| {
-                    if let Some(predicate) = conjunction(new_predicate) {
-                        make_filter(predicate, Arc::new(new_scan)).map(Transformed::yes)
-                    } else {
-                        Ok(Transformed::no(new_scan))
-                    }
-                })
+                if let Some(predicate) = conjunction(new_predicate) {
+                    let filter_changed = predicate != filter.predicate;
+                    make_filter(predicate, Arc::new(new_scan)).map(|plan| {
+                        Transformed::new_transformed(
+                            plan,
+                            predicate_changed || scan_filters_changed || filter_changed,
+                        )
+                    })
+                } else {
+                    Ok(Transformed::yes(new_scan))
+                }
             }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,
                 // so we return the original Filter unchanged.
                 if extension_plan.node.inputs().is_empty() {
                     filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new_transformed(
+                        LogicalPlan::Filter(filter),
+                        predicate_changed,
+                    ));
                 }
                 let prevent_cols =
                     extension_plan.node.prevent_predicate_push_down_columns();
@@ -1237,7 +1324,10 @@ impl OptimizerRule for PushDownFilter {
                 // all predicates are kept, no changes needed
                 if predicate_push_or_keep.iter().all(|&x| !x) {
                     filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::new_transformed(
+                        LogicalPlan::Filter(filter),
+                        predicate_changed,
+                    ));
                 }
 
                 // going to push some predicates down, so split the predicates
@@ -1284,7 +1374,10 @@ impl OptimizerRule for PushDownFilter {
             }
             child => {
                 filter.input = Arc::new(child);
-                Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                Ok(Transformed::new_transformed(
+                    LogicalPlan::Filter(filter),
+                    predicate_changed,
+                ))
             }
         }
     }

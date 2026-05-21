@@ -73,6 +73,8 @@ impl OptimizerRule for FilterNullJoinKeys {
                     }
                 }
 
+                let transformed = !left_filters.is_empty() || !right_filters.is_empty();
+
                 if !left_filters.is_empty() {
                     let predicate = create_not_null_predicate(left_filters);
                     join.left = Arc::new(LogicalPlan::Filter(Filter::try_new(
@@ -85,7 +87,11 @@ impl OptimizerRule for FilterNullJoinKeys {
                         predicate, join.right,
                     )?));
                 }
-                Ok(Transformed::yes(LogicalPlan::Join(join)))
+                if transformed {
+                    Ok(Transformed::yes(LogicalPlan::Join(join)))
+                } else {
+                    Ok(Transformed::no(LogicalPlan::Join(join)))
+                }
             }
             _ => Ok(Transformed::no(plan)),
         }

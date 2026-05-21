@@ -57,22 +57,24 @@ impl OptimizerRule for OptimizeUnions {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Union(Union { mut inputs, .. }) if inputs.len() == 1 => Ok(
-                Transformed::yes(Arc::unwrap_or_clone(inputs.pop().unwrap())),
+            LogicalPlan::Union(mut union) if union.inputs.len() == 1 => Ok(
+                Transformed::yes(Arc::unwrap_or_clone(union.inputs.pop().unwrap())),
             ),
-            LogicalPlan::Union(Union { inputs, schema }) => {
+            LogicalPlan::Union(union) => {
+                let original_plan = LogicalPlan::Union(union.clone());
+                let Union { inputs, schema } = union;
                 let inputs = inputs
                     .into_iter()
                     .flat_map(extract_plans_from_union)
                     .map(|plan| Ok(Arc::new(coerce_plan_expr_for_schema(plan, &schema)?)))
                     .collect::<Result<Vec<_>>>()?;
 
-                Ok(Transformed::yes(LogicalPlan::Union(Union {
-                    inputs,
-                    schema,
-                })))
+                let new_plan = LogicalPlan::Union(Union { inputs, schema });
+                Ok(transformed_if_changed(original_plan, new_plan))
             }
             LogicalPlan::Distinct(Distinct::All(nested_plan)) => {
+                let original_plan =
+                    LogicalPlan::Distinct(Distinct::All(Arc::clone(&nested_plan)));
                 match Arc::unwrap_or_clone(nested_plan) {
                     LogicalPlan::Union(Union { inputs, schema }) => {
                         let inputs = inputs
@@ -82,12 +84,13 @@ impl OptimizerRule for OptimizeUnions {
                             .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
                             .collect::<Result<Vec<_>>>()?;
 
-                        Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::All(
-                            Arc::new(LogicalPlan::Union(Union {
+                        let new_plan = LogicalPlan::Distinct(Distinct::All(Arc::new(
+                            LogicalPlan::Union(Union {
                                 inputs: inputs.into_iter().map(Arc::new).collect_vec(),
                                 schema: Arc::clone(&schema),
-                            })),
-                        ))))
+                            }),
+                        )));
+                        Ok(transformed_if_changed(original_plan, new_plan))
                     }
                     nested_plan => Ok(Transformed::no(LogicalPlan::Distinct(
                         Distinct::All(Arc::new(nested_plan)),
@@ -96,6 +99,17 @@ impl OptimizerRule for OptimizeUnions {
             }
             _ => Ok(Transformed::no(plan)),
         }
+    }
+}
+
+fn transformed_if_changed(
+    original_plan: LogicalPlan,
+    new_plan: LogicalPlan,
+) -> Transformed<LogicalPlan> {
+    if new_plan == original_plan {
+        Transformed::no(original_plan)
+    } else {
+        Transformed::yes(new_plan)
     }
 }
 

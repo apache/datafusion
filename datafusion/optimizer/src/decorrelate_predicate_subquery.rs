@@ -63,18 +63,22 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let plan = plan
-            .map_subqueries(|subquery| {
-                subquery.transform_down(|p| self.rewrite(p, config))
-            })?
-            .data;
+        let original_plan = plan.clone();
+        let transformed = plan.map_subqueries(|subquery| {
+            subquery.transform_down(|p| self.rewrite(p, config))
+        })?;
+        let subqueries_transformed = transformed.transformed;
+        let plan = transformed.data;
 
         let LogicalPlan::Filter(filter) = plan else {
-            return Ok(Transformed::no(plan));
+            return Ok(Transformed::new_transformed(plan, subqueries_transformed));
         };
 
         if !has_subquery(&filter.predicate) {
-            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+            return Ok(Transformed::new_transformed(
+                LogicalPlan::Filter(filter),
+                subqueries_transformed,
+            ));
         }
 
         let (with_subqueries, mut other_exprs): (Vec<_>, Vec<_>) =
@@ -123,7 +127,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 .build()?;
         }
 
-        Ok(Transformed::yes(cur_input))
+        Ok(transformed_if_changed(original_plan, cur_input))
     }
 
     fn name(&self) -> &str {
@@ -132,6 +136,17 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
+    }
+}
+
+fn transformed_if_changed(
+    original_plan: LogicalPlan,
+    new_plan: LogicalPlan,
+) -> Transformed<LogicalPlan> {
+    if new_plan == original_plan {
+        Transformed::no(original_plan)
+    } else {
+        Transformed::yes(new_plan)
     }
 }
 

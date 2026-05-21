@@ -228,6 +228,7 @@ fn optimize_projections(
             .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::Window(window) => {
+            let original_window = window.clone();
             let input_schema = Arc::clone(window.input.schema());
             // Split parent requirements to child and window expression sections:
             let n_input_fields = input_schema.fields().len();
@@ -238,37 +239,46 @@ fn optimize_projections(
             // Only use window expressions that are absolutely necessary according
             // to parent requirements:
             let new_window_expr = window_reqs.get_at_indices(&window.window_expr);
+            let window_expr_changed = new_window_expr != window.window_expr;
 
             // Get all the required column indices at the input, either by the
             // parent or window expression requirements.
             let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
 
-            return optimize_projections(
+            let transformed_input = optimize_projections(
                 Arc::unwrap_or_clone(window.input),
                 config,
                 required_indices.clone(),
-            )?
-            .transform_data(|window_child| {
-                if new_window_expr.is_empty() {
-                    // When no window expression is necessary, use the input directly:
-                    Ok(Transformed::no(window_child))
-                } else {
-                    // Calculate required expressions at the input of the window.
-                    // Please note that we use `input_schema`, because `required_indices`
-                    // refers to that schema
-                    let required_exprs =
-                        required_indices.get_required_exprs(&input_schema);
-                    let window_child =
-                        add_projection_on_top_if_helpful(window_child, required_exprs)?
-                            .data;
-                    Window::try_new(new_window_expr, Arc::new(window_child))
+            )?;
+            let input_changed = transformed_input.transformed;
+            let window_child = transformed_input.data;
+
+            let transformed_plan = if new_window_expr.is_empty() {
+                // When no window expression is necessary, use the input directly:
+                Transformed::yes(window_child)
+            } else {
+                // Calculate required expressions at the input of the window.
+                // Please note that we use `input_schema`, because `required_indices`
+                // refers to that schema
+                let required_exprs = required_indices.get_required_exprs(&input_schema);
+                let projected_input =
+                    add_projection_on_top_if_helpful(window_child, required_exprs)?;
+                let input_changed = input_changed || projected_input.transformed;
+
+                if window_expr_changed || input_changed {
+                    Window::try_new(new_window_expr, Arc::new(projected_input.data))
                         .map(LogicalPlan::Window)
-                        .map(Transformed::yes)
+                        .map(Transformed::yes)?
+                } else {
+                    Transformed::no(LogicalPlan::Window(original_window))
                 }
-            })?
-            .transform_data(|plan| optimize_subqueries(plan, config));
+            };
+
+            return transformed_plan
+                .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::TableScan(table_scan) => {
+            let original_scan = table_scan.clone();
             let TableScan {
                 table_name,
                 source,
@@ -286,6 +296,9 @@ fn optimize_projections(
             };
             let new_scan =
                 TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+            if new_scan == original_scan {
+                return Ok(Transformed::no(LogicalPlan::TableScan(original_scan)));
+            }
 
             return Transformed::yes(LogicalPlan::TableScan(new_scan))
                 .transform_data(|plan| optimize_subqueries(plan, config));
@@ -856,6 +869,7 @@ fn rewrite_projection_given_requirements(
     config: &dyn OptimizerConfig,
     indices: &RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
+    let original_plan = LogicalPlan::Projection(proj.clone());
     let Projection { expr, input, .. } = proj;
 
     let exprs_used = indices.get_at_indices(&expr);
@@ -865,16 +879,24 @@ fn rewrite_projection_given_requirements(
 
     // rewrite the children projection, and if they are changed rewrite the
     // projection down
-    optimize_projections(Arc::unwrap_or_clone(input), config, required_indices)?
-        .transform_data(|input| {
-            if is_projection_unnecessary(&input, &exprs_used)? {
-                Ok(Transformed::yes(input))
-            } else {
-                Projection::try_new(exprs_used, Arc::new(input))
-                    .map(LogicalPlan::Projection)
-                    .map(Transformed::yes)
-            }
-        })
+    let transformed_input = optimize_projections(
+        Arc::unwrap_or_clone(Arc::clone(&input)),
+        config,
+        required_indices,
+    )?;
+    let new_input = transformed_input.data;
+
+    if is_projection_unnecessary(&new_input, &exprs_used)? {
+        return Ok(Transformed::yes(new_input));
+    }
+
+    let new_plan = Projection::try_new(exprs_used, Arc::new(new_input))
+        .map(LogicalPlan::Projection)?;
+    if new_plan == original_plan {
+        Ok(Transformed::no(original_plan))
+    } else {
+        Ok(Transformed::yes(new_plan))
+    }
 }
 
 /// Projection is unnecessary, when
