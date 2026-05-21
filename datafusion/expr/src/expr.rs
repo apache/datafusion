@@ -2149,10 +2149,25 @@ impl Expr {
                     negated: _,
                 }) => {
                     let subquery_schema = subquery.subquery.schema();
-                    let column = Expr::Column(Column::new_unqualified(
-                        subquery_schema.fields()[0].name().clone(),
-                    ));
-                    rewrite_placeholder(expr.as_mut(), &column, subquery_schema)?;
+                      match &subquery_schema.fields()[..] {
+                          [subquery_field] => {
+                              let column = Expr::Column(Column::new_unqualified(
+                                  subquery_field.name().clone(),
+                              ));
+                              rewrite_placeholder(
+                                  expr.as_mut(),
+                                  &column,
+                                  subquery_schema,
+                              )?;
+                          }
+                          _ => {
+                              return plan_err!(
+                                  "InSubquery should only return one column, but found {}: {}",
+                                  subquery_schema.fields().len(),
+                                  subquery_schema.field_names().join(", ")
+                              );
+                          }
+                      }
                 }
                 Expr::Like(Like { expr, pattern, .. })
                 | Expr::SimilarTo(Like { expr, pattern, .. }) => {
