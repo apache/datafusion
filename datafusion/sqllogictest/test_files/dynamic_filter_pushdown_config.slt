@@ -157,7 +157,7 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[id@2, data@3, info@1]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
-03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
 
 # Disable Join dynamic filter pushdown
 statement ok
@@ -857,16 +857,16 @@ DROP TABLE agg_parquet;
 
 # Config reset
 statement ok
-SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = true;
+RESET datafusion.optimizer.enable_topk_dynamic_filter_pushdown;
 
 statement ok
-SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+RESET datafusion.optimizer.enable_join_dynamic_filter_pushdown;
 
 statement ok
-SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
+RESET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown;
 
 statement ok
-SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
+RESET datafusion.optimizer.enable_dynamic_filter_pushdown;
 
 statement ok
 RESET datafusion.execution.parquet.max_row_group_size;

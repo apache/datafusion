@@ -104,9 +104,9 @@ physical_plan
 02)--RepartitionExec: partitioning=Hash([small_id@2], 4), input_partitions=1, maintains_sort_order=true
 03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(customer_id@0, customer_id@1)], projection=[region_id@1, order_id@2, small_id@4]
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/customers.parquet]]}, projection=[customer_id, region_id], output_ordering=[region_id@1 ASC NULLS LAST], file_type=parquet
-05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/orders.parquet]]}, projection=[order_id, customer_id, small_id], output_ordering=[order_id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/orders.parquet]]}, projection=[order_id, customer_id, small_id], output_ordering=[order_id@0 ASC NULLS LAST], file_type=parquet
 06)--RepartitionExec: partitioning=Hash([small_id@0], 4), input_partitions=1, maintains_sort_order=true
-07)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/dim_small.parquet]]}, projection=[small_id, label], output_ordering=[small_id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+07)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/dim_small.parquet]]}, projection=[small_id, label], output_ordering=[small_id@0 ASC NULLS LAST], file_type=parquet
 
 # -- With registry -----------------------------------------------------------
 # Conservative estimate 100 > 50: dim_small correctly swapped to build side
@@ -127,7 +127,7 @@ physical_plan
 04)--RepartitionExec: partitioning=Hash([small_id@2], 4), input_partitions=1, maintains_sort_order=true
 05)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(customer_id@0, customer_id@1)], projection=[region_id@1, order_id@2, small_id@4]
 06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/customers.parquet]]}, projection=[customer_id, region_id], output_ordering=[region_id@1 ASC NULLS LAST], file_type=parquet
-07)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/orders.parquet]]}, projection=[order_id, customer_id, small_id], output_ordering=[order_id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ]
+07)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/orders.parquet]]}, projection=[order_id, customer_id, small_id], output_ordering=[order_id@0 ASC NULLS LAST], file_type=parquet
 
 # -- Verify results are identical regardless of join order --------------------
 
