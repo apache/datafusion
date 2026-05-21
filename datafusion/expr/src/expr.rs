@@ -2186,6 +2186,32 @@ impl Expr {
                         rewrite_placeholder(item, expr.as_ref(), schema)?;
                     }
                 }
+                Expr::InSubquery(InSubquery {
+                    expr,
+                    subquery,
+                    negated: _,
+                }) => {
+                    let subquery_schema = subquery.subquery.schema();
+                      match &subquery_schema.fields()[..] {
+                          [subquery_field] => {
+                              let column = Expr::Column(Column::new_unqualified(
+                                  subquery_field.name().clone(),
+                              ));
+                              rewrite_placeholder(
+                                  expr.as_mut(),
+                                  &column,
+                                  subquery_schema,
+                              )?;
+                          }
+                          _ => {
+                              return plan_err!(
+                                  "InSubquery should only return one column, but found {}: {}",
+                                  subquery_schema.fields().len(),
+                                  subquery_schema.field_names().join(", ")
+                              );
+                          }
+                      }
+                }
                 Expr::Like(Like { expr, pattern, .. })
                 | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                     rewrite_placeholder(pattern.as_mut(), expr.as_ref(), schema)?;
@@ -3814,6 +3840,108 @@ mod test {
                 }
             }
             _ => panic!("Expected InList expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_in_subquery() {
+        // WHERE $1 IN (SELECT a FROM t)
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let in_subquery = Expr::InSubquery(InSubquery {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            negated: false,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) =
+            in_subquery.infer_placeholder_types(&outer_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::InSubquery(in_subquery) => match *in_subquery.expr {
+                Expr::Placeholder(placeholder) => {
+                    let inferred = placeholder.field.expect("placeholder field");
+                    assert_eq!(inferred.data_type(), &DataType::Int32);
+                    assert!(inferred.is_nullable());
+                }
+                _ => panic!("Expected Placeholder expression in InSubquery"),
+            },
+            _ => panic!("Expected InSubquery expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_not_in_subquery() {
+        // WHERE $1 NOT IN (SELECT a FROM t)
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let not_in_subquery = Expr::InSubquery(InSubquery {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            negated: true,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) = not_in_subquery
+            .infer_placeholder_types(&outer_schema)
+            .unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::InSubquery(in_subquery) => {
+                assert!(in_subquery.negated, "negated flag must be preserved");
+                match *in_subquery.expr {
+                    Expr::Placeholder(placeholder) => {
+                        let inferred = placeholder.field.expect("placeholder field");
+                        assert_eq!(inferred.data_type(), &DataType::Int32);
+                        assert!(inferred.is_nullable());
+                    }
+                    _ => {
+                        panic!("Expected Placeholder expression in InSubquery")
+                    }
+                }
+            }
+            _ => panic!("Expected InSubquery expression"),
         }
     }
 
