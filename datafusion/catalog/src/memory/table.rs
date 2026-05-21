@@ -31,7 +31,6 @@ use arrow::compute::{and, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, DFSchema, SchemaExt, not_impl_err, plan_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
@@ -46,7 +45,7 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PhysicalExpr, PlanProperties, common,
+    PlanProperties, common,
 };
 use datafusion_session::Session;
 
@@ -396,7 +395,10 @@ impl TableProvider for MemTable {
         let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
 
         // Create physical expressions for assignments upfront (outside batch loop)
-        let physical_assignments: HashMap<String, Arc<dyn PhysicalExpr>> = assignments
+        let physical_assignments: HashMap<
+            String,
+            Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        > = assignments
             .iter()
             .map(|(name, expr)| {
                 let physical_expr =
@@ -626,12 +628,5 @@ impl ExecutionPlan for DmlResultExec {
             Arc::clone(&self.schema),
             stream,
         )))
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 }
