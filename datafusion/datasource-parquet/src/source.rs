@@ -624,6 +624,20 @@ impl FileSource for ParquetSource {
         self.predicate.clone()
     }
 
+    /// Parquet evaluates the predicate inline on the scan thread when
+    /// `pushdown_filters = false` — the whole predicate runs as a
+    /// post-decode filter, so giving downstream stages
+    /// `target_partitions` worth of parallelism (which is what a sibling
+    /// `FilterExec` used to trigger) is the right move.
+    ///
+    /// With `pushdown_filters = true` the parquet `RowFilter` evaluates
+    /// conjuncts *during* decode and any leftovers (the per-file
+    /// post-scan-filter path) are rare and cheap, so we don't ask for
+    /// extra fan-out.
+    fn benefits_from_output_partitioning(&self) -> bool {
+        self.predicate.is_some() && !self.pushdown_filters()
+    }
+
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);

@@ -678,6 +678,10 @@ impl DataSource for FileScanConfig {
         }
     }
 
+    fn benefits_from_output_partitioning(&self) -> bool {
+        self.file_source.benefits_from_output_partitioning()
+    }
+
     /// If supported by the underlying [`FileSource`], redistribute files across partitions according to their size.
     fn repartitioned(
         &self,

@@ -543,7 +543,9 @@ logical_plan
 01)SubqueryAlias: hits
 02)--Filter: hits_raw.UserID = Int64(435090932899640449)
 03)----TableScan: hits_raw projection=[UserID], partial_filters=[hits_raw.UserID = Int64(435090932899640449)]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID], file_type=parquet, predicate=UserID@9 = 435090932899640449, pruning_predicate=UserID_null_count@2 != row_count@3 AND UserID_min@0 <= 435090932899640449 AND 435090932899640449 <= UserID_max@1, required_guarantees=[UserID in (435090932899640449)]
+physical_plan
+01)RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[UserID], file_type=parquet, predicate=UserID@9 = 435090932899640449, pruning_predicate=UserID_null_count@2 != row_count@3 AND UserID_min@0 <= 435090932899640449 AND 435090932899640449 <= UserID_max@1, required_guarantees=[UserID in (435090932899640449)]
 
 query I
 SELECT "UserID" FROM hits WHERE "UserID" = 435090932899640449;
@@ -657,8 +659,11 @@ logical_plan
 06)----------TableScan: hits_raw projection=[EventTime, SearchPhrase], partial_filters=[hits_raw.SearchPhrase != Utf8View("")]
 physical_plan
 01)ProjectionExec: expr=[SearchPhrase@0 as SearchPhrase]
-02)--SortExec: TopK(fetch=10), expr=[EventTime@1 ASC NULLS LAST], preserve_partitioning=[false]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchPhrase, EventTime], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], sort_order_for_reorder=[EventTime@1 ASC NULLS LAST], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+02)--SortPreservingMergeExec: [EventTime@1 ASC NULLS LAST], fetch=10
+03)----SortExec: TopK(fetch=10), expr=[EventTime@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[SearchPhrase@1 as SearchPhrase, EventTime@0 as EventTime]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], sort_order_for_reorder=[EventTime@0 ASC NULLS LAST], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query T
 SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "EventTime" LIMIT 10;
@@ -694,8 +699,11 @@ logical_plan
 06)----------TableScan: hits_raw projection=[EventTime, SearchPhrase], partial_filters=[hits_raw.SearchPhrase != Utf8View("")]
 physical_plan
 01)ProjectionExec: expr=[SearchPhrase@0 as SearchPhrase]
-02)--SortExec: TopK(fetch=10), expr=[EventTime@1 ASC NULLS LAST, SearchPhrase@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[SearchPhrase, EventTime], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], sort_order_for_reorder=[EventTime@1 ASC NULLS LAST, SearchPhrase@0 ASC NULLS LAST], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+02)--SortPreservingMergeExec: [EventTime@1 ASC NULLS LAST, SearchPhrase@0 ASC NULLS LAST], fetch=10
+03)----SortExec: TopK(fetch=10), expr=[EventTime@1 ASC NULLS LAST, SearchPhrase@0 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[SearchPhrase@1 as SearchPhrase, EventTime@0 as EventTime]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], sort_order_for_reorder=[EventTime@0 ASC NULLS LAST, SearchPhrase@1 ASC NULLS LAST], pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 
 query T
 SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "EventTime", "SearchPhrase" LIMIT 10;

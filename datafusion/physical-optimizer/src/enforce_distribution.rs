@@ -1307,8 +1307,12 @@ pub fn ensure_distribution(
                 child.plan.output_partitioning().partition_count() < target_partitions;
 
             let add_roundrobin = enable_round_robin
-                // Operator benefits from partitioning (e.g. filter):
-                && roundrobin_beneficial
+                // Either the parent says the child should be parallelised
+                // (e.g. a sibling FilterExec) or the child itself asks for
+                // its output to be fanned out (e.g. a parquet scan that
+                // evaluates a filter in-line after decode).
+                && (roundrobin_beneficial
+                    || child.plan.benefits_from_output_partitioning())
                 && roundrobin_beneficial_stats
                 // Unless partitioning increases the partition count, it is not beneficial:
                 && increases_partition_count;

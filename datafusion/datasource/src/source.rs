@@ -161,6 +161,14 @@ pub trait DataSource: Any + Send + Sync + Debug {
         Ok(None)
     }
 
+    /// Whether downstream stages would benefit from this source's output
+    /// being fanned out via `RepartitionExec(RoundRobinBatch)`. Surfaced
+    /// through `DataSourceExec` — see
+    /// [`ExecutionPlan::benefits_from_output_partitioning`](datafusion_physical_plan::ExecutionPlan::benefits_from_output_partitioning).
+    fn benefits_from_output_partitioning(&self) -> bool {
+        false
+    }
+
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
     fn scheduling_type(&self) -> SchedulingType {
@@ -407,6 +415,10 @@ impl ExecutionPlan for DataSourceExec {
                 .with_partitioning(output_partitioning);
             Arc::new(plan) as _
         }))
+    }
+
+    fn benefits_from_output_partitioning(&self) -> bool {
+        self.data_source.benefits_from_output_partitioning()
     }
 
     fn execute(

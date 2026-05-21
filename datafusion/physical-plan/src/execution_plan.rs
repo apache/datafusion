@@ -197,6 +197,29 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
             .collect()
     }
 
+    /// Specifies whether this `ExecutionPlan` would benefit from its own
+    /// output being repartitioned (e.g. via a `RoundRobinBatch`
+    /// repartition) to give downstream stages more parallelism — even when
+    /// the parent doesn't otherwise request it.
+    ///
+    /// Mirrors [`Self::benefits_from_input_partitioning`], which asks the
+    /// same question about children. The canonical consumer is
+    /// `EnforceDistribution`, which today only inserts a `RoundRobinBatch`
+    /// when a parent's `benefits_from_input_partitioning` is `true`. That
+    /// signal disappears when a parent like `SortExec` /
+    /// `CoalescePartitionsExec` / `HashJoinExec` (`CollectLeft` build
+    /// side) sits directly above a leaf that nevertheless does CPU-bound
+    /// per-batch work (e.g. a parquet scan that evaluates a filter
+    /// in-line after decode). Returning `true` here lets the leaf opt
+    /// back in.
+    ///
+    /// The default implementation returns `false`. Override on plans whose
+    /// per-batch work is CPU-bound enough that downstream parallelism
+    /// pays for the round-robin overhead.
+    fn benefits_from_output_partitioning(&self) -> bool {
+        false
+    }
+
     /// Get a list of children `ExecutionPlan`s that act as inputs to this plan.
     /// The returned list will be empty for leaf nodes such as scans, will contain
     /// a single value for unary nodes, or two values for binary nodes (such as

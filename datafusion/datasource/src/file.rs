@@ -114,6 +114,18 @@ pub trait FileSource: Any + Send + Sync {
         None
     }
 
+    /// Whether the per-batch work this source does on the scan thread
+    /// (filter evaluation, dictionary expansion, etc.) is CPU-bound enough
+    /// that downstream stages benefit from a `RepartitionExec(RoundRobinBatch)`
+    /// fan-out above the scan — even when its parent doesn't request one.
+    ///
+    /// Surfaced by `FileScanConfig` and `DataSourceExec` so the
+    /// `EnforceDistribution` rule can insert the round-robin. See
+    /// [`ExecutionPlan::benefits_from_output_partitioning`](datafusion_physical_plan::ExecutionPlan::benefits_from_output_partitioning).
+    fn benefits_from_output_partitioning(&self) -> bool {
+        false
+    }
+
     /// Return the projection that will be applied to the output stream on top
     /// of [`Self::table_schema`].
     ///
