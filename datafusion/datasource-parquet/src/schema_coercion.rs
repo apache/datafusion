@@ -135,11 +135,106 @@ pub fn apply_file_schema_type_coercions(
     ))
 }
 
-/// Coerces the file schema's Timestamps to the provided TimeUnit if Parquet schema contains INT96.
+/// Coerces the file schema's Timestamps to the provided TimeUnit if the
+/// Parquet schema contains INT96.
+///
+/// Deprecated wrapper around [`Int96Coercer`]; use the builder directly
+/// instead — it also supports attaching a timezone via
+/// [`Int96Coercer::with_timezone`].
+#[deprecated(since = "53.2.0", note = "use `Int96Coercer` instead")]
 pub fn coerce_int96_to_resolution(
     parquet_schema: &SchemaDescriptor,
     file_schema: &Schema,
     time_unit: &TimeUnit,
+) -> Option<Schema> {
+    Int96Coercer::new(parquet_schema, file_schema, time_unit).coerce()
+}
+
+/// Builder for coercing INT96-originated Timestamp columns in `file_schema`
+/// to a specific [`TimeUnit`], optionally attaching a timezone.
+///
+/// INT96 is the legacy Parquet representation that systems like Spark use for
+/// timestamps. Arrow surfaces it as `Timestamp(Nanosecond, None)`, but the
+/// underlying values are written as UTC-adjusted instants. Use this builder
+/// to:
+///
+/// - Coerce INT96-derived columns to a smaller [`TimeUnit`] (e.g. microseconds)
+///   to extend the representable date range.
+/// - Optionally attach a timezone so the resulting Arrow type carries the
+///   timezone-aware semantic (`Timestamp(unit, Some(tz))`). Without a
+///   timezone, INT96-derived columns become `Timestamp(unit, None)` — the
+///   historical default.
+///
+/// Returns `None` if `file_schema` contains no INT96-derived columns.
+///
+/// # Example
+///
+/// ```ignore
+/// use std::sync::Arc;
+/// use arrow::datatypes::TimeUnit;
+/// use datafusion_datasource_parquet::Int96Coercer;
+///
+/// let coerced = Int96Coercer::new(parquet_schema, file_schema, &TimeUnit::Microsecond)
+///     .with_timezone(Some(Arc::from("UTC")))
+///     .coerce();
+/// ```
+pub struct Int96Coercer<'a> {
+    parquet_schema: &'a SchemaDescriptor,
+    file_schema: &'a Schema,
+    time_unit: &'a TimeUnit,
+    timezone: Option<Arc<str>>,
+}
+
+impl<'a> Int96Coercer<'a> {
+    /// Create a new builder. INT96-derived columns will coerce to
+    /// `Timestamp(time_unit, None)` unless [`Self::with_timezone`] is set.
+    pub fn new(
+        parquet_schema: &'a SchemaDescriptor,
+        file_schema: &'a Schema,
+        time_unit: &'a TimeUnit,
+    ) -> Self {
+        Self {
+            parquet_schema,
+            file_schema,
+            time_unit,
+            timezone: None,
+        }
+    }
+
+    /// Attach a timezone to INT96-derived columns. When `Some`, INT96-derived
+    /// columns coerce to `Timestamp(time_unit, Some(timezone))` instead of
+    /// the default `Timestamp(time_unit, None)`. Spark and other systems
+    /// write INT96 as UTC-adjusted instants, so callers that need the
+    /// resulting Arrow type to be timezone-aware should pass
+    /// `Some(Arc::from("UTC"))`.
+    pub fn with_timezone(mut self, timezone: Option<Arc<str>>) -> Self {
+        self.timezone = timezone;
+        self
+    }
+
+    /// Run the coercion, returning the rewritten schema or `None` if
+    /// `file_schema` contains no INT96-derived columns.
+    pub fn coerce(self) -> Option<Schema> {
+        let Self {
+            parquet_schema,
+            file_schema,
+            time_unit,
+            timezone,
+        } = self;
+        coerce_int96_to_resolution_impl(
+            parquet_schema,
+            file_schema,
+            time_unit,
+            timezone.as_ref(),
+        )
+    }
+}
+
+fn coerce_int96_to_resolution_impl(
+    parquet_schema: &SchemaDescriptor,
+    file_schema: &Schema,
+    time_unit: &TimeUnit,
+    timezone: Option<&Arc<str>>,
 ) -> Option<Schema> {
     // Traverse the parquet_schema columns looking for int96 physical types. If encountered, insert
     // the field's full path into a set.
@@ -302,11 +397,11 @@ pub fn coerce_int96_to_resolution(
                 (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
                     if int96_fields.contains(parquet_path.concat().as_str()) =>
                 // We found a timestamp(nanos) and it originated as int96. Coerce it to the correct
-                // time_unit.
+                // time_unit, optionally attaching the requested timezone.
                 {
                     parent_fields.borrow_mut().push(field_with_new_type(
                         current_field,
-                        DataType::Timestamp(*time_unit, None),
+                        DataType::Timestamp(*time_unit, timezone.cloned()),
                     ));
                 }
                 // Other types can be cloned as they are.
@@ -505,14 +600,70 @@ mod tests {
 
         let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
 
-        let result =
-            coerce_int96_to_resolution(&descr, &arrow_schema, &TimeUnit::Microsecond)
-                .unwrap();
+        let result = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
 
         // Only the first field (c0) should be converted to a microsecond timestamp because it's the
         // only timestamp that originated from an INT96.
         let expected_schema = Schema::new(vec![
             Field::new("c0", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new(
+                "c1",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c2", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            Field::new(
+                "c3",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c4", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new(
+                "c5",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("c6", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        ]);
+
+        assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn coerce_int96_to_resolution_with_tz_applies_timezone() {
+        // Same input schema as `coerce_int96_to_resolution_with_mixed_timestamps`, but with a
+        // non-empty `timezone` argument. Only c0 (the INT96 column) should pick up the timezone;
+        // the other timestamp columns must keep whatever timezone they were declared with.
+        let spark_schema = "
+        message spark_schema {
+          optional int96 c0;
+          optional int64 c1 (TIMESTAMP(NANOS,true));
+          optional int64 c2 (TIMESTAMP(NANOS,false));
+          optional int64 c3 (TIMESTAMP(MILLIS,true));
+          optional int64 c4 (TIMESTAMP(MILLIS,false));
+          optional int64 c5 (TIMESTAMP(MICROS,true));
+          optional int64 c6 (TIMESTAMP(MICROS,false));
+        }
+        ";
+
+        let schema = parse_message_type(spark_schema).expect("should parse schema");
+        let descr = SchemaDescriptor::new(Arc::new(schema));
+
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+
+        let result = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .with_timezone(Some(Arc::from("UTC")))
+            .coerce()
+            .unwrap();
+
+        let expected_schema = Schema::new(vec![
+            Field::new(
+                "c0",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
             Field::new(
                 "c1",
                 DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
@@ -592,9 +743,9 @@ mod tests {
 
         let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
 
-        let result =
-            coerce_int96_to_resolution(&descr, &arrow_schema, &TimeUnit::Microsecond)
-                .unwrap();
+        let result = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
 
         let expected_schema = Schema::new(vec![
             Field::new("c0", DataType::Timestamp(TimeUnit::Microsecond, None), true),
