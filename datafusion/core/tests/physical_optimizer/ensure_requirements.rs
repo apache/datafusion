@@ -152,12 +152,8 @@ fn assert_idempotent(plan: Arc<dyn ExecutionPlan>) {
         .optimize(Arc::clone(&p1), &config)
         .expect("second optimize failed");
 
-    let s1 = datafusion_physical_plan::displayable(p1.as_ref())
-        .indent(true)
-        .to_string();
-    let s2 = datafusion_physical_plan::displayable(p2.as_ref())
-        .indent(true)
-        .to_string();
+    let s1 = plan_string(&p1);
+    let s2 = plan_string(&p2);
     assert_eq!(
         s1, s2,
         "EnsureRequirements is NOT idempotent!\nFirst:\n{s1}\nSecond:\n{s2}"
@@ -172,6 +168,33 @@ fn assert_idempotent(plan: Arc<dyn ExecutionPlan>) {
         .expect("SanityCheckPlan failed on second pass");
 }
 
+/// Single-column `LexOrdering` on `(name, idx)` with the given options.
+/// Most tests in this file want a one-column ordering on the canonical
+/// `a@0` or `b@1` columns; this helper trims the 7-line per-test
+/// boilerplate down to a single call.
+fn sort_expr_on(
+    name: &str,
+    idx: usize,
+    descending: bool,
+    nulls_first: bool,
+) -> LexOrdering {
+    LexOrdering::new(vec![PhysicalSortExpr::new(
+        Arc::new(Column::new(name, idx)),
+        SortOptions {
+            descending,
+            nulls_first,
+        },
+    )])
+    .unwrap()
+}
+
+/// Render an execution plan with `displayable(...).indent(true)`.
+fn plan_string(plan: &Arc<dyn ExecutionPlan>) -> String {
+    datafusion_physical_plan::displayable(plan.as_ref())
+        .indent(true)
+        .to_string()
+}
+
 /// Union with mixed partition counts + sort + limit.
 #[test]
 fn test_union_mixed_partitions_sort_limit() {
@@ -180,14 +203,7 @@ fn test_union_mixed_partitions_sort_limit() {
 
     let union = UnionExec::try_new(vec![live as _, historical as _]).unwrap();
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, union));
     let limit = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
@@ -203,14 +219,7 @@ fn test_idempotent_union_mixed_partitions() {
     let hist = Arc::new(MockMultiPartitionExec::new(1));
     let union = UnionExec::try_new(vec![live as _, hist as _]).unwrap();
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, union));
     let limit = Arc::new(GlobalLimitExec::new(sort, 0, Some(5)));
@@ -235,14 +244,7 @@ fn test_projection_over_multi_partition_sort_limit() {
     ];
     let projection = Arc::new(ProjectionExec::try_new(proj_exprs, source as _).unwrap());
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, projection));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
@@ -265,22 +267,13 @@ fn test_projection_over_multi_partition_sort_limit() {
 fn test_single_partition_no_unnecessary_spm() {
     let source = Arc::new(MockMultiPartitionExec::new(1));
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, source));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
     let optimized = optimize_and_sanity_check(limit).unwrap();
-    let plan_str = datafusion_physical_plan::displayable(optimized.as_ref())
-        .indent(true)
-        .to_string();
+    let plan_str = plan_string(&optimized);
 
     // Single partition should not have SortPreservingMergeExec
     assert!(
@@ -295,22 +288,13 @@ fn test_sort_already_satisfied_no_extra_sort() {
     let source = Arc::new(MockMultiPartitionExec::new(1));
 
     // Sort ASC matches MockMultiPartitionExec's output ordering (a ASC)
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: false,
-            nulls_first: false,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, false, false);
 
     let sort = Arc::new(SortExec::new(sort_expr, source));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
     let optimized = optimize_and_sanity_check(limit).unwrap();
-    let plan_str = datafusion_physical_plan::displayable(optimized.as_ref())
-        .indent(true)
-        .to_string();
+    let plan_str = plan_string(&optimized);
 
     // Sort should be eliminated since source already satisfies ordering
     // The plan should just be limit + source (or limit + local limit + source)
@@ -330,14 +314,7 @@ fn test_various_partition_counts_all_pass_sanity_check() {
     for n in [2, 4, 8, 16, 32, 64] {
         let source = Arc::new(MockMultiPartitionExec::new(n));
 
-        let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-            Arc::new(Column::new("a", 0)),
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-        )])
-        .unwrap();
+        let sort_expr = sort_expr_on("a", 0, true, true);
 
         let sort = Arc::new(SortExec::new(sort_expr, source));
         let limit: Arc<dyn ExecutionPlan> =
@@ -362,14 +339,7 @@ fn test_coalesce_then_sort_limit() {
     let source = Arc::new(MockMultiPartitionExec::new(8));
     let coalesce: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(source));
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, coalesce));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
@@ -400,14 +370,7 @@ fn test_filter_over_multi_partition_sort_limit() {
     let predicate = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
     let filter = Arc::new(FilterExec::try_new(predicate, source as _).unwrap());
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, filter));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
@@ -433,14 +396,7 @@ fn test_repartition_sort_limit_idempotent() {
         RepartitionExec::try_new(source as _, Partitioning::RoundRobinBatch(8)).unwrap(),
     );
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, repartition));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
@@ -463,14 +419,7 @@ fn test_repartition_sort_limit_idempotent() {
 fn test_skip_and_fetch_multi_partition() {
     let source = Arc::new(MockMultiPartitionExec::new(16));
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, source));
     // skip=5, fetch=10
@@ -542,14 +491,7 @@ fn test_multi_column_sort_multi_partition() {
 fn test_output_requirement_single_partition_over_multi_partition_source() {
     let source = Arc::new(MockMultiPartitionExec::new(10));
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     // OutputRequirementExec with SinglePartition + ordering requirement
     let output_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
@@ -565,9 +507,7 @@ fn test_output_requirement_single_partition_over_multi_partition_source() {
         .optimize(output_req, &config)
         .expect("optimize failed");
 
-    let plan_str = datafusion_physical_plan::displayable(optimized.as_ref())
-        .indent(true)
-        .to_string();
+    let plan_str = plan_string(&optimized);
 
     // SinglePartition must be satisfied (via SPM or Coalesce+Sort).
     let sanity = SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config);
@@ -599,14 +539,7 @@ fn test_sort_pushdown_through_projection_adds_spm() {
     let projection: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(proj_exprs, source).unwrap());
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     // OutputRequirementExec(SinglePartition) → ProjectionExec → multi-partition source
     let output_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
@@ -621,9 +554,7 @@ fn test_sort_pushdown_through_projection_adds_spm() {
         .optimize(output_req, &config)
         .expect("optimize failed");
 
-    let plan_str = datafusion_physical_plan::displayable(optimized.as_ref())
-        .indent(true)
-        .to_string();
+    let plan_str = plan_string(&optimized);
 
     // SinglePartition must be satisfied. The final ensure_distribution pass
     // adds CoalescePartitionsExec or SortPreservingMergeExec as needed.
@@ -646,14 +577,7 @@ fn test_sort_pushdown_through_projection_adds_spm() {
 #[test]
 fn test_idempotent_output_requirement_single_partition() {
     let source = Arc::new(MockMultiPartitionExec::new(10));
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let output_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
         source,
@@ -677,14 +601,7 @@ fn test_idempotent_projection_over_multi_partition_with_single_partition_require
     let projection: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(proj_exprs, source).unwrap());
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let output_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
         projection,
@@ -707,14 +624,7 @@ fn test_idempotent_projection_over_multi_partition_with_single_partition_require
 #[test]
 fn test_idempotent_spm_sort_multi_partition() {
     let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(10));
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(
         SortExec::new(sort_expr.clone(), source).with_preserve_partitioning(true),
@@ -730,9 +640,7 @@ fn test_idempotent_spm_sort_multi_partition() {
     let optimized = EnsureRequirements::new()
         .optimize(Arc::clone(&limit), &config)
         .expect("optimize failed");
-    let plan_str = datafusion_physical_plan::displayable(optimized.as_ref())
-        .indent(true)
-        .to_string();
+    let plan_str = plan_string(&optimized);
     let spm_count = plan_str.matches("SortPreservingMergeExec").count();
     assert!(
         spm_count <= 1,
@@ -775,14 +683,7 @@ fn test_idempotent_sort_aggregate_sort_aggregate() {
         .unwrap(),
     );
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: false,
-            nulls_first: false,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, false, false);
 
     let sort: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(sort_expr, partial_agg));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
@@ -795,14 +696,7 @@ fn test_idempotent_sort_aggregate_sort_aggregate() {
 fn test_idempotent_all_partition_counts_1_to_64() {
     for n in 1..=64 {
         let source = Arc::new(MockMultiPartitionExec::new(n));
-        let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-            Arc::new(Column::new("a", 0)),
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-        )])
-        .unwrap();
+        let sort_expr = sort_expr_on("a", 0, true, true);
         let sort = Arc::new(SortExec::new(sort_expr, source));
         let limit: Arc<dyn ExecutionPlan> =
             Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
@@ -822,14 +716,7 @@ fn test_issue_14150_fetch_survives_multiple_passes() {
         RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(4)).unwrap(),
     );
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: false,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, false, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, repartition as _).with_fetch(Some(5)));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(5)));
@@ -840,25 +727,19 @@ fn test_issue_14150_fetch_survives_multiple_passes() {
     let p1 = EnsureRequirements::new()
         .optimize(Arc::clone(&limit), &config)
         .unwrap();
-    let s1 = datafusion_physical_plan::displayable(p1.as_ref())
-        .indent(true)
-        .to_string();
+    let s1 = plan_string(&p1);
 
     // Pass 2
     let p2 = EnsureRequirements::new()
         .optimize(Arc::clone(&p1), &config)
         .unwrap();
-    let s2 = datafusion_physical_plan::displayable(p2.as_ref())
-        .indent(true)
-        .to_string();
+    let s2 = plan_string(&p2);
 
     // Pass 3
     let p3 = EnsureRequirements::new()
         .optimize(Arc::clone(&p2), &config)
         .unwrap();
-    let s3 = datafusion_physical_plan::displayable(p3.as_ref())
-        .indent(true)
-        .to_string();
+    let s3 = plan_string(&p3);
 
     // Fetch must survive all passes
     assert!(s1.contains("fetch=5"), "fetch=5 lost after pass 1:\n{s1}");
@@ -895,14 +776,7 @@ fn test_issue_14150_fetch_survives_multiple_passes() {
 fn test_issue_14150_fetch_survives_with_input_spm() {
     let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: false,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, false, true);
 
     // Sort with fetch=5 (TopK).
     let sort = Arc::new(
@@ -921,16 +795,12 @@ fn test_issue_14150_fetch_survives_with_input_spm() {
     let p1 = EnsureRequirements::new()
         .optimize(Arc::clone(&limit), &config)
         .unwrap();
-    let s1 = datafusion_physical_plan::displayable(p1.as_ref())
-        .indent(true)
-        .to_string();
+    let s1 = plan_string(&p1);
 
     let p2 = EnsureRequirements::new()
         .optimize(Arc::clone(&p1), &config)
         .unwrap();
-    let s2 = datafusion_physical_plan::displayable(p2.as_ref())
-        .indent(true)
-        .to_string();
+    let s2 = plan_string(&p2);
 
     // The #14150 property: `fetch=5` must survive both passes (the
     // historical bug was that pass 2 dropped it when the SPM got
@@ -1052,14 +922,7 @@ fn test_idempotent_parallelize_sorts() {
     let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(8));
     let coalesce: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(source));
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     // Sort without preserve_partitioning on top of coalesced input
     let sort: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(sort_expr, coalesce));
@@ -1074,12 +937,8 @@ fn test_idempotent_parallelize_sorts() {
         .optimize(Arc::clone(&p1), &config)
         .expect("second optimize failed");
 
-    let s1 = datafusion_physical_plan::displayable(p1.as_ref())
-        .indent(true)
-        .to_string();
-    let s2 = datafusion_physical_plan::displayable(p2.as_ref())
-        .indent(true)
-        .to_string();
+    let s1 = plan_string(&p1);
+    let s2 = plan_string(&p2);
     assert_eq!(
         s1, s2,
         "parallelize_sorts NOT idempotent!\nFirst:\n{s1}\nSecond:\n{s2}"
@@ -1121,14 +980,7 @@ fn test_idempotent_sort_merge_join() {
         .expect("SortMergeJoinExec creation failed"),
     );
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, join));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(50)));
@@ -1167,14 +1019,7 @@ fn test_idempotent_window_over_multi_partition() {
     let window_like: Arc<dyn ExecutionPlan> =
         Arc::new(MockReqExec::new(source, dist, Some(ord)));
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, window_like));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(20)));
@@ -1192,16 +1037,8 @@ fn test_idempotent_nested_subqueries_sort_limit() {
     // Inner sort (a DESC) + inner limit — use DESC to avoid matching
     // MockMultiPartitionExec's built-in ASC ordering, which would cause
     // the optimizer to eliminate the sort differently across passes.
-    let inner_sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
     let inner_sort: Arc<dyn ExecutionPlan> =
-        Arc::new(SortExec::new(inner_sort_expr, source));
+        Arc::new(SortExec::new(sort_expr_on("a", 0, true, true), source));
     let inner_limit: Arc<dyn ExecutionPlan> =
         Arc::new(GlobalLimitExec::new(inner_sort, 0, Some(100)));
 
@@ -1214,16 +1051,8 @@ fn test_idempotent_nested_subqueries_sort_limit() {
         Arc::new(ProjectionExec::try_new(proj_exprs, inner_limit).unwrap());
 
     // Outer sort (a DESC) + outer limit
-    let outer_sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
     let outer_sort: Arc<dyn ExecutionPlan> =
-        Arc::new(SortExec::new(outer_sort_expr, projection));
+        Arc::new(SortExec::new(sort_expr_on("a", 0, true, true), projection));
     let outer_limit: Arc<dyn ExecutionPlan> =
         Arc::new(GlobalLimitExec::new(outer_sort, 0, Some(10)));
 
@@ -1241,14 +1070,7 @@ fn test_idempotent_repartition_hash_sort_limit() {
         RepartitionExec::try_new(source, Partitioning::Hash(hash_exprs, 4)).unwrap(),
     );
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(sort_expr, repartition));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(15)));
@@ -1291,12 +1113,8 @@ fn test_enforce_distribution_idempotent_hash_join() {
         .optimize(Arc::clone(&p1), &config)
         .expect("second EnsureRequirements pass failed");
 
-    let s1 = datafusion_physical_plan::displayable(p1.as_ref())
-        .indent(true)
-        .to_string();
-    let s2 = datafusion_physical_plan::displayable(p2.as_ref())
-        .indent(true)
-        .to_string();
+    let s1 = plan_string(&p1);
+    let s2 = plan_string(&p2);
 
     assert_eq!(
         s1, s2,
@@ -1325,14 +1143,7 @@ fn test_idempotent_union_projection_sort() {
     let projection: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(proj_exprs, union).unwrap());
 
-    let sort_expr = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("a", 0)),
-        SortOptions {
-            descending: true,
-            nulls_first: true,
-        },
-    )])
-    .unwrap();
+    let sort_expr = sort_expr_on("a", 0, true, true);
 
     let sort = Arc::new(SortExec::new(sort_expr, projection));
     let plan: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
