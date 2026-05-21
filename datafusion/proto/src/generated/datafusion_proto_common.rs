@@ -698,6 +698,9 @@ pub struct CsvOptions {
     /// Whether to ignore trailing whitespace in string values
     #[prost(bytes = "vec", tag = "22")]
     pub ignore_trailing_whitespace: ::prost::alloc::vec::Vec<u8>,
+    /// Optional character encoding
+    #[prost(string, tag = "23")]
+    pub charset: ::prost::alloc::string::String,
 }
 /// Options controlling CSV format
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

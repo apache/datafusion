@@ -159,6 +159,7 @@ datafusion-sql = { path = "datafusion/sql", version = "53.1.0" }
 datafusion-substrait = { path = "datafusion/substrait", version = "53.1.0" }
 
 doc-comment = "0.3"
+encoding_rs = "0.8"
 env_logger = "0.11"
 flate2 = "1.1.9"
 futures = "0.3"
