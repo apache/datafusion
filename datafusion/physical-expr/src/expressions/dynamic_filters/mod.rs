@@ -456,8 +456,7 @@ impl DynamicFilterPhysicalExpr {
     pub fn try_to_proto(
         &self,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>>
-    {
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
         use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 
@@ -493,18 +492,19 @@ impl DynamicFilterPhysicalExpr {
     }
 
     /// Reconstruct a [`DynamicFilterPhysicalExpr`] from its protobuf representation.
-   pub fn try_from_proto(
+    pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
-    ) -> Result<Arc<dyn PhysicalExpr>>
-    {
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 
         let dynamic_filter = match &node.expr_type {
             Some(ExprType::DynamicFilter(df)) => df.as_ref(),
-            _ => return datafusion_common::internal_err!(
-                "PhysicalExprNode is not a DynamicFilter"
-            ),
+            _ => {
+                return datafusion_common::internal_err!(
+                    "PhysicalExprNode is not a DynamicFilter"
+                );
+            }
         };
 
         let expression_id = node.expr_id.ok_or_else(|| {
@@ -533,14 +533,12 @@ impl DynamicFilterPhysicalExpr {
             None
         };
 
-        let inner_expr = ctx.decode(
-            dynamic_filter
-                .inner_expr
-                .as_deref()
-                .ok_or_else(|| datafusion_common::DataFusionError::Internal(
+        let inner_expr =
+            ctx.decode(dynamic_filter.inner_expr.as_deref().ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(
                     "DynamicFilterPhysicalExpr missing inner_expr".to_string(),
-                ))?,
-        )?;
+                )
+            })?)?;
 
         Ok(Arc::new(DynamicFilterPhysicalExpr::from_parts(
             children,
