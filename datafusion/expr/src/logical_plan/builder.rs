@@ -68,6 +68,10 @@ use indexmap::IndexSet;
 pub const UNNAMED_TABLE: &str = "?table?";
 
 fn plan_with_schema(plan: LogicalPlan, schema: DFSchemaRef) -> Result<LogicalPlan> {
+    if schema == *plan.schema() {
+        return Ok(plan);
+    }
+
     match plan {
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
             Projection::try_new_with_schema(expr, input, schema)

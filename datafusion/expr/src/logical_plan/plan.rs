@@ -752,14 +752,7 @@ impl LogicalPlan {
                     static_term.schema(),
                     recursive_term.schema(),
                 )?;
-                if output_schema == *static_term.schema() {
-                    Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                        name,
-                        static_term,
-                        recursive_term,
-                        is_distinct,
-                    }))
-                } else {
+                if output_schema != *static_term.schema() {
                     LogicalPlanBuilder::from(Arc::unwrap_or_clone(static_term))
                         .to_recursive_query(
                             name,
@@ -767,6 +760,13 @@ impl LogicalPlan {
                             is_distinct,
                         )?
                         .build()
+                } else {
+                    Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
+                        name,
+                        static_term,
+                        recursive_term,
+                        is_distinct,
+                    }))
                 }
             }
             LogicalPlan::Analyze(_) => Ok(self),

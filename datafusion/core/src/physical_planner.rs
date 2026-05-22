@@ -998,22 +998,22 @@ impl DefaultPhysicalPlanner {
                 let input_exec = children.one()?;
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
-                let reconciled_logical_schema;
-                let logical_input_schema = if schema_satisfied_by(
-                    logical_input_schema.inner(),
-                    &physical_input_schema,
-                ) || !contains_recursive_query_input(input)
-                {
-                    logical_input_schema
-                } else if let Some(schema) = reconcile_dfschema_with_schema_nullability(
-                    logical_input_schema,
-                    &physical_input_schema,
-                )? {
-                    reconciled_logical_schema = schema;
-                    &reconciled_logical_schema
+                let needs_recursive_reconciliation =
+                    !schema_satisfied_by(
+                        logical_input_schema.inner(),
+                        &physical_input_schema,
+                    ) && contains_recursive_query_input(input);
+                let reconciled_logical_schema = if needs_recursive_reconciliation {
+                    reconcile_dfschema_with_schema_nullability(
+                        logical_input_schema,
+                        &physical_input_schema,
+                    )?
                 } else {
-                    logical_input_schema
+                    None
                 };
+                let logical_input_schema = reconciled_logical_schema
+                    .as_ref()
+                    .unwrap_or(logical_input_schema);
                 let physical_input_schema_from_logical = logical_input_schema.inner();
 
                 if !options.execution.skip_physical_aggregate_schema_check
@@ -4762,6 +4762,10 @@ digraph {
         }
     }
 
+    fn c1_i32_required_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]))
+    }
+
     /// Attempts to plan a query with potentially mismatched schemas.
     async fn plan_with_schemas(
         logical_schema: SchemaRef,
@@ -4783,8 +4787,7 @@ digraph {
     // It then panics on unimplemented error in NoOpExecutionPlan.
     #[should_panic(expected = "NoOpExecutionPlan")]
     async fn test_aggregate_schema_check_passes() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let schema = c1_i32_required_schema();
 
         plan_with_schemas(
             Arc::clone(&schema),
@@ -4797,8 +4800,7 @@ digraph {
 
     #[tokio::test]
     async fn test_aggregate_schema_mismatch_metadata() {
-        let logical_schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let logical_schema = c1_i32_required_schema();
         let physical_schema = Arc::new(
             Schema::new(vec![Field::new("c1", DataType::Int32, false)])
                 .with_metadata(HashMap::from([("key".into(), "value".into())])),
@@ -4817,8 +4819,7 @@ digraph {
 
     #[tokio::test]
     async fn test_aggregate_schema_mismatch_field_count() {
-        let logical_schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let logical_schema = c1_i32_required_schema();
         let physical_schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
@@ -4837,8 +4838,7 @@ digraph {
 
     #[tokio::test]
     async fn test_aggregate_schema_mismatch_field_name() {
-        let logical_schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let logical_schema = c1_i32_required_schema();
         let physical_schema = Arc::new(Schema::new(vec![Field::new(
             "different_name",
             DataType::Int32,
@@ -4858,8 +4858,7 @@ digraph {
 
     #[tokio::test]
     async fn test_aggregate_schema_mismatch_field_type() {
-        let logical_schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let logical_schema = c1_i32_required_schema();
         let physical_schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int64, false)]));
 
@@ -4876,8 +4875,7 @@ digraph {
 
     #[tokio::test]
     async fn test_aggregate_schema_mismatch_field_nullability() {
-        let logical_schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let logical_schema = c1_i32_required_schema();
         let physical_schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
 
@@ -4894,8 +4892,7 @@ digraph {
 
     #[tokio::test]
     async fn test_aggregate_schema_mismatch_field_metadata() {
-        let logical_schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let logical_schema = c1_i32_required_schema();
         let physical_schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false)
                 .with_metadata(HashMap::from([("key".into(), "value".into())])),

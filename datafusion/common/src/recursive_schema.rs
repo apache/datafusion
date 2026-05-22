@@ -120,13 +120,16 @@ fn widen_dfschema_nullability_with_fields<'a>(
             return Ok(None);
         }
 
-        widened_nullability |= !base_field.is_nullable() && widening_field.is_nullable();
+        let base_nullable = base_field.is_nullable();
+        let widening_nullable = widening_field.is_nullable();
+        let output_nullable = base_nullable || widening_nullable;
+        widened_nullability |= !base_nullable && widening_nullable;
         fields.push((
             qualifier.cloned(),
             base_field
                 .as_ref()
                 .clone()
-                .with_nullable(base_field.is_nullable() || widening_field.is_nullable())
+                .with_nullable(output_nullable)
                 .into(),
         ));
     }

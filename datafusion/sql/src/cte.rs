@@ -190,7 +190,10 @@ fn has_work_table_reference(
     work_table_source: &Arc<dyn TableSource>,
 ) -> bool {
     plan.exists(|node| {
-        Ok(matches!(node, LogicalPlan::TableScan(scan) if Arc::ptr_eq(&scan.source, work_table_source)))
+        Ok(matches!(
+            node,
+            LogicalPlan::TableScan(scan) if Arc::ptr_eq(&scan.source, work_table_source)
+        ))
     })
     // Closure always returns Ok
     .unwrap()
