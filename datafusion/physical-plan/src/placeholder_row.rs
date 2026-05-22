@@ -33,7 +33,7 @@ use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=true

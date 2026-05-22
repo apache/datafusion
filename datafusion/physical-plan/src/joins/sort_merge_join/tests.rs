@@ -3365,7 +3365,7 @@ async fn test_left_outer_join_filtered_mask() -> Result<()> {
 
 #[test]
 fn test_partition_statistics() -> Result<()> {
-    use crate::statistics_context::compute_statistics;
+    use crate::statistics::compute_statistics;
     use datafusion_common::stats::Precision;
 
     let left = build_table(

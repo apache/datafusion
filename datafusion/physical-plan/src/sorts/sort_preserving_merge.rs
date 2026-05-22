@@ -24,7 +24,7 @@ use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -382,7 +382,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        args.compute_child_statistics(self.input.as_ref(), None)
+        args.compute_child_statistics(&self.input, None)
     }
 
     fn supports_limit_pushdown(&self) -> bool {

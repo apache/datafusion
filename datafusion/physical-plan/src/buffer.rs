@@ -24,7 +24,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::projection::ProjectionExec;
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SortOrderPushdownResult,
@@ -238,7 +238,7 @@ impl ExecutionPlan for BufferExec {
     }
 
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        args.compute_child_statistics(self.input.as_ref(), args.partition())
+        args.compute_child_statistics(&self.input, args.partition())
     }
 
     fn supports_limit_pushdown(&self) -> bool {

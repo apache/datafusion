@@ -20,7 +20,7 @@
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics, common,
-    execution_plan::Boundedness, statistics_context::StatisticsArgs,
+    execution_plan::Boundedness, statistics::StatisticsArgs,
 };
 use crate::{
     execution_plan::EmissionType,

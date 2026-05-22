@@ -29,7 +29,7 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};

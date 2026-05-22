@@ -53,7 +53,7 @@ use crate::projection::{
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::spill::get_record_batch_memory_size;
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
@@ -1441,10 +1441,9 @@ impl ExecutionPlan for HashJoinExec {
             // Left side is broadcast, so it always needs overall stats
             // Right side is partitioned, so it needs per-partition stats
             (Some(_), PartitionMode::CollectLeft) => {
-                let left_stats =
-                    args.compute_child_statistics(self.left.as_ref(), None)?;
+                let left_stats = args.compute_child_statistics(&self.left, None)?;
                 let right_stats =
-                    args.compute_child_statistics(self.right.as_ref(), args.partition())?;
+                    args.compute_child_statistics(&self.right, args.partition())?;
 
                 estimate_join_statistics(
                     Arc::unwrap_or_clone(left_stats),
@@ -1459,9 +1458,9 @@ impl ExecutionPlan for HashJoinExec {
             // so each output partition uses the matching partition from both sides.
             (Some(_), PartitionMode::Partitioned) => {
                 let left_stats =
-                    args.compute_child_statistics(self.left.as_ref(), args.partition())?;
+                    args.compute_child_statistics(&self.left, args.partition())?;
                 let right_stats =
-                    args.compute_child_statistics(self.right.as_ref(), args.partition())?;
+                    args.compute_child_statistics(&self.right, args.partition())?;
 
                 estimate_join_statistics(
                     Arc::unwrap_or_clone(left_stats),
@@ -1474,10 +1473,8 @@ impl ExecutionPlan for HashJoinExec {
 
             // Overall stats requested, look up overall child stats.
             (None, _) => {
-                let left_stats =
-                    args.compute_child_statistics(self.left.as_ref(), None)?;
-                let right_stats =
-                    args.compute_child_statistics(self.right.as_ref(), None)?;
+                let left_stats = args.compute_child_statistics(&self.left, None)?;
+                let right_stats = args.compute_child_statistics(&self.right, None)?;
                 estimate_join_statistics(
                     Arc::unwrap_or_clone(left_stats),
                     Arc::unwrap_or_clone(right_stats),
@@ -1490,10 +1487,8 @@ impl ExecutionPlan for HashJoinExec {
             // Auto mode hasn't decided partitioning yet, so it needs
             // overall stats from both sides.
             (Some(_), PartitionMode::Auto) => {
-                let left_stats =
-                    args.compute_child_statistics(self.left.as_ref(), None)?;
-                let right_stats =
-                    args.compute_child_statistics(self.right.as_ref(), None)?;
+                let left_stats = args.compute_child_statistics(&self.left, None)?;
+                let right_stats = args.compute_child_statistics(&self.right, None)?;
                 estimate_join_statistics(
                     Arc::unwrap_or_clone(left_stats),
                     Arc::unwrap_or_clone(right_stats),

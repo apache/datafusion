@@ -42,7 +42,7 @@ use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
 };
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -701,12 +701,11 @@ impl ExecutionPlan for NestedLoopJoinExec {
         let join_columns = Vec::new();
 
         // Left side is always broadcast, so it always needs overall stats
-        let left_stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(self.left.as_ref(), None)?,
-        );
+        let left_stats =
+            Arc::unwrap_or_clone(args.compute_child_statistics(&self.left, None)?);
         // Right side is partitioned, so it needs per-partition stats
         let right_stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(self.right.as_ref(), args.partition())?,
+            args.compute_child_statistics(&self.right, args.partition())?,
         );
 
         let stats = estimate_join_statistics(
@@ -2974,7 +2973,7 @@ fn build_unmatched_batch(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::statistics_context::compute_statistics;
+    use crate::statistics::compute_statistics;
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,

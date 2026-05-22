@@ -45,7 +45,7 @@ use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
 use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
@@ -523,8 +523,8 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// See [`compute_statistics`] for the top-level entry point that
     /// builds the args automatically.
     ///
-    /// [`StatisticsArgs`]: crate::statistics_context::StatisticsArgs
-    /// [`compute_statistics`]: crate::statistics_context::compute_statistics
+    /// [`StatisticsArgs`]: crate::statistics::StatisticsArgs
+    /// [`compute_statistics`]: crate::statistics::compute_statistics
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         #[expect(deprecated)]
         self.partition_statistics(args.partition())

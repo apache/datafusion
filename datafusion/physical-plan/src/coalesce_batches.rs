@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use crate::projection::ProjectionExec;
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
@@ -218,7 +218,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         let stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(self.input.as_ref(), args.partition())?,
+            args.compute_child_statistics(&self.input, args.partition())?,
         );
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }

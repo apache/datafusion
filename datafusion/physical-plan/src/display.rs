@@ -31,7 +31,7 @@ use datafusion_physical_expr::LexOrdering;
 use crate::metrics::{MetricCategory, MetricType};
 use crate::render_tree::RenderTree;
 
-use crate::statistics_context::compute_statistics;
+use crate::statistics::compute_statistics;
 
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
@@ -1172,7 +1172,7 @@ mod tests {
     use datafusion_common::{Result, Statistics, internal_datafusion_err};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
-    use crate::statistics_context::StatisticsArgs;
+    use crate::statistics::StatisticsArgs;
     use crate::{DisplayAs, ExecutionPlan, PlanProperties};
 
     use super::DisplayableExecutionPlan;

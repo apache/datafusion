@@ -42,7 +42,7 @@ use crate::projection::{
     EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
     try_embed_projection, update_expr,
 };
-use crate::statistics_context::{StatisticsArgs, compute_statistics};
+use crate::statistics::{StatisticsArgs, compute_statistics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, ExecutionPlan,
@@ -572,7 +572,7 @@ impl ExecutionPlan for FilterExec {
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         let input_stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(self.input.as_ref(), args.partition())?,
+            args.compute_child_statistics(&self.input, args.partition())?,
         );
         let stats = Self::statistics_helper(
             &self.input.schema(),
@@ -1154,7 +1154,7 @@ mod tests {
     use super::*;
     use crate::empty::EmptyExec;
     use crate::expressions::*;
-    use crate::statistics_context::compute_statistics;
+    use crate::statistics::compute_statistics;
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};

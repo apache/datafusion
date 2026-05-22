@@ -94,9 +94,10 @@ impl StatisticsArgs {
     /// from the current [`compute_statistics`] walk.
     pub fn compute_child_statistics(
         &self,
-        plan: &dyn ExecutionPlan,
+        plan: impl AsRef<dyn ExecutionPlan>,
         partition: Option<usize>,
     ) -> Result<Arc<Statistics>> {
+        let plan = plan.as_ref();
         match &self.cache {
             Some(cache) => compute_statistics_inner(plan, partition, cache),
             None => compute_statistics(plan, partition),

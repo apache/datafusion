@@ -43,7 +43,7 @@ use crate::filter_pushdown::{
 };
 use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, make_with_child};
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -329,8 +329,7 @@ impl ExecutionPlan for UnionExec {
                     // This partition belongs to this input - compute stats
                     // for the specific child at the specific partition
                     let child = &self.inputs[i];
-                    return args
-                        .compute_child_statistics(child.as_ref(), Some(remaining_idx));
+                    return args.compute_child_statistics(child, Some(remaining_idx));
                 }
                 remaining_idx -= input_partition_count;
             }
@@ -341,7 +340,7 @@ impl ExecutionPlan for UnionExec {
             let stats = self
                 .inputs
                 .iter()
-                .map(|input| args.compute_child_statistics(input.as_ref(), None))
+                .map(|input| args.compute_child_statistics(input, None))
                 .collect::<Result<Vec<_>>>()?;
             let stats_refs = stats.iter().map(|s| s.as_ref()).collect::<Vec<_>>();
 
@@ -657,7 +656,7 @@ impl ExecutionPlan for InterleaveExec {
             .inputs
             .iter()
             .map(|input| {
-                args.compute_child_statistics(input.as_ref(), args.partition())
+                args.compute_child_statistics(input, args.partition())
                     .map(Arc::unwrap_or_clone)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -830,7 +829,7 @@ mod tests {
     use super::*;
     use crate::collect;
     use crate::repartition::RepartitionExec;
-    use crate::statistics_context::compute_statistics;
+    use crate::statistics::compute_statistics;
     use crate::test::exec::StatisticsExec;
     use crate::test::{self, TestMemoryExec};
 

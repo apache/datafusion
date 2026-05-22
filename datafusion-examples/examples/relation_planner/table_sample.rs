@@ -724,7 +724,7 @@ impl ExecutionPlan for SampleExec {
 
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         let mut stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(self.input.as_ref(), args.partition())?,
+            args.compute_child_statistics(&self.input, args.partition())?,
         );
         let ratio = self.upper_bound - self.lower_bound;
 

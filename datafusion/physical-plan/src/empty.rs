@@ -34,7 +34,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use crate::execution_plan::SchedulingType;
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=false

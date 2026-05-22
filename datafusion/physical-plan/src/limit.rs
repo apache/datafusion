@@ -27,7 +27,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     check_if_same_properties,
@@ -222,7 +222,7 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         let stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(self.input.as_ref(), args.partition())?,
+            args.compute_child_statistics(&self.input, args.partition())?,
         );
         Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
     }
@@ -387,7 +387,7 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         let stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(self.input.as_ref(), args.partition())?,
+            args.compute_child_statistics(&self.input, args.partition())?,
         );
         Ok(Arc::new(stats.with_fetch(Some(self.fetch), 0, 1)?))
     }
@@ -535,7 +535,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common::collect;
-    use crate::statistics_context::compute_statistics;
+    use crate::statistics::compute_statistics;
     use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};

@@ -242,7 +242,7 @@ impl ExecutionPlan for OutputRequirementExec {
     }
 
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        args.compute_child_statistics(self.input.as_ref(), args.partition())
+        args.compute_child_statistics(&self.input, args.partition())
     }
 
     fn try_swapping_with_projection(

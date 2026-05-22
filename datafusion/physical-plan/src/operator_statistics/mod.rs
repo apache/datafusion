@@ -94,7 +94,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 
 use crate::ExecutionPlan;
-use crate::statistics_context::compute_statistics;
+use crate::statistics::compute_statistics;
 
 // ============================================================================
 // ExtendedStatistics: Statistics with type-safe extensions
@@ -1024,7 +1024,7 @@ mod tests {
     use super::*;
     use crate::filter::FilterExec;
     use crate::projection::ProjectionExec;
-    use crate::statistics_context::StatisticsArgs;
+    use crate::statistics::StatisticsArgs;
     use crate::{DisplayAs, DisplayFormatType, PlanProperties};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::Precision;

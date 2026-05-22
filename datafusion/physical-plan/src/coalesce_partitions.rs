@@ -30,7 +30,7 @@ use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::sort_pushdown::SortOrderPushdownResult;
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_properties};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -233,9 +233,8 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(self.input.as_ref(), None)?,
-        );
+        let stats =
+            Arc::unwrap_or_clone(args.compute_child_statistics(&self.input, None)?);
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 

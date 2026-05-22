@@ -38,7 +38,7 @@ use crate::projection::{
     physical_to_column_exprs, update_join_on,
 };
 use crate::spill::spill_manager::SpillManager;
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, Statistics, check_if_same_properties,
@@ -573,10 +573,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         let left_stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(self.left.as_ref(), args.partition())?,
+            args.compute_child_statistics(&self.left, args.partition())?,
         );
         let right_stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(self.right.as_ref(), args.partition())?,
+            args.compute_child_statistics(&self.right, args.partition())?,
         );
         Ok(Arc::new(estimate_join_statistics(
             left_stats,

@@ -45,7 +45,7 @@ use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
-use crate::statistics_context::StatisticsArgs;
+use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::stream::ReservationStream;
 use crate::topk::TopK;
@@ -1290,8 +1290,7 @@ impl ExecutionPlan for SortExec {
         } else {
             None
         };
-        let child_stats =
-            args.compute_child_statistics(self.input.as_ref(), partition)?;
+        let child_stats = args.compute_child_statistics(&self.input, partition)?;
         let stats = Arc::unwrap_or_clone(child_stats);
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
