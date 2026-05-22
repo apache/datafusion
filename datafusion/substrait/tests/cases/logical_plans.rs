@@ -46,9 +46,9 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
-        Projection: NOT DATA.D AS EXPR$0
-          TableScan: DATA
+        @"
+        Projection: NOT data.D AS EXPR$0
+          TableScan: data
         "
                 );
 
@@ -77,10 +77,10 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
-        Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR
-          WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
-            TableScan: DATA
+        @"
+        Projection: sum(data.D) PARTITION BY [data.PART] ORDER BY [data.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR
+          WindowAggr: windowExpr=[[sum(data.D) PARTITION BY [data.PART] ORDER BY [data.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
+            TableScan: data
         "
                 );
 
@@ -104,10 +104,10 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
+        @"
         Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED
           WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            TableScan: DATA
+            TableScan: data
         "
                 );
 
@@ -133,11 +133,11 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
-        Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1
+        @"
+        Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [data.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1
           WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-            WindowAggr: windowExpr=[[row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-              TableScan: DATA
+            WindowAggr: windowExpr=[[row_number() PARTITION BY [data.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+              TableScan: data
         "
                 );
 
@@ -162,17 +162,17 @@ mod tests {
 
         assert_snapshot!(
             plan,
-            @r"
+            @"
         Projection: left.A, left.Utf8(NULL) AS C, right.D, Utf8(NULL) AS Utf8(NULL)__temp__0 AS E
           Left Join: left.A = right.A
             SubqueryAlias: left
               Union
-                Projection: A.A, Utf8(NULL)
-                  TableScan: A
-                Projection: B.A, CAST(B.C AS Utf8)
-                  TableScan: B
+                Projection: a.A, Utf8(NULL)
+                  TableScan: a
+                Projection: b.A, CAST(b.C AS Utf8)
+                  TableScan: b
             SubqueryAlias: right
-              TableScan: C
+              TableScan: c
         "
         );
 
@@ -212,7 +212,7 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
+        @"
         Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count
           Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]
             Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]
@@ -235,7 +235,7 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
+        @"
         Projection: foo AS col1, bar AS col2
           Union
             Projection: foo, bar
@@ -250,7 +250,7 @@ mod tests {
 
         assert_snapshot!(
             format_batches(&results)?,
-            @r"
+            @"
         +------+------+
         | col1 | col2 |
         +------+------+
@@ -282,9 +282,9 @@ mod tests {
 
         assert_snapshot!(
             plan,
-            @r"
-        Projection: make_array(DATA.a, DATA.b) AS my_list
-          TableScan: DATA
+            @"
+        Projection: make_array(data.a, data.b) AS my_list
+          TableScan: data
         "
         );
 

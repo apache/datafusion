@@ -35,7 +35,7 @@ mod tests {
 
         assert_snapshot!(
             plan,
-            @r"
+            @"
         Aggregate: groupBy=[[]], aggr=[[sum(c0) AS summation]]
           EmptyRelation: rows=0
         "
@@ -57,7 +57,7 @@ mod tests {
 
         assert_snapshot!(
             plan,
-            @r"
+            @"
         Aggregate: groupBy=[[c0]], aggr=[[sum(c0) AS summation]]
           EmptyRelation: rows=0
         "

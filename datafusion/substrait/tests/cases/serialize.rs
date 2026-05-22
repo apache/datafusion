@@ -104,7 +104,7 @@ mod tests {
 
         assert_snapshot!(
                     format!("{}", datafusion_plan),
-                    @r"
+                    @"
         Projection: data.b, data.a + data.a, data.a
           TableScan: data projection=[a, b]
         "
@@ -151,7 +151,7 @@ mod tests {
         let datafusion_plan = df.into_optimized_plan()?;
         assert_snapshot!(
                     datafusion_plan,
-                    @r"
+                    @"
         Projection: data.b, rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, data.c
           WindowAggr: windowExpr=[[rank() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
             TableScan: data projection=[a, b, c]

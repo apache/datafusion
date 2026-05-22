@@ -34,7 +34,7 @@ mod tests {
             table_name: &str,
             fields: Vec<(&str, DataType, bool)>,
         ) -> Result<SessionContext> {
-            let table_ref = TableReference::bare(table_name);
+            let table_ref = TableReference::parse_str(table_name);
             let fields: Vec<(Option<TableReference>, Arc<Field>)> = fields
                 .into_iter()
                 .map(|pair| {
@@ -69,9 +69,9 @@ mod tests {
 
             assert_snapshot!(
             plan,
-            @r"
-            Projection: DATA.a, DATA.b
-              TableScan: DATA
+            @"
+            Projection: data.a, data.b
+              TableScan: data
             "
                         );
             Ok(())
@@ -92,9 +92,9 @@ mod tests {
 
             assert_snapshot!(
             plan,
-            @r"
-            Projection: DATA.a, DATA.b
-              TableScan: DATA projection=[a, b]
+            @"
+            Projection: data.a, data.b
+              TableScan: data projection=[a, b]
             "
                         );
             Ok(())
@@ -117,9 +117,9 @@ mod tests {
 
             assert_snapshot!(
             plan,
-            @r"
-            Projection: DATA.a, DATA.b
-              TableScan: DATA projection=[a, b]
+            @"
+            Projection: data.a, data.b
+              TableScan: data projection=[a, b]
             "
                         );
             Ok(())

@@ -38,9 +38,9 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r"
-        Projection: DATA.A AS a, DATA.B AS b, DATA.A + Int64(1) AS add1
-          TableScan: DATA
+        @"
+        Projection: data.A AS a, data.B AS b, data.A + Int64(1) AS add1
+          TableScan: data
         "
                 );
         Ok(())
@@ -57,10 +57,10 @@ mod tests {
         assert_snapshot!(
         plan,
         // Note that duplicate references in the remap are aliased
-        @r"
-        Projection: DATA.B, DATA.A AS A1, DATA.A AS DATA.A__temp__0 AS A2
-          Filter: DATA.B = Int64(2)
-            TableScan: DATA
+        @"
+        Projection: data.B, data.A AS A1, data.A AS data.A__temp__0 AS A2
+          Filter: data.B = Int64(2)
+            TableScan: data
         "
                 );
         Ok(())
@@ -88,7 +88,7 @@ mod tests {
         let plan = df.into_unoptimized_plan();
         assert_snapshot!(
             plan,
-            @r"
+            @"
         Projection: random() AS c1, data.a + Int64(1) AS c2
           TableScan: data
         "        );
@@ -98,7 +98,7 @@ mod tests {
         // note how the Projections are not flattened
         assert_snapshot!(
         plan2,
-        @r"
+        @"
         Projection: random() AS c1, data.a + Int64(1) AS c2
           Projection: data.a, data.b, data.c, data.d, data.e, data.f, random(), data.a + Int64(1)
             TableScan: data
@@ -115,7 +115,7 @@ mod tests {
         let plan = df.into_unoptimized_plan();
         assert_snapshot!(
         plan,
-        @r"
+        @"
         Projection: data.a + Int64(1), data.b + Int64(2)
           TableScan: data
         "

@@ -90,6 +90,28 @@ pub mod test {
         schemas: Vec<(TableReference, Arc<dyn TableProvider>)>,
     }
 
+    fn normalized_substrait_name(name: &str) -> Arc<str> {
+        name.to_ascii_lowercase().into()
+    }
+
+    fn named_table_reference(names: &[String]) -> Option<TableReference> {
+        match names {
+            [] => None,
+            [table] => Some(TableReference::Bare {
+                table: normalized_substrait_name(table),
+            }),
+            [schema, table] => Some(TableReference::Partial {
+                schema: normalized_substrait_name(schema),
+                table: normalized_substrait_name(table),
+            }),
+            [catalog, schema, table, ..] => Some(TableReference::Full {
+                catalog: normalized_substrait_name(catalog),
+                schema: normalized_substrait_name(schema),
+                table: normalized_substrait_name(table),
+            }),
+        }
+    }
+
     impl<'a, T: SubstraitConsumer> TestSchemaCollector<'a, T> {
         fn new(consumer: &'a T) -> Self {
             TestSchemaCollector {
@@ -126,23 +148,9 @@ pub mod test {
         }
 
         fn collect_named_table(&mut self, read: &ReadRel, nt: &NamedTable) -> Result<()> {
-            let table_reference = match nt.names.len() {
-                0 => {
-                    panic!("No table name found in NamedTable");
-                }
-                1 => TableReference::Bare {
-                    table: nt.names[0].clone().into(),
-                },
-                2 => TableReference::Partial {
-                    schema: nt.names[0].clone().into(),
-                    table: nt.names[1].clone().into(),
-                },
-                _ => TableReference::Full {
-                    catalog: nt.names[0].clone().into(),
-                    schema: nt.names[1].clone().into(),
-                    table: nt.names[2].clone().into(),
-                },
-            };
+            let table_reference = named_table_reference(&nt.names).unwrap_or_else(|| {
+                panic!("No table name found in NamedTable");
+            });
 
             let substrait_schema =
                 read.base_schema.as_ref().ok_or(substrait_datafusion_err!(
