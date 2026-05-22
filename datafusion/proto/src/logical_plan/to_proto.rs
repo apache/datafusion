@@ -410,6 +410,19 @@ pub fn serialize_expr(
                 })),
             }
         }
+        Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+            let mut buf = Vec::new();
+            let _ = codec.try_encode_higher_order_function(func.as_ref(), &mut buf);
+            protobuf::LogicalExprNode {
+                expr_type: Some(ExprType::HigherOrderUdfExpr(
+                    protobuf::HigherOrderUdfExprNode {
+                        fun_name: func.name().to_string(),
+                        fun_definition: (!buf.is_empty()).then_some(buf),
+                        args: serialize_exprs(args, codec)?,
+                    },
+                )),
+            }
+        }
         Expr::Not(expr) => {
             let expr = Box::new(protobuf::Not {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
@@ -635,19 +648,6 @@ pub fn serialize_expr(
                     .unwrap_or(HashMap::new()),
             })),
         },
-        Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
-            let mut buf = Vec::new();
-            let _ = codec.try_encode_higher_order_function(func.as_ref(), &mut buf);
-            protobuf::LogicalExprNode {
-                expr_type: Some(ExprType::HigherOrderUdfExpr(
-                    protobuf::HigherOrderUdfExprNode {
-                        fun_name: func.name().to_string(),
-                        fun_definition: (!buf.is_empty()).then_some(buf),
-                        args: serialize_exprs(args, codec)?,
-                    },
-                )),
-            }
-        }
         Expr::Lambda(Lambda { params, body }) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Lambda(Box::new(protobuf::Lambda {
                 params: params.clone(),

@@ -465,6 +465,31 @@ pub fn parse_physical_expr_with_converter(
                 .with_nullable(e.nullable),
             )
         }
+        ExprType::HigherOrderUdf(e) => {
+            let func = match &e.fun_definition {
+                Some(buf) => {
+                    ctx.codec().try_decode_higher_order_function(&e.name, buf)?
+                }
+                None => ctx
+                    .task_ctx()
+                    .higher_order_function(e.name.as_str())
+                    .or_else(|_| {
+                        ctx.codec().try_decode_higher_order_function(&e.name, &[])
+                    })?,
+            };
+            let func_def = Arc::clone(&func);
+
+            let args = parse_physical_exprs(&e.args, ctx, input_schema, proto_converter)?;
+
+            let config_options = Arc::clone(ctx.task_ctx().session_config().options());
+
+            Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
+                func_def,
+                args,
+                input_schema,
+                config_options,
+            )?)
+        }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
             like_expr.negated,
             like_expr.case_insensitive,
@@ -572,31 +597,6 @@ pub fn parse_physical_expr_with_converter(
                 .collect::<Result<_>>()?;
             ctx.codec()
                 .try_decode_expr(extension.expr.as_slice(), &inputs)? as _
-        }
-        ExprType::HigherOrderUdf(e) => {
-            let func = match &e.fun_definition {
-                Some(buf) => {
-                    ctx.codec().try_decode_higher_order_function(&e.name, buf)?
-                }
-                None => ctx
-                    .task_ctx()
-                    .higher_order_function(e.name.as_str())
-                    .or_else(|_| {
-                        ctx.codec().try_decode_higher_order_function(&e.name, &[])
-                    })?,
-            };
-            let func_def = Arc::clone(&func);
-
-            let args = parse_physical_exprs(&e.args, ctx, input_schema, proto_converter)?;
-
-            let config_options = Arc::clone(ctx.task_ctx().session_config().options());
-
-            Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
-                func_def,
-                args,
-                input_schema,
-                config_options,
-            )?)
         }
         ExprType::Lambda(lambda) => Arc::new(LambdaExpr::try_new(
             lambda.params.clone(),

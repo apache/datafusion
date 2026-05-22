@@ -596,6 +596,22 @@ pub fn parse_expr(
                 parse_exprs(args, ctx, codec)?,
             )))
         }
+        ExprType::HigherOrderUdfExpr(protobuf::HigherOrderUdfExprNode {
+            fun_name,
+            args,
+            fun_definition,
+        }) => {
+            let hof_fn = match fun_definition {
+                Some(buf) => codec.try_decode_higher_order_function(fun_name, buf)?,
+                None => ctx
+                    .higher_order_function(fun_name.as_str())
+                    .or_else(|_| codec.try_decode_higher_order_function(fun_name, &[]))?,
+            };
+            Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+                hof_fn,
+                parse_exprs(args, ctx, codec)?,
+            )))
+        }
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = match &pb.fun_definition {
                 Some(buf) => codec.try_decode_udaf(&pb.fun_name, buf)?,
@@ -668,22 +684,6 @@ pub fn parse_expr(
                 codec,
             )?;
             Ok(Expr::ScalarSubquery(subquery))
-        }
-        ExprType::HigherOrderUdfExpr(protobuf::HigherOrderUdfExprNode {
-            fun_name,
-            args,
-            fun_definition,
-        }) => {
-            let hof_fn = match fun_definition {
-                Some(buf) => codec.try_decode_higher_order_function(fun_name, buf)?,
-                None => ctx
-                    .higher_order_function(fun_name.as_str())
-                    .or_else(|_| codec.try_decode_higher_order_function(fun_name, &[]))?,
-            };
-            Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
-                hof_fn,
-                parse_exprs(args, ctx, codec)?,
-            )))
         }
         ExprType::Lambda(lambda) => Ok(Expr::Lambda(Lambda::new(
             lambda.params.clone(),

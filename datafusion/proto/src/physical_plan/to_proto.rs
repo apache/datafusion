@@ -502,6 +502,19 @@ pub fn serialize_physical_expr_with_converter(
                 },
             )),
         })
+    } else if let Some(expr) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
+        let mut buf = Vec::new();
+        codec.try_encode_higher_order_function(expr.fun(), &mut buf)?;
+        Ok(protobuf::PhysicalExprNode {
+            expr_id,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::HigherOrderUdf(
+                protobuf::PhysicalHigherOrderUdfNode {
+                    name: expr.name().to_string(),
+                    args: serialize_physical_exprs(expr.args(), codec, proto_converter)?,
+                    fun_definition: (!buf.is_empty()).then_some(buf),
+                },
+            )),
+        })
     } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
         Ok(protobuf::PhysicalExprNode {
             expr_id,
@@ -575,19 +588,6 @@ pub fn serialize_physical_expr_with_converter(
                     inner_expr: Some(inner_expr),
                     is_complete: inner.is_complete,
                 }),
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
-        let mut buf = Vec::new();
-        codec.try_encode_higher_order_function(expr.fun(), &mut buf)?;
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::HigherOrderUdf(
-                protobuf::PhysicalHigherOrderUdfNode {
-                    name: expr.name().to_string(),
-                    args: serialize_physical_exprs(expr.args(), codec, proto_converter)?,
-                    fun_definition: (!buf.is_empty()).then_some(buf),
-                },
             )),
         })
     } else if let Some(lambda) = expr.downcast_ref::<LambdaExpr>() {
