@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{UInt8Builder, UInt64Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::{assert_batches_eq, tree_node::TreeNodeRecursion};
 use datafusion::datasource::{TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
@@ -58,14 +58,27 @@ pub async fn custom_datasource() -> Result<()> {
     // - `SELECT COUNT(id) ...` requests a single column (projection: Some([0]))
     let ctx = SessionContext::new();
     ctx.register_table("accounts", Arc::new(db))?;
-    ctx.sql("SELECT 1 AS a FROM accounts")
+    let constant_batches = ctx
+        .sql("SELECT 1 AS a FROM accounts")
         .await?
         .collect()
         .await?;
-    ctx.sql("SELECT COUNT(id) FROM accounts")
+    assert_batches_eq!(
+        [
+            "+---+", "| a |", "+---+", "| 1 |", "| 1 |", "| 1 |", "+---+",
+        ],
+        &constant_batches
+    );
+
+    let count_batches = ctx
+        .sql("SELECT COUNT(id) AS cnt FROM accounts")
         .await?
         .collect()
         .await?;
+    assert_batches_eq!(
+        ["+-----+", "| cnt |", "+-----+", "| 3   |", "+-----+",],
+        &count_batches
+    );
 
     Ok(())
 }
