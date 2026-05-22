@@ -1,0 +1,274 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! [`ScalarUDFImpl`] definitions for array_add function.
+
+use crate::utils::make_scalar_function;
+use arrow::array::{
+    Array, ArrayRef, Float64Array, GenericListArray, NullBufferBuilder,
+    OffsetBufferBuilder, OffsetSizeTrait,
+};
+use arrow::buffer::NullBuffer;
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, LargeList, List, Null},
+    Field,
+};
+use datafusion_common::cast::{as_float64_array, as_generic_list_array};
+use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
+use datafusion_common::{
+    Result, exec_err, not_impl_err, plan_err, utils::take_function_args,
+};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
+};
+use datafusion_macros::user_doc;
+use std::sync::Arc;
+
+make_udf_expr_and_func!(
+    ArrayAdd,
+    array_add,
+    array1 array2,
+    "returns the element-wise sum of two numeric arrays.",
+    array_add_udf
+);
+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the element-wise sum of two numeric arrays of equal length, computed as `array1[i] + array2[i]` per position. NULL is propagated per element: if either input element at position `i` is NULL, the corresponding output element is NULL (positions are preserved). Returns NULL if either entire input array is NULL. Errors if the per-row lengths differ. Returns an empty array if both inputs are empty.",
+    syntax_example = "array_add(array1, array2)",
+    sql_example = r#"```sql
+> select array_add([1.0, 2.0, 3.0], [10.0, 20.0, 30.0]);
++---------------------------------------------------------+
+| array_add(List([1.0,2.0,3.0]),List([10.0,20.0,30.0]))   |
++---------------------------------------------------------+
+| [11.0, 22.0, 33.0]                                      |
++---------------------------------------------------------+
+```"#,
+    argument(
+        name = "array1",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array2",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ArrayAdd {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl Default for ArrayAdd {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ArrayAdd {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::user_defined(Volatility::Immutable),
+            aliases: vec!["list_add".to_string()],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayAdd {
+    fn name(&self) -> &str {
+        "array_add"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        // After `coerce_types`, both args share the same List/LargeList<Float64> shape.
+        Ok(arg_types[0].clone())
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [_, _] = take_function_args(self.name(), arg_types)?;
+        let coercion = Some(&ListCoercion::FixedSizedListToList);
+
+        for arg_type in arg_types {
+            if !matches!(arg_type, Null | List(_) | LargeList(_) | FixedSizeList(..)) {
+                return plan_err!("{} does not support type {arg_type}", self.name());
+            }
+            // Only flat lists of numeric leaves are supported. Peel exactly
+            // one layer so that `List<List<_>>` is rejected as non-numeric
+            // rather than passing through and failing opaquely in the kernel.
+            let element_type = match arg_type {
+                List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                    field.data_type()
+                }
+                other => other,
+            };
+            if matches!(
+                element_type,
+                DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+            ) {
+                return not_impl_err!(
+                    "{} does not yet support decimal element types ({element_type}); \
+                     cast to DOUBLE explicitly to opt into lossy float arithmetic",
+                    self.name()
+                );
+            }
+            if !matches!(element_type, Null) && !element_type.is_numeric() {
+                return plan_err!(
+                    "{} requires numeric array elements, got list of {element_type}",
+                    self.name()
+                );
+            }
+        }
+
+        // If either side is `LargeList`, widen both to `LargeList` so the runtime
+        // dispatch sees a homogeneous pair.
+        let any_large_list = arg_types.iter().any(|t| matches!(t, LargeList(_)));
+
+        let coerced = arg_types
+            .iter()
+            .map(|arg_type| {
+                if matches!(arg_type, Null) {
+                    let field = Arc::new(Field::new_list_field(DataType::Float64, true));
+                    return if any_large_list {
+                        LargeList(field)
+                    } else {
+                        List(field)
+                    };
+                }
+                let coerced = coerced_type_with_base_type_only(
+                    arg_type,
+                    &DataType::Float64,
+                    coercion,
+                );
+                match coerced {
+                    List(field) if any_large_list => LargeList(field),
+                    other => other,
+                }
+            })
+            .collect();
+
+        Ok(coerced)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(array_add_inner)(&args.args)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+}
+
+fn array_add_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [array1, array2] = take_function_args("array_add", args)?;
+    match (array1.data_type(), array2.data_type()) {
+        (List(_), List(_)) => general_array_add::<i32>(args),
+        (LargeList(_), LargeList(_)) => general_array_add::<i64>(args),
+        (arg_type1, arg_type2) => exec_err!(
+            "array_add received unexpected types after coercion: {arg_type1} and {arg_type2}"
+        ),
+    }
+}
+
+fn general_array_add<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<ArrayRef> {
+    let lhs = as_generic_list_array::<O>(&arrays[0])?;
+    let rhs = as_generic_list_array::<O>(&arrays[1])?;
+
+    if lhs.len() != rhs.len() {
+        return exec_err!(
+            "array_add row counts differ ({} vs {})",
+            lhs.len(),
+            rhs.len()
+        );
+    }
+
+    let lhs_values = as_float64_array(lhs.values())?;
+    let rhs_values = as_float64_array(rhs.values())?;
+    let lhs_offsets = lhs.value_offsets();
+    let rhs_offsets = rhs.value_offsets();
+
+    let mut out_values: Vec<f64> = Vec::with_capacity(lhs_values.len());
+    let mut out_inner_nulls = NullBufferBuilder::new(lhs_values.len());
+    let mut out_offsets = OffsetBufferBuilder::<O>::new(lhs.len());
+    let mut out_row_nulls = NullBufferBuilder::new(lhs.len());
+
+    for row in 0..lhs.len() {
+        // Whole-row NULL on either side -> NULL output row, no elements.
+        if lhs.is_null(row) || rhs.is_null(row) {
+            out_row_nulls.append_null();
+            out_offsets.push_length(0);
+            continue;
+        }
+
+        let start1 = lhs_offsets[row].as_usize();
+        let len1 = lhs.value_length(row).as_usize();
+        let start2 = rhs_offsets[row].as_usize();
+        let len2 = rhs.value_length(row).as_usize();
+
+        if len1 != len2 {
+            return exec_err!(
+                "array_add requires both list inputs to have the same length per row, got {len1} and {len2} at row {row}"
+            );
+        }
+
+        let l_slice = lhs_values.slice(start1, len1);
+        let r_slice = rhs_values.slice(start2, len2);
+
+        let l_vals = l_slice.values();
+        let r_vals = r_slice.values();
+
+        // Per-element validity: position `i` is valid iff both lhs[i] and rhs[i]
+        // are valid. `NullBuffer::union` returns `None` when both sides are
+        // entirely valid, keeping the common case branch-free.
+        let combined = NullBuffer::union(l_slice.nulls(), r_slice.nulls());
+
+        for i in 0..len1 {
+            // Push the value unconditionally; the null buffer is the source of
+            // truth for validity.
+            out_values.push(l_vals[i] + r_vals[i]);
+            match &combined {
+                Some(nb) if nb.is_null(i) => out_inner_nulls.append_null(),
+                _ => out_inner_nulls.append_non_null(),
+            }
+        }
+
+        out_row_nulls.append_non_null();
+        out_offsets.push_length(len1);
+    }
+
+    let values_array = Arc::new(Float64Array::new(
+        out_values.into(),
+        out_inner_nulls.finish(),
+    ));
+    let field = Arc::new(Field::new_list_field(DataType::Float64, true));
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        field,
+        out_offsets.finish(),
+        values_array,
+        out_row_nulls.finish(),
+    )?))
+}
