@@ -1039,7 +1039,6 @@ pub fn binary_numeric_coercion(
 pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
-    // Prefer decimal data type over floating point for comparison operation
     match (lhs_type, rhs_type) {
         // Same decimal types
         (lhs_type, rhs_type)
@@ -1059,7 +1058,19 @@ pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
         {
             get_wider_decimal_type_cross_variant(lhs_type, rhs_type)
         }
-        // Decimal + non-decimal types
+        // Decimal + floating point: floating point wins. Decimal cannot
+        // represent NaN or ±Inf, so a Decimal common type would fail to
+        // cast values that the Float side may legitimately hold. This
+        // matches PostgreSQL's numeric-vs-float resolution.
+        (
+            Float16 | Float32 | Float64,
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
+        ) => Some(lhs_type.clone()),
+        (
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
+            Float16 | Float32 | Float64,
+        ) => Some(rhs_type.clone()),
+        // Decimal + integer types: promote to Decimal.
         (Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _), _) => {
             get_common_decimal_type(lhs_type, rhs_type)
         }
