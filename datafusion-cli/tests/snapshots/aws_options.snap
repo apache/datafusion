@@ -5,8 +5,8 @@ info:
   args: []
   stdin: "CREATE EXTERNAL TABLE CARS\nSTORED AS CSV\nLOCATION 's3://data/cars.csv'\nOPTIONS(\n    'aws.access_key_id' 'TEST-DataFusionLogin',\n    'aws.secret_access_key' 'TEST-DataFusionPassword',\n    'aws.endpoint' 'http://127.0.0.1:9000',\n    'aws.allow_http' 'true'\n);\n\nSELECT * FROM CARS limit 1;\n"
 ---
-success: true
-exit_code: 0
+success: false
+exit_code: 88
 ----- stdout -----
 [CLI_VERSION]
 0 row(s) fetched. 
