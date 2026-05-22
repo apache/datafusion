@@ -289,6 +289,7 @@ impl PartialEq for HashTableLookupExpr {
 
 impl Eq for HashTableLookupExpr {}
 
+#[cfg(feature = "proto")]
 
 impl HashTableLookupExpr {
     /// Serialize this expression to protobuf.
@@ -304,10 +305,11 @@ impl HashTableLookupExpr {
     pub fn try_to_proto(
         &self,
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> datafusion_common::Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>>
-    {
-        use datafusion_proto_common::scalar_value::Value;
+    ) -> datafusion_common::Result<
+        Option<datafusion_proto_models::protobuf::PhysicalExprNode>,
+    > {
         use datafusion_proto_common::ScalarValue;
+        use datafusion_proto_common::scalar_value::Value;
         use datafusion_proto_models::protobuf;
         use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 
