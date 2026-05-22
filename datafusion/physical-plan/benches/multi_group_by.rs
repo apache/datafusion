@@ -29,8 +29,8 @@ use arrow::array::{ArrayRef, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_physical_plan::aggregates::group_values::GroupValues;
+use datafusion_physical_plan::aggregates::group_values::GroupValuesRows;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupValuesColumn;
-use datafusion_physical_plan::aggregates::group_values::row::GroupValuesRows;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -53,14 +53,21 @@ fn generate_batches(
         .powf(1.0 / num_cols as f64)
         .ceil() as usize;
 
-    let num_batches = num_rows / batch_size;
+    let num_full_batches = num_rows / batch_size;
+    let remainder = num_rows % batch_size;
+    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
 
     (0..num_batches)
         .map(|batch_idx| {
             let batch_start = batch_idx * batch_size;
+            let current_batch_size = if batch_idx == num_batches - 1 && remainder > 0 {
+                remainder
+            } else {
+                batch_size
+            };
             (0..num_cols)
                 .map(|col_idx| {
-                    let values: Vec<i32> = (0..batch_size)
+                    let values: Vec<i32> = (0..current_batch_size)
                         .map(|row| {
                             let global_row = batch_start + row;
                             let group_id = global_row % num_distinct_groups;
