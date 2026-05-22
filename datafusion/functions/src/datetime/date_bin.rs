@@ -340,7 +340,11 @@ fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> Resul
 
 // distance from origin to bin
 fn compute_distance(time_diff: i64, stride: i64) -> Result<i64> {
-    let remainder = time_diff % stride;
+    let remainder = time_diff.checked_rem(stride).ok_or_else(|| {
+        arrow::error::ArrowError::InvalidArgumentError(format!(
+            "date_bin compute_distance time_diff {time_diff} % stride {stride} overflows i64"
+        ))
+    })?;
     let time_delta = time_diff.checked_sub(remainder).ok_or_else(|| {
         arrow::error::ArrowError::InvalidArgumentError(format!(
             "date_bin compute_distance time_diff {time_diff} - remainder {remainder} overflows i64"
@@ -1390,5 +1394,18 @@ mod tests {
         } else {
             panic!("Expected TimestampNanosecond scalar");
         }
+    }
+
+    #[test]
+    fn test_date_bin_compute_distance_rem_overflow() {
+        // Regression for #22215: `time_diff % stride` panics with "attempt to
+        // calculate the remainder with overflow" when `time_diff == i64::MIN`
+        // and `stride == -1`. Now it must return a normal Err that the scalar
+        // pipeline maps to NULL.
+        let result = date_bin_nanos_interval(-1, i64::MIN, 0);
+        assert!(
+            result.is_err(),
+            "expected Err for time_diff=i64::MIN, stride=-1, got {result:?}"
+        );
     }
 }
