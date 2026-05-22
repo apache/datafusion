@@ -54,7 +54,6 @@ use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::metadata::check_metadata_with_storage_equal;
-use datafusion_common::recursive_schema::recursive_query_output_schema;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -747,28 +746,13 @@ impl LogicalPlan {
                 static_term,
                 recursive_term,
                 is_distinct,
-            }) => {
-                let output_schema = recursive_query_output_schema(
-                    static_term.schema(),
-                    recursive_term.schema(),
-                )?;
-                if output_schema != *static_term.schema() {
-                    LogicalPlanBuilder::from(Arc::unwrap_or_clone(static_term))
-                        .to_recursive_query(
-                            name,
-                            Arc::unwrap_or_clone(recursive_term),
-                            is_distinct,
-                        )?
-                        .build()
-                } else {
-                    Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                        name,
-                        static_term,
-                        recursive_term,
-                        is_distinct,
-                    }))
-                }
-            }
+            }) => LogicalPlanBuilder::from(Arc::unwrap_or_clone(static_term))
+                .to_recursive_query(
+                    name,
+                    Arc::unwrap_or_clone(recursive_term),
+                    is_distinct,
+                )?
+                .build(),
             LogicalPlan::Analyze(_) => Ok(self),
             LogicalPlan::Explain(_) => Ok(self),
             LogicalPlan::TableScan(_) => Ok(self),
@@ -5086,6 +5070,58 @@ mod tests {
         Projection: Int32(1) AS $1, Utf8("s") AS $2 [$1:Int32, $2:Utf8]
           EmptyRelation: rows=0 []
         "#);
+    }
+
+    #[test]
+    fn recompute_schema_rebuilds_recursive_query_even_when_output_schema_matches() {
+        let static_schema = DFSchema::from_unqualified_fields(
+            vec![Field::new("n", DataType::Int32, false)].into(),
+            HashMap::new(),
+        )
+        .unwrap();
+        let recursive_schema = DFSchema::from_unqualified_fields(
+            vec![Field::new("n", DataType::Int32, false)].into(),
+            HashMap::from([("recursive".to_string(), "metadata".to_string())]),
+        )
+        .unwrap();
+
+        let static_term = Arc::new(LogicalPlan::Values(Values {
+            schema: Arc::new(static_schema.clone()),
+            values: vec![vec![Expr::Literal(ScalarValue::Int32(Some(0)), None)]],
+        }));
+        let recursive_term = Arc::new(LogicalPlan::Values(Values {
+            schema: Arc::new(recursive_schema),
+            values: vec![vec![Expr::Literal(ScalarValue::Int32(Some(1)), None)]],
+        }));
+
+        assert_ne!(
+            static_term.schema().metadata(),
+            recursive_term.schema().metadata()
+        );
+
+        let plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
+            name: "cte".to_string(),
+            static_term,
+            recursive_term,
+            is_distinct: false,
+        });
+
+        let recomputed = plan.recompute_schema().unwrap();
+
+        let LogicalPlan::RecursiveQuery(RecursiveQuery {
+            static_term,
+            recursive_term,
+            ..
+        }) = recomputed
+        else {
+            panic!("recompute_schema should preserve the recursive query shape");
+        };
+
+        assert_eq!(static_term.schema(), recursive_term.schema());
+        assert_eq!(
+            recursive_term.schema().metadata(),
+            static_term.schema().metadata()
+        );
     }
 
     #[test]
