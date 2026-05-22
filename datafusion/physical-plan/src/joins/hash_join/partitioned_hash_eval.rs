@@ -289,8 +289,6 @@ impl PartialEq for HashTableLookupExpr {
 
 impl Eq for HashTableLookupExpr {}
 
-#[cfg(feature = "proto")]
-
 impl HashTableLookupExpr {
     /// Serialize this expression to protobuf.
     ///
