@@ -281,6 +281,65 @@ SELECT * FROM t
 ----
 a Int64 YES
 
+# recursive self-reference must not simplify away IS NULL guards when the
+# anchor term is nullable and the recursive term is non-null.
+query I rowsort
+WITH RECURSIVE t(a) AS (
+  SELECT CAST(NULL AS INT) AS a
+  UNION ALL
+  SELECT 1 AS a FROM t WHERE a IS NULL
+)
+SELECT * FROM t
+----
+1
+NULL
+
+# widened recursive nullability must survive aggregate physical planning.
+query III
+WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT COUNT(*), COUNT(a), SUM(a) FROM t
+----
+2 1 1
+
+# outer filters must still see widened nullability through a derived projection.
+query I
+WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT x FROM (SELECT a AS x FROM t) WHERE x IS NULL
+----
+NULL
+
+# per-column nullability widening must survive type coercion in multi-column
+# recursive terms.
+query II
+WITH RECURSIVE t(a, b) AS (
+  SELECT 1::INT AS a, 2::INT AS b
+  UNION ALL
+  SELECT a + 1 AS a, CAST(NULL AS BIGINT) AS b FROM t WHERE a < 2
+)
+SELECT * FROM t WHERE b IS NULL
+----
+2 NULL
+
+# join planning must preserve recursive output nullability for null-sensitive
+# predicates above the recursive query.
+query II
+WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT t.a, u.b FROM t LEFT JOIN (SELECT 1 AS b) u ON t.a = u.b WHERE u.b IS NULL
+----
+NULL NULL
+
 # deduplicating recursive CTE with two variables works
 query II
 WITH RECURSIVE ranges AS (
