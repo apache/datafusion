@@ -569,7 +569,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
     );
     let nulls = list_array.nulls().cloned();
     let keep_mask =
-        arrow_ord::cmp::distinct(list_array.values(), &Scalar::new(Arc::clone(needle)))?;
+        arrow_ord::cmp::distinct(&values_slice, &Scalar::new(Arc::clone(needle)))?;
     let remove_bits = match keep_mask.nulls() {
         Some(validity) => !(&(keep_mask.values() & validity.inner())),
         None => !keep_mask.values(),
@@ -593,7 +593,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         }
 
         let row_len = end - start;
-        let row_remove_bits = remove_bits.slice(first_offset + start, row_len);
+        let row_remove_bits = remove_bits.slice(start, row_len);
         let num_to_remove = row_remove_bits.count_set_bits();
 
         if num_to_remove == 0 {
@@ -604,8 +604,9 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
 
         let max_removals = n.min(num_to_remove as i64) as usize;
 
-        // Iterate only over the positions that need removal using set_indices,
-        // which is more efficient than scanning every bit.
+        // Iterate only over the removal positions via set_indices. This is
+        // efficient when the number of removals is small relative to the row
+        // length (common case), since it skips over retained elements.
         let mut removed = 0usize;
         let mut copied = 0usize;
         let mut prev_end = start; // end of last copied range (absolute index into values_slice)
