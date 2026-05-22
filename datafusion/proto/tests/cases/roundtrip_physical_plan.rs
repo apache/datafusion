@@ -105,7 +105,6 @@ use datafusion_common::{
 };
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
-use datafusion_execution::FunctionRegistry;
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
@@ -139,9 +138,7 @@ use crate::cases::{
     CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyHigherOrderUDF,
     MyHigherOrderUdfNode, MyRegexUdf, MyRegexUdfNode,
 };
-use datafusion_physical_expr::expressions::{
-    DynamicFilterPhysicalExpr, LambdaVariable, is_not_null, lambda,
-};
+use datafusion_physical_expr::expressions::{LambdaVariable, is_not_null, lambda};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
@@ -1479,8 +1476,8 @@ fn roundtrip_higher_order_udf() -> Result<()> {
         input,
     )?;
 
-    let mut ctx = SessionContext::new();
-    ctx.register_higher_order_function(hof).unwrap();
+    let ctx = SessionContext::new();
+    ctx.register_higher_order_function(hof);
 
     roundtrip_test_with_context(Arc::new(project), &ctx)
 }

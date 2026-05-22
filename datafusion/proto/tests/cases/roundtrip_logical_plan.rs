@@ -2676,8 +2676,8 @@ fn roundtrip_higher_order_function() {
         dummy_higher_order_function_args(),
     ));
 
-    let mut ctx = SessionContext::new();
-    ctx.register_higher_order_function(hof).unwrap();
+    let ctx = SessionContext::new();
+    ctx.register_higher_order_function(hof);
 
     roundtrip_expr_test(test_expr.clone(), ctx);
 

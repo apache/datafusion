@@ -305,9 +305,9 @@ fn test_expression_serialization_roundtrip() {
 
 /// return a `SessionContext` with `MyHigherOrderUDF` registered as a higher-order UDF
 fn context_with_higher_order_function() -> SessionContext {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let hof = Arc::new(MyHigherOrderUDF::new("payload".to_string()));
-    ctx.register_higher_order_function(hof).unwrap();
+    ctx.register_higher_order_function(hof);
     ctx
 }
 
