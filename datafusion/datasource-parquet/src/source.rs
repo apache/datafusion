@@ -36,7 +36,6 @@ use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -960,26 +959,6 @@ impl FileSource for ParquetSource {
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(
-            &dyn PhysicalExpr,
-        ) -> datafusion_common::Result<TreeNodeRecursion>,
-    ) -> datafusion_common::Result<TreeNodeRecursion> {
-        // Visit predicate (filter) expression if present
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(predicate) = &self.predicate {
-            tnr = tnr.visit_sibling(|| f(predicate.as_ref()))?;
-        }
-
-        // Visit projection expressions
-        for proj_expr in &self.projection {
-            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
-        }
-
-        Ok(tnr)
     }
 }
 

@@ -605,7 +605,6 @@ jobs:
           rust-version: stable
       - name: Run
         run: |
-          echo '' > datafusion/proto/src/generated/datafusion.rs
           ci/scripts/rust_fmt.sh
 
   # Coverage job disabled due to
