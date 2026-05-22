@@ -312,13 +312,7 @@ pub fn parse_physical_expr_with_converter(
                 proto_converter,
             )?))
         }
-        ExprType::NotExpr(e) => Arc::new(NotExpr::new(parse_required_physical_expr(
-            e.expr.as_deref(),
-            ctx,
-            "expr",
-            input_schema,
-            proto_converter,
-        )?)),
+        ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Negative(e) => {
             Arc::new(NegativeExpr::new(parse_required_physical_expr(
                 e.expr.as_deref(),

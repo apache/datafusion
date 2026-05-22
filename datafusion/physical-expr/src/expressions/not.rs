@@ -181,6 +181,46 @@ impl PhysicalExpr for NotExpr {
         write!(f, "NOT ")?;
         self.arg.fmt_sql(f)
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(Box::new(
+                protobuf::PhysicalNot {
+                    expr: Some(Box::new(ctx.encode_child(&self.arg)?)),
+                },
+            ))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl NotExpr {
+    /// Reconstruct a [`NotExpr`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_proto_models::protobuf;
+
+        let protobuf::PhysicalNot { expr } = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::NotExpr(e)) => e.as_ref(),
+            _ => return internal_err!("PhysicalExprNode is not a NotExpr"),
+        };
+        let expr = expr.as_deref().ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(
+                "NotExpr is missing required field 'expr'".to_string(),
+            )
+        })?;
+
+        Ok(Arc::new(NotExpr::new(ctx.decode(expr)?)))
+    }
 }
 
 /// Creates a unary expression NOT
