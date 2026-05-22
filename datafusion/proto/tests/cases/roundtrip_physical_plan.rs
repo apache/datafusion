@@ -4067,5 +4067,54 @@ fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
     // rewrite can reconstruct the remapped form on the other side.
     assert_dynamic_filters_equal(deser_custom_df, deser_filter_df);
     assert_dynamic_filter_update_is_visible(deser_custom_df, deser_filter_df)?;
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_parquet_exec_partitioned_by_file_group() -> Result<()> {
+    use datafusion::datasource::physical_plan::FileScanConfig;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .with_partitioned_by_file_group(true)
+            .build();
+
+    assert!(scan_config.partitioned_by_file_group);
+
+    let exec_plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&exec_plan),
+        &codec,
+        &proto_converter,
+    )?;
+    let result_plan = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &proto_converter,
+    )?;
+
+    let data_source_exec = result_plan
+        .downcast_ref::<DataSourceExec>()
+        .expect("Expected DataSourceExec");
+    let file_scan_config = data_source_exec
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("Expected FileScanConfig");
+
+    assert!(file_scan_config.partitioned_by_file_group);
+
     Ok(())
 }

@@ -711,6 +711,7 @@ pub fn parse_protobuf_file_scan_config(
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_output_ordering(output_ordering)
         .with_batch_size(proto.batch_size.map(|s| s as usize))
+        .with_partitioned_by_file_group(proto.partitioned_by_file_group.unwrap_or(false))
         .build();
     Ok(config)
 }
