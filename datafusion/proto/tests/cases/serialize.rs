@@ -294,13 +294,13 @@ fn test_expression_serialization_roundtrip() {
 
         assert_eq!(serialize_name, deserialize_name);
     }
-}
 
-/// Extracts the first part of a function name
-/// 'foo(bar)' -> 'foo'
-fn extract_function_name(expr: &Expr) -> String {
-    let name = expr.schema_name().to_string();
-    name.split('(').next().unwrap().to_string()
+    /// Extracts the first part of a function name
+    /// 'foo(bar)' -> 'foo'
+    fn extract_function_name(expr: &Expr) -> String {
+        let name = expr.schema_name().to_string();
+        name.split('(').next().unwrap().to_string()
+    }
 }
 
 /// return a `SessionContext` with `MyHigherOrderUDF` registered as a higher-order UDF
@@ -386,9 +386,6 @@ fn test_higher_order_serialization_roundtrip() {
         let deserialize =
             parse_expr(&proto, ctx.task_ctx().as_ref(), &extension_codec).unwrap();
 
-        let serialize_name = extract_function_name(&expr);
-        let deserialize_name = extract_function_name(&deserialize);
-
-        assert_eq!(serialize_name, deserialize_name);
+        assert_eq!(deserialize, expr);
     }
 }
