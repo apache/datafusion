@@ -39,6 +39,7 @@ use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::SubqueryIndex;
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
@@ -60,9 +61,6 @@ use super::{
 use crate::convert::TryFromProto;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::{convert_required, convert_required_proto, protobuf};
-use datafusion_physical_expr::expressions::{
-    DynamicFilterInner, DynamicFilterPhysicalExpr,
-};
 
 /// Parses a physical sort expression from a protobuf.
 ///
@@ -281,6 +279,9 @@ pub fn parse_physical_expr_with_converter(
         ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
         ExprType::BinaryExpr(_) => BinaryExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::DynamicFilter(_) => {
+            DynamicFilterPhysicalExpr::try_from_proto(proto, &decode_ctx)?
+        }
         ExprType::AggregateExpr(_) => {
             return not_impl_err!(
                 "Cannot convert aggregate expr node to physical expression"
@@ -477,53 +478,6 @@ pub fn parse_physical_expr_with_converter(
                 SubqueryIndex::new(sq.index as usize),
                 results.clone(),
             ))
-        }
-        ExprType::DynamicFilter(dynamic_filter) => {
-            let children = parse_physical_exprs(
-                &dynamic_filter.children,
-                ctx,
-                input_schema,
-                proto_converter,
-            )?;
-
-            let remapped_children = if !dynamic_filter.remapped_children.is_empty() {
-                Some(parse_physical_exprs(
-                    &dynamic_filter.remapped_children,
-                    ctx,
-                    input_schema,
-                    proto_converter,
-                )?)
-            } else {
-                None
-            };
-
-            let inner_expr = parse_required_physical_expr(
-                dynamic_filter.inner_expr.as_deref(),
-                ctx,
-                "inner_expr",
-                input_schema,
-                proto_converter,
-            )?;
-
-            let expression_id = proto.expr_id.ok_or_else(|| {
-                proto_error(
-                    "DynamicFilterPhysicalExpr requires PhysicalExprNode.expr_id \
-                     to be set by the serializer",
-                )
-            })?;
-
-            let base_filter: Arc<dyn PhysicalExpr> =
-                Arc::new(DynamicFilterPhysicalExpr::from_parts(
-                    children,
-                    remapped_children,
-                    DynamicFilterInner {
-                        expression_id,
-                        generation: dynamic_filter.generation,
-                        expr: inner_expr,
-                        is_complete: dynamic_filter.is_complete,
-                    },
-                ));
-            base_filter
         }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension

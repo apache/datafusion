@@ -82,22 +82,18 @@ pub struct DynamicFilterPhysicalExpr {
 /// `expression_id` lives here because it identifies the actual filter expression `expr`.
 /// Derived `DynamicFilterPhysicalExpr`s (e.g. via [`PhysicalExpr::with_new_children`]) are
 /// the same logical filter and must report the same `expression_id`.
-///
-/// **Warning:** exposed publicly solely so that proto (de)serialization in
-/// `datafusion-proto` can read and rebuild this state. Do not treat this type
-/// or its layout as a stable API.
 #[derive(Clone, Debug)]
-pub struct Inner {
+struct Inner {
     /// A unique identifier for the expression.
-    pub expression_id: u64,
+    expression_id: u64,
     /// A counter that gets incremented every time the expression is updated so that we can track changes cheaply.
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
-    pub generation: u64,
-    pub expr: Arc<dyn PhysicalExpr>,
+    generation: u64,
+    expr: Arc<dyn PhysicalExpr>,
     /// Flag for quick synchronous check if filter is complete.
     /// This is redundant with the watch channel state, but allows us to return immediately
     /// from `wait_complete()` without subscribing if already complete.
-    pub is_complete: bool,
+    is_complete: bool,
 }
 
 impl Inner {
@@ -361,108 +357,10 @@ impl DynamicFilterPhysicalExpr {
 
         write!(f, " ]")
     }
-
-    /// Return the filter's original children (before any remapping).
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn original_children(&self) -> &[Arc<dyn PhysicalExpr>] {
-        &self.children
-    }
-
-    /// Return the filter's remapped children, if any have been set via
-    /// [`PhysicalExpr::with_new_children`].
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn remapped_children(&self) -> Option<&[Arc<dyn PhysicalExpr>]> {
-        self.remapped_children.as_deref()
-    }
-
-    /// Rebuild a `DynamicFilterPhysicalExpr` from its stored parts. Used by
-    /// proto deserialization.
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn from_parts(
-        children: Vec<Arc<dyn PhysicalExpr>>,
-        remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
-        inner: Inner,
-    ) -> Self {
-        let state = if inner.is_complete {
-            FilterState::Complete {
-                generation: inner.generation,
-            }
-        } else {
-            FilterState::InProgress {
-                generation: inner.generation,
-            }
-        };
-        let (state_watch, _) = watch::channel(state);
-
-        Self {
-            children,
-            remapped_children,
-            inner: Arc::new(RwLock::new(inner)),
-            state_watch,
-            data_type: Arc::new(RwLock::new(None)),
-            nullable: Arc::new(RwLock::new(None)),
-        }
-    }
-
-    /// Return a clone of the atomically-captured `Inner` state.
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn inner(&self) -> Inner {
-        self.inner.read().clone()
-    }
 }
 
 #[cfg(feature = "proto")]
 impl DynamicFilterPhysicalExpr {
-    /// Serialize this expression to protobuf.
-    ///
-    /// Encodes `children`, `remapped_children`, and the atomically-captured
-    /// `Inner` state (expression id, generation, current expr, is_complete).
-    pub fn try_to_proto(
-        &self,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
-        use datafusion_proto_models::protobuf;
-        use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
-
-        let children = self
-            .children
-            .iter()
-            .map(|c| ctx.encode_child(c))
-            .collect::<Result<Vec<_>>>()?;
-
-        let remapped_children = match &self.remapped_children {
-            Some(remapped) => remapped
-                .iter()
-                .map(|c| ctx.encode_child(c))
-                .collect::<Result<Vec<_>>>()?,
-            None => vec![],
-        };
-
-        let inner = self.inner.read().clone();
-        let inner_expr = Box::new(ctx.encode_child(&inner.expr)?);
-
-        Ok(Some(protobuf::PhysicalExprNode {
-            expr_id: Some(inner.expression_id),
-            expr_type: Some(ExprType::DynamicFilter(Box::new(
-                protobuf::PhysicalDynamicFilterNode {
-                    children,
-                    remapped_children,
-                    generation: inner.generation,
-                    inner_expr: Some(inner_expr),
-                    is_complete: inner.is_complete,
-                },
-            ))),
-        }))
-    }
-
     /// Reconstruct a [`DynamicFilterPhysicalExpr`] from its protobuf representation.
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
@@ -512,16 +410,31 @@ impl DynamicFilterPhysicalExpr {
                 )
             })?)?;
 
-        Ok(Arc::new(DynamicFilterPhysicalExpr::from_parts(
+        let inner = Inner {
+            expression_id,
+            generation: dynamic_filter.generation,
+            expr: inner_expr,
+            is_complete: dynamic_filter.is_complete,
+        };
+        let state = if inner.is_complete {
+            FilterState::Complete {
+                generation: inner.generation,
+            }
+        } else {
+            FilterState::InProgress {
+                generation: inner.generation,
+            }
+        };
+        let (state_watch, _) = watch::channel(state);
+
+        Ok(Arc::new(DynamicFilterPhysicalExpr {
             children,
             remapped_children,
-            Inner {
-                expression_id,
-                generation: dynamic_filter.generation,
-                expr: inner_expr,
-                is_complete: dynamic_filter.is_complete,
-            },
-        )))
+            inner: Arc::new(RwLock::new(inner)),
+            state_watch,
+            data_type: Arc::new(RwLock::new(None)),
+            nullable: Arc::new(RwLock::new(None)),
+        }))
     }
 }
 
@@ -607,6 +520,45 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             self.data_type(&schema)?;
         };
         current.evaluate(batch)
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+        use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
+
+        let children = self
+            .children
+            .iter()
+            .map(|c| ctx.encode_child(c))
+            .collect::<Result<Vec<_>>>()?;
+
+        let remapped_children = match &self.remapped_children {
+            Some(remapped) => remapped
+                .iter()
+                .map(|c| ctx.encode_child(c))
+                .collect::<Result<Vec<_>>>()?,
+            None => vec![],
+        };
+
+        let inner = self.inner.read().clone();
+        let inner_expr = Box::new(ctx.encode_child(&inner.expr)?);
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: Some(inner.expression_id),
+            expr_type: Some(ExprType::DynamicFilter(Box::new(
+                protobuf::PhysicalDynamicFilterNode {
+                    children,
+                    remapped_children,
+                    generation: inner.generation,
+                    inner_expr: Some(inner_expr),
+                    is_complete: inner.is_complete,
+                },
+            ))),
+        }))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1066,68 +1018,6 @@ mod test {
             hash1, hash3,
             "Hash should be stable after update (identity-based)"
         );
-    }
-
-    /// Verifies that `from_parts` rebuilds a `DynamicFilterPhysicalExpr`
-    /// whose observable state (original children, remapped children,
-    /// expression id, inner generation/expr/is_complete) matches the source
-    /// filter.
-    #[test]
-    fn test_from_parts_preserves_state() {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let col_a = col("a", &schema).unwrap();
-
-        // Create a dynamic filter with children
-        let expr = Arc::new(BinaryExpr::new(
-            Arc::clone(&col_a),
-            datafusion_expr::Operator::Gt,
-            lit(10) as Arc<dyn PhysicalExpr>,
-        ));
-        let filter = DynamicFilterPhysicalExpr::new(
-            vec![Arc::clone(&col_a)],
-            expr as Arc<dyn PhysicalExpr>,
-        );
-
-        // Add remapped children.
-        let reassigned_schema = Arc::new(Schema::new(vec![
-            Field::new("b", DataType::Int32, false),
-            Field::new("a", DataType::Int32, false),
-        ]));
-        let reassigned = reassign_expr_columns(
-            Arc::new(filter) as Arc<dyn PhysicalExpr>,
-            &reassigned_schema,
-        )
-        .expect("reassign_expr_columns should succeed");
-        let reassigned = reassigned
-            .downcast_ref::<DynamicFilterPhysicalExpr>()
-            .expect("Expected dynamic filter after reassignment");
-
-        reassigned
-            .update(lit(42) as Arc<dyn PhysicalExpr>)
-            .expect("Update should succeed");
-        reassigned.mark_complete();
-
-        // Capture the parts and reconstruct. `expression_id` rides in `inner`.
-        let reconstructed = DynamicFilterPhysicalExpr::from_parts(
-            reassigned.original_children().to_vec(),
-            reassigned.remapped_children().map(|r| r.to_vec()),
-            reassigned.inner(),
-        );
-
-        assert_eq!(
-            reassigned.original_children(),
-            reconstructed.original_children(),
-        );
-        assert_eq!(
-            reassigned.remapped_children(),
-            reconstructed.remapped_children(),
-        );
-        assert_eq!(reassigned.expression_id(), reconstructed.expression_id());
-        let r = reassigned.inner();
-        let c = reconstructed.inner();
-        assert_eq!(r.generation, c.generation);
-        assert_eq!(r.is_complete, c.is_complete);
-        assert_eq!(format!("{:?}", r.expr), format!("{:?}", c.expr));
     }
 
     #[tokio::test]
