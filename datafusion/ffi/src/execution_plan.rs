@@ -209,6 +209,7 @@ unsafe extern "C" fn partition_statistics_fn_wrapper(
     partition: FFI_Option<usize>,
 ) -> FFI_Result<SVec<u8>> {
     let partition: Option<usize> = partition.into();
+    #[expect(deprecated)]
     plan.inner()
         .partition_statistics(partition)
         .map(|stats| SVec::from(serialize_statistics(stats.as_ref()).as_slice()))
@@ -673,6 +674,7 @@ pub mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_ffi_execution_plan_partition_statistics_round_trip() -> Result<()> {
         use datafusion_common::stats::Precision;
         use datafusion_common::{ColumnStatistics, ScalarValue};

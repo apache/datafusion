@@ -108,7 +108,7 @@ use datafusion::{
     },
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput},
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
@@ -722,8 +722,10 @@ impl ExecutionPlan for SampleExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let mut stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(self.input.as_ref(), args.partition())?,
+        );
         let ratio = self.upper_bound - self.lower_bound;
 
         // Scale statistics by sampling ratio (inexact due to randomness)

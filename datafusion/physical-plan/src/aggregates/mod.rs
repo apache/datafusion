@@ -31,6 +31,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::statistics_context::StatisticsArgs;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
     SendableRecordBatchStream, Statistics, check_if_same_properties,
@@ -1612,8 +1613,9 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let child_statistics = self.input().partition_statistics(partition)?;
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let child_statistics =
+            args.compute_child_statistics(self.input.as_ref(), args.partition())?;
         Ok(Arc::new(self.statistics_inner(&child_statistics)?))
     }
 
@@ -2237,6 +2239,7 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::metrics::MetricValue;
+    use crate::statistics_context::compute_statistics;
     use crate::test::TestMemoryExec;
     use crate::test::assert_is_pending;
     use crate::test::exec::{
@@ -2622,7 +2625,7 @@ mod tests {
         )?);
 
         // Verify statistics are preserved proportionally through aggregation
-        let final_stats = merged_aggregate.partition_statistics(None)?;
+        let final_stats = compute_statistics(merged_aggregate.as_ref(), None)?;
         assert!(final_stats.total_byte_size.get_value().is_some());
 
         let task_ctx = if spill {
@@ -2757,11 +2760,8 @@ mod tests {
             Ok(Box::pin(stream))
         }
 
-        fn partition_statistics(
-            &self,
-            partition: Option<usize>,
-        ) -> Result<Arc<Statistics>> {
-            if partition.is_some() {
+        fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+            if args.partition().is_some() {
                 return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             let (_, batches) = some_data();
@@ -4099,7 +4099,7 @@ mod tests {
             PhysicalGroupBy::default(),
             None,
         )?;
-        let stats = agg.partition_statistics(None)?;
+        let stats = compute_statistics(&agg, None)?;
         assert_eq!(stats.total_byte_size, Precision::Absent);
 
         let zero_row_stats = Statistics {
@@ -4116,7 +4116,7 @@ mod tests {
             PhysicalGroupBy::default(),
             None,
         )?;
-        let stats_zero = agg_zero.partition_statistics(None)?;
+        let stats_zero = compute_statistics(&agg_zero, None)?;
         assert_eq!(stats_zero.total_byte_size, Precision::Absent);
 
         Ok(())
@@ -4469,7 +4469,7 @@ mod tests {
             let agg =
                 build_test_aggregate(&schema, input_stats, group_by, case.limit_options)?;
 
-            let stats = agg.partition_statistics(None)?;
+            let stats = compute_statistics(&agg, None)?;
             assert_eq!(
                 stats.num_rows, case.expected_num_rows,
                 "FAILED: '{}' — expected {:?}, got {:?}",
@@ -4508,7 +4508,7 @@ mod tests {
             None,
         )?;
 
-        let stats = agg.partition_statistics(None)?;
+        let stats = compute_statistics(&agg, None)?;
         assert_eq!(
             stats.column_statistics[0].distinct_count,
             Precision::Exact(100),
@@ -4562,7 +4562,7 @@ mod tests {
 
         let agg = build_test_aggregate(&schema, input_stats, grouping_set, None)?;
 
-        let stats = agg.partition_statistics(None)?;
+        let stats = compute_statistics(&agg, None)?;
         // Per-set NDV: (a,NULL)=100, (NULL,b)=50, (a,b)=100*50=5000
         // Total = 100 + 50 + 5000 = 5150
         assert_eq!(
@@ -4611,7 +4611,7 @@ mod tests {
             PhysicalGroupBy::new_single(vec![(expr_a_plus_b, "a+b".to_string())]);
         let agg = build_test_aggregate(&schema, input_stats, group_by, None)?;
 
-        let stats = agg.partition_statistics(None)?;
+        let stats = compute_statistics(&agg, None)?;
         assert_eq!(
             stats.num_rows,
             Precision::Inexact(1_000_000),

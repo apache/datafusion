@@ -53,6 +53,7 @@ use crate::projection::{
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::spill::get_record_batch_memory_size;
+use crate::statistics_context::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
@@ -1435,14 +1436,15 @@ impl ExecutionPlan for HashJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = match (partition, self.mode) {
-            // For CollectLeft mode, the left side is collected into a single partition,
-            // so all left partitions are available to each output partition.
-            // For the right side, we need the specific partition statistics.
-            (Some(partition), PartitionMode::CollectLeft) => {
-                let left_stats = self.left.partition_statistics(None)?;
-                let right_stats = self.right.partition_statistics(Some(partition))?;
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let stats = match (args.partition(), self.mode) {
+            // Left side is broadcast, so it always needs overall stats
+            // Right side is partitioned, so it needs per-partition stats
+            (Some(_), PartitionMode::CollectLeft) => {
+                let left_stats =
+                    args.compute_child_statistics(self.left.as_ref(), None)?;
+                let right_stats =
+                    args.compute_child_statistics(self.right.as_ref(), args.partition())?;
 
                 estimate_join_statistics(
                     Arc::unwrap_or_clone(left_stats),
@@ -1453,11 +1455,13 @@ impl ExecutionPlan for HashJoinExec {
                 )?
             }
 
-            // For Partitioned mode, both sides are partitioned, so each output partition
-            // only has access to the corresponding partition from both sides.
-            (Some(partition), PartitionMode::Partitioned) => {
-                let left_stats = self.left.partition_statistics(Some(partition))?;
-                let right_stats = self.right.partition_statistics(Some(partition))?;
+            // For Partitioned mode, both sides are hash-partitioned symmetrically,
+            // so each output partition uses the matching partition from both sides.
+            (Some(_), PartitionMode::Partitioned) => {
+                let left_stats =
+                    args.compute_child_statistics(self.left.as_ref(), args.partition())?;
+                let right_stats =
+                    args.compute_child_statistics(self.right.as_ref(), args.partition())?;
 
                 estimate_join_statistics(
                     Arc::unwrap_or_clone(left_stats),
@@ -1468,14 +1472,28 @@ impl ExecutionPlan for HashJoinExec {
                 )?
             }
 
-            // For Auto mode or when no specific partition is requested, fall back to
-            // the current behavior of getting all partition statistics.
-            (None, _) | (Some(_), PartitionMode::Auto) => {
-                // TODO stats: it is not possible in general to know the output size of joins
-                // There are some special cases though, for example:
-                // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-                let left_stats = self.left.partition_statistics(None)?;
-                let right_stats = self.right.partition_statistics(None)?;
+            // Overall stats requested, look up overall child stats.
+            (None, _) => {
+                let left_stats =
+                    args.compute_child_statistics(self.left.as_ref(), None)?;
+                let right_stats =
+                    args.compute_child_statistics(self.right.as_ref(), None)?;
+                estimate_join_statistics(
+                    Arc::unwrap_or_clone(left_stats),
+                    Arc::unwrap_or_clone(right_stats),
+                    &self.on,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+
+            // Auto mode hasn't decided partitioning yet, so it needs
+            // overall stats from both sides.
+            (Some(_), PartitionMode::Auto) => {
+                let left_stats =
+                    args.compute_child_statistics(self.left.as_ref(), None)?;
+                let right_stats =
+                    args.compute_child_statistics(self.right.as_ref(), None)?;
                 estimate_join_statistics(
                     Arc::unwrap_or_clone(left_stats),
                     Arc::unwrap_or_clone(right_stats),

@@ -28,6 +28,7 @@ use std::task::{Context, Poll};
 
 use super::utils::create_schema;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::statistics_context::StatisticsArgs;
 use crate::stream::EmptyRecordBatchStream;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -377,9 +378,10 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let input_stat =
-            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let input_stat = Arc::unwrap_or_clone(
+            args.compute_child_statistics(self.input.as_ref(), args.partition())?,
+        );
         Ok(Arc::new(self.statistics_helper(input_stat)?))
     }
 

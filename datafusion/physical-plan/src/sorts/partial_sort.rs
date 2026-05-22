@@ -58,6 +58,7 @@ use std::task::{Context, Poll};
 
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
+use crate::statistics_context::StatisticsArgs;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -334,8 +335,8 @@ impl ExecutionPlan for PartialSortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        args.compute_child_statistics(self.input.as_ref(), args.partition())
     }
 }
 

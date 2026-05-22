@@ -71,6 +71,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::combine_limit;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::compute_statistics;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
@@ -351,7 +352,7 @@ fn limit_eliminable_exact_num_rows(
     }
 
     if matches!(
-        current.partition_statistics(None)?.num_rows,
+        compute_statistics(current.as_ref(), None)?.num_rows,
         Precision::Exact(0)
     ) {
         return Ok(Some(0));

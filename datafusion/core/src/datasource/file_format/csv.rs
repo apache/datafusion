@@ -45,7 +45,7 @@ mod tests {
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::write::BatchSerializer;
     use datafusion_expr::{col, lit};
-    use datafusion_physical_plan::{ExecutionPlan, collect};
+    use datafusion_physical_plan::{ExecutionPlan, collect, compute_statistics};
 
     use arrow::array::{
         Array, BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
@@ -215,9 +215,12 @@ mod tests {
         assert_eq!(tt_batches, 50 /* 100/2 */);
 
         // test metadata
-        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
         assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
+            compute_statistics(exec.as_ref(), None)?.num_rows,
+            Precision::Absent
+        );
+        assert_eq!(
+            compute_statistics(exec.as_ref(), None)?.total_byte_size,
             Precision::Absent
         );
 

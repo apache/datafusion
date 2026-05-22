@@ -40,7 +40,9 @@ use datafusion_physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{
+    ExecutionPlan, ExecutionPlanProperties, compute_statistics,
+};
 use std::sync::Arc;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
@@ -65,7 +67,7 @@ fn get_stats(
         reg.compute(plan)
             .map(|s| Arc::<Statistics>::clone(s.base_arc()))
     } else {
-        plan.partition_statistics(None)
+        compute_statistics(plan, None)
     }
 }
 

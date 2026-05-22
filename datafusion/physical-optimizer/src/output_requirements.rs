@@ -32,6 +32,7 @@ use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
+use datafusion_physical_plan::StatisticsArgs;
 use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::projection::{
     ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
@@ -240,8 +241,8 @@ impl ExecutionPlan for OutputRequirementExec {
         unreachable!();
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        args.compute_child_statistics(self.input.as_ref(), args.partition())
     }
 
     fn try_swapping_with_projection(

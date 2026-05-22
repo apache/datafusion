@@ -31,6 +31,8 @@ use datafusion_physical_expr::LexOrdering;
 use crate::metrics::{MetricCategory, MetricType};
 use crate::render_tree::RenderTree;
 
+use crate::statistics_context::compute_statistics;
+
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
@@ -480,7 +482,7 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
         }
         if self.show_statistics {
-            let stats = plan.partition_statistics(None).map_err(|_e| fmt::Error)?;
+            let stats = compute_statistics(plan, None).map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{stats}]")?;
         }
         if self.show_schema {
@@ -576,7 +578,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         };
 
         let statistics = if self.show_statistics {
-            let stats = plan.partition_statistics(None).map_err(|_e| fmt::Error)?;
+            let stats = compute_statistics(plan, None).map_err(|_e| fmt::Error)?;
             format!("statistics=[{stats}]")
         } else {
             "".to_string()
@@ -1170,6 +1172,7 @@ mod tests {
     use datafusion_common::{Result, Statistics, internal_datafusion_err};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
+    use crate::statistics_context::StatisticsArgs;
     use crate::{DisplayAs, ExecutionPlan, PlanProperties};
 
     use super::DisplayableExecutionPlan;
@@ -1219,11 +1222,8 @@ mod tests {
             todo!()
         }
 
-        fn partition_statistics(
-            &self,
-            partition: Option<usize>,
-        ) -> Result<Arc<Statistics>> {
-            if partition.is_some() {
+        fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+            if args.partition().is_some() {
                 return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             match self {
