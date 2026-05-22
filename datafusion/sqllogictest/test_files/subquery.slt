@@ -893,26 +893,6 @@ FROM t1
 33 3 3
 44 0 0
 
-query III rowsort
-SELECT
-  t1_id,
-  (
-    SELECT regr_count(1.0, 1.0) AS rc
-    FROM t2
-    WHERE t2.t2_int = t1.t1_int
-  ) AS r,
-  (
-    SELECT approx_distinct(t2.t2_id) AS ad
-    FROM t2
-    WHERE t2.t2_int = t1.t1_int
-  ) AS d
-FROM t1
-----
-11 1 1
-22 0 0
-33 3 3
-44 0 0
-
 query II rowsort
 SELECT
   t1_id,

@@ -512,19 +512,12 @@ fn agg_exprs_evaluation_result_on_empty_batch(
         let result_expr = e
             .clone()
             .transform_up(|expr| {
-                let new_expr = match expr {
-                    Expr::AggregateFunction(expr::AggregateFunction { func, params }) => {
-                        let fields = params
-                            .args
-                            .iter()
-                            .map(|arg| arg.to_field(schema.as_ref()).map(|(_, f)| f))
-                            .collect::<Result<Vec<_>>>()?;
-                        let return_field = func.return_field(&fields)?;
-                        let default_value =
-                            func.default_value(return_field.data_type())?;
-                        Transformed::yes(Expr::Literal(default_value, None))
-                    }
-                    _ => Transformed::no(expr),
+                let new_expr = if let Expr::AggregateFunction(agg) = &expr {
+                    let return_type = expr.get_type(schema.as_ref())?;
+                    let default_value = agg.func.default_value(&return_type)?;
+                    Transformed::yes(Expr::Literal(default_value, None))
+                } else {
+                    Transformed::no(expr)
                 };
                 Ok(new_expr)
             })
