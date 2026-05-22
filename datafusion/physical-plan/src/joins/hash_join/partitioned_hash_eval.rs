@@ -242,6 +242,8 @@ impl HashTableLookupExpr {
     }
 }
 
+
+
 impl std::fmt::Debug for HashTableLookupExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cols = self
@@ -288,6 +290,38 @@ impl PartialEq for HashTableLookupExpr {
 }
 
 impl Eq for HashTableLookupExpr {}
+
+#[cfg(feature = "proto")]
+impl HashTableLookupExpr {
+    /// Serialize this expression to protobuf.
+    ///
+    /// `HashTableLookupExpr` holds an `Arc<Map>` (a runtime hash table built
+    /// on the build side) which cannot be serialized. We replace it with
+    /// `lit(true)`, which is safe because:
+    ///
+    /// - The filter is a performance optimisation, not a correctness requirement.
+    /// - `lit(true)` passes all rows so no valid rows are lost.
+    /// - In distributed execution the remote worker has no access to the
+    ///   build-side hash table anyway.
+    pub fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> datafusion_common::Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>>
+    {
+        use datafusion_proto_common::scalar_value::Value;
+        use datafusion_proto_common::ScalarValue;
+        use datafusion_proto_models::protobuf;
+        use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
+
+        let value = ScalarValue {
+            value: Some(Value::BoolValue(true)),
+        };
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(ExprType::Literal(value)),
+        }))
+    }
+}
 
 impl Display for HashTableLookupExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
