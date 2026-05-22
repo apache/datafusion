@@ -2973,7 +2973,7 @@ fn build_unmatched_batch(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::statistics::compute_statistics;
+    use crate::statistics::StatisticsArgs;
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
@@ -3353,7 +3353,7 @@ pub(crate) mod tests {
             &JoinType::Left,
             Some(vec![1, 2]),
         )?;
-        let stats = compute_statistics(&nested_loop_join, None)?;
+        let stats = nested_loop_join.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(
             nested_loop_join.schema().fields().len(),
             stats.column_statistics.len(),

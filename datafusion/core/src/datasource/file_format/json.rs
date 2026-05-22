@@ -36,7 +36,8 @@ mod tests {
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_physical_plan::{ExecutionPlan, collect, compute_statistics};
+    use datafusion_physical_plan::statistics::StatisticsArgs;
+    use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field};
@@ -118,11 +119,13 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            compute_statistics(exec.as_ref(), None)?.num_rows,
+            exec.statistics_with_args(&StatisticsArgs::new(None))?
+                .num_rows,
             Precision::Absent
         );
         assert_eq!(
-            compute_statistics(exec.as_ref(), None)?.total_byte_size,
+            exec.statistics_with_args(&StatisticsArgs::new(None))?
+                .total_byte_size,
             Precision::Absent
         );
 

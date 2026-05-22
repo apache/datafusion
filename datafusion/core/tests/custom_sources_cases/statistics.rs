@@ -36,7 +36,6 @@ use datafusion_catalog::Session;
 use datafusion_common::{project_schema, stats::Precision};
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::StatisticsArgs;
-use datafusion_physical_plan::compute_statistics;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
@@ -232,7 +231,10 @@ async fn sql_basic() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
 
     // the statistics should be those of the source
-    assert_eq!(stats, *compute_statistics(physical_plan.as_ref(), None)?);
+    assert_eq!(
+        stats,
+        *physical_plan.statistics_with_args(&StatisticsArgs::new(None))?
+    );
 
     Ok(())
 }
@@ -248,7 +250,7 @@ async fn sql_filter() -> Result<()> {
         .unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
-    let stats = compute_statistics(physical_plan.as_ref(), None)?;
+    let stats = physical_plan.statistics_with_args(&StatisticsArgs::new(None))?;
     assert_eq!(stats.num_rows, Precision::Inexact(7));
 
     Ok(())
@@ -263,7 +265,7 @@ async fn sql_limit() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is smaller than the original number of lines we mark the statistics as inexact
     // and cap NDV at the new row count
-    let limit_stats = compute_statistics(physical_plan.as_ref(), None)?;
+    let limit_stats = physical_plan.statistics_with_args(&StatisticsArgs::new(None))?;
     assert_eq!(limit_stats.num_rows, Precision::Exact(5));
     // c1: NDV=2 stays at 2 (already below limit of 5)
     assert_eq!(
@@ -282,7 +284,10 @@ async fn sql_limit() -> Result<()> {
         .unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is larger than the original number of lines, statistics remain unchanged
-    assert_eq!(stats, *compute_statistics(physical_plan.as_ref(), None)?);
+    assert_eq!(
+        stats,
+        *physical_plan.statistics_with_args(&StatisticsArgs::new(None))?
+    );
 
     Ok(())
 }
@@ -299,7 +304,7 @@ async fn sql_window() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
 
-    let result = compute_statistics(physical_plan.as_ref(), None)?;
+    let result = physical_plan.statistics_with_args(&StatisticsArgs::new(None))?;
 
     assert_eq!(stats.num_rows, result.num_rows);
     let col_stats = &result.column_statistics;

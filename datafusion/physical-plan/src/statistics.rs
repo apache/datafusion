@@ -15,29 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Context for computing statistics in physical plans.
+//! Statistics computation for physical plans.
 //!
 //! [`StatisticsArgs`] provides external context to
 //! [`ExecutionPlan::statistics_with_args`].
 
 use crate::ExecutionPlan;
-use datafusion_common::Result;
-use datafusion_common::{Statistics, assert_or_internal_err};
+use datafusion_common::{Result, Statistics, assert_or_internal_err};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// Per-call memoization cache for [`compute_statistics`].
+/// Per-call memoization cache for statistics computation.
 ///
-/// Keyed by `(plan node pointer address, partition)`. Created once per
-/// top-level [`compute_statistics`] call and shared across all recursive
-/// and operator-internal calls via [`StatisticsArgs`].
+/// Keyed by `(plan node pointer address, partition)`. Shared across
+/// a single statistics walk via [`StatisticsArgs`].
 ///
-/// The pointer-based key is safe within a single synchronous
-/// `compute_statistics` call: all `Arc<dyn ExecutionPlan>` nodes are held
-/// by the plan tree for the duration of the walk, so addresses cannot be
-/// reused.
+/// The pointer-based key is safe within a single synchronous walk:
+/// all `Arc<dyn ExecutionPlan>` nodes are held by the plan tree for
+/// the duration of the walk, so addresses cannot be reused.
 #[derive(Debug, Default)]
 struct StatsCache(HashMap<(usize, Option<usize>), Arc<Statistics>>);
 
@@ -74,15 +71,16 @@ impl StatsCache {
 #[derive(Debug)]
 pub struct StatisticsArgs {
     partition: Option<usize>,
-    /// Shared memoization cache for the current `compute_statistics` walk.
-    cache: Option<Rc<RefCell<StatsCache>>>,
+    /// Shared memoization cache for the current statistics walk.
+    cache: Rc<RefCell<StatsCache>>,
 }
 
 impl StatisticsArgs {
+    /// Creates new statistics arguments with a fresh cache.
     pub fn new(partition: Option<usize>) -> Self {
         Self {
             partition,
-            cache: None,
+            cache: Rc::new(RefCell::new(StatsCache::default())),
         }
     }
 
@@ -91,63 +89,39 @@ impl StatisticsArgs {
     }
 
     /// Computes statistics for a child plan, using the shared cache
-    /// from the current [`compute_statistics`] walk.
+    /// to avoid redundant subtree walks.
     pub fn compute_child_statistics(
         &self,
         plan: impl AsRef<dyn ExecutionPlan>,
         partition: Option<usize>,
     ) -> Result<Arc<Statistics>> {
         let plan = plan.as_ref();
-        match &self.cache {
-            Some(cache) => compute_statistics_inner(plan, partition, cache),
-            None => compute_statistics(plan, partition),
+
+        if let Some(idx) = partition {
+            let partition_count = plan.properties().partitioning.partition_count();
+            assert_or_internal_err!(
+                idx < partition_count,
+                "Invalid partition index: {}, the partition count is {}",
+                idx,
+                partition_count
+            );
         }
+
+        if let Some(cached) = self.cache.borrow().get(plan, partition) {
+            return Ok(Arc::clone(cached));
+        }
+
+        let child_args = StatisticsArgs {
+            partition,
+            cache: Rc::clone(&self.cache),
+        };
+        let result = plan.statistics_with_args(&child_args)?;
+
+        self.cache
+            .borrow_mut()
+            .insert(plan, partition, Arc::clone(&result));
+        Ok(result)
     }
-}
-
-/// Computes statistics for a plan node by calling
-/// [`ExecutionPlan::statistics_with_args`] with a shared cache.
-///
-/// Results are memoized within a single call: operators that call
-/// [`StatisticsArgs::compute_child_statistics`] will hit the cache
-/// instead of re-walking subtrees.
-pub fn compute_statistics(
-    plan: &dyn ExecutionPlan,
-    partition: Option<usize>,
-) -> Result<Arc<Statistics>> {
-    let cache = Rc::new(RefCell::new(StatsCache::default()));
-    compute_statistics_inner(plan, partition, &cache)
-}
-
-fn compute_statistics_inner(
-    plan: &dyn ExecutionPlan,
-    partition: Option<usize>,
-    cache: &Rc<RefCell<StatsCache>>,
-) -> Result<Arc<Statistics>> {
-    if let Some(idx) = partition {
-        let partition_count = plan.properties().partitioning.partition_count();
-        assert_or_internal_err!(
-            idx < partition_count,
-            "Invalid partition index: {}, the partition count is {}",
-            idx,
-            partition_count
-        );
-    }
-
-    if let Some(cached) = cache.borrow().get(plan, partition) {
-        return Ok(Arc::clone(cached));
-    }
-
-    let args = StatisticsArgs {
-        partition,
-        cache: Some(Rc::clone(cache)),
-    };
-    let result = plan.statistics_with_args(&args)?;
-
-    cache
-        .borrow_mut()
-        .insert(plan, partition, Arc::clone(&result));
-    Ok(result)
 }
 
 #[cfg(all(test, feature = "test_utils"))]
@@ -183,10 +157,12 @@ mod tests {
         let leaf = make_stats_leaf(100);
         let plan: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(leaf));
 
-        let stats = compute_statistics(plan.as_ref(), Some(0)).unwrap();
+        let args = StatisticsArgs::new(Some(0));
+        let stats = plan.statistics_with_args(&args).unwrap();
         assert_eq!(stats.num_rows, Precision::Exact(100));
 
-        let stats_none = compute_statistics(plan.as_ref(), None).unwrap();
+        let args_none = StatisticsArgs::new(None);
+        let stats_none = plan.statistics_with_args(&args_none).unwrap();
         assert_eq!(stats_none.num_rows, Precision::Exact(100));
     }
 }

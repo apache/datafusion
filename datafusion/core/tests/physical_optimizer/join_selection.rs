@@ -45,7 +45,6 @@ use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, Partitio
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
-    compute_statistics,
     execution_plan::{Boundedness, EmissionType},
 };
 
@@ -249,13 +248,17 @@ async fn test_join_with_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        compute_statistics(swapped_join.left().as_ref(), None)
+        swapped_join
+            .left()
+            .statistics_with_args(&StatisticsArgs::new(None))
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        compute_statistics(swapped_join.right().as_ref(), None)
+        swapped_join
+            .right()
+            .statistics_with_args(&StatisticsArgs::new(None))
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -293,13 +296,17 @@ async fn test_left_join_no_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        compute_statistics(swapped_join.left().as_ref(), None)
+        swapped_join
+            .left()
+            .statistics_with_args(&StatisticsArgs::new(None))
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        compute_statistics(swapped_join.right().as_ref(), None)
+        swapped_join
+            .right()
+            .statistics_with_args(&StatisticsArgs::new(None))
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -340,13 +347,17 @@ async fn test_join_with_swap_semi() {
 
         assert_eq!(swapped_join.schema().fields().len(), 1);
         assert_eq!(
-            compute_statistics(swapped_join.left().as_ref(), None)
+            swapped_join
+                .left()
+                .statistics_with_args(&StatisticsArgs::new(None))
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(8192)
         );
         assert_eq!(
-            compute_statistics(swapped_join.right().as_ref(), None)
+            swapped_join
+                .right()
+                .statistics_with_args(&StatisticsArgs::new(None))
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(2097152)
@@ -389,13 +400,17 @@ async fn test_join_with_swap_mark() {
 
         assert_eq!(swapped_join.schema().fields().len(), 2);
         assert_eq!(
-            compute_statistics(swapped_join.left().as_ref(), None)
+            swapped_join
+                .left()
+                .statistics_with_args(&StatisticsArgs::new(None))
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(8192)
         );
         assert_eq!(
-            compute_statistics(swapped_join.right().as_ref(), None)
+            swapped_join
+                .right()
+                .statistics_with_args(&StatisticsArgs::new(None))
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(2097152)
@@ -513,13 +528,17 @@ async fn test_join_no_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        compute_statistics(swapped_join.left().as_ref(), None)
+        swapped_join
+            .left()
+            .statistics_with_args(&StatisticsArgs::new(None))
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        compute_statistics(swapped_join.right().as_ref(), None)
+        swapped_join
+            .right()
+            .statistics_with_args(&StatisticsArgs::new(None))
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -584,13 +603,17 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     );
 
     assert_eq!(
-        compute_statistics(swapped_join.left().as_ref(), None)
+        swapped_join
+            .left()
+            .statistics_with_args(&StatisticsArgs::new(None))
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        compute_statistics(swapped_join.right().as_ref(), None)
+        swapped_join
+            .right()
+            .statistics_with_args(&StatisticsArgs::new(None))
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -653,13 +676,17 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     );
 
     assert_eq!(
-        compute_statistics(swapped_join.left().as_ref(), None)
+        swapped_join
+            .left()
+            .statistics_with_args(&StatisticsArgs::new(None))
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        compute_statistics(swapped_join.right().as_ref(), None)
+        swapped_join
+            .right()
+            .statistics_with_args(&StatisticsArgs::new(None))
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)

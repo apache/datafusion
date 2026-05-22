@@ -45,7 +45,6 @@ mod test {
     };
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion_physical_plan::common::compute_record_batch_statistics;
-    use datafusion_physical_plan::compute_statistics;
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::filter::FilterExec;
     use datafusion_physical_plan::joins::{
@@ -56,6 +55,7 @@ mod test {
     use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
     use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
+    use datafusion_physical_plan::statistics::StatisticsArgs;
     use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
     use datafusion_physical_plan::windows::{WindowAggExec, create_window_expr};
     use datafusion_physical_plan::{
@@ -239,7 +239,7 @@ mod test {
     async fn test_statistics_by_partition_of_data_source() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let statistics = (0..scan.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(scan.as_ref(), Some(idx)))
+            .map(|idx| scan.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         // Partition 1: ids [3,4], dates [2025-03-01, 2025-03-02]
         let expected_statistic_partition_1 = create_partition_statistics(
@@ -283,7 +283,7 @@ mod test {
         let projection: Arc<dyn ExecutionPlan> =
             Arc::new(ProjectionExec::try_new(exprs, scan)?);
         let statistics = (0..projection.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(projection.as_ref(), Some(idx)))
+            .map(|idx| projection.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         // Projection only includes id column, not the date partition column
         let expected_statistic_partition_1 =
@@ -315,7 +315,7 @@ mod test {
         let sort = SortExec::new(ordering.clone().into(), scan_1);
         let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(sort);
         let statistics = (0..sort_exec.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(sort_exec.as_ref(), Some(idx)))
+            .map(|idx| sort_exec.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         // All 4 files merged: ids [1-4], dates [2025-03-01, 2025-03-04]
         let expected_statistic_partition = create_partition_statistics(
@@ -354,7 +354,7 @@ mod test {
             Some((DATE_2025_03_03, DATE_2025_03_04)),
         );
         let statistics = (0..sort_exec.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(sort_exec.as_ref(), Some(idx)))
+            .map(|idx| sort_exec.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
         assert_eq!(*statistics[0], expected_statistic_partition_1);
@@ -381,7 +381,7 @@ mod test {
         )?;
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, scan)?);
-        let full_statistics = compute_statistics(filter.as_ref(), None)?;
+        let full_statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         let expected_full_statistic = Statistics {
             num_rows: Precision::Inexact(0),
             total_byte_size: Precision::Inexact(0),
@@ -407,7 +407,7 @@ mod test {
         assert_eq!(*full_statistics, expected_full_statistic);
 
         let statistics = (0..filter.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(filter.as_ref(), Some(idx)))
+            .map(|idx| filter.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
         let expected_partition_statistic = Statistics {
@@ -443,7 +443,7 @@ mod test {
         let union_exec: Arc<dyn ExecutionPlan> =
             UnionExec::try_new(vec![scan.clone(), scan])?;
         let statistics = (0..union_exec.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(union_exec.as_ref(), Some(idx)))
+            .map(|idx| union_exec.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         // Check that we have 4 partitions (2 from each scan)
         assert_eq!(statistics.len(), 4);
@@ -506,7 +506,7 @@ mod test {
 
         // Verify the result of partition statistics
         let stats = (0..interleave.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(interleave.as_ref(), Some(idx)))
+            .map(|idx| interleave.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(stats.len(), 2);
 
@@ -552,7 +552,7 @@ mod test {
         let cross_join: Arc<dyn ExecutionPlan> =
             Arc::new(CrossJoinExec::new(left_scan, right_scan));
         let statistics = (0..cross_join.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(cross_join.as_ref(), Some(idx)))
+            .map(|idx| cross_join.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         // Check that we have 2 partitions
         assert_eq!(statistics.len(), 2);
@@ -659,7 +659,8 @@ mod test {
 
         // Test partition_statistics(None) - returns overall statistics
         // For RightSemi join, output columns come from right side only
-        let full_statistics = compute_statistics(nested_loop_join.as_ref(), None)?;
+        let full_statistics =
+            nested_loop_join.statistics_with_args(&StatisticsArgs::new(None))?;
         // With empty join columns, estimate_join_statistics returns Inexact row count
         // based on the outer side (right side for RightSemi)
         let mut expected_full_statistics = create_partition_statistics(
@@ -697,7 +698,9 @@ mod test {
         expected_statistic_partition_2.total_byte_size = Precision::Absent;
 
         let statistics = (0..nested_loop_join.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(nested_loop_join.as_ref(), Some(idx)))
+            .map(|idx| {
+                nested_loop_join.statistics_with_args(&StatisticsArgs::new(Some(idx)))
+            })
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
         assert_eq!(*statistics[0], expected_statistic_partition_1);
@@ -727,7 +730,9 @@ mod test {
             Some((DATE_2025_03_01, DATE_2025_03_04)),
         );
         let statistics = (0..coalesce_partitions.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(coalesce_partitions.as_ref(), Some(idx)))
+            .map(|idx| {
+                coalesce_partitions.statistics_with_args(&StatisticsArgs::new(Some(idx)))
+            })
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 1);
         assert_eq!(*statistics[0], expected_statistic_partition);
@@ -744,7 +749,7 @@ mod test {
         let local_limit: Arc<dyn ExecutionPlan> =
             Arc::new(LocalLimitExec::new(scan.clone(), 1));
         let statistics = (0..local_limit.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(local_limit.as_ref(), Some(idx)))
+            .map(|idx| local_limit.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
         let mut expected_0 = Statistics::clone(&statistics[0]);
@@ -771,7 +776,7 @@ mod test {
         let global_limit: Arc<dyn ExecutionPlan> =
             Arc::new(GlobalLimitExec::new(scan.clone(), 0, Some(2)));
         let statistics = (0..global_limit.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(global_limit.as_ref(), Some(idx)))
+            .map(|idx| global_limit.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 1);
         // GlobalLimit takes from first partition: ids [3,4], dates [2025-03-01, 2025-03-02]
@@ -830,7 +835,8 @@ mod test {
             @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]"
         );
 
-        let p0_statistics = compute_statistics(aggregate_exec_partial.as_ref(), Some(0))?;
+        let p0_statistics =
+            aggregate_exec_partial.statistics_with_args(&StatisticsArgs::new(Some(0)))?;
 
         // Aggregate doesn't propagate num_rows and ColumnStatistics byte_size from input
         let expected_p0_statistics = Statistics {
@@ -869,7 +875,8 @@ mod test {
             ],
         };
 
-        let p1_statistics = compute_statistics(aggregate_exec_partial.as_ref(), Some(1))?;
+        let p1_statistics =
+            aggregate_exec_partial.statistics_with_args(&StatisticsArgs::new(Some(1)))?;
         assert_eq!(*p1_statistics, expected_p1_statistics);
 
         validate_statistics_with_data(
@@ -891,10 +898,12 @@ mod test {
             aggregate_exec_partial.schema(),
         )?);
 
-        let p0_statistics = compute_statistics(agg_final.as_ref(), Some(0))?;
+        let p0_statistics =
+            agg_final.statistics_with_args(&StatisticsArgs::new(Some(0)))?;
         assert_eq!(*p0_statistics, expected_p0_statistics);
 
-        let p1_statistics = compute_statistics(agg_final.as_ref(), Some(1))?;
+        let p1_statistics =
+            agg_final.statistics_with_args(&StatisticsArgs::new(Some(1)))?;
         assert_eq!(*p1_statistics, expected_p1_statistics);
 
         validate_statistics_with_data(
@@ -941,11 +950,11 @@ mod test {
 
         assert_eq!(
             empty_stat,
-            *compute_statistics(agg_partial.as_ref(), Some(0))?
+            *agg_partial.statistics_with_args(&StatisticsArgs::new(Some(0)))?
         );
         assert_eq!(
             empty_stat,
-            *compute_statistics(agg_partial.as_ref(), Some(1))?
+            *agg_partial.statistics_with_args(&StatisticsArgs::new(Some(1)))?
         );
         validate_statistics_with_data(
             agg_partial.clone(),
@@ -974,11 +983,11 @@ mod test {
 
         assert_eq!(
             empty_stat,
-            *compute_statistics(agg_final.as_ref(), Some(0))?
+            *agg_final.statistics_with_args(&StatisticsArgs::new(Some(0)))?
         );
         assert_eq!(
             empty_stat,
-            *compute_statistics(agg_final.as_ref(), Some(1))?
+            *agg_final.statistics_with_args(&StatisticsArgs::new(Some(1)))?
         );
 
         validate_statistics_with_data(
@@ -1017,7 +1026,7 @@ mod test {
 
         assert_eq!(
             expect_stat,
-            *compute_statistics(agg_final.as_ref(), Some(0))?
+            *agg_final.statistics_with_args(&StatisticsArgs::new(Some(0)))?
         );
 
         // Verify that the aggregate final result has exactly one partition with one row
@@ -1046,7 +1055,7 @@ mod test {
         let mut all_batches = vec![];
         for (i, partition_stream) in partitions.into_iter().enumerate() {
             let batches: Vec<RecordBatch> = partition_stream.try_collect().await?;
-            let actual = compute_statistics(plan.as_ref(), Some(i))?;
+            let actual = plan.statistics_with_args(&StatisticsArgs::new(Some(i)))?;
             let expected = compute_record_batch_statistics(
                 std::slice::from_ref(&batches),
                 &schema,
@@ -1056,7 +1065,7 @@ mod test {
             all_batches.push(batches);
         }
 
-        let actual = compute_statistics(plan.as_ref(), None)?;
+        let actual = plan.statistics_with_args(&StatisticsArgs::new(None))?;
         let expected = compute_record_batch_statistics(&all_batches, &schema, None);
         assert_eq!(*actual, expected);
 
@@ -1073,7 +1082,7 @@ mod test {
         )?);
 
         let statistics = (0..repartition.partitioning().partition_count())
-            .map(|idx| compute_statistics(repartition.as_ref(), Some(idx)))
+            .map(|idx| repartition.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 3);
 
@@ -1124,7 +1133,7 @@ mod test {
             Partitioning::RoundRobinBatch(2),
         )?);
 
-        let result = compute_statistics(repartition.as_ref(), Some(2));
+        let result = repartition.statistics_with_args(&StatisticsArgs::new(Some(2)));
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(
@@ -1153,7 +1162,7 @@ mod test {
             Partitioning::RoundRobinBatch(0),
         )?);
 
-        let result = compute_statistics(repartition.as_ref(), Some(0))?;
+        let result = repartition.statistics_with_args(&StatisticsArgs::new(Some(0)))?;
         assert_eq!(*result, Statistics::new_unknown(&scan_schema));
 
         // Verify that the result has exactly 0 partitions
@@ -1180,7 +1189,7 @@ mod test {
 
         // Verify the result of partition statistics of repartition
         let stats = (0..repartition.partitioning().partition_count())
-            .map(|idx| compute_statistics(repartition.as_ref(), Some(idx)))
+            .map(|idx| repartition.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(stats.len(), 2);
 
@@ -1238,7 +1247,7 @@ mod test {
 
         // Verify partition statistics are properly propagated (not unknown)
         let statistics = (0..window_agg.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(window_agg.as_ref(), Some(idx)))
+            .map(|idx| window_agg.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
 
         assert_eq!(statistics.len(), 2);
@@ -1324,7 +1333,7 @@ mod test {
         // Try to test with single partition
         let empty_single = Arc::new(EmptyExec::new(Arc::clone(&schema)));
 
-        let stats = compute_statistics(empty_single.as_ref(), Some(0))?;
+        let stats = empty_single.statistics_with_args(&StatisticsArgs::new(Some(0)))?;
         assert_eq!(stats.num_rows, Precision::Exact(0));
         assert_eq!(stats.total_byte_size, Precision::Exact(0));
         assert_eq!(stats.column_statistics.len(), 2);
@@ -1339,7 +1348,8 @@ mod test {
             assert_eq!(col_stat.byte_size, Precision::Exact(0));
         }
 
-        let overall_stats = compute_statistics(empty_single.as_ref(), None)?;
+        let overall_stats =
+            empty_single.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(stats, overall_stats);
 
         validate_statistics_with_data(empty_single, vec![ExpectedStatistics::Empty], 0)
@@ -1350,7 +1360,7 @@ mod test {
             Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(3));
 
         let statistics = (0..empty_multi.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(empty_multi.as_ref(), Some(idx)))
+            .map(|idx| empty_multi.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
 
         assert_eq!(statistics.len(), 3);
@@ -1410,7 +1420,9 @@ mod test {
 
         // Test partition statistics for CollectLeft mode
         let statistics = (0..collect_left_join.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(collect_left_join.as_ref(), Some(idx)))
+            .map(|idx| {
+                collect_left_join.statistics_with_args(&StatisticsArgs::new(Some(idx)))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         // Check that we have the expected number of partitions
@@ -1486,7 +1498,9 @@ mod test {
 
         // Test partition statistics for Partitioned mode
         let statistics = (0..partitioned_join.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(partitioned_join.as_ref(), Some(idx)))
+            .map(|idx| {
+                partitioned_join.statistics_with_args(&StatisticsArgs::new(Some(idx)))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         // Check that we have the expected number of partitions
@@ -1560,7 +1574,7 @@ mod test {
 
         // Test partition statistics for Auto mode
         let statistics = (0..auto_join.output_partitioning().partition_count())
-            .map(|idx| compute_statistics(auto_join.as_ref(), Some(idx)))
+            .map(|idx| auto_join.statistics_with_args(&StatisticsArgs::new(Some(idx))))
             .collect::<Result<Vec<_>>>()?;
 
         // Check that we have the expected number of partitions

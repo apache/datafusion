@@ -42,7 +42,7 @@ use crate::projection::{
     EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
     try_embed_projection, update_expr,
 };
-use crate::statistics::{StatisticsArgs, compute_statistics};
+use crate::statistics::StatisticsArgs;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, ExecutionPlan,
@@ -401,7 +401,7 @@ impl FilterExec {
         let schema = input.schema();
         let stats = Self::statistics_helper(
             &schema,
-            Arc::unwrap_or_clone(compute_statistics(input.as_ref(), None)?),
+            Arc::unwrap_or_clone(input.statistics_with_args(&StatisticsArgs::new(None))?),
             predicate,
             default_selectivity,
         )?;
@@ -1154,7 +1154,7 @@ mod tests {
     use super::*;
     use crate::empty::EmptyExec;
     use crate::expressions::*;
-    use crate::statistics::compute_statistics;
+    use crate::statistics::StatisticsArgs;
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
@@ -1231,7 +1231,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
 
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(statistics.num_rows, Precision::Inexact(25));
         assert_eq!(
             statistics.total_byte_size,
@@ -1281,7 +1281,7 @@ mod tests {
             sub_filter,
         )?);
 
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(statistics.num_rows, Precision::Inexact(16));
         assert_eq!(
             statistics.column_statistics,
@@ -1341,7 +1341,7 @@ mod tests {
             binary(col("a", &schema)?, Operator::GtEq, lit(10i32), &schema)?,
             b_gt_5,
         )?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         // On a uniform distribution, only fifteen rows will satisfy the
         // filter that 'a' proposed (a >= 10 AND a <= 25) (15/100) and only
         // 5 rows will satisfy the filter that 'b' proposed (b > 45) (5/50).
@@ -1386,7 +1386,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
 
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(statistics.num_rows, Precision::Absent);
 
         Ok(())
@@ -1459,7 +1459,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         // 0.5 (from a) * 0.333333... (from b) * 0.798387... (from c) ≈ 0.1330...
         // num_rows after ceil => 133.0... => 134
         // total_byte_size after ceil => 532.0... => 533
@@ -1555,12 +1555,13 @@ mod tests {
             )),
         ));
         // Since filter predicate passes all entries, statistics after filter shouldn't change.
-        let expected = compute_statistics(input.as_ref(), None)?
+        let expected = input
+            .statistics_with_args(&StatisticsArgs::new(None))?
             .column_statistics
             .clone();
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
 
         assert_eq!(statistics.num_rows, Precision::Inexact(1000));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(4000));
@@ -1613,7 +1614,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
 
         assert_eq!(statistics.num_rows, Precision::Inexact(0));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(0));
@@ -1700,7 +1701,7 @@ mod tests {
             Arc::new(FilterExec::try_new(outer_predicate, inner_filter)?);
 
         // Should succeed without error
-        let statistics = compute_statistics(outer_filter.as_ref(), None)?;
+        let statistics = outer_filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(statistics.num_rows, Precision::Inexact(0));
 
         Ok(())
@@ -1739,7 +1740,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
 
         assert_eq!(statistics.num_rows, Precision::Inexact(490));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(1960));
@@ -1789,7 +1790,8 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let filter_statistics = compute_statistics(filter.as_ref(), None)?;
+        let filter_statistics =
+            filter.statistics_with_args(&StatisticsArgs::new(None))?;
 
         let expected_filter_statistics = Statistics {
             num_rows: Precision::Absent,
@@ -1824,7 +1826,8 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let filter_statistics = compute_statistics(filter.as_ref(), None)?;
+        let filter_statistics =
+            filter.statistics_with_args(&StatisticsArgs::new(None))?;
         // First column is "a", and it is a column with only one value after the filter.
         assert!(filter_statistics.column_statistics[0].is_singleton());
 
@@ -1871,11 +1874,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Decimal128(Some(10), 10, 10))),
         ));
         let filter = FilterExec::try_new(predicate, input)?;
-        let statistics = compute_statistics(&filter, None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(statistics.num_rows, Precision::Inexact(200));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(800));
         let filter = filter.with_default_selectivity(40)?;
-        let statistics = compute_statistics(&filter, None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(statistics.num_rows, Precision::Inexact(400));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(1600));
         Ok(())
@@ -1910,7 +1913,8 @@ mod tests {
             Arc::new(EmptyExec::new(Arc::clone(&schema))),
         )?;
 
-        compute_statistics(&exec, None).unwrap();
+        exec.statistics_with_args(&StatisticsArgs::new(None))
+            .unwrap();
 
         Ok(())
     }
@@ -2066,8 +2070,8 @@ mod tests {
         assert_eq!(filter1.projection(), filter2.projection());
 
         // Verify statistics are the same
-        let stats1 = compute_statistics(&filter1, None)?;
-        let stats2 = compute_statistics(&filter2, None)?;
+        let stats1 = filter1.statistics_with_args(&StatisticsArgs::new(None))?;
+        let stats2 = filter2.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(stats1.num_rows, stats2.num_rows);
         assert_eq!(stats1.total_byte_size, stats2.total_byte_size);
 
@@ -2120,7 +2124,7 @@ mod tests {
             .unwrap()
             .build()?;
 
-        let statistics = compute_statistics(&filter, None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
 
         // Verify statistics reflect both filtering and projection
         assert!(matches!(statistics.num_rows, Precision::Inexact(_)));
@@ -2351,7 +2355,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
 
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         let col_b_stats = &statistics.column_statistics[1];
         assert_eq!(col_b_stats.min_value, Precision::Absent);
         assert_eq!(col_b_stats.max_value, Precision::Absent);
@@ -2636,7 +2640,7 @@ mod tests {
             ));
             let filter: Arc<dyn ExecutionPlan> =
                 Arc::new(FilterExec::try_new(predicate, input)?);
-            let statistics = compute_statistics(filter.as_ref(), None)?;
+            let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
 
             for (i, expected) in expected_ndvs.iter().enumerate() {
                 assert_eq!(
@@ -2710,7 +2714,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         // a = 42 collapses to single value
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
@@ -2756,7 +2760,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
             Precision::Exact(1)
@@ -2789,7 +2793,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
             Precision::Exact(1)
@@ -2822,7 +2826,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
             Precision::Exact(1)
@@ -2855,7 +2859,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
             Precision::Exact(1)
@@ -2889,7 +2893,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
             Precision::Exact(1)
@@ -2935,7 +2939,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
             Precision::Exact(1)
@@ -3236,7 +3240,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
 
-        let statistics = compute_statistics(filter.as_ref(), None)?;
+        let statistics = filter.statistics_with_args(&StatisticsArgs::new(None))?;
         // Filter estimates ~10 rows (selectivity = 10/100)
         assert_eq!(statistics.num_rows, Precision::Inexact(10));
         // NDV should be capped at the filtered row count (10), not the original 80

@@ -44,7 +44,7 @@ use datafusion_physical_plan::execution_plan::{
 };
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::CrossJoinExec;
-use datafusion_physical_plan::statistics::{StatisticsArgs, compute_statistics};
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, Partitioning, SendableRecordBatchStream,
 };
@@ -198,7 +198,10 @@ fn bench_compute_statistics(c: &mut Criterion) {
     for depth in [10, 20, 50] {
         let plan = build_coalesce_chain(depth);
         group.bench_with_input(BenchmarkId::new("cached", depth), &plan, |b, plan| {
-            b.iter(|| compute_statistics(plan.as_ref(), None).unwrap());
+            b.iter(|| {
+                plan.statistics_with_args(&StatisticsArgs::new(None))
+                    .unwrap()
+            });
         });
         group.bench_with_input(
             BenchmarkId::new("no_shared_cache", depth),
@@ -224,7 +227,10 @@ fn bench_compute_statistics(c: &mut Criterion) {
         let plan = build_cross_join_tree(depth, &mut next_col);
         let label = format!("depth={depth}_leaves={}", 1usize << depth);
         group.bench_with_input(BenchmarkId::new("cached", &label), &plan, |b, plan| {
-            b.iter(|| compute_statistics(plan.as_ref(), Some(0)).unwrap());
+            b.iter(|| {
+                plan.statistics_with_args(&StatisticsArgs::new(Some(0)))
+                    .unwrap()
+            });
         });
         group.bench_with_input(
             BenchmarkId::new("no_shared_cache", &label),
@@ -250,14 +256,20 @@ fn bench_compute_statistics(c: &mut Criterion) {
             BenchmarkId::new("cached_partition", depth),
             &plan,
             |b, plan| {
-                b.iter(|| compute_statistics(plan.as_ref(), Some(0)).unwrap());
+                b.iter(|| {
+                    plan.statistics_with_args(&StatisticsArgs::new(Some(0)))
+                        .unwrap()
+                });
             },
         );
         group.bench_with_input(
             BenchmarkId::new("cached_overall", depth),
             &plan,
             |b, plan| {
-                b.iter(|| compute_statistics(plan.as_ref(), None).unwrap());
+                b.iter(|| {
+                    plan.statistics_with_args(&StatisticsArgs::new(None))
+                        .unwrap()
+                });
             },
         );
         group.bench_with_input(
@@ -281,7 +293,10 @@ fn bench_compute_statistics(c: &mut Criterion) {
         let plan = build_mixed_chain(groups);
         let depth = groups * 3; // 2 filters + 1 coalesce per group
         group.bench_with_input(BenchmarkId::new("cached", depth), &plan, |b, plan| {
-            b.iter(|| compute_statistics(plan.as_ref(), Some(0)).unwrap());
+            b.iter(|| {
+                plan.statistics_with_args(&StatisticsArgs::new(Some(0)))
+                    .unwrap()
+            });
         });
         group.bench_with_input(
             BenchmarkId::new("no_shared_cache", depth),

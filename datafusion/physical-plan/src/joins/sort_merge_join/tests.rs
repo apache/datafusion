@@ -3365,7 +3365,7 @@ async fn test_left_outer_join_filtered_mask() -> Result<()> {
 
 #[test]
 fn test_partition_statistics() -> Result<()> {
-    use crate::statistics::compute_statistics;
+    use crate::statistics::StatisticsArgs;
     use datafusion_common::stats::Precision;
 
     let left = build_table(
@@ -3402,7 +3402,7 @@ fn test_partition_statistics() -> Result<()> {
 
         // Test aggregate statistics (partition = None)
         // Should return meaningful statistics computed from both inputs
-        let stats = compute_statistics(&join_exec, None)?;
+        let stats = join_exec.statistics_with_args(&StatisticsArgs::new(None))?;
         assert_eq!(
             stats.column_statistics.len(),
             expected_cols,
@@ -3420,7 +3420,8 @@ fn test_partition_statistics() -> Result<()> {
         // Since the child TestMemoryExec returns unknown stats for specific partitions,
         // the join output will also have Absent num_rows. This is expected behavior
         // as the statistics depend on what the children can provide.
-        let partition_stats = compute_statistics(&join_exec, Some(0))?;
+        let partition_stats =
+            join_exec.statistics_with_args(&StatisticsArgs::new(Some(0)))?;
         assert_eq!(
             partition_stats.column_statistics.len(),
             expected_cols,

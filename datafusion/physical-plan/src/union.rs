@@ -829,7 +829,7 @@ mod tests {
     use super::*;
     use crate::collect;
     use crate::repartition::RepartitionExec;
-    use crate::statistics::compute_statistics;
+    use crate::statistics::StatisticsArgs;
     use crate::test::exec::StatisticsExec;
     use crate::test::{self, TestMemoryExec};
 
@@ -1020,7 +1020,7 @@ mod tests {
             Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
 
         let union = UnionExec::try_new(vec![left, right])?;
-        let stats = compute_statistics(union.as_ref(), None)?;
+        let stats = union.statistics_with_args(&StatisticsArgs::new(None))?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1037,7 +1037,7 @@ mod tests {
             Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
 
         let union = UnionExec::try_new(vec![left, right])?;
-        let stats = compute_statistics(union.as_ref(), None)?;
+        let stats = union.statistics_with_args(&StatisticsArgs::new(None))?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1058,7 +1058,7 @@ mod tests {
         )?);
 
         let interleave = InterleaveExec::try_new(vec![left, right])?;
-        let stats = compute_statistics(&interleave, None)?;
+        let stats = interleave.statistics_with_args(&StatisticsArgs::new(None))?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1080,7 +1080,7 @@ mod tests {
         )?);
 
         let interleave = InterleaveExec::try_new(vec![left, right])?;
-        let stats = compute_statistics(&interleave, Some(0))?;
+        let stats = interleave.statistics_with_args(&StatisticsArgs::new(Some(0)))?;
 
         let expected = Statistics::default()
             .with_num_rows(Precision::Inexact(5))

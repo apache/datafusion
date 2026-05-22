@@ -61,13 +61,13 @@ use datafusion_physical_plan::joins::{
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave};
 use datafusion_physical_plan::windows::WindowAggExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, get_best_fitting_window};
 use datafusion_physical_plan::{
-    Distribution, ExecutionPlan, Partitioning, compute_statistics,
-    with_new_children_if_necessary,
+    Distribution, ExecutionPlan, Partitioning, with_new_children_if_necessary,
 };
 
 use itertools::izip;
@@ -1016,7 +1016,8 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match compute_statistics(child.as_ref(), None)?
+        let roundrobin_beneficial_stats = match child
+            .statistics_with_args(&StatisticsArgs::new(None))?
             .num_rows
         {
             Precision::Exact(n_rows) => n_rows > batch_size,

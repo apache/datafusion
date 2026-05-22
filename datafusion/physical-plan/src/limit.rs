@@ -535,7 +535,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common::collect;
-    use crate::statistics::compute_statistics;
+    use crate::statistics::StatisticsArgs;
     use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -818,7 +818,9 @@ mod tests {
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
-        Ok(compute_statistics(&offset, None)?.num_rows)
+        Ok(offset
+            .statistics_with_args(&StatisticsArgs::new(None))?
+            .num_rows)
     }
 
     pub fn build_group_by(
@@ -858,7 +860,9 @@ mod tests {
             fetch,
         );
 
-        Ok(compute_statistics(&offset, None)?.num_rows)
+        Ok(offset
+            .statistics_with_args(&StatisticsArgs::new(None))?
+            .num_rows)
     }
 
     async fn row_number_statistics_for_local_limit(
@@ -871,7 +875,9 @@ mod tests {
 
         let offset = LocalLimitExec::new(csv, fetch);
 
-        Ok(compute_statistics(&offset, None)?.num_rows)
+        Ok(offset
+            .statistics_with_args(&StatisticsArgs::new(None))?
+            .num_rows)
     }
 
     /// Return a RecordBatch with a single array with row_count sz

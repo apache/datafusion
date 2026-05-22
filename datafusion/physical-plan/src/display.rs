@@ -31,7 +31,7 @@ use datafusion_physical_expr::LexOrdering;
 use crate::metrics::{MetricCategory, MetricType};
 use crate::render_tree::RenderTree;
 
-use crate::statistics::compute_statistics;
+use crate::statistics::StatisticsArgs;
 
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
@@ -482,7 +482,9 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
         }
         if self.show_statistics {
-            let stats = compute_statistics(plan, None).map_err(|_e| fmt::Error)?;
+            let stats = plan
+                .statistics_with_args(&StatisticsArgs::new(None))
+                .map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{stats}]")?;
         }
         if self.show_schema {
@@ -578,7 +580,9 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         };
 
         let statistics = if self.show_statistics {
-            let stats = compute_statistics(plan, None).map_err(|_e| fmt::Error)?;
+            let stats = plan
+                .statistics_with_args(&StatisticsArgs::new(None))
+                .map_err(|_e| fmt::Error)?;
             format!("statistics=[{stats}]")
         } else {
             "".to_string()

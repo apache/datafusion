@@ -1186,7 +1186,7 @@ mod tests {
     use crate::common::collect;
 
     use crate::filter_pushdown::PushedDown;
-    use crate::statistics::compute_statistics;
+    use crate::statistics::StatisticsArgs;
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
@@ -1377,7 +1377,9 @@ mod tests {
 
         let projection = ProjectionExec::try_new(exprs, input).unwrap();
 
-        let stats = compute_statistics(&projection, None).unwrap();
+        let stats = projection
+            .statistics_with_args(&StatisticsArgs::new(None))
+            .unwrap();
 
         assert_eq!(stats.num_rows, Precision::Exact(10));
         assert_eq!(

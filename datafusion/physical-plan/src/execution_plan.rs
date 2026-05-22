@@ -520,11 +520,10 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// If `partition` is `None`, it returns statistics for all partitions.
     ///
     /// [`StatisticsArgs`] carries the partition index and a shared cache.
-    /// See [`compute_statistics`] for the top-level entry point that
-    /// builds the args automatically.
+    /// Create one with [`StatisticsArgs::new`] and pass it to this method.
     ///
     /// [`StatisticsArgs`]: crate::statistics::StatisticsArgs
-    /// [`compute_statistics`]: crate::statistics::compute_statistics
+    /// [`StatisticsArgs::new`]: crate::statistics::StatisticsArgs::new
     fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         #[expect(deprecated)]
         self.partition_statistics(args.partition())

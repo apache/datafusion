@@ -49,7 +49,7 @@ pub use crate::execution_plan::{
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::sort_pushdown::SortOrderPushdownResult;
-pub use crate::statistics::{StatisticsArgs, compute_statistics};
+pub use crate::statistics::StatisticsArgs;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};

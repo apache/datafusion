@@ -144,9 +144,8 @@ mod tests {
     use datafusion_physical_expr::expressions::binary;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
-    use datafusion_physical_plan::{
-        ExecutionPlanProperties, collect, compute_statistics,
-    };
+    use datafusion_physical_plan::statistics::StatisticsArgs;
+    use datafusion_physical_plan::{ExecutionPlanProperties, collect};
     use std::collections::HashMap;
     use std::io::Write;
     use std::sync::Arc;
@@ -249,11 +248,13 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            compute_statistics(exec.as_ref(), None)?.num_rows,
+            exec.statistics_with_args(&StatisticsArgs::new(None))?
+                .num_rows,
             Precision::Exact(8)
         );
         assert_eq!(
-            compute_statistics(exec.as_ref(), None)?.total_byte_size,
+            exec.statistics_with_args(&StatisticsArgs::new(None))?
+                .total_byte_size,
             Precision::Absent,
         );
 
@@ -1357,13 +1358,17 @@ mod tests {
 
         let exec_default = table_default.scan(&state, None, &[], None).await?;
         assert_eq!(
-            compute_statistics(exec_default.as_ref(), None)?.num_rows,
+            exec_default
+                .statistics_with_args(&StatisticsArgs::new(None))?
+                .num_rows,
             Precision::Absent
         );
 
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            compute_statistics(exec_default.as_ref(), None)?.total_byte_size,
+            exec_default
+                .statistics_with_args(&StatisticsArgs::new(None))?
+                .total_byte_size,
             Precision::Absent
         );
 
@@ -1378,11 +1383,15 @@ mod tests {
 
         let exec_disabled = table_disabled.scan(&state, None, &[], None).await?;
         assert_eq!(
-            compute_statistics(exec_disabled.as_ref(), None)?.num_rows,
+            exec_disabled
+                .statistics_with_args(&StatisticsArgs::new(None))?
+                .num_rows,
             Precision::Absent
         );
         assert_eq!(
-            compute_statistics(exec_disabled.as_ref(), None)?.total_byte_size,
+            exec_disabled
+                .statistics_with_args(&StatisticsArgs::new(None))?
+                .total_byte_size,
             Precision::Absent
         );
 
@@ -1397,12 +1406,16 @@ mod tests {
 
         let exec_enabled = table_enabled.scan(&state, None, &[], None).await?;
         assert_eq!(
-            compute_statistics(exec_enabled.as_ref(), None)?.num_rows,
+            exec_enabled
+                .statistics_with_args(&StatisticsArgs::new(None))?
+                .num_rows,
             Precision::Exact(8)
         );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            compute_statistics(exec_enabled.as_ref(), None)?.total_byte_size,
+            exec_enabled
+                .statistics_with_args(&StatisticsArgs::new(None))?
+                .total_byte_size,
             Precision::Absent,
         );
 
