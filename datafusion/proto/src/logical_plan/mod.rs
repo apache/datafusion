@@ -57,8 +57,8 @@ use datafusion_datasource_json::file_format::{
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RecursiveQuery, SkipType,
-    TableSource, Unnest, WriteOp,
+    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, SkipType, TableSource, Unnest,
+    WriteOp,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
