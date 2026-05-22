@@ -407,10 +407,6 @@ pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
         vec.drain(0..n).collect()
     } else {
         let remaining = vec.split_off(n);
-        // The emitted prefix keeps the original (larger) allocation. datafusion
-        // accounts memory by capacity rather than length, so shrink it to avoid
-        // handing off a short Vec that still reserves the pre-split capacity.
-        vec.shrink_to_fit();
         std::mem::replace(vec, remaining)
     }
 }
@@ -460,6 +456,73 @@ mod split_vec_min_alloc_tests {
         let first = split_vec_min_alloc(&mut v, 0);
         assert!(first.is_empty());
         assert_eq!(v, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn emitted_prefix_does_not_realloc_on_push() {
+        // Demonstrates *why* the split-off branch must NOT call `shrink_to_fit`.
+        //
+        // Downstream callers (e.g. `multi_group_by/bytes.rs`, which does
+        // `first_n_offsets.push(offset_n)` right after the split) push onto the
+        // emitted prefix immediately. The split-off branch hands the original
+        // backing allocation to that prefix, so the prefix already has spare
+        // capacity for the very next push.
+        //
+        // If we shrank the prefix to fit, that next push would have to
+        // reallocate, and Vec's growth strategy would land it at a *larger*
+        // capacity than the original allocation we started with -- the opposite
+        // of the memory saving `shrink_to_fit` was meant to deliver.
+
+        // A Vec with a known, deliberately large capacity. n*2 > len, so this
+        // takes the split-off branch.
+        let mut v: Vec<u32> = Vec::with_capacity(64);
+        v.extend(0..10);
+        let original_capacity = v.capacity();
+        assert!(original_capacity >= 64);
+
+        // Emit a prefix that is most of the Vec (n = 8, remaining = 2).
+        let mut prefix = split_vec_min_alloc(&mut v, 8);
+        assert_eq!(prefix, vec![0, 1, 2, 3, 4, 5, 6, 7]);
+
+        // The split-off branch moved the original backing store into `prefix`,
+        // so it keeps the original (large) capacity -- no shrink happened.
+        assert_eq!(
+            prefix.capacity(),
+            original_capacity,
+            "split-off branch must hand the original allocation to the prefix"
+        );
+
+        // The caller's very next operation: push one element onto the prefix.
+        prefix.push(99);
+
+        // Because the capacity was preserved, the push reused the existing
+        // allocation: post-push capacity is unchanged and still <= original.
+        // This is the realloc that `shrink_to_fit` would have forced.
+        assert_eq!(
+            prefix.capacity(),
+            original_capacity,
+            "push must reuse the preserved allocation (no realloc)"
+        );
+        assert!(prefix.capacity() <= original_capacity);
+
+        // Counter-demonstration: had we shrunk the prefix to fit (capacity 8),
+        // the same push would have reallocated. Vec doubles on growth, so the
+        // post-push capacity (16) ends up LARGER than where a length-8 prefix
+        // started -- and we paid a realloc for it.
+        let mut shrunk: Vec<u32> = prefix[..8].to_vec();
+        shrunk.shrink_to_fit();
+        let shrunk_capacity = shrink_then_push_capacity(&mut shrunk);
+        assert!(
+            shrunk_capacity > 8,
+            "shrink-to-fit then push reallocates to a larger capacity"
+        );
+    }
+
+    /// Helper for the counter-demonstration above: push one element and report
+    /// the resulting capacity.
+    fn shrink_then_push_capacity(v: &mut Vec<u32>) -> usize {
+        v.push(99);
+        v.capacity()
     }
 }
 
