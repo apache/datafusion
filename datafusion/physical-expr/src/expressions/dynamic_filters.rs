@@ -86,7 +86,7 @@ pub struct DynamicFilterPhysicalExpr {
 /// **Warning:** exposed publicly solely so that proto (de)serialization in
 /// `datafusion-proto` can read and rebuild this state. Do not treat this type
 /// or its layout as a stable API.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Inner {
     /// A unique identifier for the expression.
     pub expression_id: u64,
@@ -98,24 +98,6 @@ pub struct Inner {
     /// This is redundant with the watch channel state, but allows us to return immediately
     /// from `wait_complete()` without subscribing if already complete.
     pub is_complete: bool,
-}
-
-// TODO: Include expression_id in Debug output.
-//
-// See https://github.com/apache/datafusion/issues/20418. Currently, plan nodes
-// like `HashJoinExec`, `AggregateExec`, `SortExec` do not serialize their
-// dynamic filter. They auto-create one on decode with a fresh `expression_id`,
-// so a round-trip Debug comparison would diverge purely on the id even when
-// the rest of the state is preserved. Excluding it from Debug keeps those
-// roundtrip equality assertions meaningful until that work lands.
-impl std::fmt::Debug for Inner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Inner")
-            .field("generation", &self.generation)
-            .field("expr", &self.expr)
-            .field("is_complete", &self.is_complete)
-            .finish()
-    }
 }
 
 impl Inner {

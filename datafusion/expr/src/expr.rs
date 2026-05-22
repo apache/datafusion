@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
-use crate::higher_order_function::HigherOrderUDF;
+use crate::higher_order_function::{HigherOrderUDF, resolve_lambda_variables};
 use crate::logical_plan::Subquery;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf;
 use crate::{AggregateUDF, LambdaParametersProgress, ValueOrLambda, Volatility};
@@ -92,7 +92,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 ///
 /// For example the expression `A + 1` will be represented as
 ///
-///```text
+/// ```text
 ///  BinaryExpr {
 ///    left: Expr::Column("A"),
 ///    op: Operator::Plus,
@@ -265,7 +265,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 ///
 /// [`ExplainFormat::Tree`]: crate::logical_plan::ExplainFormat::Tree
 ///
-///```
+/// ```
 /// # use datafusion_expr::{lit, col};
 /// let expr = col("c1") + lit(42);
 /// assert_eq!(format!("{}", expr.human_display()), "c1 + 42");
@@ -301,7 +301,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// Rewrite an expression, replacing references to column "a" in an
 /// to the literal `42`:
 ///
-///  ```
+/// ```
 /// # use datafusion_common::tree_node::{Transformed, TreeNode};
 /// # use datafusion_expr::{col, Expr, lit};
 /// // expression a = 5 AND b = 6
@@ -453,7 +453,12 @@ impl HigherOrderFunction {
     }
 
     /// Invokes the inner function [`HigherOrderUDF::lambda_parameters`]
-    /// using the arguments of this invocation
+    /// using the arguments of this invocation. This expression lambda
+    /// variables must be already resolved either by coming from the
+    /// default sql planner or by calling [Expr::resolve_lambda_variables]
+    /// or [LogicalPlan::resolve_lambda_variables]
+    ///
+    /// [LogicalPlan::resolve_lambda_variables]: crate::LogicalPlan::resolve_lambda_variables
     pub fn lambda_parameters(
         &self,
         schema: &dyn ExprSchema,
@@ -496,9 +501,20 @@ impl PartialEq for HigherOrderFunction {
 }
 
 /// A named reference to a lambda parameter which includes it's own [`FieldRef`],
-/// which is used to implement [`ExprSchemable`], for example. Note the field must
-/// be set in order to create a physical lambda variable. A helper to automatically
-/// set them will be added in the future
+/// which is used to implement [`ExprSchemable`], for example. It is an option only to make
+/// easier for `expr_api` users to construct lambda variables, but any expression
+/// tree or [`LogicalPlan`] containing unresolved variables must be resolved before
+/// usage with either [`Expr::resolve_lambda_variables`] or
+/// [`LogicalPlan::resolve_lambda_variables`]. The default SQL planner produces
+/// already resolved variables and no further resolving is required.
+///
+/// After resolving, if any argument from the lambda function which this
+/// variables originates from have it's field changed (type, nullability,
+/// metadata, etc), the resolved variable may became outdated and must be
+/// resolved again.
+///
+/// [`LogicalPlan`]: crate::LogicalPlan
+/// [`LogicalPlan::resolve_lambda_variables`]: crate::LogicalPlan::resolve_lambda_variables
 #[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub struct LambdaVariable {
     pub name: String,
@@ -507,7 +523,12 @@ pub struct LambdaVariable {
 }
 
 impl LambdaVariable {
-    /// Create a lambda variable from a name and a Field.
+    /// Create a lambda variable from a name and an optional field.
+    /// If the field is none, the expression tree or LogicalPlan which
+    /// owns this variable must be resolved before usage with either
+    /// [`Expr::resolve_lambda_variables`] or [`LogicalPlan::resolve_lambda_variables`].
+    ///
+    /// [`LogicalPlan::resolve_lambda_variables`]: crate::LogicalPlan::resolve_lambda_variables
     pub fn new(name: String, field: Option<FieldRef>) -> Self {
         Self {
             name,
@@ -721,6 +742,28 @@ impl Alias {
     pub fn with_metadata(mut self, metadata: Option<FieldMetadata>) -> Self {
         self.metadata = metadata;
         self
+    }
+
+    #[doc(hidden)]
+    pub fn with_expr(mut self, expr: Expr) -> Self {
+        self.expr = Box::new(expr);
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn try_map_expr(self, f: impl FnOnce(Expr) -> Result<Expr>) -> Result<Expr> {
+        let Alias {
+            expr,
+            relation,
+            name,
+            metadata,
+        } = self;
+        Ok(Expr::Alias(Alias {
+            expr: Box::new(f(*expr)?),
+            relation,
+            name,
+            metadata,
+        }))
     }
 }
 
@@ -2143,6 +2186,32 @@ impl Expr {
                         rewrite_placeholder(item, expr.as_ref(), schema)?;
                     }
                 }
+                Expr::InSubquery(InSubquery {
+                    expr,
+                    subquery,
+                    negated: _,
+                }) => {
+                    let subquery_schema = subquery.subquery.schema();
+                      match &subquery_schema.fields()[..] {
+                          [subquery_field] => {
+                              let column = Expr::Column(Column::new_unqualified(
+                                  subquery_field.name().clone(),
+                              ));
+                              rewrite_placeholder(
+                                  expr.as_mut(),
+                                  &column,
+                                  subquery_schema,
+                              )?;
+                          }
+                          _ => {
+                              return plan_err!(
+                                  "InSubquery should only return one column, but found {}: {}",
+                                  subquery_schema.fields().len(),
+                                  subquery_schema.field_names().join(", ")
+                              );
+                          }
+                      }
+                }
                 Expr::Like(Like { expr, pattern, .. })
                 | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                     rewrite_placeholder(pattern.as_mut(), expr.as_ref(), schema)?;
@@ -2228,6 +2297,16 @@ impl Expr {
         } else {
             None
         }
+    }
+
+    /// Return a `Expr` with all [`LambdaVariable`] resolved only if all of them
+    /// are contained in the subtree of the [`HigherOrderFunction`] it originates from,
+    /// otherwise returns an error
+    pub fn resolve_lambda_variables(
+        self,
+        schema: &DFSchema,
+    ) -> Result<Transformed<Expr>> {
+        resolve_lambda_variables(self, schema, &mut HashMap::new())
     }
 }
 
@@ -3765,6 +3844,108 @@ mod test {
     }
 
     #[test]
+    fn infer_placeholder_in_subquery() {
+        // WHERE $1 IN (SELECT a FROM t)
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let in_subquery = Expr::InSubquery(InSubquery {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            negated: false,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) =
+            in_subquery.infer_placeholder_types(&outer_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::InSubquery(in_subquery) => match *in_subquery.expr {
+                Expr::Placeholder(placeholder) => {
+                    let inferred = placeholder.field.expect("placeholder field");
+                    assert_eq!(inferred.data_type(), &DataType::Int32);
+                    assert!(inferred.is_nullable());
+                }
+                _ => panic!("Expected Placeholder expression in InSubquery"),
+            },
+            _ => panic!("Expected InSubquery expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_not_in_subquery() {
+        // WHERE $1 NOT IN (SELECT a FROM t)
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let not_in_subquery = Expr::InSubquery(InSubquery {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            negated: true,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) = not_in_subquery
+            .infer_placeholder_types(&outer_schema)
+            .unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::InSubquery(in_subquery) => {
+                assert!(in_subquery.negated, "negated flag must be preserved");
+                match *in_subquery.expr {
+                    Expr::Placeholder(placeholder) => {
+                        let inferred = placeholder.field.expect("placeholder field");
+                        assert_eq!(inferred.data_type(), &DataType::Int32);
+                        assert!(inferred.is_nullable());
+                    }
+                    _ => {
+                        panic!("Expected Placeholder expression in InSubquery")
+                    }
+                }
+            }
+            _ => panic!("Expected InSubquery expression"),
+        }
+    }
+
+    #[test]
     fn infer_placeholder_like_and_similar_to() {
         // name LIKE $1
         let schema =
@@ -4014,8 +4195,8 @@ mod test {
                 wildcard_with_options(wildcard_options(
                     None,
                     Some(ExcludeSelectItem::Multiple(vec![
-                        Ident::from("c1"),
-                        Ident::from("c2")
+                        Ident::from("c1").into(),
+                        Ident::from("c2").into()
                     ])),
                     None,
                     None,
@@ -4122,6 +4303,36 @@ mod test {
             ),
             "column_name"
         );
+    }
+
+    #[test]
+    fn test_unalias_nested_respects_user_metadata() {
+        use std::collections::HashMap;
+
+        let base_expr = col("id");
+
+        let no_metadata = base_expr.clone().alias("alias");
+        assert_eq!(no_metadata.unalias_nested().data, base_expr);
+
+        let Expr::Alias(empty_metadata_alias) = base_expr.clone().alias("alias") else {
+            unreachable!();
+        };
+        let empty_metadata_alias = Expr::Alias(
+            empty_metadata_alias.with_metadata(Some(FieldMetadata::default())),
+        );
+        assert_eq!(empty_metadata_alias.unalias_nested().data, base_expr);
+
+        let user_metadata = FieldMetadata::from(HashMap::from([(
+            "some_key".to_string(),
+            "some_value".to_string(),
+        )]));
+
+        let Expr::Alias(user_alias) = base_expr.clone().alias("alias") else {
+            unreachable!();
+        };
+        let user_alias =
+            Expr::Alias(user_alias.with_metadata(Some(user_metadata.clone())));
+        assert_eq!(user_alias.clone().unalias_nested().data, user_alias);
     }
 
     fn wildcard_options(

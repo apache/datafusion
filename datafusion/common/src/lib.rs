@@ -47,6 +47,7 @@ pub mod extensions;
 pub mod file_options;
 pub mod format;
 pub mod hash_utils;
+pub mod heap_size;
 pub mod instant;
 pub mod metadata;
 pub mod nested_struct;
@@ -64,6 +65,7 @@ pub mod test_util;
 pub mod tree_node;
 pub mod types;
 pub mod utils;
+
 /// Reexport arrow crate
 pub use arrow;
 pub use column::Column;
@@ -117,6 +119,7 @@ pub type HashMap<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<K, V, S>;
 pub type HashSet<T, S = DefaultHashBuilder> = hashbrown::HashSet<T, S>;
 pub mod hash_map {
     pub use hashbrown::hash_map::Entry;
+    pub use hashbrown::hash_map::EntryRef;
 }
 pub mod hash_set {
     pub use hashbrown::hash_set::Entry;

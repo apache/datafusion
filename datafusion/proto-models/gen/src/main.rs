@@ -18,9 +18,9 @@
 use std::path::Path;
 
 fn main() -> Result<(), String> {
-    let proto_dir = Path::new("datafusion/proto");
-    let proto_path = Path::new("datafusion/proto/proto/datafusion.proto");
-    let out_dir = Path::new("datafusion/proto/src");
+    let proto_dir = Path::new("datafusion/proto-models");
+    let proto_path = Path::new("datafusion/proto-models/proto/datafusion.proto");
+    let out_dir = Path::new("datafusion/proto-models/src");
 
     // proto definitions has to be there
     let descriptor_path = proto_dir.join("proto/proto_descriptor.bin");
