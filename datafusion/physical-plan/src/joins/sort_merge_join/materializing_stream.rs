@@ -382,6 +382,8 @@ pub(super) struct MaterializingSortMergeJoinStream {
 
     /// Tracks the active stream when loading spilled buffered batches back in memory
     pub spill_stream: Option<SendableRecordBatchStream>,
+    /// Tracks the number of batches currently spilled
+    pub spilled_batch_count: usize,
 
     // ========================================================================
     // CACHED COMPARATORS:
@@ -869,6 +871,7 @@ impl MaterializingSortMergeJoinStream {
             runtime_env,
             spill_manager,
             spill_stream: None,
+            spilled_batch_count: 0,
             streamed_buffered_cmp: None,
             buffered_equality_cmp: None,
             streamed_batch_counter: AtomicUsize::new(0),
@@ -946,7 +949,10 @@ impl MaterializingSortMergeJoinStream {
     /// Identifies which buffered batches are needed for the upcoming freeze operation
     fn get_required_batch_indices(&self, buffered_freeze_count: usize) -> Vec<usize> {
         let mut needed = vec![];
-
+        // Avoid scanning if no spilled batches exist
+        if self.spilled_batch_count == 0 {
+            return needed;
+        }
         // We need all batches that matched with streamed rows
         for chunk in &self.streamed_batch.output_indices {
             if let Some(idx) = chunk.buffered_batch_idx {
@@ -991,7 +997,7 @@ impl MaterializingSortMergeJoinStream {
                     Some(Ok(batch)) => {
                         // Transition the batch back to InMemory
                         bb.batch = BufferedBatchState::InMemory(batch);
-
+                        self.spilled_batch_count -= 1;
                         // The batch is back in memory, so we must account for its size.
                         let newly_allocated =
                             bb.size_estimation.saturating_sub(bb.reserved_amount);
@@ -1106,6 +1112,7 @@ impl MaterializingSortMergeJoinStream {
                             .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
 
                         buffered_batch.batch = BufferedBatchState::Spilled(spill_file);
+                        self.spilled_batch_count += 1;
 
                         // Join key arrays remain in memory after the batch is
                         // spilled — the comparator needs them for key boundary
