@@ -242,8 +242,6 @@ impl HashTableLookupExpr {
     }
 }
 
-
-
 impl std::fmt::Debug for HashTableLookupExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cols = self
@@ -306,10 +304,11 @@ impl HashTableLookupExpr {
     pub fn try_to_proto(
         &self,
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> datafusion_common::Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>>
-    {
-        use datafusion_proto_common::scalar_value::Value;
+    ) -> datafusion_common::Result<
+        Option<datafusion_proto_models::protobuf::PhysicalExprNode>,
+    > {
         use datafusion_proto_common::ScalarValue;
+        use datafusion_proto_common::scalar_value::Value;
         use datafusion_proto_models::protobuf;
         use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 
