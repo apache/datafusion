@@ -47,9 +47,10 @@ members = [
     "datafusion/pruning",
     "datafusion/physical-plan",
     "datafusion/proto",
-    "datafusion/proto/gen",
     "datafusion/proto-common",
     "datafusion/proto-common/gen",
+    "datafusion/proto-models",
+    "datafusion/proto-models/gen",
     "datafusion/session",
     "datafusion/spark",
     "datafusion/sql",
@@ -152,6 +153,7 @@ datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", versio
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "53.1.0" }
 datafusion-proto = { path = "datafusion/proto", version = "53.1.0" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "53.1.0" }
+datafusion-proto-models = { path = "datafusion/proto-models", version = "53.1.0" }
 datafusion-pruning = { path = "datafusion/pruning", version = "53.1.0" }
 datafusion-session = { path = "datafusion/session", version = "53.1.0" }
 datafusion-spark = { path = "datafusion/spark", version = "53.1.0" }
