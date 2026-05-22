@@ -282,7 +282,7 @@ pub fn parse_physical_expr_with_converter(
         // their own `ExprType` variant — see #21835. This match only routes
         // to the right constructor.
         ExprType::Column(_) => Column::try_from_proto(proto, &decode_ctx)?,
-        ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
+        ExprType::UnknownColumn(_) => UnKnownColumn::try_from_proto(proto, &decode_ctx)?,
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
         ExprType::BinaryExpr(_) => BinaryExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::AggregateExpr(_) => {

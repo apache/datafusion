@@ -27,6 +27,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{Result, internal_err};
+
+#[cfg(feature = "proto")]
+use datafusion_proto_models::protobuf;
 use datafusion_expr::ColumnarValue;
 
 #[derive(Debug, Clone, Eq)]
@@ -83,6 +86,36 @@ impl PhysicalExpr for UnKnownColumn {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<protobuf::PhysicalExprNode>> {
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
+                protobuf::UnknownColumn {
+                    name: self.name.clone(),
+                },
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl UnKnownColumn {
+    /// Reconstruct an [`UnKnownColumn`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &protobuf::PhysicalExprNode,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let protobuf::UnknownColumn { name } = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::UnknownColumn(c)) => c,
+            _ => return internal_err!("PhysicalExprNode is not an UnKnownColumn"),
+        };
+        Ok(Arc::new(UnKnownColumn::new(name)))
     }
 }
 
