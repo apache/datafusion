@@ -336,6 +336,46 @@ FROM t GROUP BY a, b ORDER BY a, b + 0 DESC;
 100 2
 200 1
 
+# A nested ORDER BY expression over a SELECT alias is still rejected in
+# the post-aggregate DISTINCT ON path.
+query error No field named agg2
+WITH t(a, b) AS (VALUES (1, 10), (1, 20), (2, 30))
+SELECT DISTINCT ON (a) a, max(b) AS agg2
+FROM t GROUP BY a ORDER BY a, agg2 + 1;
+
+# DISTINCT ON after aggregation still needs the SELECT-list unnest
+# rewrite, and bare ORDER BY aliases should keep working against the
+# rewritten DistinctOn input.
+query II
+WITH t(a, b) AS (VALUES (1, 10), (1, 20), (2, 30))
+SELECT DISTINCT ON (a) a, unnest(array_agg(b)) AS b
+FROM t GROUP BY a ORDER BY a, b DESC;
+----
+1 20
+2 30
+
+# DISTINCT ON after aggregation also needs to keep multi-column SELECT
+# expansions from struct unnest working.
+query III
+WITH t(a, b) AS (VALUES (1, 10), (1, 20), (2, 30))
+SELECT DISTINCT ON (a) a, unnest(struct(max(b), min(b)))
+FROM t GROUP BY a ORDER BY a;
+----
+1 20 10
+2 30 30
+
+# DISTINCT ON keys that expand to multiple columns are rejected.
+query error DISTINCT ON expressions that expand to multiple columns are not supported with DISTINCT ON
+WITH t(a, b) AS (VALUES (1, 10), (2, 20))
+SELECT DISTINCT ON (unnest(struct(max(b), min(b)))) a
+FROM t GROUP BY a ORDER BY unnest(struct(max(b), min(b))), a;
+
+# ORDER BY tie-breakers that expand to multiple columns are rejected.
+query error ORDER BY expressions that expand to multiple columns are not supported with DISTINCT ON
+WITH t(a, b) AS (VALUES (1, 10), (2, 20))
+SELECT DISTINCT ON (a) a, max(b)
+FROM t GROUP BY a ORDER BY a, unnest(struct(max(b), min(b)));
+
 # Fast path (no aggregation): a bare ORDER BY alias must resolve to
 # its underlying SELECT expression so that the sort attached to
 # DistinctOn normalizes against the base plan.
@@ -363,6 +403,17 @@ logical_plan
 
 statement ok
 RESET datafusion.explain.logical_plan_only;
+
+# Ordinal ORDER BY still works in the post-aggregate DISTINCT ON path.
+query TI
+SELECT DISTINCT ON (c1) c1, max(c4)
+FROM aggregate_test_100 GROUP BY c1 ORDER BY 1, 2;
+----
+a 32064
+b 25286
+c 29106
+d 31106
+e 32514
 
 # Synthetic repro for issue #17256.
 query TIR

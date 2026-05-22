@@ -25,7 +25,8 @@ use crate::utils::{
     CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up,
-    rewrite_recursive_unnests_bottom_up,
+    rewrite_recursive_unnests_bottom_up, substitute_top_level_alias,
+    substitute_top_level_aliases_in_sorts,
 };
 
 use arrow::datatypes::DataType;
@@ -73,21 +74,20 @@ struct AggregatePlanResult {
     on_exprs: Vec<Expr>,
 }
 
-/// If `expr` is a bare unqualified `Column` whose name matches a SELECT
-/// alias, swap it for the alias's underlying expression. Nested occurrences
-/// are left alone — PostgreSQL only resolves a top-level identifier as an
-/// output alias in clauses like ORDER BY and DISTINCT ON.
-fn substitute_top_level_alias(
-    expr: Expr,
-    aliases: &datafusion_common::HashMap<String, Expr>,
-) -> Expr {
-    if let Expr::Column(c) = &expr
-        && c.relation.is_none()
-        && let Some(underlying) = aliases.get(&c.name)
-    {
-        return underlying.clone();
-    }
-    expr
+struct DistinctOnUnnestPlanResult {
+    plan: LogicalPlan,
+    select_exprs: Vec<Expr>,
+    on_exprs: Vec<Expr>,
+    order_by_exprs: Vec<SortExpr>,
+}
+
+struct RewrittenUnnestExprGroups {
+    plan: LogicalPlan,
+    expr_groups: Vec<Vec<Expr>>,
+}
+
+fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
+    expr_groups.into_iter().flatten().collect()
 }
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -464,18 +464,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // so a bare ORDER BY alias (e.g. `ORDER BY x` where
                     // SELECT has `a AS x`) must be swapped back to the
                     // underlying input expression first.
-                    if !alias_map.is_empty() {
-                        order_by_rex = order_by_rex
-                            .into_iter()
-                            .map(|s| {
-                                let expr = substitute_top_level_alias(
-                                    s.expr.clone(),
-                                    &alias_map,
-                                );
-                                s.with_expr(expr)
-                            })
-                            .collect();
-                    }
+                    order_by_rex =
+                        substitute_top_level_aliases_in_sorts(order_by_rex, &alias_map);
                     LogicalPlanBuilder::from(base_plan)
                         .distinct_on(on_exprs_post_aggr, select_exprs, None)?
                         .build()?
@@ -491,34 +481,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // those aliases — substitute them back to the
                     // underlying post-aggregate expression so they
                     // resolve against the DistinctOn input.
-                    let select_alias_map: datafusion_common::HashMap<String, Expr> =
-                        select_exprs_post_aggr
-                            .iter()
-                            .filter_map(|e| match e {
-                                Expr::Alias(a) => {
-                                    Some((a.name.clone(), (*a.expr).clone()))
-                                }
-                                _ => None,
-                            })
-                            .collect();
+                    let select_alias_map = extract_aliases(&select_exprs_post_aggr);
+                    order_by_rex = substitute_top_level_aliases_in_sorts(
+                        order_by_rex,
+                        &select_alias_map,
+                    );
 
-                    if !select_alias_map.is_empty() {
-                        // Only swap an alias for its underlying expression
-                        // when the ORDER BY item is a bare alias name —
-                        // matches PostgreSQL's behavior. `b` resolves to
-                        // the alias; `b + 0` keeps `b` as the input
-                        // column.
-                        order_by_rex = order_by_rex
-                            .into_iter()
-                            .map(|s| {
-                                let expr = substitute_top_level_alias(
-                                    s.expr.clone(),
-                                    &select_alias_map,
-                                );
-                                s.with_expr(expr)
-                            })
-                            .collect();
-                    }
+                    let DistinctOnUnnestPlanResult {
+                        plan,
+                        select_exprs: select_exprs_post_aggr,
+                        on_exprs: on_exprs_post_aggr,
+                        order_by_exprs: rewritten_order_by_rex,
+                    } = self.try_process_distinct_on_unnest(
+                        plan,
+                        select_exprs_post_aggr,
+                        on_exprs_post_aggr,
+                        order_by_rex,
+                    )?;
+                    order_by_rex = rewritten_order_by_rex;
 
                     LogicalPlanBuilder::from(plan)
                         .distinct_on(on_exprs_post_aggr, select_exprs_post_aggr, None)?
@@ -557,98 +537,159 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
+        let RewrittenUnnestExprGroups { plan, expr_groups } = self
+            .rewrite_unnest_expr_groups(
+                input,
+                select_exprs.into_iter().map(|expr| vec![expr]).collect(),
+            )?;
+
+        LogicalPlanBuilder::from(plan)
+            .project(flatten_expr_groups(expr_groups))?
+            .build()
+    }
+
+    /// Rewrites SELECT-list UNNESTs while keeping hidden DISTINCT ON / ORDER
+    /// BY inputs available to the DistinctOn node.
+    fn try_process_distinct_on_unnest(
+        &self,
+        input: LogicalPlan,
+        select_exprs: Vec<Expr>,
+        on_exprs: Vec<Expr>,
+        order_by_exprs: Vec<SortExpr>,
+    ) -> Result<DistinctOnUnnestPlanResult> {
+        let select_len = select_exprs.len();
+        let on_len = on_exprs.len();
+        let mut expr_groups = select_exprs
+            .into_iter()
+            .map(|expr| vec![expr])
+            .collect::<Vec<_>>();
+        expr_groups.extend(on_exprs.into_iter().map(|expr| vec![expr]));
+        expr_groups.extend(
+            order_by_exprs
+                .iter()
+                .map(|sort_expr| vec![sort_expr.expr.clone()]),
+        );
+
+        let RewrittenUnnestExprGroups {
+            plan,
+            mut expr_groups,
+        } = self.rewrite_unnest_expr_groups(input, expr_groups)?;
+
+        let rewritten_select_exprs =
+            flatten_expr_groups(expr_groups.drain(..select_len).collect());
+        let rewritten_on_exprs = expr_groups
+            .drain(..on_len)
+            .map(|exprs| self.expect_single_distinct_on_expr(exprs, "DISTINCT ON"))
+            .collect::<Result<Vec<_>>>()?;
+        let rewritten_order_by_exprs = order_by_exprs
+            .into_iter()
+            .zip(expr_groups)
+            .map(|(sort_expr, exprs)| {
+                Ok(sort_expr
+                    .with_expr(self.expect_single_distinct_on_expr(exprs, "ORDER BY")?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(DistinctOnUnnestPlanResult {
+            plan,
+            select_exprs: rewritten_select_exprs,
+            on_exprs: rewritten_on_exprs,
+            order_by_exprs: rewritten_order_by_exprs,
+        })
+    }
+
+    fn expect_single_distinct_on_expr(
+        &self,
+        exprs: Vec<Expr>,
+        clause: &str,
+    ) -> Result<Expr> {
+        if exprs.len() == 1 {
+            return Ok(exprs.into_iter().next().expect("len checked above"));
+        }
+
+        not_impl_err!(
+            "{clause} expressions that expand to multiple columns are not supported with DISTINCT ON"
+        )
+    }
+
+    fn rewrite_unnest_expr_groups(
+        &self,
+        input: LogicalPlan,
+        expr_groups: Vec<Vec<Expr>>,
+    ) -> Result<RewrittenUnnestExprGroups> {
         // Try process group by unnest
         let input = self.try_process_aggregate_unnest(input)?;
 
         let mut intermediate_plan = input;
-        let mut intermediate_select_exprs = select_exprs;
-        // Fast path: If there is are no unnests in the select_exprs, wrap the plan in a projection
-        if !intermediate_select_exprs
-            .iter()
-            .any(has_unnest_expr_recursively)
-        {
-            return LogicalPlanBuilder::from(intermediate_plan)
-                .project(intermediate_select_exprs)?
-                .build();
-        }
+        let mut intermediate_expr_groups = expr_groups;
 
-        // Each expr in select_exprs can contains multiple unnest stage
-        // The transformation happen bottom up, one at a time for each iteration
-        // Only exhaust the loop if no more unnest transformation is found
-        for i in 0.. {
+        loop {
             let mut unnest_columns = IndexMap::new();
-            // from which column used for projection, before the unnest happen
-            // including non unnest column and unnest column
+            // from which columns used for projection, before the unnest happen
+            // including non unnest columns and unnest columns
             let mut inner_projection_exprs = vec![];
+            let mut outer_expr_groups =
+                Vec::with_capacity(intermediate_expr_groups.len());
 
-            // expr returned here maybe different from the originals in inner_projection_exprs
-            // for example:
-            // - unnest(struct_col) will be transformed into struct_col.field1, struct_col.field2
-            // - unnest(array_col) will be transformed into array_col.element
-            // - unnest(array_col) + 1 will be transformed into array_col.element +1
-            let mut outer_projection_exprs = vec![];
-            for expr in &intermediate_select_exprs {
-                let mut rewritten_exprs = rewrite_recursive_unnest_bottom_up(
-                    &intermediate_plan,
-                    &mut unnest_columns,
-                    &mut inner_projection_exprs,
-                    expr,
-                )?;
+            for expr_group in &intermediate_expr_groups {
+                let mut outer_expr_group = vec![];
+                for expr in expr_group {
+                    let mut rewritten_exprs = rewrite_recursive_unnest_bottom_up(
+                        &intermediate_plan,
+                        &mut unnest_columns,
+                        &mut inner_projection_exprs,
+                        expr,
+                    )?;
 
-                if let Some(columns) =
-                    self.get_struct_unnest_columns(&intermediate_plan, expr)?
-                {
-                    rewritten_exprs = rewritten_exprs
-                        .into_iter()
-                        .zip(columns)
-                        .map(|(expr, column)| expr.alias(column.flat_name()))
-                        .collect();
+                    if let Some(columns) =
+                        self.get_struct_unnest_columns(&intermediate_plan, expr)?
+                    {
+                        rewritten_exprs = rewritten_exprs
+                            .into_iter()
+                            .zip(columns)
+                            .map(|(expr, column)| expr.alias(column.flat_name()))
+                            .collect();
+                    }
+
+                    outer_expr_group.extend(rewritten_exprs);
                 }
-
-                outer_projection_exprs.extend(rewritten_exprs);
+                outer_expr_groups.push(outer_expr_group);
             }
 
             // No more unnest is possible
             if unnest_columns.is_empty() {
-                // The original expr does not contain any unnest
-                if i == 0 {
-                    return LogicalPlanBuilder::from(intermediate_plan)
-                        .project(intermediate_select_exprs)?
-                        .build();
-                }
-                break;
-            } else {
-                // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
-                let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-                let mut unnest_col_vec = vec![];
-
-                for (col, maybe_list_unnest) in unnest_columns.into_iter() {
-                    if let Some(list_unnest) = maybe_list_unnest {
-                        unnest_options = list_unnest.into_iter().fold(
-                            unnest_options,
-                            |options, unnest_list| {
-                                options.with_recursions(RecursionUnnestOption {
-                                    input_column: col.clone(),
-                                    output_column: unnest_list.output_column,
-                                    depth: unnest_list.depth,
-                                })
-                            },
-                        );
-                    }
-                    unnest_col_vec.push(col);
-                }
-                let plan = LogicalPlanBuilder::from(intermediate_plan)
-                    .project(inner_projection_exprs)?
-                    .unnest_columns_with_options(unnest_col_vec, unnest_options)?
-                    .build()?;
-                intermediate_plan = plan;
-                intermediate_select_exprs = outer_projection_exprs;
+                return Ok(RewrittenUnnestExprGroups {
+                    plan: intermediate_plan,
+                    expr_groups: intermediate_expr_groups,
+                });
             }
-        }
 
-        LogicalPlanBuilder::from(intermediate_plan)
-            .project(intermediate_select_exprs)?
-            .build()
+            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
+            let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+            let mut unnest_col_vec = vec![];
+
+            for (col, maybe_list_unnest) in unnest_columns.into_iter() {
+                if let Some(list_unnest) = maybe_list_unnest {
+                    unnest_options = list_unnest.into_iter().fold(
+                        unnest_options,
+                        |options, unnest_list| {
+                            options.with_recursions(RecursionUnnestOption {
+                                input_column: col.clone(),
+                                output_column: unnest_list.output_column,
+                                depth: unnest_list.depth,
+                            })
+                        },
+                    );
+                }
+                unnest_col_vec.push(col);
+            }
+
+            intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
+                .project(inner_projection_exprs)?
+                .unnest_columns_with_options(unnest_col_vec, unnest_options)?
+                .build()?;
+            intermediate_expr_groups = outer_expr_groups;
+        }
     }
 
     fn get_struct_unnest_columns(
