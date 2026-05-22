@@ -680,7 +680,7 @@ fn summarize_distinct_counts(
         return Precision::Absent;
     }
 
-    let required_count = required_ndv_count(num_row_groups);
+    let required_count = (num_row_groups as f64 * PARTIAL_NDV_THRESHOLD).ceil() as usize;
     let mut ndv_count = 0;
     let mut max_distinct_count: Option<u64> = None;
 
@@ -698,6 +698,7 @@ fn summarize_distinct_counts(
             });
         }
 
+        // Return early if there's no chance to reach the required coverage.
         let remaining = num_row_groups - row_group_idx - 1;
         if ndv_count + remaining < required_count {
             return Precision::Absent;
@@ -711,10 +712,6 @@ fn summarize_distinct_counts(
         Some(distinct_count) => Precision::Inexact(distinct_count as usize),
         None => Precision::Absent,
     }
-}
-
-fn required_ndv_count(num_row_groups: usize) -> usize {
-    (num_row_groups as f64 * PARTIAL_NDV_THRESHOLD).ceil() as usize
 }
 
 /// Compute the Arrow in-memory size for a single column
