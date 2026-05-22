@@ -25,7 +25,8 @@ use crate::metrics::{
 };
 
 use super::{
-    Count, ExecutionPlanMetricsSet, Gauge, Label, Metric, MetricValue, Time, Timestamp,
+    Count, ExecutionPlanMetricsSet, Gauge, Label, LabelValue, Metric, MetricValue, Time,
+    Timestamp,
 };
 
 /// Structure for constructing metrics, counters, timers, etc.
@@ -110,7 +111,10 @@ impl<'a> MetricBuilder<'a> {
         name: impl Into<Cow<'static, str>>,
         value: impl Into<Cow<'static, str>>,
     ) -> Self {
-        self.with_label(Label::new(name.into(), value.into()))
+        self.with_label(Label::new(
+            LabelValue::from(name.into()),
+            LabelValue::from(value.into()),
+        ))
     }
 
     /// Set the partition of the metric being constructed

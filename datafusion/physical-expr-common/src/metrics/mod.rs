@@ -532,12 +532,9 @@ pub struct Label {
 
 impl Label {
     /// Create a new [`Label`]
-    pub fn new(
-        name: impl Into<Cow<'static, str>>,
-        value: impl Into<Cow<'static, str>>,
-    ) -> Self {
-        let name = LabelValue::from(name.into());
-        let value = LabelValue::from(value.into());
+    pub fn new(name: impl Into<LabelValue>, value: impl Into<LabelValue>) -> Self {
+        let name = name.into();
+        let value = value.into();
         Self { name, value }
     }
 
@@ -558,32 +555,55 @@ impl Display for Label {
     }
 }
 
-/// Internal representation for label names and values.
+/// A label name or value.
 ///
-/// `Static` preserves the existing allocation-free path for string literals.
-/// `Shared` stores dynamic strings behind [`Arc<str>`], so cloning a [`Label`]
-/// only increments an atomic reference count and does not allocate or copy the
-/// underlying string data.
-#[derive(Clone, Eq)]
-enum LabelValue {
+/// String literals preserve the existing allocation-free path. Dynamic strings
+/// can be stored behind [`Arc<str>`], so cloning a [`Label`] only increments an
+/// atomic reference count and does not allocate or copy the underlying string
+/// data.
+#[derive(Clone)]
+pub struct LabelValue(LabelValueInner);
+
+/// Internal representation for label names and values.
+#[derive(Clone)]
+enum LabelValueInner {
     Static(&'static str),
     Shared(Arc<str>),
 }
 
 impl LabelValue {
-    fn as_str(&self) -> &str {
-        match self {
-            Self::Static(value) => value,
-            Self::Shared(value) => value.as_ref(),
+    /// Return this label value as a string slice.
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            LabelValueInner::Static(value) => value,
+            LabelValueInner::Shared(value) => value.as_ref(),
         }
+    }
+}
+
+impl From<&'static str> for LabelValue {
+    fn from(value: &'static str) -> Self {
+        Self(LabelValueInner::Static(value))
+    }
+}
+
+impl From<String> for LabelValue {
+    fn from(value: String) -> Self {
+        Self(LabelValueInner::Shared(Arc::from(value)))
+    }
+}
+
+impl From<Arc<str>> for LabelValue {
+    fn from(value: Arc<str>) -> Self {
+        Self(LabelValueInner::Shared(value))
     }
 }
 
 impl From<Cow<'static, str>> for LabelValue {
     fn from(value: Cow<'static, str>) -> Self {
         match value {
-            Cow::Borrowed(value) => Self::Static(value),
-            Cow::Owned(value) => Self::Shared(Arc::from(value)),
+            Cow::Borrowed(value) => value.into(),
+            Cow::Owned(value) => value.into(),
         }
     }
 }
@@ -593,6 +613,8 @@ impl PartialEq for LabelValue {
         self.as_str() == other.as_str()
     }
 }
+
+impl Eq for LabelValue {}
 
 impl Hash for LabelValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -670,9 +692,12 @@ mod tests {
     fn test_label_owned_and_borrowed_values_are_equal() {
         let borrowed = Label::new("foo", "bar");
         let owned = Label::new("foo".to_string(), "bar".to_string());
+        let shared = Label::new("foo", Arc::<str>::from("bar"));
 
         assert_eq!(borrowed, owned);
+        assert_eq!(borrowed, shared);
         assert_eq!(borrowed.to_string(), owned.to_string());
+        assert_eq!(borrowed.to_string(), shared.to_string());
     }
 
     #[test]

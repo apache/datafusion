@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, Label, MetricBuilder, MetricCategory,
     MetricType, PruningMetrics, RatioMergeStrategy, RatioMetrics, Time,
@@ -102,7 +104,7 @@ impl ParquetFileMetrics {
     ) -> Self {
         // Share the filename label across all per-file metrics to avoid
         // allocating the same filename string for each metric.
-        let filename_label = Label::new("filename", filename.to_string());
+        let filename_label = Label::new("filename", Arc::<str>::from(filename));
         let builder = MetricBuilder::new(metrics).with_label(filename_label);
 
         // -----------------------
