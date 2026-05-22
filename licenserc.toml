@@ -27,4 +27,5 @@ excludes = [
     # generated code
     "datafusion/proto/src/generated/",
     "datafusion/proto-common/src/generated/",
+    "datafusion/proto-models/src/generated/",
 ]
