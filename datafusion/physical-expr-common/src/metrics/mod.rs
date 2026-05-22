@@ -565,6 +565,10 @@ impl Display for Label {
 pub struct LabelValue(LabelValueInner);
 
 /// Internal representation for label names and values.
+///
+/// `LabelValue` is public because `Label::new` accepts it, but these storage
+/// variants are implementation details. Keeping them private prevents external
+/// code from constructing or matching on `Static` and `Shared` directly.
 #[derive(Clone)]
 enum LabelValueInner {
     Static(&'static str),
