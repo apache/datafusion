@@ -40,11 +40,8 @@ pub mod macros;
 #[macro_use]
 pub mod macros_lambda;
 
+pub mod array_add;
 pub mod array_any_match;
-pub(crate) mod lambda_utils;
-
-pub mod array_add;
-pub mod array_add;
 pub mod array_compact;
 pub mod array_filter;
 pub mod array_has;
@@ -62,6 +59,7 @@ pub mod expr_ext;
 pub mod extract;
 pub mod flatten;
 pub mod inner_product;
+pub(crate) mod lambda_utils;
 pub mod length;
 pub mod make_array;
 pub mod map;
