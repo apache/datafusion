@@ -195,7 +195,7 @@ fn make_array(
 }
 
 fn nullable_value<T>(row: usize, value: T) -> Option<T> {
-    (row % 7 != 0).then_some(value)
+    (!row.is_multiple_of(7)).then_some(value)
 }
 
 fn value(column_idx: usize, row_group: usize, row: usize) -> i64 {
