@@ -1117,6 +1117,27 @@ async fn aggregate_identical_grouping_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_identical_measures() -> Result<()> {
+    // Two identical aggregate measures share the same schema_name; without
+    // NameTracker dedup over measures, building the Aggregate's output
+    // DFSchema fails with "Schema contains duplicate unqualified field name".
+    let proto_plan = read_json(
+        "tests/testdata/test_plans/aggregate_identical_measures.substrait.json",
+    );
+
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: __common_expr_1 AS sum_a_1, __common_expr_1 AS sum(data.a)__temp__0 AS sum_a_2
+      Aggregate: groupBy=[[]], aggr=[[sum(data.a) AS __common_expr_1]]
+        TableScan: data projection=[a]
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn simple_intersect_consume() -> Result<()> {
     let proto_plan = read_json("tests/testdata/test_plans/intersect.substrait.json");
 
