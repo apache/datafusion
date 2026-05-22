@@ -388,6 +388,8 @@ pub struct JoinNode {
     pub null_equality: i32,
     #[prost(message, optional, boxed, tag = "8")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(bool, tag = "9")]
+    pub null_aware: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DistinctNode {
@@ -1733,6 +1735,8 @@ pub struct FileScanExecConf {
     pub batch_size: ::core::option::Option<u64>,
     #[prost(message, optional, tag = "13")]
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
+    #[prost(bool, optional, tag = "14")]
+    pub partitioned_by_file_group: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {

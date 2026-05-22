@@ -24,19 +24,19 @@ use self::early_stop::EarlyStoppingStream;
 #[cfg(feature = "parquet_encryption")]
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
+use crate::decoder_projection::DecoderProjection;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{DecoderBuilderConfig, PushDecoderStreamState};
-use crate::row_filter::{RowFilterGenerator, build_projection_read_plan};
+use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
-    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
-    apply_file_schema_type_coercions, coerce_int96_to_resolution,
+    Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
+    apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -121,6 +121,10 @@ pub(super) struct ParquetMorselizer {
     pub enable_row_group_stats_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
+    /// Optional timezone applied to INT96-coerced timestamps. When `Some`, the
+    /// coerced column type becomes `Timestamp(<coerce_int96>, Some(<tz>))`.
+    /// No effect when `coerce_int96` is `None`.
+    pub coerce_int96_tz: Option<Arc<str>>,
     /// Optional parquet FileDecryptionProperties
     #[cfg(feature = "parquet_encryption")]
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -283,6 +287,7 @@ struct PreparedParquetOpen {
     enable_row_group_stats_pruning: bool,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
+    coerce_int96_tz: Option<Arc<str>>,
     expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
@@ -653,6 +658,7 @@ impl ParquetMorselizer {
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
+            coerce_int96_tz: self.coerce_int96_tz.clone(),
             expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
@@ -780,11 +786,13 @@ impl MetadataLoadedParquetOpen {
         }
 
         if let Some(ref coerce) = prepared.coerce_int96
-            && let Some(merged) = coerce_int96_to_resolution(
+            && let Some(merged) = Int96Coercer::new(
                 reader_metadata.parquet_schema(),
                 &physical_file_schema,
                 coerce,
             )
+            .with_timezone(prepared.coerce_int96_tz.clone())
+            .coerce()
         {
             physical_file_schema = Arc::new(merged);
             options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -1148,11 +1156,17 @@ impl RowGroupsPrunedParquetOpen {
             };
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
-        let read_plan = build_projection_read_plan(
-            prepared.projection.expr_iter(),
+
+        // Build the decoder projection (mask + per-batch transform) in a
+        // single call. Encapsulating it behind `DecoderProjection` keeps the
+        // opener's orchestration body focused on filter / decoder / stream
+        // wiring.
+        let decoder_projection = DecoderProjection::try_new(
+            &prepared.projection,
             &prepared.physical_file_schema,
             reader_metadata.parquet_schema(),
-        );
+            &prepared.output_schema,
+        )?;
 
         let (decoder, pending_decoders, remaining_limit) = {
             let pushdown_predicate = prepared
@@ -1180,7 +1194,7 @@ impl RowGroupsPrunedParquetOpen {
             let remaining_limit = prepared.limit.filter(|_| run_count > 1);
 
             let decoder_config = DecoderBuilderConfig {
-                read_plan: &read_plan,
+                projection_mask: decoder_projection.projection_mask(),
                 batch_size: prepared.batch_size,
                 arrow_reader_metrics: &arrow_reader_metrics,
                 force_filter_selections: prepared.force_filter_selections,
@@ -1218,19 +1232,6 @@ impl RowGroupsPrunedParquetOpen {
         let predicate_cache_records =
             prepared.file_metrics.predicate_cache_records.clone();
 
-        // Check if we need to replace the schema to handle things like differing nullability or metadata.
-        // See note below about file vs. output schema.
-        let stream_schema = read_plan.projected_schema;
-        let replace_schema = stream_schema != prepared.output_schema;
-
-        // Rebase column indices to match the narrowed stream schema.
-        // The projection expressions have indices based on physical_file_schema,
-        // but the stream only contains the columns selected by the ProjectionMask.
-        let projection = prepared
-            .projection
-            .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
-        let projector = projection.make_projector(&stream_schema)?;
-        let output_schema = Arc::clone(&prepared.output_schema);
         let files_ranges_pruned_statistics =
             prepared.file_metrics.files_ranges_pruned_statistics.clone();
         let stream = PushDecoderStreamState {
@@ -1238,9 +1239,7 @@ impl RowGroupsPrunedParquetOpen {
             pending_decoders,
             remaining_limit,
             reader: prepared.async_file_reader,
-            projector,
-            output_schema,
-            replace_schema,
+            decoder_projection,
             arrow_reader_metrics,
             predicate_cache_inner_records,
             predicate_cache_records,
@@ -1603,6 +1602,10 @@ mod test {
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
                 coerce_int96: self.coerce_int96,
+                // End-to-end coercion behavior (including timezone) is
+                // covered by parquet.slt. No opener-level test currently
+                // needs a non-default value here.
+                coerce_int96_tz: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
