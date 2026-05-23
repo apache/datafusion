@@ -32,24 +32,22 @@
 //! [`PushDecoderStreamState::into_stream`] for consumption.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 
-use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::datatypes::Schema;
+use arrow::array::RecordBatch;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use parquet::DecodeResult;
+use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, RowSelectionPolicy};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 
 use datafusion_common::{DataFusionError, Result};
-use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Gauge};
 
 use crate::access_plan::PreparedAccessPlan;
-use crate::row_filter::ParquetReadPlan;
+use crate::decoder_projection::DecoderProjection;
 
 /// Shared options applied to every [`ParquetPushDecoderBuilder`] in a file scan.
 ///
@@ -58,7 +56,9 @@ use crate::row_filter::ParquetReadPlan;
 /// requirements). All decoders in that scan share the same projection, batch
 /// size, metrics sink, and selection policy.
 pub(crate) struct DecoderBuilderConfig<'a> {
-    pub(crate) read_plan: &'a ParquetReadPlan,
+    /// Projection mask installed on every decoder in the scan. Sourced from
+    /// the file's [`DecoderProjection`].
+    pub(crate) projection_mask: &'a ProjectionMask,
     pub(crate) batch_size: usize,
     pub(crate) arrow_reader_metrics: &'a ArrowReaderMetrics,
     pub(crate) force_filter_selections: bool,
@@ -77,7 +77,7 @@ impl DecoderBuilderConfig<'_> {
         metadata: ArrowReaderMetadata,
     ) -> ParquetPushDecoderBuilder {
         let mut builder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
-            .with_projection(self.read_plan.projection_mask.clone())
+            .with_projection(self.projection_mask.clone())
             .with_batch_size(self.batch_size)
             .with_metrics(self.arrow_reader_metrics.clone());
         if self.force_filter_selections {
@@ -113,9 +113,9 @@ pub(crate) struct PushDecoderStreamState {
     /// here instead.
     pub(crate) remaining_limit: Option<usize>,
     pub(crate) reader: Box<dyn AsyncFileReader>,
-    pub(crate) projector: Projector,
-    pub(crate) output_schema: Arc<Schema>,
-    pub(crate) replace_schema: bool,
+    /// Per-file projection: the mask installed on every decoder and the
+    /// per-batch transform applied by [`Self::project_batch`].
+    pub(crate) decoder_projection: DecoderProjection,
     pub(crate) arrow_reader_metrics: ArrowReaderMetrics,
     pub(crate) predicate_cache_inner_records: Gauge,
     pub(crate) predicate_cache_records: Gauge,
@@ -216,24 +216,6 @@ impl PushDecoderStreamState {
     }
 
     fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let mut batch = self.projector.project_batch(batch)?;
-        if self.replace_schema {
-            // Ensure the output batch has the expected schema.
-            // This handles things like schema level and field level metadata, which may not be present
-            // in the physical file schema.
-            // It is also possible for nullability to differ; some writers create files with
-            // OPTIONAL fields even when there are no nulls in the data.
-            // In these cases it may make sense for the logical schema to be `NOT NULL`.
-            // RecordBatch::try_new_with_options checks that if the schema is NOT NULL
-            // the array cannot contain nulls, amongst other checks.
-            let (_stream_schema, arrays, num_rows) = batch.into_parts();
-            let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
-            batch = RecordBatch::try_new_with_options(
-                Arc::clone(&self.output_schema),
-                arrays,
-                &options,
-            )?;
-        }
-        Ok(batch)
+        self.decoder_projection.map(batch)
     }
 }
