@@ -174,6 +174,46 @@ impl PhysicalExpr for NegativeExpr {
         self.arg.fmt_sql(f)?;
         write!(f, ")")
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
+                protobuf::PhysicalNegativeNode {
+                    expr: Some(Box::new(ctx.encode_child(&self.arg)?)),
+                },
+            ))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl NegativeExpr {
+    /// Reconstruct a [`NegativeExpr`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_proto_models::protobuf;
+
+        let protobuf::PhysicalNegativeNode { expr } = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::Negative(n)) => n.as_ref(),
+            _ => return internal_err!("PhysicalExprNode is not a Negative"),
+        };
+        let expr = expr.as_deref().ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(
+                "Negative is missing required field 'expr'".to_string(),
+            )
+        })?;
+
+        Ok(Arc::new(NegativeExpr::new(ctx.decode(expr)?)))
+    }
 }
 
 /// Creates a unary expression NEGATIVE
