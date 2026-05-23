@@ -119,3 +119,68 @@ fn to_substrait_jointype(join_type: JoinType) -> join_rel::JoinType {
         JoinType::RightSemi => join_rel::JoinType::RightSemi,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::logical_plan::producer::{DefaultSubstraitProducer, SubstraitProducer};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::{JoinConstraint, JoinType, NullEquality};
+    use datafusion::execution::SessionStateBuilder;
+    use datafusion::logical_expr::utils::conjunction;
+    use datafusion::logical_expr::{Join, col, table_scan};
+    use std::sync::Arc;
+    use substrait::proto::rel::RelType;
+    use substrait::proto::{JoinRel, Rel, join_rel};
+
+    #[test]
+    fn test_from_join() -> datafusion::common::Result<()> {
+        let state = SessionStateBuilder::default().build();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]);
+        let left_scan = table_scan(Some("t1"), &schema, None)?.build()?;
+        let right_scan = table_scan(Some("t2"), &schema, None)?.build()?;
+        let join = Join::try_new(
+            Arc::new(left_scan.clone()),
+            Arc::new(right_scan.clone()),
+            vec![(col("t1.a"), col("t2.a")), (col("t1.b"), col("t2.b"))],
+            Some(col("t1.c").gt(col("t2.c"))),
+            JoinType::Inner,
+            JoinConstraint::On,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        let join_expr = producer.handle_join(&join)?;
+
+        let in_join_schema = Arc::new(join.left.schema().join(join.right.schema())?);
+        let expected_join_expr = conjunction(vec![
+            // Join on
+            col("t1.a").eq(col("t2.a")),
+            col("t1.b").eq(col("t2.b")),
+            // Join filter
+            col("t1.c").gt(col("t2.c")),
+        ])
+        .unwrap();
+        assert_eq!(
+            join_expr,
+            Box::new(Rel {
+                rel_type: Some(RelType::Join(Box::new(JoinRel {
+                    common: None,
+                    left: Some(producer.handle_plan(&left_scan)?),
+                    right: Some(producer.handle_plan(&right_scan)?),
+                    r#type: join_rel::JoinType::Inner as i32,
+                    expression: Some(Box::new(
+                        producer.handle_expr(&expected_join_expr, &in_join_schema)?
+                    )),
+                    post_join_filter: None,
+                    advanced_extension: None,
+                })))
+            })
+        );
+        Ok(())
+    }
+}
