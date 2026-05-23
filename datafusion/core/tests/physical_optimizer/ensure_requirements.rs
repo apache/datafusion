@@ -30,7 +30,6 @@ use std::sync::Arc;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
@@ -115,12 +114,6 @@ impl ExecutionPlan for MockMultiPartitionExec {
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
-    }
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
     fn execute(
         &self,
@@ -995,12 +988,6 @@ impl ExecutionPlan for MockReqExec {
             self.dist.clone(),
             self.ord.clone(),
         )))
-    }
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
     fn execute(
         &self,
