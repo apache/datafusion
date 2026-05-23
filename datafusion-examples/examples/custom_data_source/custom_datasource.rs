@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{UInt8Builder, UInt64Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::{assert_batches_eq, tree_node::TreeNodeRecursion};
+use datafusion::common::assert_batches_eq;
 use datafusion::datasource::{TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
