@@ -1126,7 +1126,15 @@ config_namespace! {
 
         /// When set to true, the optimizer will attempt to push down Join dynamic filters
         /// into the file scan phase.
-        pub enable_join_dynamic_filter_pushdown: bool, default = true
+        ///
+        /// Disabled by default: when a join's build-side dynamic filter contains a
+        /// `hash_lookup` term, evaluating it on every probe-side row inside the scan
+        /// duplicates the work the join's own probe is about to do, which on benchmarks
+        /// like TPC-H Q17 doubles the query time (the equivalent of running the probe
+        /// twice). Re-enable per-query when the build-side filter is selective enough
+        /// to make scan-level pruning worthwhile (e.g. a small dimension table that
+        /// prunes most of a large fact table's row groups / pages).
+        pub enable_join_dynamic_filter_pushdown: bool, default = false
 
         /// When set to true, the optimizer will attempt to push down Aggregate dynamic filters
         /// into the file scan phase.
