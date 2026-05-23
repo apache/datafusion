@@ -1677,6 +1677,8 @@ pub struct FileScanExecConf {
     pub batch_size: ::core::option::Option<u64>,
     #[prost(message, optional, tag = "13")]
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
+    #[prost(bool, optional, tag = "14")]
+    pub partitioned_by_file_group: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {

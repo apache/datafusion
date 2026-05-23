@@ -20,7 +20,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::MetricsSet;
@@ -439,22 +438,6 @@ impl ExecutionPlan for ForeignExecutionPlan {
         }
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion_physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.properties.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
-    }
-
     fn repartitioned(
         &self,
         target_partitions: usize,
@@ -580,22 +563,6 @@ pub mod tests {
             Ok(Arc::new(self.statistics.clone().unwrap_or_else(|| {
                 Statistics::new_unknown(self.props.eq_properties.schema())
             })))
-        }
-
-        fn apply_expressions(
-            &self,
-            f: &mut dyn FnMut(
-                &dyn datafusion_physical_plan::PhysicalExpr,
-            ) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            // Visit expressions in the output ordering from equivalence properties
-            let mut tnr = TreeNodeRecursion::Continue;
-            if let Some(ordering) = self.props.output_ordering() {
-                for sort_expr in ordering {
-                    tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-                }
-            }
-            Ok(tnr)
         }
     }
 
