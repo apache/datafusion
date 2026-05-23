@@ -326,7 +326,8 @@ impl LogicalPlanBuilder {
                 }
 
                 if let Some(prev_type) = common_type {
-                    // get common type of each column values.
+                    // Widen the running type so that it can hold both the
+                    // previously seen rows and this row's value.
                     let data_types = vec![prev_type.clone(), data_type.clone()];
                     let Some(new_type) = type_union_resolution(&data_types) else {
                         return plan_err!(
@@ -338,13 +339,13 @@ impl LogicalPlanBuilder {
                     common_type = Some(data_type);
                 }
             }
-            // assuming common_type was not set, and no error, therefore the type should be NULL
-            // since the code loop skips NULL
-            fields.push_with_metadata(
-                common_type.unwrap_or(DataType::Null),
-                nullable,
-                common_metadata,
-            );
+            // If common_type is not set, every value in this column had type
+            // NULL. A DataType::Null field is always nullable.
+            let (data_type, nullable) = match common_type {
+                Some(t) => (t, nullable),
+                None => (DataType::Null, true),
+            };
+            fields.push_with_metadata(data_type, nullable, common_metadata);
         }
 
         Self::infer_inner(values, fields, &schema)
