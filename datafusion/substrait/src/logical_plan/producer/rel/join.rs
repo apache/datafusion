@@ -96,15 +96,18 @@ fn to_substrait_jointype(join_type: JoinType) -> join_rel::JoinType {
 
 #[cfg(test)]
 mod tests {
-    use crate::logical_plan::producer::{DefaultSubstraitProducer, SubstraitProducer};
+    use crate::logical_plan::producer::{
+        DefaultSubstraitProducer, SubstraitProducer, to_substrait_type,
+    };
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::{JoinConstraint, JoinType, NullEquality};
     use datafusion::execution::SessionStateBuilder;
     use datafusion::logical_expr::utils::conjunction;
     use datafusion::logical_expr::{Join, col, table_scan};
     use std::sync::Arc;
+    use substrait::proto::expression::{RexType, ScalarFunction};
     use substrait::proto::rel::RelType;
-    use substrait::proto::{JoinRel, Rel, join_rel};
+    use substrait::proto::{Expression, JoinRel, Rel, join_rel};
 
     #[test]
     fn test_from_join() -> datafusion::common::Result<()> {
@@ -139,6 +142,9 @@ mod tests {
             col("t1.c").gt(col("t2.c")),
         ])
         .unwrap();
+        let expected_join_expression =
+            producer.handle_expr(&expected_join_expr, &in_join_schema)?;
+
         assert_eq!(
             join_expr,
             Box::new(Rel {
@@ -147,14 +153,25 @@ mod tests {
                     left: Some(producer.handle_plan(&left_scan)?),
                     right: Some(producer.handle_plan(&right_scan)?),
                     r#type: join_rel::JoinType::Inner as i32,
-                    expression: Some(Box::new(
-                        producer.handle_expr(&expected_join_expr, &in_join_schema)?
-                    )),
+                    expression: Some(Box::new(expected_join_expression.clone())),
                     post_join_filter: None,
                     advanced_extension: None,
                 })))
             })
         );
+
+        // Check that the join_expression has the expected output_type
+        if let Expression {
+            rex_type: Some(RexType::ScalarFunction(ScalarFunction { output_type, .. })),
+        } = expected_join_expression
+        {
+            let expected_type =
+                to_substrait_type(&mut producer, &DataType::Boolean, false)?;
+            assert_eq!(output_type, Some(expected_type));
+        } else {
+            panic!("Substrait ScalarFunction expected")
+        }
+
         Ok(())
     }
 }
