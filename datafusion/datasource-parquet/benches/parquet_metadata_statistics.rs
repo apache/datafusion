@@ -24,66 +24,89 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use datafusion_common::stats::Precision;
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_datasource_parquet::metadata::DFParquetMetadata;
-use parquet::arrow::ArrowWriter;
-use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::{EnabledStatistics, WriterProperties};
+use parquet::arrow::ArrowSchemaConverter;
+use parquet::data_type::ByteArray;
+use parquet::file::metadata::{
+    ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
+};
+use parquet::file::statistics::{Statistics as ParquetStatistics, ValueStatistics};
+
+const ROWS_PER_GROUP: usize = 8;
 
 #[derive(Debug, Copy, Clone)]
 struct BenchmarkSpec {
-    name: &'static str,
     columns: usize,
     row_groups: usize,
-    rows_per_group: usize,
+    metadata: MetadataState,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum MetadataState {
+    Full,
+    Mixed,
+    None,
+}
+
+impl std::fmt::Display for MetadataState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Full => write!(f, "full"),
+            Self::Mixed => write!(f, "mixed"),
+            Self::None => write!(f, "none"),
+        }
+    }
 }
 
 struct BenchmarkCase {
-    spec: BenchmarkSpec,
     schema: SchemaRef,
     metadata: ParquetMetaData,
 }
 
 fn parquet_metadata_statistics(c: &mut Criterion) {
-    let specs = [
-        BenchmarkSpec {
-            name: "wide_one_row_group",
-            columns: 1024,
-            row_groups: 1,
-            rows_per_group: 16,
-        },
-        BenchmarkSpec {
-            name: "moderate_width_many_row_groups",
-            columns: 64,
-            row_groups: 128,
-            rows_per_group: 8,
-        },
-        BenchmarkSpec {
-            name: "wide_many_row_groups",
-            columns: 256,
-            row_groups: 32,
-            rows_per_group: 8,
-        },
+    let metadata_states = [
+        MetadataState::Full,
+        MetadataState::Mixed,
+        MetadataState::None,
     ];
+    let column_counts = [8, 64, 256];
+    let row_group_counts = [1, 32, 128];
 
-    let cases: Vec<_> = specs.into_iter().map(BenchmarkCase::new).collect();
     let mut group = c.benchmark_group("parquet_metadata_statistics");
-    group.sample_size(10);
 
-    for case in &cases {
-        group.bench_function(BenchmarkId::from_parameter(case.spec.name), |b| {
-            b.iter(|| {
-                let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
-                    black_box(&case.metadata),
-                    black_box(&case.schema),
-                )
-                .expect("statistics extraction failed");
-                black_box(statistics);
-            });
-        });
+    for metadata in metadata_states {
+        for columns in column_counts {
+            for row_groups in row_group_counts {
+                let spec = BenchmarkSpec {
+                    columns,
+                    row_groups,
+                    metadata,
+                };
+                group.bench_function(
+                    BenchmarkId::from_parameter(format!(
+                        "metadata_{}_col_{}_rg_{}",
+                        spec.metadata, spec.columns, spec.row_groups,
+                    )),
+                    |b| {
+                        b.iter_batched(
+                            || BenchmarkCase::new(spec),
+                            |case| {
+                                let statistics =
+                                    DFParquetMetadata::statistics_from_parquet_metadata(
+                                        black_box(&case.metadata),
+                                        black_box(&case.schema),
+                                    )
+                                    .expect("statistics extraction failed");
+                                black_box(statistics);
+                            },
+                            BatchSize::PerIteration,
+                        );
+                    },
+                );
+            }
+        }
     }
 
     group.finish();
@@ -92,45 +115,149 @@ fn parquet_metadata_statistics(c: &mut Criterion) {
 impl BenchmarkCase {
     fn new(spec: BenchmarkSpec) -> Self {
         let schema = make_schema(spec.columns);
-        let props = WriterProperties::builder()
-            .set_max_row_group_row_count(Some(spec.rows_per_group))
-            .set_statistics_enabled(EnabledStatistics::Chunk)
-            .build();
-        let file = tempfile::Builder::new()
-            .prefix("parquet_metadata_statistics")
-            .suffix(".parquet")
-            .tempfile()
-            .expect("failed to create temporary parquet file");
-        let mut writer = ArrowWriter::try_new(
-            file.reopen().expect("failed to reopen temporary file"),
-            Arc::clone(&schema),
-            Some(props),
-        )
-        .expect("failed to create parquet writer");
+        let metadata = match spec.metadata {
+            MetadataState::Full => {
+                make_synthetic_metadata(&schema, spec, full_statistics)
+            }
+            MetadataState::Mixed => {
+                make_synthetic_metadata(&schema, spec, mixed_statistics)
+            }
+            MetadataState::None => make_synthetic_metadata(&schema, spec, |_, _, _| None),
+        };
 
-        for row_group in 0..spec.row_groups {
-            writer
-                .write(&make_batch(&schema, row_group, spec.rows_per_group))
-                .expect("failed to write benchmark row group");
+        Self { schema, metadata }
+    }
+}
+
+fn make_synthetic_metadata(
+    schema: &SchemaRef,
+    spec: BenchmarkSpec,
+    statistics: fn(&DataType, usize, usize) -> Option<ParquetStatistics>,
+) -> ParquetMetaData {
+    let schema_descr = Arc::new(
+        ArrowSchemaConverter::new()
+            .convert(schema.as_ref())
+            .expect("failed to convert arrow schema"),
+    );
+    let row_groups = (0..spec.row_groups)
+        .map(|row_group| {
+            let columns = schema
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(column_idx, field)| {
+                    let mut builder =
+                        ColumnChunkMetaData::builder(schema_descr.column(column_idx));
+                    if let Some(statistics) =
+                        statistics(field.data_type(), column_idx, row_group)
+                    {
+                        builder = builder.set_statistics(statistics);
+                    }
+                    builder
+                        .set_num_values(ROWS_PER_GROUP as i64)
+                        .build()
+                        .expect("failed to build column metadata")
+                })
+                .collect::<Vec<_>>();
+
+            RowGroupMetaData::builder(Arc::clone(&schema_descr))
+                .set_num_rows(ROWS_PER_GROUP as i64)
+                .set_total_byte_size((spec.columns * ROWS_PER_GROUP * 8) as i64)
+                .set_column_metadata(columns)
+                .build()
+                .expect("failed to build row group metadata")
+        })
+        .collect::<Vec<_>>();
+
+    let file_metadata = FileMetaData::new(
+        1,
+        (spec.row_groups * ROWS_PER_GROUP) as i64,
+        Some("datafusion parquet metadata benchmark".to_string()),
+        None,
+        schema_descr,
+        None,
+    );
+
+    ParquetMetaData::new(file_metadata, row_groups)
+}
+
+fn full_statistics(
+    data_type: &DataType,
+    column_idx: usize,
+    row_group: usize,
+) -> Option<ParquetStatistics> {
+    Some(statistics(
+        data_type,
+        column_idx,
+        row_group,
+        true,
+        true,
+        Some(null_count_for_rows()),
+    ))
+}
+
+fn mixed_statistics(
+    data_type: &DataType,
+    column_idx: usize,
+    row_group: usize,
+) -> Option<ParquetStatistics> {
+    if column_idx.is_multiple_of(16) || row_group.is_multiple_of(5) {
+        return None;
+    }
+
+    let min_exact = !row_group.is_multiple_of(3);
+    let max_exact = !row_group.is_multiple_of(4);
+    let null_count = (!row_group.is_multiple_of(7)).then(null_count_for_rows);
+
+    Some(statistics(
+        data_type, column_idx, row_group, min_exact, max_exact, null_count,
+    ))
+}
+
+fn statistics(
+    data_type: &DataType,
+    column_idx: usize,
+    row_group: usize,
+    min_exact: bool,
+    max_exact: bool,
+    null_count: Option<u64>,
+) -> ParquetStatistics {
+    let min_row = first_non_null_row();
+    let max_row = last_non_null_row();
+
+    match data_type {
+        DataType::Int64 => {
+            let min = min_row.map(|row| value(column_idx, row_group, row));
+            let max = max_row.map(|row| value(column_idx, row_group, row));
+            ParquetStatistics::Int64(
+                ValueStatistics::new(min, max, None, null_count, false)
+                    .with_min_is_exact(min_exact)
+                    .with_max_is_exact(max_exact),
+            )
         }
-
-        let metadata = writer.close().expect("failed to close parquet writer");
-        assert_eq!(metadata.row_groups().len(), spec.row_groups);
-
-        let statistics =
-            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &schema)
-                .expect("failed to validate benchmark metadata");
-        assert_eq!(statistics.column_statistics.len(), spec.columns);
-        assert_eq!(
-            statistics.num_rows,
-            Precision::Exact(spec.row_groups * spec.rows_per_group)
-        );
-
-        Self {
-            spec,
-            schema,
-            metadata,
+        DataType::Float64 => {
+            let min = min_row.map(|row| value(column_idx, row_group, row) as f64 * 1.5);
+            let max = max_row.map(|row| value(column_idx, row_group, row) as f64 * 1.5);
+            ParquetStatistics::Double(
+                ValueStatistics::new(min, max, None, null_count, false)
+                    .with_min_is_exact(min_exact)
+                    .with_max_is_exact(max_exact),
+            )
         }
+        DataType::Utf8 => {
+            let min = min_row.map(|row| {
+                ByteArray::from(string_value(column_idx, row_group, row).into_bytes())
+            });
+            let max = max_row.map(|row| {
+                ByteArray::from(string_value(column_idx, row_group, row).into_bytes())
+            });
+            ParquetStatistics::ByteArray(
+                ValueStatistics::new(min, max, None, null_count, false)
+                    .with_min_is_exact(min_exact)
+                    .with_max_is_exact(max_exact),
+            )
+        }
+        other => unreachable!("unsupported benchmark data type: {other:?}"),
     }
 }
 
@@ -150,56 +277,26 @@ fn make_schema(columns: usize) -> SchemaRef {
     Arc::new(Schema::new(fields))
 }
 
-fn make_batch(
-    schema: &SchemaRef,
-    row_group: usize,
-    rows_per_group: usize,
-) -> RecordBatch {
-    let columns = schema
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(column_idx, field)| {
-            make_array(field.data_type(), column_idx, row_group, rows_per_group)
-        })
-        .collect::<Vec<_>>();
-
-    RecordBatch::try_new(Arc::clone(schema), columns)
-        .expect("failed to create benchmark record batch")
+fn first_non_null_row() -> Option<usize> {
+    (0..ROWS_PER_GROUP).find(|row| !row.is_multiple_of(7))
 }
 
-fn make_array(
-    data_type: &DataType,
-    column_idx: usize,
-    row_group: usize,
-    rows_per_group: usize,
-) -> ArrayRef {
-    match data_type {
-        DataType::Int64 => {
-            Arc::new(Int64Array::from_iter((0..rows_per_group).map(|row| {
-                nullable_value(row, value(column_idx, row_group, row))
-            })))
-        }
-        DataType::Float64 => {
-            Arc::new(Float64Array::from_iter((0..rows_per_group).map(|row| {
-                nullable_value(row, value(column_idx, row_group, row) as f64 * 1.5)
-            })))
-        }
-        DataType::Utf8 => {
-            Arc::new(StringArray::from_iter((0..rows_per_group).map(|row| {
-                nullable_value(row, format!("s{column_idx}_{row_group}_{row}"))
-            })))
-        }
-        other => unreachable!("unsupported benchmark data type: {other:?}"),
-    }
+fn last_non_null_row() -> Option<usize> {
+    (0..ROWS_PER_GROUP).rev().find(|row| !row.is_multiple_of(7))
 }
 
-fn nullable_value<T>(row: usize, value: T) -> Option<T> {
-    (!row.is_multiple_of(7)).then_some(value)
+fn null_count_for_rows() -> u64 {
+    (0..ROWS_PER_GROUP)
+        .filter(|row| row.is_multiple_of(7))
+        .count() as u64
 }
 
 fn value(column_idx: usize, row_group: usize, row: usize) -> i64 {
     (column_idx as i64 * 10_000) + (row_group as i64 * 100) + row as i64
+}
+
+fn string_value(column_idx: usize, row_group: usize, row: usize) -> String {
+    format!("s{column_idx:04}_{row_group:04}_{row:04}")
 }
 
 criterion_group!(benches, parquet_metadata_statistics);

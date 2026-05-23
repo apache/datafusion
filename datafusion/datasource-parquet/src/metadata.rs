@@ -20,8 +20,8 @@
 
 use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
-use arrow::compute::and;
 use arrow::compute::kernels::cmp::eq;
+use arrow::compute::{and, sum};
 use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
@@ -537,7 +537,7 @@ fn summarize_column_statistics(
     }
 
     accumulators.null_counts_array[logical_schema_index] =
-        summarize_null_counts(parquet_index, row_groups_metadata);
+        summarize_null_counts(stats_converter, row_groups_metadata)?;
 
     accumulators.distinct_counts_array[logical_schema_index] =
         summarize_distinct_counts(parquet_index, row_groups_metadata);
@@ -583,36 +583,21 @@ fn summarize_bound<A: Accumulator>(
 }
 
 fn summarize_null_counts(
-    parquet_idx: Option<usize>,
+    stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
-) -> Precision<usize> {
-    let Some(parquet_idx) = parquet_idx else {
-        return match row_groups_metadata.len() {
-            0 => Precision::Exact(0),
-            _ => Precision::Absent,
-        };
-    };
-
-    let mut null_count_sum = 0_u64;
-    let mut has_known_count = false;
-    for row_group in row_groups_metadata {
-        let Some(null_count) = row_group
-            .columns()
-            .get(parquet_idx)
-            .and_then(|column| column.statistics())
-            .map(|statistics| statistics.null_count_opt().unwrap_or(0))
-        else {
-            continue;
-        };
-
-        has_known_count = true;
-        null_count_sum += null_count;
+) -> Result<Precision<usize>> {
+    if row_groups_metadata.is_empty() {
+        return Ok(Precision::Exact(0));
     }
 
-    if has_known_count || row_groups_metadata.is_empty() {
-        Precision::Exact(null_count_sum as usize)
-    } else {
-        Precision::Absent
+    let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
+    match sum(&null_counts) {
+        Some(null_count) => Ok(Precision::Exact(null_count as usize)),
+        None => match null_counts.len() {
+            // If sum() returned None we either have no rows or all values are null
+            0 => Ok(Precision::Exact(0)),
+            _ => Ok(Precision::Absent),
+        },
     }
 }
 
@@ -1071,6 +1056,7 @@ mod tests {
         #[test]
         fn test_summarize_null_counts() {
             let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(2);
             let stats_with_count =
                 ParquetStatistics::int32(Some(1), Some(10), None, Some(2), false);
             let stats_without_count =
@@ -1084,19 +1070,73 @@ mod tests {
                 ),
                 create_row_group_with_stats(
                     &schema_descr,
-                    vec![Some(stats_without_count)],
+                    vec![Some(stats_without_count.clone())],
                     10,
                 ),
                 create_row_group_with_stats(&schema_descr, vec![None], 10),
             ];
+            let stats_converter =
+                StatisticsConverter::try_new("col_0", &arrow_schema, &schema_descr)
+                    .unwrap();
+            let missing_column_converter =
+                StatisticsConverter::try_new("col_1", &arrow_schema, &schema_descr)
+                    .unwrap();
 
             assert_eq!(
-                summarize_null_counts(Some(0), &row_groups),
-                Precision::Exact(2)
+                summarize_null_counts(&stats_converter, &row_groups).unwrap(),
+                Precision::Inexact(2)
             );
-            assert_eq!(summarize_null_counts(None, &row_groups), Precision::Absent);
-            assert_eq!(summarize_null_counts(Some(0), &[]), Precision::Exact(0));
-            assert_eq!(summarize_null_counts(None, &[]), Precision::Exact(0));
+            assert_eq!(
+                summarize_null_counts(&missing_column_converter, &row_groups).unwrap(),
+                Precision::Absent
+            );
+            assert_eq!(
+                summarize_null_counts(&stats_converter, &[]).unwrap(),
+                Precision::Exact(0)
+            );
+            assert_eq!(
+                summarize_null_counts(&missing_column_converter, &[]).unwrap(),
+                Precision::Exact(0)
+            );
+
+            let missing_counts_unknown_converter =
+                StatisticsConverter::try_new("col_0", &arrow_schema, &schema_descr)
+                    .unwrap()
+                    .with_missing_null_counts_as_zero(false);
+            assert_eq!(
+                summarize_null_counts(&missing_counts_unknown_converter, &row_groups)
+                    .unwrap(),
+                Precision::Inexact(2)
+            );
+
+            let row_groups_without_count = vec![
+                create_row_group_with_stats(
+                    &schema_descr,
+                    vec![Some(stats_without_count.clone())],
+                    10,
+                ),
+                create_row_group_with_stats(
+                    &schema_descr,
+                    vec![Some(stats_without_count)],
+                    10,
+                ),
+            ];
+            assert_eq!(
+                summarize_null_counts(&stats_converter, &row_groups_without_count)
+                    .unwrap(),
+                Precision::Exact(0)
+            );
+
+            let missing_counts_unknown_converter =
+                stats_converter.with_missing_null_counts_as_zero(false);
+            assert_eq!(
+                summarize_null_counts(
+                    &missing_counts_unknown_converter,
+                    &row_groups_without_count,
+                )
+                .unwrap(),
+                Precision::Absent
+            );
         }
 
         #[test]
