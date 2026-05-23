@@ -145,6 +145,69 @@ impl PhysicalExpr for LikeExpr {
         write!(f, " {} ", self.op_name())?;
         self.pattern.fmt_sql(f)
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(Box::new(
+                protobuf::PhysicalLikeExprNode {
+                    negated: self.negated,
+                    case_insensitive: self.case_insensitive,
+                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
+                    pattern: Some(Box::new(ctx.encode_child(&self.pattern)?)),
+                },
+            ))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl LikeExpr {
+    /// Reconstruct a [`LikeExpr`] from its protobuf representation.
+    ///
+    /// Takes the whole [`PhysicalExprNode`] so the decode signature matches
+    /// other migrated expressions and can inspect outer-node metadata if
+    /// needed in the future.
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_common::internal_err;
+        use datafusion_proto_models::protobuf;
+
+        let like_expr = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::LikeExpr(like_expr)) => {
+                like_expr.as_ref()
+            }
+            _ => return internal_err!("PhysicalExprNode is not a LikeExpr"),
+        };
+
+        let expr = like_expr.expr.as_deref().ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(
+                "LikeExpr is missing required field 'expr'".to_string(),
+            )
+        })?;
+        let pattern = like_expr.pattern.as_deref().ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(
+                "LikeExpr is missing required field 'pattern'".to_string(),
+            )
+        })?;
+
+        Ok(Arc::new(LikeExpr::new(
+            like_expr.negated,
+            like_expr.case_insensitive,
+            ctx.decode(expr)?,
+            ctx.decode(pattern)?,
+        )))
+    }
 }
 
 /// used for optimize Dictionary like
