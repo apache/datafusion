@@ -68,3 +68,13 @@ select date_bin(
 );
 ----
 NULL
+
+# compute_distance overflow: source at i64::MIN nanoseconds previously panicked
+# inside compute_distance; it must return NULL through the SQL execution path
+query P
+select date_bin(
+  interval '3 nanoseconds',
+  arrow_cast(-9223372036854775808, 'Timestamp(Nanosecond, None)')
+);
+----
+NULL
