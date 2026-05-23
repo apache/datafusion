@@ -338,57 +338,21 @@ pub fn from_between(
         low,
         high,
     } = between;
-    if *negated {
+
+    let expr = if *negated {
         // `expr NOT BETWEEN low AND high` can be translated into (expr < low OR high < expr)
-        let substrait_expr = producer.handle_expr(expr.as_ref(), schema)?;
-        let substrait_low = producer.handle_expr(low.as_ref(), schema)?;
-        let substrait_high = producer.handle_expr(high.as_ref(), schema)?;
-
-        let l_expr = make_binary_op_scalar_func(
-            producer,
-            &substrait_expr,
-            &substrait_low,
-            Operator::Lt,
-        );
-        let r_expr = make_binary_op_scalar_func(
-            producer,
-            &substrait_high,
-            &substrait_expr,
-            Operator::Lt,
-        );
-
-        Ok(make_binary_op_scalar_func(
-            producer,
-            &l_expr,
-            &r_expr,
-            Operator::Or,
-        ))
+        Expr::or(
+            Expr::lt(*expr.clone(), *low.clone()),
+            Expr::lt(*high.clone(), *expr.clone()),
+        )
     } else {
         // `expr BETWEEN low AND high` can be translated into (low <= expr AND expr <= high)
-        let substrait_expr = producer.handle_expr(expr.as_ref(), schema)?;
-        let substrait_low = producer.handle_expr(low.as_ref(), schema)?;
-        let substrait_high = producer.handle_expr(high.as_ref(), schema)?;
-
-        let l_expr = make_binary_op_scalar_func(
-            producer,
-            &substrait_low,
-            &substrait_expr,
-            Operator::LtEq,
-        );
-        let r_expr = make_binary_op_scalar_func(
-            producer,
-            &substrait_expr,
-            &substrait_high,
-            Operator::LtEq,
-        );
-
-        Ok(make_binary_op_scalar_func(
-            producer,
-            &l_expr,
-            &r_expr,
-            Operator::And,
-        ))
-    }
+        Expr::and(
+            Expr::lt_eq(*low.clone(), *expr.clone()),
+            Expr::lt_eq(*expr.clone(), *high.clone()),
+        )
+    };
+    producer.handle_expr(&expr, schema)
 }
 
 pub fn operator_to_name(op: Operator) -> &'static str {
