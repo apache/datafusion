@@ -181,7 +181,13 @@ pub fn from_unary_expr(
         Expr::Negative(arg) => ("negate", arg),
         expr => not_impl_err!("Unsupported expression: {expr:?}")?,
     };
-    to_substrait_unary_scalar_fn(producer, fn_name, arg, schema)
+    let (_, output_field) = expr.to_field(schema)?;
+    let output_type = to_substrait_type(
+        producer,
+        output_field.data_type(),
+        output_field.is_nullable(),
+    )?;
+    to_substrait_unary_scalar_fn(producer, fn_name, arg, schema, &output_type)
 }
 
 pub fn from_binary_expr(
@@ -299,6 +305,7 @@ fn to_substrait_unary_scalar_fn(
     fn_name: &str,
     arg: &Expr,
     schema: &DFSchemaRef,
+    output_type: &Type,
 ) -> datafusion::common::Result<Expression> {
     let function_anchor = producer.register_function(fn_name.to_string());
     let substrait_expr = producer.handle_expr(arg, schema)?;
@@ -309,7 +316,7 @@ fn to_substrait_unary_scalar_fn(
             arguments: vec![FunctionArgument {
                 arg_type: Some(ArgType::Value(substrait_expr)),
             }],
-            output_type: None,
+            output_type: Some(output_type.clone()),
             options: vec![],
             ..Default::default()
         })),
