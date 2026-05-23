@@ -389,6 +389,47 @@ select * from t1 left join t2 on t1.a = t2.x where not ((t2.y > 150) is true);
 3 30 c NULL NULL NULL
 NULL 40 d NULL NULL NULL
 
+# LEFT JOIN + WHERE NOT ((t2.y > 150) IS FALSE) -> stays LEFT JOIN
+# NOT(<x> IS FALSE) is TRUE when <x> is TRUE OR NULL, so it accepts the
+# LEFT-padded NULL rows and is not null-rejecting.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where not ((t2.y > 150) is false);
+----
+logical_plan
+01)Filter: NOT t2.y > Int32(150) IS FALSE
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b, c]
+04)----TableScan: t2 projection=[x, y, z]
+
+# The matched-with-high-y row AND the LEFT-padded NULL rows must survive.
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where not ((t2.y > 150) is false);
+----
+2 20 b 2 200 q
+3 30 c NULL NULL NULL
+NULL 40 d NULL NULL NULL
+
+# LEFT JOIN + WHERE NOT ((t2.y > 150) IS NOT UNKNOWN) -> stays LEFT JOIN
+# NOT(<x> IS NOT UNKNOWN) is equivalent to IS UNKNOWN: TRUE only when
+# <x> is NULL, so it accepts the LEFT-padded NULL rows and is not
+# null-rejecting.
+query TT
+explain select * from t1 left join t2 on t1.a = t2.x where not ((t2.y > 150) is not unknown);
+----
+logical_plan
+01)Filter: NOT t2.y > Int32(150) IS NOT UNKNOWN
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b, c]
+04)----TableScan: t2 projection=[x, y, z]
+
+# Only the LEFT-padded NULL rows (where t2.y > 150 evaluates to NULL)
+# should survive.
+query IITIIT rowsort
+select * from t1 left join t2 on t1.a = t2.x where not ((t2.y > 150) is not unknown);
+----
+3 30 c NULL NULL NULL
+NULL 40 d NULL NULL NULL
+
 ###
 ### FULL JOIN → LEFT / RIGHT conversion tests
 ###
