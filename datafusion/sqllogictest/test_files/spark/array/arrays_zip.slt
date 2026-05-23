@@ -1,0 +1,131 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+## Spark `arrays_zip` returns a list of structs whose fields use 0-based ordinal
+## names (`0`, `1`, ...), in contrast to DataFusion's 1-based ordinals.
+##
+## Scenarios below mirror Apache Spark's
+## `DataFrameFunctionsSuite#"dataframe arrays_zip function"` and
+## `"SPARK-24633: arrays_zip splits input processing correctly"`.
+
+# Spark docs example: arrays_zip(array(1, 2, 3), array(2, 3, 4), array(3, 4, 5))
+query ?
+SELECT arrays_zip(array(1, 2, 3), array(2, 3, 4), array(3, 4, 5));
+----
+[{0: 1, 1: 2, 2: 3}, {0: 2, 1: 3, 2: 4}, {0: 3, 1: 4, 2: 5}]
+
+# Spark df1: equal-length integer arrays.
+# Seq(9001, 9002, 9003), Seq(4, 5, 6)
+query ?
+SELECT arrays_zip(array(9001, 9002, 9003), array(4, 5, 6));
+----
+[{0: 9001, 1: 4}, {0: 9002, 1: 5}, {0: 9003, 1: 6}]
+
+# Spark df2: three arrays with mixed element types (string, boolean, int).
+# Seq("a", "b"), Seq(true, false), Seq(10, 11)
+query ?
+SELECT arrays_zip(array('a', 'b'), array(true, false), array(10, 11));
+----
+[{0: a, 1: true, 2: 10}, {0: b, 1: false, 2: 11}]
+
+# Spark df3: shorter first array padded with NULL.
+# Seq("a", "b"), Seq(4, 5, 6)
+query ?
+SELECT arrays_zip(array('a', 'b'), array(4, 5, 6));
+----
+[{0: a, 1: 4}, {0: b, 1: 5}, {0: NULL, 1: 6}]
+
+# Spark df4: NULL inside an array plus shorter second array.
+# Seq("a", "b", null), Seq(4L)
+query ?
+SELECT arrays_zip(array('a', 'b', NULL), array(arrow_cast(4, 'Int64')));
+----
+[{0: a, 1: 4}, {0: b, 1: NULL}, {0: NULL, 1: NULL}]
+
+# Spark df5: four arrays exercising single-element, single-null, empty, and all-null cases.
+# Seq(-1), Seq(null), Seq(), Seq(null, null)
+query ?
+SELECT arrays_zip(
+    array(-1),
+    array(arrow_cast(NULL, 'Int32')),
+    arrow_cast(make_array(), 'List(Int32)'),
+    array(arrow_cast(NULL, 'Int32'), arrow_cast(NULL, 'Int32'))
+);
+----
+[{0: -1, 1: NULL, 2: NULL, 3: NULL}, {0: NULL, 1: NULL, 2: NULL, 3: NULL}]
+
+# Spark df7: nested arrays zipped with doubles.
+# Seq(Seq(1, 2, 3), Seq(4, 5)), Seq(1.1, 2.2)
+query ?
+SELECT arrays_zip(array(array(1, 2, 3), array(4, 5)), array(1.1, 2.2));
+----
+[{0: [1, 2, 3], 1: 1.1}, {0: [4, 5], 1: 2.2}]
+
+# SPARK-24633: arrays_zip with many single-element arrays merges into one row.
+# (0 to 5).map(x => array(id + x)) on spark.range(1) → Row(Seq(Row(0, 1, 2, 3, 4, 5)))
+query ?
+SELECT arrays_zip(array(0), array(1), array(2), array(3), array(4), array(5));
+----
+[{0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5}]
+
+# Both arguments are NULL list → result is NULL.
+query ?
+SELECT arrays_zip(arrow_cast(NULL, 'List(Int32)'), arrow_cast(NULL, 'List(Int32)'));
+----
+NULL
+
+# Single argument: still produces a 0-based struct.
+query ?
+SELECT arrays_zip(array(1, 2, 3));
+----
+[{0: 1}, {0: 2}, {0: 3}]
+
+# Column-level: multiple rows with different lengths.
+query ?
+SELECT arrays_zip(a, b)
+FROM (VALUES ([1, 2], [10, 20]), ([3, 4, 5], [30]), ([6], [60, 70])) AS t(a, b);
+----
+[{0: 1, 1: 10}, {0: 2, 1: 20}]
+[{0: 3, 1: 30}, {0: 4, 1: NULL}, {0: 5, 1: NULL}]
+[{0: 6, 1: 60}, {0: NULL, 1: 70}]
+
+# Column-level: NULL rows in the input.
+query ?
+SELECT arrays_zip(a, b)
+FROM (VALUES ([1, 2], [10, 20]), (null, [30, 40]), ([5, 6], null)) AS t(a, b);
+----
+[{0: 1, 1: 10}, {0: 2, 1: 20}]
+[{0: NULL, 1: 30}, {0: NULL, 1: 40}]
+[{0: 5, 1: NULL}, {0: 6, 1: NULL}]
+
+# LargeList inputs are accepted (DataFusion-specific list flavor).
+query ?
+SELECT arrays_zip(
+    arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'LargeList(Int64)')
+);
+----
+[{0: 1, 1: 10}, {0: 2, 1: 20}, {0: 3, 1: 30}]
+
+# FixedSizeList inputs are accepted (DataFusion-specific list flavor).
+query ?
+SELECT arrays_zip(
+    arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'),
+    arrow_cast(make_array(10, 20, 30), 'FixedSizeList(3, Int64)')
+);
+----
+[{0: 1, 1: 10}, {0: 2, 1: 20}, {0: 3, 1: 30}]
