@@ -32,7 +32,7 @@ use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
+    Cast, Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility, lit,
 };
 use datafusion_macros::user_doc;
@@ -249,8 +249,7 @@ where
     })
 }
 
-/// Fallback implementation using f64 for negative or non-integer exponents.
-/// This handles cases that cannot be computed using integer arithmetic.
+/// Fallback for `pow_decimal_int` when the exponent is negative or non-integer.
 fn pow_decimal_float_fallback<T>(base: T, scale: i8, exp: f64) -> Result<T, ArrowError>
 where
     T: ToPrimitive + NumCast + Copy,
@@ -271,7 +270,7 @@ where
     decimal_from_i128(result_i128)
 }
 
-/// Decimal256 specialized float exponent version.
+/// Like `pow_decimal_float`, but specialized for Decimal256.
 fn pow_decimal256_float(base: i256, scale: i8, exp: f64) -> Result<i256, ArrowError> {
     if exp.is_finite() && exp.trunc() == exp && exp >= 0f64 && exp < u32::MAX as f64 {
         return pow_decimal256_int(base, scale, exp as i64);
@@ -286,7 +285,7 @@ fn pow_decimal256_float(base: i256, scale: i8, exp: f64) -> Result<i256, ArrowEr
     pow_decimal256_float_fallback(base, scale, exp)
 }
 
-/// Decimal256 specialized integer exponent version.
+/// Like `pow_decimal_int`, but specialized for Decimal256.
 fn pow_decimal256_int(base: i256, scale: i8, exp: i64) -> Result<i256, ArrowError> {
     if exp < 0 {
         return pow_decimal256_float(base, scale, exp as f64);
@@ -346,7 +345,7 @@ fn pow_decimal256_int(base: i256, scale: i8, exp: i64) -> Result<i256, ArrowErro
     }
 }
 
-/// Fallback implementation for Decimal256.
+/// Like `pow_decimal_float_fallback`, but specialized for Decimal256.
 fn pow_decimal256_float_fallback(
     base: i256,
     scale: i8,
@@ -369,34 +368,23 @@ fn pow_decimal256_float_fallback(
     Ok(i256::from_i128(result_i128))
 }
 
-/// Fallback implementation for decimal power when exponent is an array.
-/// Casts decimal to float64, computes power, and casts back to original decimal type.
-/// This is used for performance when exponent varies per-row.
-fn pow_decimal_with_float_fallback(
-    base: &ArrayRef,
+/// Compute `power(decimal_base, float_exponent)` by casting the base to
+/// `Float64` and running `pow` in float space; returns `Float64`.
+/// `calculate_binary_math` casts the exponent internally and preserves
+/// scalar shape, so we only need to materialize the base here.
+fn pow_decimal_via_float64(
+    base: &ColumnarValue,
     exponent: &ColumnarValue,
     num_rows: usize,
 ) -> Result<ColumnarValue> {
-    use arrow::compute::cast;
-
-    let original_type = base.data_type().clone();
-    let base_f64 = cast(base.as_ref(), &DataType::Float64)?;
-
-    let exp_f64 = match exponent {
-        ColumnarValue::Array(arr) => cast(arr.as_ref(), &DataType::Float64)?,
-        ColumnarValue::Scalar(scalar) => {
-            let scalar_f64 = scalar.cast_to(&DataType::Float64)?;
-            scalar_f64.to_array_of_size(num_rows)?
-        }
-    };
-
-    let result_f64 = calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
+    let base_f64 = base
+        .cast_to(&DataType::Float64, None)?
+        .into_array(num_rows)?;
+    let result = calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
         &base_f64,
-        &ColumnarValue::Array(exp_f64),
+        exponent,
         float64_power_checked,
     )?;
-
-    let result = cast(result_f64.as_ref(), &original_type)?;
     Ok(ColumnarValue::Array(result))
 }
 
@@ -410,11 +398,23 @@ impl ScalarUDFImpl for PowerFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0].is_null() {
-            Ok(DataType::Float64)
-        } else {
-            Ok(arg_types[0].clone())
+        // Return type as a function of (base, exponent). After signature
+        // coercion the operands are one of three shapes, plus a NULL on
+        // either side when an operand is a literal NULL:
+        //
+        //   - NULL on either side -> Float64 (matches the other math
+        //     UDFs, which all return Float64 for NULL input)
+        //   - (Decimal, Float64)  -> Float64
+        //   - (Decimal, Int64)    -> the base's Decimal type
+        //   - (Float64, Float64)  -> Float64
+        let [base, exponent] = take_function_args(self.name(), arg_types)?;
+        if base.is_null() || exponent.is_null() {
+            return Ok(DataType::Float64);
         }
+        if base.is_decimal() && exponent.is_floating() {
+            return Ok(DataType::Float64);
+        }
+        Ok(base.clone())
     }
 
     fn aliases(&self) -> &[String] {
@@ -424,22 +424,24 @@ impl ScalarUDFImpl for PowerFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [base, exponent] = take_function_args(self.name(), &args.args)?;
 
-        // For decimal types, only use native decimal
-        // operations when we have a scalar exponent. When the exponent is an array,
-        // fall back to float computation for better performance.
-        let use_float_fallback = matches!(
-            base.data_type(),
-            DataType::Decimal32(_, _)
-                | DataType::Decimal64(_, _)
-                | DataType::Decimal128(_, _)
-                | DataType::Decimal256(_, _)
-        ) && matches!(exponent, ColumnarValue::Array(_));
+        // No native kernel exists for `(Decimal, Float64)`; bridge via
+        // Float64. The match below handles the remaining coerced shapes.
+        if base.data_type().is_decimal() && exponent.data_type().is_floating() {
+            return pow_decimal_via_float64(base, exponent, args.number_rows);
+        }
 
         let base = base.to_array(args.number_rows)?;
 
-        // If decimal with array exponent, cast to float and compute
-        if use_float_fallback {
-            return pow_decimal_with_float_fallback(&base, exponent, args.number_rows);
+        macro_rules! decimal_pow_arm {
+            ($decimal_ty:ident, $pow_fn:ident, $precision:expr, $scale:expr) => {
+                calculate_binary_decimal_math::<$decimal_ty, Int64Type, $decimal_ty, _>(
+                    &base,
+                    exponent,
+                    |b, e| $pow_fn(b, *$scale, e),
+                    *$precision,
+                    *$scale,
+                )?
+            };
         }
 
         let arr: ArrayRef = match (base.data_type(), exponent.data_type()) {
@@ -451,106 +453,16 @@ impl ScalarUDFImpl for PowerFunc {
                 )?
             }
             (DataType::Decimal32(precision, scale), DataType::Int64) => {
-                calculate_binary_decimal_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
-                    &base,
-                    exponent,
-                    |b, e| pow_decimal_int(b, *scale, e),
-                    *precision,
-                    *scale,
-                )?
-            }
-            (DataType::Decimal32(precision, scale), DataType::Float64) => {
-                calculate_binary_decimal_math::<
-                    Decimal32Type,
-                    Float64Type,
-                    Decimal32Type,
-                    _,
-                >(
-                    &base,
-                    exponent,
-                    |b, e| pow_decimal_float(b, *scale, e),
-                    *precision,
-                    *scale,
-                )?
+                decimal_pow_arm!(Decimal32Type, pow_decimal_int, precision, scale)
             }
             (DataType::Decimal64(precision, scale), DataType::Int64) => {
-                calculate_binary_decimal_math::<Decimal64Type, Int64Type, Decimal64Type, _>(
-                    &base,
-                    exponent,
-                    |b, e| pow_decimal_int(b, *scale, e),
-                    *precision,
-                    *scale,
-                )?
-            }
-            (DataType::Decimal64(precision, scale), DataType::Float64) => {
-                calculate_binary_decimal_math::<
-                    Decimal64Type,
-                    Float64Type,
-                    Decimal64Type,
-                    _,
-                >(
-                    &base,
-                    exponent,
-                    |b, e| pow_decimal_float(b, *scale, e),
-                    *precision,
-                    *scale,
-                )?
+                decimal_pow_arm!(Decimal64Type, pow_decimal_int, precision, scale)
             }
             (DataType::Decimal128(precision, scale), DataType::Int64) => {
-                calculate_binary_decimal_math::<
-                    Decimal128Type,
-                    Int64Type,
-                    Decimal128Type,
-                    _,
-                >(
-                    &base,
-                    exponent,
-                    |b, e| pow_decimal_int(b, *scale, e),
-                    *precision,
-                    *scale,
-                )?
-            }
-            (DataType::Decimal128(precision, scale), DataType::Float64) => {
-                calculate_binary_decimal_math::<
-                    Decimal128Type,
-                    Float64Type,
-                    Decimal128Type,
-                    _,
-                >(
-                    &base,
-                    exponent,
-                    |b, e| pow_decimal_float(b, *scale, e),
-                    *precision,
-                    *scale,
-                )?
+                decimal_pow_arm!(Decimal128Type, pow_decimal_int, precision, scale)
             }
             (DataType::Decimal256(precision, scale), DataType::Int64) => {
-                calculate_binary_decimal_math::<
-                    Decimal256Type,
-                    Int64Type,
-                    Decimal256Type,
-                    _,
-                >(
-                    &base,
-                    exponent,
-                    |b, e| pow_decimal256_int(b, *scale, e),
-                    *precision,
-                    *scale,
-                )?
-            }
-            (DataType::Decimal256(precision, scale), DataType::Float64) => {
-                calculate_binary_decimal_math::<
-                    Decimal256Type,
-                    Float64Type,
-                    Decimal256Type,
-                    _,
-                >(
-                    &base,
-                    exponent,
-                    |b, e| pow_decimal256_float(b, *scale, e),
-                    *precision,
-                    *scale,
-                )?
+                decimal_pow_arm!(Decimal256Type, pow_decimal256_int, precision, scale)
             }
             (base_type, exp_type) => {
                 return internal_err!(
@@ -582,22 +494,43 @@ impl ScalarUDFImpl for PowerFunc {
             )));
         }
 
+        // The simplified expression must keep `return_type`'s declared
+        // type. For example, `power(decimal, float)` returns `Float64`,
+        // so rewriting `power(decimal, 0)` to `1::decimal` or
+        // `power(decimal, 1)` to the decimal base would violate that
+        // contract and trip the optimizer's schema-compatibility check.
+        // Wrap simplified forms in a cast to `return_type` when needed.
+        let return_type =
+            self.return_type(&[base_type.clone(), exponent_type.clone()])?;
+        let needs_cast = |t: &DataType| *t != return_type;
         match exponent {
             Expr::Literal(value, _)
                 if value == ScalarValue::new_zero(&exponent_type)? =>
             {
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
                     &base_type,
-                )?)))
+                )?
+                .cast_to(&return_type)?)))
             }
             Expr::Literal(value, _) if value == ScalarValue::new_one(&exponent_type)? => {
-                Ok(ExprSimplifyResult::Simplified(base))
+                let result = if needs_cast(&base_type) {
+                    Expr::Cast(Cast::new(Box::new(base), return_type))
+                } else {
+                    base
+                };
+                Ok(ExprSimplifyResult::Simplified(result))
             }
             Expr::ScalarFunction(ScalarFunction { func, mut args })
                 if is_log(&func) && args.len() == 2 && base == args[0] =>
             {
                 let b = args.pop().unwrap(); // length checked above
-                Ok(ExprSimplifyResult::Simplified(b))
+                let b_type = info.get_data_type(&b)?;
+                let result = if needs_cast(&b_type) {
+                    Expr::Cast(Cast::new(Box::new(b), return_type))
+                } else {
+                    b
+                };
+                Ok(ExprSimplifyResult::Simplified(result))
             }
             _ => Ok(ExprSimplifyResult::Original(vec![base, exponent])),
         }

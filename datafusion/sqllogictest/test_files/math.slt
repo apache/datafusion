@@ -818,6 +818,9 @@ from values
 81
 NULL
 
+# `power` accepts (Decimal, Int), (Decimal, Float), or (Float, Float) -- there
+# is no form that takes a Decimal exponent. So a Decimal exponent coerces to
+# Float64, and `power(decimal, float)` returns Float64.
 query RT rowsort
 select
   power(base::decimal(38, 0), exponent::decimal(38, 0)),
@@ -830,12 +833,12 @@ from values
   (2, 3),
   (3, 4) as t(base, exponent);
 ----
-0 Decimal128(38, 0)
-1 Decimal128(38, 0)
-4 Decimal128(38, 0)
-625 Decimal128(38, 0)
-8 Decimal128(38, 0)
-81 Decimal128(38, 0)
+0 Float64
+1 Float64
+4 Float64
+625 Float64
+8 Float64
+81 Float64
 
 query RT
 select
