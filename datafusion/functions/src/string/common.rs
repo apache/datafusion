@@ -522,7 +522,7 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
                 let to_reserve = len.max(block_size as usize);
                 #[expect(
                     clippy::disallowed_methods,
-                    reason = "StringView block_size bounds growth, so reserve cannot overflow capacity"
+                    reason = "StringView's block size bounds growth, so reserve cannot overflow capacity arithmetically. This hot loop intentionally avoids the extra `try_reserve` checks. It remains subject to allocator failure/OOM, which must be managed externally."
                 )]
                 in_progress.reserve(to_reserve);
             }
