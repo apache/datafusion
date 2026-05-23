@@ -1,31 +1,20 @@
--- Copyright 2015 Transaction Processing Performance Council
-
-select  
-   sum(ws_ext_discount_amt)  as 'Excess Discount Amount'
-from 
-    web_sales 
-   ,item 
-   ,date_dim
-where
-i_manufact_id = 269
-and i_item_sk = ws_item_sk 
-and d_date between '1998-03-18' and 
-        (cast('1998-03-18' as date) + INTERVAL '90 days')
-and d_date_sk = ws_sold_date_sk 
-and ws_ext_discount_amt  
-     > ( 
-         SELECT 
-            1.3 * avg(ws_ext_discount_amt) 
-         FROM 
-            web_sales 
-           ,date_dim
-         WHERE 
-              ws_item_sk = i_item_sk 
-          and d_date between '1998-03-18' and
-                             (cast('1998-03-18' as date) + INTERVAL '90 days')
-          and d_date_sk = ws_sold_date_sk 
-      ) 
-order by sum(ws_ext_discount_amt)
-limit 100;
-
-
+SELECT sum(ws_ext_discount_amt) AS excess_discount_amount
+FROM web_sales, item, date_dim
+WHERE
+    i_manufact_id = 350
+    AND i_item_sk = ws_item_sk
+    AND d_date
+    BETWEEN '2000-01-27' AND (cast('2000-01-27' AS date) + INTERVAL '90 days')
+    AND d_date_sk = ws_sold_date_sk
+    AND ws_ext_discount_amt > (
+        SELECT 1.3 * avg(ws_ext_discount_amt)
+        FROM web_sales, date_dim
+        WHERE
+            ws_item_sk = i_item_sk
+            AND d_date
+            BETWEEN '2000-01-27' AND (cast('2000-01-27' AS date) + INTERVAL '90 days')
+            AND d_date_sk = ws_sold_date_sk
+    )
+ORDER BY sum(ws_ext_discount_amt)
+LIMIT 100
+;
