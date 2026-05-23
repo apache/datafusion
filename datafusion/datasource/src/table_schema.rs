@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_with_table_partition_cols_after_clone_does_not_panic() {
-        // `TableSchema` is cheaply clonable because its partition columns are
+        // `TableSchema` is cheaply cloneable because its partition columns are
         // stored behind an `Arc`. Appending more partition columns to a clone
         // must not panic just because the `Arc` is shared, and must not mutate
         // the other clone (copy-on-write isolation).
