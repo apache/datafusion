@@ -494,15 +494,21 @@ fn general_replace<O: OffsetSizeTrait>(
 /// element in `to_array` for each row in `list_array`.
 ///
 /// This is a specialized fast path for the all-scalar case that uses a single
-/// bulk `not_distinct` comparison instead of per-row comparisons.
+/// bulk `not_distinct` comparison over only the visible values range, then
+/// iterates match positions via `set_indices` instead of scanning every bit.
 fn general_replace_with_scalar<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     needle: &Scalar<ArrayRef>,
     to_array: &ArrayRef,
     max_replacements: i64,
 ) -> Result<ArrayRef> {
-    let values = list_array.values();
-    let original_data = values.to_data();
+    let first_offset = list_array.offsets()[0].to_usize().unwrap();
+    let last_offset = list_array.offsets()[list_array.len()].to_usize().unwrap();
+    let visible_values = list_array
+        .values()
+        .slice(first_offset, last_offset - first_offset);
+
+    let original_data = visible_values.to_data();
     let to_data = to_array.to_data();
     let capacity = Capacities::Array(original_data.len());
 
@@ -513,11 +519,15 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
     );
 
     let mut offsets = OffsetBufferBuilder::<O>::new(list_array.len());
-    let match_array = arrow_ord::cmp::not_distinct(list_array.values(), needle)?;
+
+    // Single bulk comparison over the visible values only.
+    let match_bitmap = arrow_ord::cmp::not_distinct(&visible_values, needle)?;
+    let match_bits = match_bitmap.values();
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
-        let start = offset_window[0].to_usize().unwrap();
-        let end = offset_window[1].to_usize().unwrap();
+        // Offsets relative to visible_values (subtract first_offset).
+        let start = offset_window[0].to_usize().unwrap() - first_offset;
+        let end = offset_window[1].to_usize().unwrap() - first_offset;
         let row_len = end - start;
 
         if list_array.is_null(row_index) {
@@ -525,42 +535,41 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
             continue;
         }
 
-        let original_idx = O::usize_as(0);
-        let replace_idx = O::usize_as(1);
-        let mut counter = 0;
-
-        let eq_array = match_array.slice(start, row_len);
-        if max_replacements <= 0 || eq_array.true_count() == 0 {
-            mutable.extend(original_idx.to_usize().unwrap(), start, end);
+        if max_replacements <= 0 {
+            mutable.extend(0, start, end);
             offsets.push_length(row_len);
             continue;
         }
 
-        let mut pending_retain: Option<usize> = None;
-        for (i, is_match) in eq_array.iter().enumerate() {
-            if is_match == Some(true) && counter < max_replacements {
-                if let Some(rs) = pending_retain.take() {
-                    mutable.extend(
-                        original_idx.to_usize().unwrap(),
-                        start + rs,
-                        start + i,
-                    );
-                }
-                mutable.extend(replace_idx.to_usize().unwrap(), 0, 1);
-                counter += 1;
-                if counter == max_replacements {
-                    mutable.extend(original_idx.to_usize().unwrap(), start + i + 1, end);
-                    break;
-                }
-            } else if pending_retain.is_none() {
-                pending_retain = Some(i);
-            }
+        // Slice the match bits to this row and iterate only over true positions.
+        let row_bits = match_bits.slice(start, row_len);
+        let mut match_positions = row_bits
+            .set_indices()
+            .take(max_replacements as usize)
+            .peekable();
+        if match_positions.peek().is_none() {
+            mutable.extend(0, start, end);
+            offsets.push_length(row_len);
+            continue;
         }
 
-        if counter < max_replacements
-            && let Some(rs) = pending_retain
-        {
-            mutable.extend(original_idx.to_usize().unwrap(), start + rs, end);
+        // Iterate only over the positions that match using set_indices,
+        // which is more efficient than scanning every bit because the number
+        // of matches is typically much smaller than the total array size.
+        let mut prev_end = 0usize;
+        for match_pos in match_positions {
+            // Retain elements before this match.
+            if match_pos > prev_end {
+                mutable.extend(0, start + prev_end, start + match_pos);
+            }
+            // Emit the replacement element.
+            mutable.extend(1, 0, 1);
+            prev_end = match_pos + 1;
+        }
+
+        // Copy remaining elements after the last replacement.
+        if prev_end < row_len {
+            mutable.extend(0, start + prev_end, end);
         }
 
         offsets.push_length(row_len);
