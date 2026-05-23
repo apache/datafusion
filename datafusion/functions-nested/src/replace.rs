@@ -126,17 +126,22 @@ impl ScalarUDFImpl for ArrayReplace {
         let [list_arg, from_arg, to_arg] = take_function_args(self.name(), &args.args)?;
         let num_rows = args.number_rows;
         let list_array = list_arg.to_array(num_rows)?;
-        let arr_n = [1i64];
-        match from_arg {
-            ColumnarValue::Array(from_array) => {
-                let to_array = to_arg.to_array(num_rows)?;
-                let result =
-                    array_replace_internal(&list_array, from_array, &to_array, &arr_n)?;
+        match (from_arg, to_arg) {
+            (ColumnarValue::Scalar(scalar_from), ColumnarValue::Scalar(scalar_to)) => {
+                let result = array_replace_with_scalar_args(
+                    &list_array,
+                    scalar_from,
+                    scalar_to,
+                    1i64,
+                )?;
                 Ok(ColumnarValue::Array(result))
             }
-            ColumnarValue::Scalar(scalar_from) => {
+            (from_arg, to_arg) => {
+                let from_array = from_arg.to_array(num_rows)?;
+                let to_array = to_arg.to_array(num_rows)?;
+                let arr_n = vec![1i64; num_rows];
                 let result =
-                    replace_with_scalar_needle(&list_array, scalar_from, to_arg, &arr_n)?;
+                    array_replace_internal(&list_array, &from_array, &to_array, &arr_n)?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -218,23 +223,34 @@ impl ScalarUDFImpl for ArrayReplaceN {
             take_function_args(self.name(), &args.args)?;
         let num_rows = args.number_rows;
         let list_array = list_arg.to_array(num_rows)?;
-        let arr_n = match max_arg {
-            ColumnarValue::Scalar(s) => {
-                let a = s.to_array_of_size(1)?;
-                as_int64_array(&a)?.values().to_vec()
-            }
-            ColumnarValue::Array(a) => as_int64_array(&a)?.values().to_vec(),
-        };
-        match from_arg {
-            ColumnarValue::Array(from_array) => {
-                let to_array = to_arg.to_array(num_rows)?;
-                let result =
-                    array_replace_internal(&list_array, from_array, &to_array, &arr_n)?;
+        match (from_arg, to_arg, max_arg) {
+            (
+                ColumnarValue::Scalar(scalar_from),
+                ColumnarValue::Scalar(scalar_to),
+                ColumnarValue::Scalar(scalar_max),
+            ) => {
+                let a = scalar_max.to_array_of_size(1)?;
+                let n = as_int64_array(&a)?.value(0);
+                let result = array_replace_with_scalar_args(
+                    &list_array,
+                    scalar_from,
+                    scalar_to,
+                    n,
+                )?;
                 Ok(ColumnarValue::Array(result))
             }
-            ColumnarValue::Scalar(scalar_from) => {
+            (from_arg, to_arg, max_arg) => {
+                let from_array = from_arg.to_array(num_rows)?;
+                let to_array = to_arg.to_array(num_rows)?;
+                let arr_n = match max_arg {
+                    ColumnarValue::Scalar(s) => {
+                        let a = s.to_array_of_size(1)?;
+                        as_int64_array(&a)?.values().to_vec()
+                    }
+                    ColumnarValue::Array(a) => as_int64_array(a)?.values().to_vec(),
+                };
                 let result =
-                    replace_with_scalar_needle(&list_array, scalar_from, to_arg, &arr_n)?;
+                    array_replace_internal(&list_array, &from_array, &to_array, &arr_n)?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -313,17 +329,22 @@ impl ScalarUDFImpl for ArrayReplaceAll {
         let [list_arg, from_arg, to_arg] = take_function_args(self.name(), &args.args)?;
         let num_rows = args.number_rows;
         let list_array = list_arg.to_array(num_rows)?;
-        let arr_n = [i64::MAX];
-        match from_arg {
-            ColumnarValue::Array(from_array) => {
-                let to_array = to_arg.to_array(num_rows)?;
-                let result =
-                    array_replace_internal(&list_array, from_array, &to_array, &arr_n)?;
+        match (from_arg, to_arg) {
+            (ColumnarValue::Scalar(scalar_from), ColumnarValue::Scalar(scalar_to)) => {
+                let result = array_replace_with_scalar_args(
+                    &list_array,
+                    scalar_from,
+                    scalar_to,
+                    i64::MAX,
+                )?;
                 Ok(ColumnarValue::Array(result))
             }
-            ColumnarValue::Scalar(scalar_from) => {
+            (from_arg, to_arg) => {
+                let from_array = from_arg.to_array(num_rows)?;
+                let to_array = to_arg.to_array(num_rows)?;
+                let arr_n = vec![i64::MAX; num_rows];
                 let result =
-                    replace_with_scalar_needle(&list_array, scalar_from, to_arg, &arr_n)?;
+                    array_replace_internal(&list_array, &from_array, &to_array, &arr_n)?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -469,16 +490,16 @@ fn general_replace<O: OffsetSizeTrait>(
     )?))
 }
 
-/// For each element of `list_array[i]`, replaces up to `arr_n[i]` occurrences
-/// of `needle` with `to_array[i]`.
+/// Replaces up to `max_replacements` occurrences of `needle` with the single
+/// element in `to_array` for each row in `list_array`.
 ///
-/// This is a specialized version of `general_replace` for scalar needles that
-/// uses a single bulk comparison for better performance.
+/// This is a specialized fast path for the all-scalar case that uses a single
+/// bulk `not_distinct` comparison instead of per-row comparisons.
 fn general_replace_with_scalar<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     needle: &Scalar<ArrayRef>,
     to_array: &ArrayRef,
-    arr_n: &[i64],
+    max_replacements: i64,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
     let original_data = values.to_data();
@@ -506,16 +527,10 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
 
         let original_idx = O::usize_as(0);
         let replace_idx = O::usize_as(1);
-        let to_index = if to_array.len() == 1 { 0 } else { row_index };
-        let n = if arr_n.len() == 1 {
-            arr_n[0]
-        } else {
-            arr_n[row_index]
-        };
         let mut counter = 0;
 
         let eq_array = match_array.slice(start, row_len);
-        if n <= 0 || eq_array.true_count() == 0 {
+        if max_replacements <= 0 || eq_array.true_count() == 0 {
             mutable.extend(original_idx.to_usize().unwrap(), start, end);
             offsets.push_length(row_len);
             continue;
@@ -523,7 +538,7 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
 
         let mut pending_retain: Option<usize> = None;
         for (i, is_match) in eq_array.iter().enumerate() {
-            if is_match == Some(true) && counter < n {
+            if is_match == Some(true) && counter < max_replacements {
                 if let Some(rs) = pending_retain.take() {
                     mutable.extend(
                         original_idx.to_usize().unwrap(),
@@ -531,9 +546,9 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
                         start + i,
                     );
                 }
-                mutable.extend(replace_idx.to_usize().unwrap(), to_index, to_index + 1);
+                mutable.extend(replace_idx.to_usize().unwrap(), 0, 1);
                 counter += 1;
-                if counter == n {
+                if counter == max_replacements {
                     mutable.extend(original_idx.to_usize().unwrap(), start + i + 1, end);
                     break;
                 }
@@ -542,7 +557,7 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
             }
         }
 
-        if counter < n
+        if counter < max_replacements
             && let Some(rs) = pending_retain
         {
             mutable.extend(original_idx.to_usize().unwrap(), start + rs, end);
@@ -561,37 +576,38 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
     )?))
 }
 
-/// Dispatches scalar-needle array replacement by list offset type.
+/// Fast path for `array_replace` when all arguments are scalars.
 ///
-/// When `to_arg` is a scalar, only a length-1 array is materialized for the
-/// replacement value, avoiding unnecessary allocation of `num_rows` copies.
-fn replace_with_scalar_needle(
+/// Uses a single bulk `not_distinct` comparison instead of per-row comparisons.
+fn array_replace_with_scalar_args(
     list_array: &ArrayRef,
     scalar_from: &ScalarValue,
-    to_arg: &ColumnarValue,
-    arr_n: &[i64],
+    scalar_to: &ScalarValue,
+    max_replacements: i64,
 ) -> Result<ArrayRef> {
-    let num_rows = list_array.len();
-
+    // `not_distinct` doesn't support nested types, fall back to the generic array path.
     if scalar_from.data_type().is_nested() {
+        let num_rows = list_array.len();
         let from_array = scalar_from.to_array_of_size(num_rows)?;
-        let to_array = to_arg.to_array(num_rows)?;
-        return array_replace_internal(list_array, &from_array, &to_array, arr_n);
+        let to_array = scalar_to.to_array_of_size(num_rows)?;
+        return array_replace_internal(
+            list_array,
+            &from_array,
+            &to_array,
+            &vec![max_replacements; num_rows],
+        );
     }
 
     let needle = Scalar::new(scalar_from.to_array_of_size(1)?);
-    let to_array = match to_arg {
-        ColumnarValue::Scalar(s) => s.to_array_of_size(1)?,
-        ColumnarValue::Array(a) => Arc::clone(a),
-    };
+    let to_array = scalar_to.to_array_of_size(1)?;
     match list_array.data_type() {
         DataType::List(_) => {
             let list = list_array.as_list::<i32>();
-            general_replace_with_scalar::<i32>(list, &needle, &to_array, arr_n)
+            general_replace_with_scalar::<i32>(list, &needle, &to_array, max_replacements)
         }
         DataType::LargeList(_) => {
             let list = list_array.as_list::<i64>();
-            general_replace_with_scalar::<i64>(list, &needle, &to_array, arr_n)
+            general_replace_with_scalar::<i64>(list, &needle, &to_array, max_replacements)
         }
         DataType::Null => Ok(new_null_array(list_array.data_type(), 1)),
         array_type => exec_err!("array_replace does not support type '{array_type}'."),
