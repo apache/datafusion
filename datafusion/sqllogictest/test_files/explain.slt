@@ -473,6 +473,20 @@ explain format indent select * from values (1);
 logical_plan Values: (Int64(1))
 physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
+# By default, when format=tree is used, the logical plan is NOT rendered as a tree
+query TT
+explain format tree select * from values (1);
+----
+logical_plan Values: (Int64(1))
+physical_plan
+01)┌───────────────────────────┐
+02)│       DataSourceExec      │
+03)│    --------------------   │
+04)│         bytes: 128        │
+05)│       format: memory      │
+06)│          rows: 1          │
+07)└───────────────────────────┘
+
 statement ok
 set datafusion.explain.logical_plan_tree = true;
 
