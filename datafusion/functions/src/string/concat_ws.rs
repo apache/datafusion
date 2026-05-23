@@ -31,7 +31,6 @@ use crate::strings::{
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
-use datafusion_expr::type_coercion::is_binary;
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -127,10 +126,8 @@ impl ScalarUDFImpl for ConcatWsFunc {
         let arg_types: Vec<DataType> = args.iter().map(|c| c.data_type()).collect();
         let return_datatype = deduce_return_type(&arg_types);
 
-        let with_binary = arg_types.iter().any(is_binary);
-        let with_string = arg_types.iter().any(|t| {
-            matches!(t, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8)
-        });
+        let with_binary = arg_types.iter().any(|dt| dt.is_binary());
+        let with_string = arg_types.iter().any(|dt| dt.is_string());
         if with_binary && with_string {
             return plan_err!(
                 "concat_ws does not support mixed string and binary inputs"
@@ -377,7 +374,7 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
     };
 
     // Shortcut for binary delimiters
-    if is_binary(&delimiter_type) {
+    if delimiter_type.is_binary() {
         let mut args = args
             .iter()
             .filter(|x| !is_null(x))

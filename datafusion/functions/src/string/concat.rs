@@ -31,7 +31,6 @@ use datafusion_common::{
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::type_coercion::{is_binary, is_string};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -114,10 +113,8 @@ impl ScalarUDFImpl for ConcatFunc {
         let arg_types: Vec<DataType> = args.iter().map(|c| c.data_type()).collect();
         let return_datatype = deduce_return_type(&arg_types);
 
-        let with_binary = arg_types.iter().any(is_binary);
-        let with_string = arg_types.iter().any(|t| {
-            matches!(t, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8)
-        });
+        let with_binary = arg_types.iter().any(|dt| dt.is_binary());
+        let with_string = arg_types.iter().any(|dt| dt.is_string());
 
         if with_binary && with_string {
             return plan_err!(
@@ -298,8 +295,8 @@ pub(crate) fn deduce_return_type(arg_types: &[DataType]) -> DataType {
 
 /// Coerce all arguments to the widest type within the binary / string family
 pub(crate) fn coerce_arg_types(arg_types: &[DataType]) -> Result<Vec<DataType>> {
-    let has_binary = arg_types.iter().any(is_binary);
-    let has_string = arg_types.iter().any(is_string);
+    let has_binary = arg_types.iter().any(|dt| dt.is_binary());
+    let has_string = arg_types.iter().any(|dt| dt.is_string());
     if has_binary && has_string {
         plan_err!("function does not support mixed string and binary inputs")
     } else if has_binary {
@@ -331,7 +328,7 @@ pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     // handles only strings
     for arg in &args {
         match arg {
-            Expr::Literal(dt, _) if is_binary(&dt.data_type()) => {
+            Expr::Literal(dt, _) if dt.data_type().is_binary() => {
                 return Ok(ExprSimplifyResult::Original(args));
             }
             _ => {}
