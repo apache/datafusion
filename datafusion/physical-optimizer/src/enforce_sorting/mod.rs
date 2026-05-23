@@ -67,7 +67,7 @@ use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::windows::{
-    BoundedWindowAggExec, WindowAggExec, get_best_fitting_window,
+    BoundedWindowAggExec, WindowAggExec, get_best_fitting_window_with_preference,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, InputOrderMode};
 
@@ -215,7 +215,11 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let plan_requirements = PlanWithCorrespondingSort::new_default(plan);
         // Execute a bottom-up traversal to enforce sorting requirements,
         // remove unnecessary sorts, and optimize sort-sensitive operators:
-        let adjusted = plan_requirements.transform_up(ensure_sorting)?.data;
+        let adjusted = plan_requirements
+            .transform_up(|requirements| {
+                ensure_sorting_with_config(requirements, config)
+            })?
+            .data;
         let new_plan = if config.optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
@@ -472,7 +476,14 @@ pub fn parallelize_sorts(
 ///       -  Checks if the plan is SPM and child 1 output partitions, if so
 ///          decides this SPM is unnecessary and removes it from the plan.
 pub fn ensure_sorting(
+    requirements: PlanWithCorrespondingSort,
+) -> Result<Transformed<PlanWithCorrespondingSort>> {
+    ensure_sorting_with_config(requirements, &ConfigOptions::default())
+}
+
+fn ensure_sorting_with_config(
     mut requirements: PlanWithCorrespondingSort,
+    config: &ConfigOptions,
 ) -> Result<Transformed<PlanWithCorrespondingSort>> {
     requirements = update_sort_ctx_children_data(requirements, false)?;
 
@@ -527,7 +538,7 @@ pub fn ensure_sorting(
     // calculate the result in reverse:
     let child_node = &requirements.children[0];
     if is_window(&requirements.plan) && child_node.data {
-        return adjust_window_sort_removal(requirements).map(Transformed::yes);
+        return adjust_window_sort_removal(requirements, config).map(Transformed::yes);
     } else if is_sort_preserving_merge(&requirements.plan)
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
@@ -607,6 +618,7 @@ fn analyze_immediate_sort_removal(
 /// whether it may allow removing a sort.
 fn adjust_window_sort_removal(
     mut window_tree: PlanWithCorrespondingSort,
+    config: &ConfigOptions,
 ) -> Result<PlanWithCorrespondingSort> {
     // Window operators have a single child we need to adjust:
     let child_node = remove_corresponding_sort_from_sub_plan(
@@ -623,13 +635,21 @@ fn adjust_window_sort_removal(
         window_tree.plan.downcast_ref::<WindowAggExec>()
     {
         let window_expr = exec.window_expr();
-        let new_window =
-            get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
+        let new_window = get_best_fitting_window_with_preference(
+            window_expr,
+            child_plan,
+            &exec.partition_keys(),
+            config.optimizer.prefer_window_agg_exec,
+        )?;
         (window_expr, new_window)
     } else if let Some(exec) = window_tree.plan.downcast_ref::<BoundedWindowAggExec>() {
         let window_expr = exec.window_expr();
-        let new_window =
-            get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
+        let new_window = get_best_fitting_window_with_preference(
+            window_expr,
+            child_plan,
+            &exec.partition_keys(),
+            config.optimizer.prefer_window_agg_exec,
+        )?;
         (window_expr, new_window)
     } else {
         return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
@@ -651,7 +671,9 @@ fn adjust_window_sort_removal(
         let child_plan = Arc::clone(&child_node.plan);
         window_tree.children.push(child_node);
 
-        if window_expr.iter().all(|e| e.uses_bounded_memory()) {
+        if window_expr.iter().all(|e| e.uses_bounded_memory())
+            && !config.optimizer.prefer_window_agg_exec
+        {
             Arc::new(BoundedWindowAggExec::try_new(
                 window_expr.to_vec(),
                 child_plan,

@@ -16,12 +16,14 @@
 // under the License.
 
 mod aggregate;
+mod parallel_sliding_aggregate;
 mod sliding_aggregate;
 mod standard;
 mod standard_window_function_expr;
 mod window_expr;
 
 pub use aggregate::PlainAggregateWindowExpr;
+pub use parallel_sliding_aggregate::ParallelSlidingAggregateWindowExpr;
 pub use sliding_aggregate::SlidingAggregateWindowExpr;
 pub use standard::StandardWindowExpr;
 pub use standard_window_function_expr::StandardWindowFunctionExpr;

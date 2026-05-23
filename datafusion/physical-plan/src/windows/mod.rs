@@ -18,6 +18,7 @@
 //! Physical expressions for window functions
 
 mod bounded_window_agg_exec;
+pub(crate) mod tile;
 mod utils;
 mod window_agg_exec;
 
@@ -31,10 +32,10 @@ use crate::{
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{FieldRef, SortOptions};
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     LimitEffect, PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -42,7 +43,8 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::window::{
-    SlidingAggregateWindowExpr, StandardWindowFunctionExpr,
+    ParallelSlidingAggregateWindowExpr, SlidingAggregateWindowExpr,
+    StandardWindowFunctionExpr,
 };
 use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 use datafusion_physical_expr_common::sort_expr::{
@@ -101,6 +103,37 @@ pub fn create_window_expr(
     distinct: bool,
     filter: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn WindowExpr>> {
+    create_window_expr_with_preference(
+        fun,
+        name,
+        args,
+        partition_by,
+        order_by,
+        window_frame,
+        input_schema,
+        ignore_nulls,
+        distinct,
+        filter,
+        false,
+    )
+}
+
+/// Create a physical expression for window function, optionally preferring the
+/// expression used by [`WindowAggExec`].
+#[expect(clippy::too_many_arguments)]
+pub fn create_window_expr_with_preference(
+    fun: &WindowFunctionDefinition,
+    name: String,
+    args: &[Arc<dyn PhysicalExpr>],
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    order_by: &[PhysicalSortExpr],
+    window_frame: Arc<WindowFrame>,
+    input_schema: SchemaRef,
+    ignore_nulls: bool,
+    distinct: bool,
+    filter: Option<Arc<dyn PhysicalExpr>>,
+    prefer_window_agg_exec: bool,
+) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate = if distinct {
@@ -125,7 +158,8 @@ pub fn create_window_expr(
                 window_frame,
                 aggregate,
                 filter,
-            )
+                prefer_window_agg_exec,
+            )?
         }
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
             create_udwf_window_expr(fun, args, &input_schema, name, ignore_nulls)?,
@@ -143,26 +177,54 @@ fn window_expr_from_aggregate_expr(
     window_frame: Arc<WindowFrame>,
     aggregate: Arc<AggregateFunctionExpr>,
     filter: Option<Arc<dyn PhysicalExpr>>,
-) -> Arc<dyn WindowExpr> {
+    prefer_window_agg_exec: bool,
+) -> Result<Arc<dyn WindowExpr>> {
     // Is there a potentially unlimited sized window frame?
     let unbounded_window = window_frame.is_ever_expanding();
 
     if !unbounded_window {
-        Arc::new(SlidingAggregateWindowExpr::new(
-            aggregate,
-            partition_by,
-            order_by,
-            window_frame,
-            filter,
-        ))
+        if prefer_window_agg_exec && is_finite_rows_window_frame(&window_frame) {
+            Ok(Arc::new(ParallelSlidingAggregateWindowExpr::try_new(
+                aggregate,
+                partition_by,
+                order_by,
+                window_frame,
+                filter,
+            )?))
+        } else {
+            Ok(Arc::new(SlidingAggregateWindowExpr::new(
+                aggregate,
+                partition_by,
+                order_by,
+                window_frame,
+                filter,
+            )))
+        }
     } else {
-        Arc::new(PlainAggregateWindowExpr::new(
+        Ok(Arc::new(PlainAggregateWindowExpr::new(
             aggregate,
             partition_by,
             order_by,
             window_frame,
             filter,
-        ))
+        )))
+    }
+}
+
+fn is_finite_rows_window_frame(window_frame: &WindowFrame) -> bool {
+    window_frame.units == WindowFrameUnits::Rows
+        && is_finite_rows_window_bound(&window_frame.start_bound)
+        && is_finite_rows_window_bound(&window_frame.end_bound)
+}
+
+fn is_finite_rows_window_bound(bound: &WindowFrameBound) -> bool {
+    match bound {
+        WindowFrameBound::Preceding(ScalarValue::UInt64(Some(offset)))
+        | WindowFrameBound::Following(ScalarValue::UInt64(Some(offset))) => {
+            usize::try_from(*offset).is_ok()
+        }
+        WindowFrameBound::CurrentRow => true,
+        _ => false,
     }
 }
 
@@ -595,6 +657,23 @@ pub fn get_best_fitting_window(
     // or it is empty if partitioning is not desirable for this windowing operator.
     physical_partition_keys: &[Arc<dyn PhysicalExpr>],
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    get_best_fitting_window_with_preference(
+        window_exprs,
+        input,
+        physical_partition_keys,
+        false,
+    )
+}
+
+/// Like [`get_best_fitting_window`], but allows callers to prefer
+/// [`WindowAggExec`] over [`BoundedWindowAggExec`] even when the bounded-memory
+/// implementation supports the window expressions.
+pub fn get_best_fitting_window_with_preference(
+    window_exprs: &[Arc<dyn WindowExpr>],
+    input: &Arc<dyn ExecutionPlan>,
+    physical_partition_keys: &[Arc<dyn PhysicalExpr>],
+    prefer_window_agg_exec: bool,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // Contains at least one window expr and all of the partition by and order by sections
     // of the window_exprs are same.
     let partitionby_exprs = window_exprs[0].partition_by();
@@ -630,9 +709,21 @@ pub fn get_best_fitting_window(
         window_exprs.to_vec()
     };
 
-    // If all window expressions can run with bounded memory, choose the
-    // bounded window variant:
-    if window_expr.iter().all(|e| e.uses_bounded_memory()) {
+    if prefer_window_agg_exec {
+        if input_order_mode != InputOrderMode::Sorted {
+            // `WindowAggExec` requires sorted partition/order columns. Ask the
+            // caller to add a sort instead of using `BoundedWindowAggExec`
+            // with a more flexible input mode.
+            return Ok(None);
+        }
+        Ok(Some(Arc::new(WindowAggExec::try_new(
+            window_expr,
+            Arc::clone(input),
+            !physical_partition_keys.is_empty(),
+        )?) as _))
+    } else if window_expr.iter().all(|e| e.uses_bounded_memory()) {
+        // If all window expressions can run with bounded memory, choose the
+        // bounded window variant:
         Ok(Some(Arc::new(BoundedWindowAggExec::try_new(
             window_expr,
             Arc::clone(input),
@@ -758,6 +849,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow_schema::{DataType, Field};
     use datafusion_execution::TaskContext;
+    use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
 
     use futures::FutureExt;
@@ -806,6 +898,56 @@ mod tests {
             expr: col(name, schema).unwrap(),
             options,
         }
+    }
+
+    #[test]
+    fn create_window_expr_preference_uses_parallel_expr_for_finite_rows() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "v1",
+            DataType::Float64,
+            false,
+        )]));
+        let args = vec![col("v1", &schema)?];
+        let order_by = vec![PhysicalSortExpr::new_default(col("v1", &schema)?)];
+        let window_frame = Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(3))),
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(3))),
+        ));
+
+        let preferred = create_window_expr_with_preference(
+            &WindowFunctionDefinition::AggregateUDF(avg_udaf()),
+            "moving_avg".to_string(),
+            &args,
+            &[],
+            &order_by,
+            Arc::clone(&window_frame),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+            true,
+        )?;
+        let default = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(avg_udaf()),
+            "moving_avg".to_string(),
+            &args,
+            &[],
+            &order_by,
+            window_frame,
+            schema,
+            false,
+            false,
+            None,
+        )?;
+
+        assert!(
+            preferred
+                .as_any()
+                .is::<ParallelSlidingAggregateWindowExpr>()
+        );
+        assert!(default.as_any().is::<SlidingAggregateWindowExpr>());
+        Ok(())
     }
 
     /// Created a sorted Streaming Table exec

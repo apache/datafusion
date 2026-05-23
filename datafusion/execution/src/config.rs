@@ -256,6 +256,14 @@ impl SessionConfig {
         self.options.optimizer.prefer_existing_sort
     }
 
+    /// Prefer `WindowAggExec` over `BoundedWindowAggExec` for window
+    /// function execution. See [prefer_window_agg_exec] for more details.
+    ///
+    /// [prefer_window_agg_exec]: datafusion_common::config::OptimizerOptions::prefer_window_agg_exec
+    pub fn prefer_window_agg_exec(&self) -> bool {
+        self.options.optimizer.prefer_window_agg_exec
+    }
+
     /// Are statistics collected during execution?
     pub fn collect_statistics(&self) -> bool {
         self.options.execution.collect_statistics
@@ -339,6 +347,15 @@ impl SessionConfig {
     /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
     pub fn with_prefer_existing_sort(mut self, enabled: bool) -> Self {
         self.options_mut().optimizer.prefer_existing_sort = enabled;
+        self
+    }
+
+    /// Prefer `WindowAggExec` over `BoundedWindowAggExec` for window
+    /// function execution. See [prefer_window_agg_exec] for more details.
+    ///
+    /// [prefer_window_agg_exec]: datafusion_common::config::OptimizerOptions::prefer_window_agg_exec
+    pub fn with_prefer_window_agg_exec(mut self, enabled: bool) -> Self {
+        self.options_mut().optimizer.prefer_window_agg_exec = enabled;
         self
     }
 

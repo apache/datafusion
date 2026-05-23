@@ -1115,6 +1115,12 @@ config_namespace! {
         /// cause regressions in both memory usage and runtime.
         pub enable_window_topn: bool, default = false
 
+        /// When set to true, the physical planner and physical optimizer will
+        /// use `WindowAggExec` for window functions instead of
+        /// `BoundedWindowAggExec`, even when the bounded-memory implementation
+        /// supports the window expression.
+        pub prefer_window_agg_exec: bool, default = false
+
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the
         /// sort key, reducing data volume before the shuffle.

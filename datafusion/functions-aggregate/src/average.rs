@@ -38,7 +38,7 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, EmitTo, Expr,
     GroupsAccumulator, ReversedUDAF, Signature, TypeSignature, TypeSignatureClass,
-    Volatility,
+    Volatility, WindowBatchArgs,
 };
 use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
     DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
@@ -518,6 +518,142 @@ impl Accumulator for AvgAccumulator {
         Ok(())
     }
 
+    fn supports_window_batch(&self) -> bool {
+        true
+    }
+
+    fn evaluate_window_batch(
+        &self,
+        values: &[ArrayRef],
+        filter: Option<&BooleanArray>,
+        args: WindowBatchArgs,
+    ) -> Result<Option<ArrayRef>> {
+        let values = values[0].as_primitive::<Float64Type>();
+        let input_len = values.len();
+        args.validate(input_len)?;
+        if let Some(filter) = filter
+            && filter.len() != input_len
+        {
+            return exec_err!(
+                "AVG window filter length {} does not match input length {}",
+                filter.len(),
+                input_len
+            );
+        }
+
+        if filter.is_none() && values.null_count() == 0 {
+            let mut result = Vec::with_capacity(args.output_len());
+            let following = args.following.saturating_add(1);
+            let mut window_start = args.output_start.saturating_sub(args.preceding);
+            let mut window_end =
+                args.output_start.saturating_add(following).min(input_len);
+            let mut sum = 0.0_f64;
+            for row_idx in window_start..window_end {
+                sum += values.value(row_idx);
+            }
+
+            for row_idx in args.output_start..args.output_end {
+                result.push(sum / (window_end - window_start) as f64);
+
+                if row_idx >= args.preceding {
+                    sum -= values.value(window_start);
+                    window_start += 1;
+                }
+                if window_end < input_len {
+                    sum += values.value(window_end);
+                    window_end += 1;
+                }
+            }
+
+            return Ok(Some(
+                Arc::new(PrimitiveArray::<Float64Type>::from(result)) as ArrayRef
+            ));
+        }
+
+        let mut result =
+            PrimitiveBuilder::<Float64Type>::with_capacity(args.output_len());
+        let following = args.following.saturating_add(1);
+        let mut window_start = args.output_start.saturating_sub(args.preceding);
+        let mut window_end = args.output_start.saturating_add(following).min(input_len);
+        let mut count = 0_u64;
+        let mut sum = 0.0_f64;
+
+        if let Some(filter) = filter {
+            for row_idx in window_start..window_end {
+                if filter.is_valid(row_idx)
+                    && filter.value(row_idx)
+                    && values.is_valid(row_idx)
+                {
+                    count += 1;
+                    sum += values.value(row_idx);
+                }
+            }
+
+            for row_idx in args.output_start..args.output_end {
+                if count == 0 {
+                    result.append_null();
+                } else {
+                    result.append_value(sum / count as f64);
+                }
+
+                if row_idx >= args.preceding {
+                    if filter.is_valid(window_start)
+                        && filter.value(window_start)
+                        && values.is_valid(window_start)
+                    {
+                        count -= 1;
+                        sum -= values.value(window_start);
+                    }
+                    window_start += 1;
+                }
+                if window_end < input_len {
+                    if filter.is_valid(window_end)
+                        && filter.value(window_end)
+                        && values.is_valid(window_end)
+                    {
+                        count += 1;
+                        sum += values.value(window_end);
+                    }
+                    window_end += 1;
+                }
+            }
+
+            return Ok(Some(Arc::new(result.finish()) as ArrayRef));
+        }
+
+        for row_idx in window_start..window_end {
+            if values.is_valid(row_idx) {
+                count += 1;
+                sum += values.value(row_idx);
+            }
+        }
+
+        for row_idx in args.output_start..args.output_end {
+            if count == 0 {
+                result.append_null();
+            } else {
+                result.append_value(sum / count as f64);
+            }
+
+            if row_idx >= args.preceding {
+                if values.is_valid(window_start) {
+                    count -= 1;
+                    sum -= values.value(window_start);
+                }
+                window_start += 1;
+            }
+            if window_end < input_len {
+                if values.is_valid(window_end) {
+                    count += 1;
+                    sum += values.value(window_end);
+                }
+                window_end += 1;
+            }
+        }
+
+        Ok(Some(Arc::new(result.finish()) as ArrayRef))
+    }
+
     fn evaluate(&mut self) -> Result<ScalarValue> {
         // In sliding-window mode `retract_batch` can bring `count` back to 0
         // while `sum` remains `Some(..)` (possibly zero or a floating-point
@@ -972,5 +1108,78 @@ where
 
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<u64>() + self.sums.capacity() * size_of::<T>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::array::Float64Array;
+
+    #[test]
+    fn avg_window_batch_evaluates_direct_output() -> Result<()> {
+        let accumulator = AvgAccumulator::default();
+        let values = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0]));
+        let args = WindowBatchArgs::new(0, 5, 1, 1);
+
+        let output = accumulator
+            .evaluate_window_batch(&[values], None, args)?
+            .expect("AVG supports window batch evaluation");
+        let output = output.as_primitive::<Float64Type>();
+
+        assert_eq!(output.values(), &[1.5, 2.0, 3.0, 4.0, 4.5]);
+        assert_eq!(output.null_count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn avg_window_batch_evaluates_halo_output_range() -> Result<()> {
+        let accumulator = AvgAccumulator::default();
+        let values = Arc::new(Float64Array::from(vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0,
+        ]));
+        let args = WindowBatchArgs::new(3, 5, 3, 3);
+
+        let output = accumulator
+            .evaluate_window_batch(&[values], None, args)?
+            .expect("AVG supports window batch evaluation");
+        let output = output.as_primitive::<Float64Type>();
+
+        assert_eq!(output.values(), &[4.0, 5.0]);
+        assert_eq!(output.null_count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn avg_window_batch_applies_nulls_and_filter() -> Result<()> {
+        let accumulator = AvgAccumulator::default();
+        let values = Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            None,
+            Some(3.0),
+            Some(4.0),
+            Some(5.0),
+        ]));
+        let filter = BooleanArray::from(vec![
+            Some(true),
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+        ]);
+        let args = WindowBatchArgs::new(0, 5, 1, 1);
+
+        let output = accumulator
+            .evaluate_window_batch(&[values], Some(&filter), args)?
+            .expect("AVG supports window batch evaluation");
+        let output = output.as_primitive::<Float64Type>();
+
+        assert_eq!(output.value(0), 1.0);
+        assert_eq!(output.value(1), 1.0);
+        assert!(output.is_null(2));
+        assert_eq!(output.value(3), 5.0);
+        assert_eq!(output.value(4), 5.0);
+        Ok(())
     }
 }

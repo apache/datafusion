@@ -58,7 +58,9 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave};
 use datafusion_physical_plan::windows::WindowAggExec;
-use datafusion_physical_plan::windows::{BoundedWindowAggExec, get_best_fitting_window};
+use datafusion_physical_plan::windows::{
+    BoundedWindowAggExec, get_best_fitting_window_with_preference,
+};
 use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use itertools::izip;
@@ -1227,18 +1229,20 @@ pub fn ensure_distribution(
     } = remove_dist_changing_operators(dist_context)?;
 
     if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
-        if let Some(updated_window) = get_best_fitting_window(
+        if let Some(updated_window) = get_best_fitting_window_with_preference(
             exec.window_expr(),
             exec.input(),
             &exec.partition_keys(),
+            config.optimizer.prefer_window_agg_exec,
         )? {
             plan = updated_window;
         }
     } else if let Some(exec) = plan.downcast_ref::<BoundedWindowAggExec>()
-        && let Some(updated_window) = get_best_fitting_window(
+        && let Some(updated_window) = get_best_fitting_window_with_preference(
             exec.window_expr(),
             exec.input(),
             &exec.partition_keys(),
+            config.optimizer.prefer_window_agg_exec,
         )?
     {
         plan = updated_window;
