@@ -185,40 +185,36 @@ impl ScalarUDFImpl for ArrayAdd {
 fn array_add_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_add", args)?;
     match (array1.data_type(), array2.data_type()) {
-        (List(_), List(_)) => general_array_add::<i32>(args),
-        (LargeList(_), LargeList(_)) => general_array_add::<i64>(args),
+        (List(_), List(_)) => general_array_add::<i32>(array1, array2),
+        (LargeList(_), LargeList(_)) => general_array_add::<i64>(array1, array2),
         (arg_type1, arg_type2) => exec_err!(
             "array_add received unexpected types after coercion: {arg_type1} and {arg_type2}"
         ),
     }
 }
 
-fn general_array_add<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let lhs = as_generic_list_array::<O>(&arrays[0])?;
-    let rhs = as_generic_list_array::<O>(&arrays[1])?;
-
-    if lhs.len() != rhs.len() {
-        return exec_err!(
-            "array_add row counts differ ({} vs {})",
-            lhs.len(),
-            rhs.len()
-        );
-    }
+fn general_array_add<O: OffsetSizeTrait>(
+    lhs: &ArrayRef,
+    rhs: &ArrayRef,
+) -> Result<ArrayRef> {
+    let lhs = as_generic_list_array::<O>(lhs)?;
+    let rhs = as_generic_list_array::<O>(rhs)?;
 
     let lhs_values = as_float64_array(lhs.values())?;
     let rhs_values = as_float64_array(rhs.values())?;
     let lhs_offsets = lhs.value_offsets();
     let rhs_offsets = rhs.value_offsets();
 
+    // Row-level validity: a row is valid iff both sides are valid at that row.
+    let row_nulls = NullBuffer::union(lhs.nulls(), rhs.nulls());
+
     let mut out_values: Vec<f64> = Vec::with_capacity(lhs_values.len());
     let mut out_inner_nulls = NullBufferBuilder::new(lhs_values.len());
     let mut out_offsets = OffsetBufferBuilder::<O>::new(lhs.len());
-    let mut out_row_nulls = NullBufferBuilder::new(lhs.len());
 
     for row in 0..lhs.len() {
         // Whole-row NULL on either side -> NULL output row, no elements.
-        if lhs.is_null(row) || rhs.is_null(row) {
-            out_row_nulls.append_null();
+        if row_nulls.as_ref().is_some_and(|nb| nb.is_null(row)) {
             out_offsets.push_length(0);
             continue;
         }
@@ -240,22 +236,18 @@ fn general_array_add<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<ArrayRef
         let l_vals = l_slice.values();
         let r_vals = r_slice.values();
 
-        // Per-element validity: position `i` is valid iff both lhs[i] and rhs[i]
-        // are valid. `NullBuffer::union` returns `None` when both sides are
-        // entirely valid, keeping the common case branch-free.
-        let combined = NullBuffer::union(l_slice.nulls(), r_slice.nulls());
-
         for i in 0..len1 {
-            // Push the value unconditionally; the null buffer is the source of
-            // truth for validity.
             out_values.push(l_vals[i] + r_vals[i]);
-            match &combined {
-                Some(nb) if nb.is_null(i) => out_inner_nulls.append_null(),
-                _ => out_inner_nulls.append_non_null(),
-            }
         }
 
-        out_row_nulls.append_non_null();
+        // Per-element validity: position `i` is valid iff both lhs[i] and rhs[i]
+        // are valid. `NullBuffer::union` returns `None` when both sides are
+        // entirely valid.
+        match NullBuffer::union(l_slice.nulls(), r_slice.nulls()) {
+            Some(nb) => out_inner_nulls.append_buffer(&nb),
+            None => out_inner_nulls.append_n_non_nulls(len1),
+        }
+
         out_offsets.push_length(len1);
     }
 
@@ -269,6 +261,6 @@ fn general_array_add<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<ArrayRef
         field,
         out_offsets.finish(),
         values_array,
-        out_row_nulls.finish(),
+        row_nulls,
     )?))
 }
