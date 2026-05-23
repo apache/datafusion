@@ -2639,10 +2639,17 @@ impl DefaultPhysicalPlanner {
                     session_state,
                     |_plan, _optimizer| {},
                 )?;
-                stringified_plans.push(StringifiedPlan::new(
-                    FinalLogicalPlan,
-                    format!("{}", e.plan.display_tree(config.tree_maximum_render_width)),
-                ));
+                if config.logical_plan_tree {
+                    stringified_plans.push(StringifiedPlan::new(
+                        FinalLogicalPlan,
+                        format!(
+                            "{}",
+                            e.plan.display_tree(config.tree_maximum_render_width)
+                        ),
+                    ));
+                } else {
+                    stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
+                }
 
                 stringified_plans.push(StringifiedPlan::new(
                     FinalPhysicalPlan,

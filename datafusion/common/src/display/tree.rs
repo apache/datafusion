@@ -471,10 +471,8 @@ pub trait FormattedTreeNode: TreeNode + DisplayAs {
 /// Used to track positions of nodes and their connections.
 pub struct Coordinate {
     /// Horizontal position in the tree
-    #[expect(dead_code)]
     pub x: usize,
     /// Vertical position in the tree
-    #[expect(dead_code)]
     pub y: usize,
 }
 

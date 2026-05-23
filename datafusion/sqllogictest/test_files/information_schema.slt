@@ -281,6 +281,7 @@ datafusion.explain.analyze_categories all
 datafusion.explain.analyze_level dev
 datafusion.explain.format indent
 datafusion.explain.logical_plan_only false
+datafusion.explain.logical_plan_tree false
 datafusion.explain.physical_plan_only false
 datafusion.explain.show_schema false
 datafusion.explain.show_sizes true
@@ -428,6 +429,7 @@ datafusion.explain.analyze_categories all Which metric categories to include in 
 datafusion.explain.analyze_level dev Verbosity level for "EXPLAIN ANALYZE". Default is "dev" "summary" shows common metrics for high-level insights. "dev" provides deep operator-level introspection for developers.
 datafusion.explain.format indent Display format of explain. Default is "indent". When set to "tree", it will print the plan in a tree-rendered format.
 datafusion.explain.logical_plan_only false When set to true, the explain statement will only print logical plans
+datafusion.explain.logical_plan_tree false (format=tree only) When set to true, the explain statement will print logical plans in a tree-rendered format. When set to false, it will print logical plans in the default indented format.
 datafusion.explain.physical_plan_only false When set to true, the explain statement will only print physical plans
 datafusion.explain.show_schema false When set to true, the explain statement will print schema information
 datafusion.explain.show_sizes true When set to true, the explain statement will print the partition sizes
@@ -889,7 +891,7 @@ show functions
 statement ok
 reset datafusion.catalog.information_schema;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
