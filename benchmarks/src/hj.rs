@@ -25,8 +25,6 @@ use std::path::PathBuf;
 
 use futures::StreamExt;
 
-// TODO: Add existence joins
-
 /// Run the Hash Join benchmark
 ///
 /// This micro-benchmark focuses on the performance characteristics of Hash Joins.
@@ -304,193 +302,105 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "60M",
     },
     // RightSemi Join benchmarks with Int32 keys
-    // Q16: RightSemi, 100% Density, 100% Hit rate
+    //
+    // Fanout (average build rows matched per probe row, as measured by running
+    // the equivalent INNER JOIN under `EXPLAIN ANALYZE` and reading the
+    // `HashJoinExec` metrics): 1 for Q16-Q18. Build keys here are primary
+    // keys (`n_nationkey`, `s_suppkey`), so each probe row matches at most
+    // one build row. `prob_hit` controls what fraction of probe rows find
+    // that one match.
+    //
+    // Fanout still matters because semi joins short-circuit after the first
+    // match. Coverage of fanout > 1 (build-side duplicates) is left for a
+    // follow-up.
+    //
+    // Q16: RightSemi, Small build (25 rows), 100% Hit rate
+    // Build Side: nation (25 rows) | Probe Side: customer (1.5M rows)
+    HashJoinQuery {
+        sql: r###"SELECT c.k
+        FROM (SELECT CAST(n_nationkey AS INT) as k FROM nation) n
+        RIGHT SEMI JOIN (SELECT CAST(c_nationkey AS INT) as k FROM customer) c
+        ON n.k = c.k"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "25",
+        probe_size: "1.5M_RightSemi",
+    },
+    // Q17: RightSemi, Medium build (100K rows), 100% Hit rate
+    // Build Side: supplier (100K rows) | Probe Side: lineitem (60M rows)
     HashJoinQuery {
         sql: r###"SELECT l.k
-        FROM (
-          SELECT CAST(l_suppkey AS INT) as k FROM lineitem
-        ) l
-        WHERE EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
+        FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s
+        RIGHT SEMI JOIN (SELECT CAST(l_suppkey AS INT) as k FROM lineitem) l
+        ON s.k = l.k"###,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "100K",
         probe_size: "60M_RightSemi",
     },
-    // Q17: RightSemi, 100% Density, 10% Hit rate
+    // Q18: RightSemi, Medium build (100K rows), 10% Hit rate
+    // Build Side: supplier (100K rows) | Probe Side: lineitem (60M rows)
     HashJoinQuery {
         sql: r###"SELECT l.k
-        FROM (
+        FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s
+        RIGHT SEMI JOIN (
           SELECT CAST(CASE WHEN l_suppkey % 10 = 0 THEN l_suppkey ELSE l_suppkey + 1000000 END AS INT) as k
           FROM lineitem
         ) l
-        WHERE EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
+        ON s.k = l.k"###,
         density: 1.0,
-        prob_hit: 0.1,
-        build_size: "100K",
-        probe_size: "60M_RightSemi",
-    },
-    // Q18: RightSemi, 50% Density, 100% Hit rate
-    HashJoinQuery {
-        sql: r###"SELECT l.k
-        FROM (
-          SELECT CAST(l_suppkey * 2 AS INT) as k FROM lineitem
-        ) l
-        WHERE EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey * 2 AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
-        density: 0.5,
-        prob_hit: 1.0,
-        build_size: "100K",
-        probe_size: "60M_RightSemi",
-    },
-    // Q19: RightSemi, 50% Density, 10% Hit rate
-    HashJoinQuery {
-        sql: r###"SELECT l.k
-        FROM (
-          SELECT CAST(CASE
-                      WHEN l_suppkey % 10 = 0 THEN l_suppkey * 2
-                      WHEN l_suppkey % 10 < 9 THEN l_suppkey * 2 + 1
-                      ELSE l_suppkey * 2 + 1000000
-                 END AS INT) as k
-          FROM lineitem
-        ) l
-        WHERE EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey * 2 AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
-        density: 0.5,
-        prob_hit: 0.1,
-        build_size: "100K",
-        probe_size: "60M_RightSemi",
-    },
-    // Q20: RightSemi, 10% Density, 100% Hit rate
-    HashJoinQuery {
-        sql: r###"SELECT l.k
-        FROM (
-          SELECT CAST(l_suppkey * 10 AS INT) as k FROM lineitem
-        ) l
-        WHERE EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey * 10 AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
-        density: 0.1,
-        prob_hit: 1.0,
-        build_size: "100K",
-        probe_size: "60M_RightSemi",
-    },
-    // Q21: RightSemi, 10% Density, 10% Hit rate
-    HashJoinQuery {
-        sql: r###"SELECT l.k
-        FROM (
-          SELECT CAST(CASE
-                      WHEN l_suppkey % 10 = 0 THEN l_suppkey * 10
-                      WHEN l_suppkey % 10 < 9 THEN l_suppkey * 10 + 1
-                      ELSE l_suppkey * 10 + 1000000
-                 END AS INT) as k
-          FROM lineitem
-        ) l
-        WHERE EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey * 10 AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
-        density: 0.1,
         prob_hit: 0.1,
         build_size: "100K",
         probe_size: "60M_RightSemi",
     },
     // RightAnti Join benchmarks with Int32 keys
-    // Q22: RightAnti, 100% Density, 100% Hit rate (no output)
+    //
+    // Fanout (average build rows matched per probe row, as measured by running
+    // the equivalent INNER JOIN under `EXPLAIN ANALYZE` and reading the
+    // `HashJoinExec` metrics): 1 for Q19-Q21. Build keys here are primary
+    // keys (`n_nationkey`, `s_suppkey`), so each probe row matches at most
+    // one build row. `prob_hit` controls what fraction of probe rows find
+    // that one match (and are therefore filtered *out* by anti).
+    //
+    // Fanout still matters because anti joins short-circuit after the first
+    // match. Coverage of fanout > 1 (build-side duplicates) is left for a
+    // follow-up.
+    //
+    // Q19: RightAnti, Small build (25 rows), 100% Hit rate (no output)
+    // Build Side: nation (25 rows) | Probe Side: customer (1.5M rows)
+    HashJoinQuery {
+        sql: r###"SELECT c.k
+        FROM (SELECT CAST(n_nationkey AS INT) as k FROM nation) n
+        RIGHT ANTI JOIN (SELECT CAST(c_nationkey AS INT) as k FROM customer) c
+        ON n.k = c.k"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "25",
+        probe_size: "1.5M_RightAnti",
+    },
+    // Q20: RightAnti, Medium build (100K rows), 100% Hit rate (no output)
+    // Build Side: supplier (100K rows) | Probe Side: lineitem (60M rows)
     HashJoinQuery {
         sql: r###"SELECT l.k
-        FROM (
-          SELECT CAST(l_suppkey AS INT) as k FROM lineitem
-        ) l
-        WHERE NOT EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
+        FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s
+        RIGHT ANTI JOIN (SELECT CAST(l_suppkey AS INT) as k FROM lineitem) l
+        ON s.k = l.k"###,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "100K",
         probe_size: "60M_RightAnti",
     },
-    // Q23: RightAnti, 100% Density, 10% Hit rate (90% output)
+    // Q21: RightAnti, Medium build (100K rows), 10% Hit rate (90% output)
+    // Build Side: supplier (100K rows) | Probe Side: lineitem (60M rows)
     HashJoinQuery {
         sql: r###"SELECT l.k
-        FROM (
+        FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s
+        RIGHT ANTI JOIN (
           SELECT CAST(CASE WHEN l_suppkey % 10 = 0 THEN l_suppkey ELSE l_suppkey + 1000000 END AS INT) as k
           FROM lineitem
         ) l
-        WHERE NOT EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
+        ON s.k = l.k"###,
         density: 1.0,
-        prob_hit: 0.1,
-        build_size: "100K",
-        probe_size: "60M_RightAnti",
-    },
-    // Q24: RightAnti, 50% Density, 100% Hit rate (no output)
-    HashJoinQuery {
-        sql: r###"SELECT l.k
-        FROM (
-          SELECT CAST(l_suppkey * 2 AS INT) as k FROM lineitem
-        ) l
-        WHERE NOT EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey * 2 AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
-        density: 0.5,
-        prob_hit: 1.0,
-        build_size: "100K",
-        probe_size: "60M_RightAnti",
-    },
-    // Q25: RightAnti, 50% Density, 10% Hit rate (90% output)
-    HashJoinQuery {
-        sql: r###"SELECT l.k
-        FROM (
-          SELECT CAST(CASE
-                      WHEN l_suppkey % 10 = 0 THEN l_suppkey * 2
-                      WHEN l_suppkey % 10 < 9 THEN l_suppkey * 2 + 1
-                      ELSE l_suppkey * 2 + 1000000
-                 END AS INT) as k
-          FROM lineitem
-        ) l
-        WHERE NOT EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey * 2 AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
-        density: 0.5,
-        prob_hit: 0.1,
-        build_size: "100K",
-        probe_size: "60M_RightAnti",
-    },
-    // Q26: RightAnti, 10% Density, 100% Hit rate (no output)
-    HashJoinQuery {
-        sql: r###"SELECT l.k
-        FROM (
-          SELECT CAST(l_suppkey * 10 AS INT) as k FROM lineitem
-        ) l
-        WHERE NOT EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey * 10 AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
-        density: 0.1,
-        prob_hit: 1.0,
-        build_size: "100K",
-        probe_size: "60M_RightAnti",
-    },
-    // Q27: RightAnti, 10% Density, 10% Hit rate (90% output)
-    HashJoinQuery {
-        sql: r###"SELECT l.k
-        FROM (
-          SELECT CAST(CASE
-                      WHEN l_suppkey % 10 = 0 THEN l_suppkey * 10
-                      WHEN l_suppkey % 10 < 9 THEN l_suppkey * 10 + 1
-                      ELSE l_suppkey * 10 + 1000000
-                 END AS INT) as k
-          FROM lineitem
-        ) l
-        WHERE NOT EXISTS (
-          SELECT 1 FROM (SELECT CAST(s_suppkey * 10 AS INT) as k FROM supplier) s WHERE s.k = l.k
-        )"###,
-        density: 0.1,
         prob_hit: 0.1,
         build_size: "100K",
         probe_size: "60M_RightAnti",
@@ -515,7 +425,9 @@ impl RunOpt {
             None => 1..=HASH_QUERIES.len(),
         };
 
-        let config = self.common.config()?;
+        let mut config = self.common.config()?;
+        // Disable join reordering to ensure the optimizer doesn't swap join sides
+        config.options_mut().optimizer.join_reordering = false;
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
 

@@ -116,4 +116,9 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "hash_join_semi_anti"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "dictionary_group_values"
