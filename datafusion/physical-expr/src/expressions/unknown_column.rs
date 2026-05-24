@@ -126,6 +126,20 @@ impl UnKnownColumn {
     }
 }
 
+impl Hash for UnKnownColumn {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
+impl PartialEq for UnKnownColumn {
+    fn eq(&self, _other: &Self) -> bool {
+        // UnknownColumn is not a valid expression, so it should not be equal to any other expression.
+        // See https://github.com/apache/datafusion/pull/11536
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,19 +195,5 @@ mod tests {
 
         assert!(err.contains("expr_id=Some(7)"));
         assert!(err.contains("PhysicalColumn"));
-    }
-}
-
-impl Hash for UnKnownColumn {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
-    }
-}
-
-impl PartialEq for UnKnownColumn {
-    fn eq(&self, _other: &Self) -> bool {
-        // UnknownColumn is not a valid expression, so it should not be equal to any other expression.
-        // See https://github.com/apache/datafusion/pull/11536
-        false
     }
 }
