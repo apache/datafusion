@@ -63,7 +63,7 @@ logical_plan
 10)----------TableScan: lineitem projection=[l_orderkey, l_quantity]
 11)------SubqueryAlias: __correlated_sq_1
 12)--------Projection: lineitem.l_orderkey
-13)----------Filter: sum(lineitem.l_quantity) > Decimal128(Some(30000),25,2)
+13)----------Filter: sum(lineitem.l_quantity) > Decimal128(300.00,25,2)
 14)------------Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[sum(lineitem.l_quantity)]]
 15)--------------TableScan: lineitem projection=[l_orderkey, l_quantity]
 physical_plan
