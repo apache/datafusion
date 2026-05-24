@@ -28,7 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::metadata::FieldMetadata;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::Expr;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -132,6 +132,43 @@ impl PhysicalExpr for Literal {
 
     fn placement(&self) -> ExpressionPlacement {
         ExpressionPlacement::Literal
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
+                self.value().try_into()?,
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl Literal {
+    /// Reconstruct a [`Literal`] from its protobuf representation.
+    ///
+    /// Takes the whole [`PhysicalExprNode`] — the exact inverse of what
+    /// [`PhysicalExpr::try_to_proto`] produces — so every expression's
+    /// `try_from_proto` shares one signature.
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    /// [`PhysicalExpr::try_to_proto`]: datafusion_physical_expr_common::physical_expr::PhysicalExpr::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_proto_models::protobuf;
+        let scalar = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::Literal(scalar)) => scalar,
+            _ => return internal_err!("PhysicalExprNode is not a Literal"),
+        };
+        Ok(Arc::new(Literal::new(scalar.try_into()?)))
     }
 }
 
