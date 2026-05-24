@@ -121,3 +121,7 @@ required-features = ["test_utils"]
 [[bench]]
 harness = false
 name = "dictionary_group_values"
+
+[[bench]]
+harness = false
+name = "multi_group_by"
