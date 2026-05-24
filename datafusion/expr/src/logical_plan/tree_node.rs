@@ -46,7 +46,9 @@ use crate::{
     Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
     Values, Window, dml::CopyTo,
 };
-use datafusion_common::display::{DisplayAs, DisplayFormatType, FormattedTreeNode};
+use datafusion_common::display::{
+    DisplayAs, DisplayFormatType, FormattedTreeNode, MAIN_CONTENT_KEY,
+};
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
 use crate::expr::{Exists, InSubquery, SetComparison};
@@ -110,7 +112,7 @@ impl DisplayAs for LogicalPlan {
                 .split_once(':')
                 .map(|(_, second)| second.trim_start())
                 .unwrap_or("");
-            return write!(f, "__main_content__={second}");
+            return write!(f, "{MAIN_CONTENT_KEY}={second}");
         }
         // DisplayAs only used to render tree for now
         unimplemented!()

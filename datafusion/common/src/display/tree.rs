@@ -312,7 +312,7 @@ impl RenderTree {
             let available_width = Self::NODE_RENDER_WIDTH - 7;
             let total_size = key.len() + str.len() + 2;
             let is_multiline = str.contains('\n');
-            let hide_key = key == "__main_content__";
+            let hide_key = key == super::MAIN_CONTENT_KEY;
 
             if str.is_empty() {
                 str = if hide_key { str } else { key.to_string() };

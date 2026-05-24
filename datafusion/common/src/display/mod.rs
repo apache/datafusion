@@ -158,6 +158,41 @@ impl<T: DisplayAs + ?Sized> DisplayAs for Arc<T> {
     }
 }
 
+/// The key used in `DisplayFormatType::TreeRender` to represent the main content of a node.
+/// This content is rendered centered without displaying the key itself.
+///
+/// # Example
+///
+/// For example, implementing `DisplayAs` with `MAIN_CONTENT_KEY` and an additional key-value pair:
+///
+/// ```rust
+/// # use std::fmt::{Formatter, Result};
+/// # use datafusion_common::display::{DisplayAs, DisplayFormatType, MAIN_CONTENT_KEY};
+/// # struct MyNode;
+/// # impl DisplayAs for MyNode {
+/// fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> Result {
+///     if let DisplayFormatType::TreeRender = t {
+///         write!(f, "{MAIN_CONTENT_KEY}=My main content text\n")?;
+///         write!(f, "my_key=my_value")?;
+///     }
+///     Ok(())
+/// }
+/// # }
+/// ```
+///
+/// If the node name is `"Projection"`, it is rendered inside a box in the following way (the main content key
+/// is omitted, and the other key-value pairs are rendered in alphabetical order):
+///
+/// ```text
+/// ┌───────────────────────────┐
+/// │         Projection        │
+/// │    --------------------   │
+/// │    My main content text   │
+/// │      my_key: my_value     │
+/// └───────────────────────────┘
+/// ```
+pub const MAIN_CONTENT_KEY: &str = "__main_content__";
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DisplayFormatType {
     /// Default, compact format. Example: `FilterExec: c12 < 10.0`
