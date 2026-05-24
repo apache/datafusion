@@ -1427,11 +1427,8 @@ mod tests {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
-        let expected = "Schema error: No field named \"t1.c0\". \
-            Column names are case sensitive. \
-            You can use double quotes to refer to the \"\"t1.c0\"\" column \
-            or set the datafusion.sql_parser.enable_ident_normalization configuration. \
-            Did you mean 't1.c0'?.";
+        let expected = "Schema error: No field named \"t1.c0\". Did you mean 't1.c0'?\n\
+            Valid fields are t1.c0, t1.c1.";
         assert_eq!(err.strip_backtrace(), expected);
         Ok(())
     }
@@ -1449,8 +1446,43 @@ mod tests {
 
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
-        let expected = "Schema error: No field named \"t1.c0\". \
+        let expected = "Schema error: No field named \"t1.c0\".\n\
             Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\".";
+        assert_eq!(err.strip_backtrace(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn field_not_found_suggests_closest_field_name() -> Result<()> {
+        let schema = DFSchema::try_from(Schema::new(vec![
+            Field::new("abzz", DataType::Boolean, true),
+            Field::new("abcd", DataType::Boolean, true),
+        ]))?;
+
+        let err = schema.field_with_unqualified_name("abc").unwrap_err();
+        let expected = "Schema error: No field named abc. Did you mean 'abcd'?\n\
+            Valid fields are abzz, abcd.";
+        assert_eq!(err.strip_backtrace(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn field_not_found_suggests_case_sensitive_qualified_field() -> Result<()> {
+        let schema = DFSchema::try_from_qualified_schema(
+            "hits",
+            &Schema::new(vec![
+                Field::new("WatchID", DataType::Boolean, true),
+                Field::new("URL", DataType::Boolean, true),
+                Field::new("URLHash", DataType::Boolean, true),
+            ]),
+        )?;
+
+        let err = schema.field_with_unqualified_name("url").unwrap_err();
+        let expected = "Schema error: No field named url. Did you mean 'hits.\"URL\"'?\n\
+            Column names are case sensitive. \
+            You can use double quotes to refer to the hits.\"URL\" column \
+            or set the datafusion.sql_parser.enable_ident_normalization configuration.\n\
+            Valid fields are hits.\"WatchID\", hits.\"URL\", hits.\"URLHash\".";
         assert_eq!(err.strip_backtrace(), expected);
         Ok(())
     }

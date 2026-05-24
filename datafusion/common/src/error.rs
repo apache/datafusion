@@ -45,7 +45,7 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
-use crate::utils::datafusion_strsim::normalized_levenshtein;
+use crate::utils::datafusion_strsim::{levenshtein, normalized_levenshtein};
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, Diagnostic, TableReference};
 use arrow::error::ArrowError;
@@ -198,6 +198,71 @@ pub enum SchemaError {
     },
 }
 
+fn case_insensitive_field_match<'a>(
+    field: &Column,
+    valid_fields: &'a [Column],
+) -> Option<&'a Column> {
+    let field_flat_name = field.flat_name();
+    let field_name_lower = field.name().to_lowercase();
+    let field_flat_name_lower = field_flat_name.to_lowercase();
+
+    valid_fields.iter().find(|valid_field| {
+        let valid_field_flat_name = valid_field.flat_name();
+        let valid_field_name_lower = valid_field.name().to_lowercase();
+        let valid_field_flat_name_lower = valid_field_flat_name.to_lowercase();
+
+        let name_differs_only_by_case = field_name_lower == valid_field_name_lower
+            && field.name() != valid_field.name();
+        let flat_name_differs_only_by_case = field_flat_name_lower
+            == valid_field_flat_name_lower
+            && field_flat_name != valid_field_flat_name;
+
+        name_differs_only_by_case || flat_name_differs_only_by_case
+    })
+}
+
+fn closest_valid_field<'a>(
+    field: &Column,
+    valid_fields: &'a [Column],
+) -> Option<&'a Column> {
+    // Find the most similar valid field name.
+    let target_names = [
+        field.name().to_lowercase(),
+        field.flat_name().to_lowercase(),
+    ];
+
+    let mut best_match: Option<(usize, usize, usize, &Column)> = None;
+    for (index, valid_field) in valid_fields.iter().enumerate() {
+        let valid_names = [
+            valid_field.name().to_lowercase(),
+            valid_field.flat_name().to_lowercase(),
+        ];
+        for target in &target_names {
+            for valid_name in &valid_names {
+                let distance = levenshtein(target, valid_name);
+                let max_len = target.chars().count().max(valid_name.chars().count());
+                if max_len == 0 || distance * 2 > max_len {
+                    continue;
+                }
+
+                let should_replace = best_match.is_none_or(
+                    |(best_distance, best_max_len, best_index, _)| {
+                        distance < best_distance
+                            || distance == best_distance
+                                && (max_len > best_max_len
+                                    || max_len == best_max_len && index < best_index)
+                    },
+                );
+                if should_replace {
+                    best_match = Some((distance, max_len, index, valid_field));
+                }
+            }
+        }
+    }
+
+    best_match.map(|(_, _, _, valid_field)| valid_field)
+}
+
 impl Display for SchemaError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -205,44 +270,39 @@ impl Display for SchemaError {
                 field,
                 valid_fields,
             } => {
-                write!(f, "No field named {}", field.quoted_flat_name())?;
-                let lower_valid_fields = valid_fields
-                    .iter()
-                    .map(|column| column.flat_name().to_lowercase())
-                    .collect::<Vec<String>>();
+                let closest_field = closest_valid_field(field, valid_fields);
+                let case_sensitive_match =
+                    case_insensitive_field_match(field, valid_fields);
 
-                let valid_fields_names = valid_fields
-                    .iter()
-                    .map(|column| column.flat_name())
-                    .collect::<Vec<String>>();
-                if lower_valid_fields.contains(&field.flat_name().to_lowercase()) {
+                write!(f, "No field named {}", field.quoted_flat_name())?;
+                if let Some(matched) = closest_field {
+                    write!(f, ". Did you mean '{}'?", matched.quoted_flat_name())?;
+                } else {
+                    write!(f, ".")?;
+                }
+
+                if let Some(case_sensitive_match) = case_sensitive_match {
                     write!(
                         f,
-                        ". Column names are case sensitive. You can use double quotes to refer to the \"{}\" column \
-                        or set the datafusion.sql_parser.enable_ident_normalization configuration",
-                        field.quoted_flat_name()
+                        "\nColumn names are case sensitive. You can use double quotes to refer to the {} column \
+                        or set the datafusion.sql_parser.enable_ident_normalization configuration.",
+                        case_sensitive_match.quoted_flat_name()
                     )?;
                 }
-                let field_name = field.name();
-                if let Some(matched) = valid_fields_names
-                    .iter()
-                    .filter(|str| normalized_levenshtein(str, field_name) >= 0.5)
-                    .collect::<Vec<&String>>()
-                    .first()
-                {
-                    write!(f, ". Did you mean '{matched}'?")?;
-                } else if !valid_fields.is_empty() {
+
+                if !valid_fields.is_empty() {
                     write!(
                         f,
-                        ". Valid fields are {}",
+                        "\nValid fields are {}.",
                         valid_fields
                             .iter()
                             .map(|field| field.quoted_flat_name())
                             .collect::<Vec<String>>()
                             .join(", ")
-                    )?;
+                    )
+                } else {
+                    Ok(())
                 }
-                write!(f, ".")
             }
             Self::DuplicateQualifiedField { qualifier, name } => {
                 write!(
