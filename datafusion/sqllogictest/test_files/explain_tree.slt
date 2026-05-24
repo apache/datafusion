@@ -160,6 +160,40 @@ UNION ALL SELECT * FROM table1
 
 ######## Begin Queries ########
 
+# By default, logical plan is not displayed with tree format (backward compatibility)
+query TT
+explain SELECT int_col FROM table1 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8View("foo")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8View("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│         FilterExec        │
+03)│    --------------------   │
+04)│         predicate:        │
+05)│     string_col != foo     │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│      RepartitionExec      │
+09)│    --------------------   │
+10)│ partition_count(in->out): │
+11)│           1 -> 4          │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)│    --------------------   │
+19)│          files: 1         │
+20)│        format: csv        │
+21)└───────────────────────────┘
+
+statement ok
+set datafusion.explain.logical_plan_tree = true;
+
 # Filter
 query TT
 explain SELECT int_col FROM table1 WHERE string_col != 'foo';
@@ -3327,3 +3361,6 @@ RESET datafusion.explain.format;
 
 statement ok
 RESET datafusion.explain.tree_maximum_render_width;
+
+statement ok
+RESET datafusion.explain.logical_plan_tree;
