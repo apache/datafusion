@@ -169,20 +169,24 @@ impl FileScanConfig {
         //
         // This interleaving is actually beneficial because SPM pulls from both
         // partitions concurrently, keeping parallel I/O active.
-        let keep_ordering = if all_non_overlapping {
-            if is_exact {
-                true
-            } else {
-                // Re-validate: now that files are sorted, can the
-                // request be satisfied?
-                //
-                // Same NULL guard as `try_sort_file_groups_by_statistics`:
-                // we cannot claim Exact if any non-last file contains
-                // NULLs in the sort columns. With NULLS LAST those
-                // NULLs sit after all non-null rows in the file, so
-                // when the next file's non-nulls are smaller than the
-                // previous file's max, they'd appear *after* the NULLs
-                // in the concatenated stream — breaking the ordering.
+        let keep_ordering = match (all_non_overlapping, is_exact) {
+            // Files still overlap after the stats sort — the combined
+            // stream isn't ordered, so `output_ordering` must be dropped.
+            (false, _) => false,
+            // Source already had validated ordering and the post-sort
+            // files still don't overlap — Exact carries through.
+            (true, true) => true,
+            // Source returned `Inexact`; re-validate against the
+            // reordered file groups to decide whether to upgrade.
+            //
+            // Same NULL guard as `try_sort_file_groups_by_statistics`:
+            // we cannot claim Exact if any non-last file contains
+            // NULLs in the sort columns. With NULLS LAST those
+            // NULLs sit after all non-null rows in the file, so
+            // when the next file's non-nulls are smaller than the
+            // previous file's max, they'd appear *after* the NULLs
+            // in the concatenated stream — breaking the ordering.
+            (true, false) => {
                 let projected_schema = new_config.projected_schema()?;
                 let projection_indices = new_config
                     .file_source
@@ -201,8 +205,6 @@ impl FileScanConfig {
                     new_eq_props.ordering_satisfy(order.iter().cloned())?
                 }
             }
-        } else {
-            false
         };
 
         if !keep_ordering {

@@ -1110,7 +1110,7 @@ EXPLAIN SELECT * FROM reversed_parquet ORDER BY id ASC;
 logical_plan
 01)Sort: reversed_parquet.id ASC NULLS LAST
 02)--TableScan: reversed_parquet projection=[id, value]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/c_low.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/a_high.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, sort_order_for_reorder=[id@0 ASC NULLS LAST]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/c_low.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/a_high.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 # Test 4.2: Results must be correct
 query II
@@ -1336,7 +1336,7 @@ EXPLAIN SELECT * FROM reversed_with_order_parquet ORDER BY id ASC;
 logical_plan
 01)Sort: reversed_with_order_parquet.id ASC NULLS LAST
 02)--TableScan: reversed_with_order_parquet projection=[id, value]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/c_low.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/a_high.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, sort_order_for_reorder=[id@0 ASC NULLS LAST]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/c_low.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/reversed/a_high.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 # Test 6.2: Results must be correct
 query II
@@ -1473,7 +1473,7 @@ EXPLAIN SELECT * FROM desc_reversed_parquet ORDER BY id DESC;
 logical_plan
 01)Sort: desc_reversed_parquet.id DESC NULLS FIRST
 02)--TableScan: desc_reversed_parquet projection=[id, value]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/desc_reversed/b_high.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/desc_reversed/a_low.parquet]]}, projection=[id, value], output_ordering=[id@0 DESC], file_type=parquet, sort_order_for_reorder=[id@0 DESC], reverse_row_groups=true
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/desc_reversed/b_high.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/desc_reversed/a_low.parquet]]}, projection=[id, value], output_ordering=[id@0 DESC], file_type=parquet
 
 # Test 8.2: Results must be correct
 query II
@@ -1485,6 +1485,78 @@ SELECT * FROM desc_reversed_parquet ORDER BY id DESC;
 3 300
 2 200
 1 100
+
+# Test 8b: DESC with multiple row groups per file sharing a min value.
+# Regression test for the Inexact→Exact upgrade: when SortExec is eliminated
+# the files must be read in natural order. The opener's runtime row-group
+# reorder (sort ASC-by-min then reverse) mis-orders two row groups in one file
+# that share the same min — so the upgrade must NOT leave those hints active.
+#
+# File b_high is DESC-sorted [10,8,8,8] written with 2 rows per row group:
+#   RG0 = [10, 8] (min 8, max 10)
+#   RG1 = [ 8, 8] (min 8, max 8)
+# Both row groups have min=8. Naively reordering RGs ASC-by-min then reversing
+# yields [RG1, RG0] → 8,8,10,8 (wrong). Natural order [RG0, RG1] is correct.
+
+statement ok
+CREATE TABLE rg_desc_high(id INT, value INT) AS VALUES (10, 100), (8, 801), (8, 802), (8, 803);
+
+statement ok
+CREATE TABLE rg_desc_low(id INT, value INT) AS VALUES (3, 300), (2, 200), (1, 100);
+
+query I
+COPY (SELECT * FROM rg_desc_high ORDER BY id DESC)
+TO 'test_files/scratch/sort_pushdown/rg_desc/b_high.parquet'
+OPTIONS ('format.max_row_group_size' '2');
+----
+4
+
+query I
+COPY (SELECT * FROM rg_desc_low ORDER BY id DESC)
+TO 'test_files/scratch/sort_pushdown/rg_desc/a_low.parquet'
+OPTIONS ('format.max_row_group_size' '2');
+----
+3
+
+# Files named so filesystem order [a_low, b_high] is wrong for DESC → the
+# Inexact path fires, stats reorder makes file groups [b_high, a_low]
+# non-overlapping, and the upgrade eliminates SortExec.
+statement ok
+CREATE EXTERNAL TABLE rg_desc_parquet(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/rg_desc/'
+WITH ORDER (id DESC);
+
+# SortExec eliminated, files reordered, NO sort_order_for_reorder /
+# reverse_row_groups (natural read is correct after the upgrade).
+query TT
+EXPLAIN SELECT id FROM rg_desc_parquet ORDER BY id DESC;
+----
+logical_plan
+01)Sort: rg_desc_parquet.id DESC NULLS FIRST
+02)--TableScan: rg_desc_parquet projection=[id]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/rg_desc/b_high.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/rg_desc/a_low.parquet]]}, projection=[id], output_ordering=[id@0 DESC], file_type=parquet
+
+# Results must be in DESC order — id=10 first.
+query I
+SELECT id FROM rg_desc_parquet ORDER BY id DESC;
+----
+10
+8
+8
+8
+3
+2
+1
+
+statement ok
+DROP TABLE rg_desc_parquet;
+
+statement ok
+DROP TABLE rg_desc_high;
+
+statement ok
+DROP TABLE rg_desc_low;
 
 # Test 9: Multi-column sort key validation
 # Files have (category, id) ordering. Files share a boundary value on category='B'
@@ -2366,7 +2438,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
 02)--BufferExec: capacity=1073741824
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/a_high.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/c_low.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, sort_order_for_reorder=[id@0 ASC NULLS LAST]
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/a_high.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/c_low.parquet]]}, projection=[id, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 # Verify correctness
 query II
@@ -2393,7 +2465,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [id@0 ASC NULLS LAST], fetch=3
 02)--BufferExec: capacity=1073741824
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/a_high.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/c_low.parquet]]}, projection=[id, value], limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, sort_order_for_reorder=[id@0 ASC NULLS LAST]
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/b_mid.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/a_high.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/tg_buffer/c_low.parquet]]}, projection=[id, value], limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 query II
 SELECT * FROM tg_buffer ORDER BY id ASC LIMIT 3;
