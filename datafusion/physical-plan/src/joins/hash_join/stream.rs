@@ -749,8 +749,7 @@ impl HashJoinStream {
                                 return !is_semi;
                             }
                             let v = arr.value(i) as u32;
-                            let in_set =
-                                v >= min && v <= max && bitmap.contains(v);
+                            let in_set = v >= min && v <= max && bitmap.contains(v);
                             in_set == is_semi
                         });
                         BooleanArray::new(buffer, None)
@@ -762,8 +761,7 @@ impl HashJoinStream {
                                 return !is_semi;
                             }
                             let v = arr.value(i);
-                            let in_set =
-                                v >= min && v <= max && bitmap.contains(v);
+                            let in_set = v >= min && v <= max && bitmap.contains(v);
                             in_set == is_semi
                         });
                         BooleanArray::new(buffer, None)

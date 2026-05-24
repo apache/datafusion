@@ -31,8 +31,6 @@ use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::{Map, RoaringMapData};
-use roaring::RoaringBitmap;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
@@ -47,6 +45,7 @@ use crate::joins::utils::{
     swap_join_projection, update_hash,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
+use crate::joins::{Map, RoaringMapData};
 use crate::metrics::{Count, MetricBuilder, MetricCategory};
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
@@ -65,6 +64,7 @@ use crate::{
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
+use roaring::RoaringBitmap;
 
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, Int32Array, UInt32Array};
 use arrow::compute::concat_batches;
