@@ -662,7 +662,7 @@ pub fn intersect_metadata_for_union<'a>(
             }
             Some(current) => {
                 // Only keep keys that exist in both with the same value
-                current.retain(|k, v| metadata.get(k) == Some(v));
+                current.retain(|k, v| metadata.get(k) == Some(&*v));
             }
         }
     }
