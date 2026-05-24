@@ -420,7 +420,7 @@ exp(numeric_expression)
 
 ### `factorial`
 
-Factorial. Returns 1 if value is less than 2.
+Factorial of a non-negative integer. Errors if the argument is negative or the result overflows.
 
 ```sql
 factorial(numeric_expression)
@@ -3258,6 +3258,7 @@ _Alias of [current_date](#current_date)._
 - [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
+- [array_filter](#array_filter)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -3268,6 +3269,7 @@ _Alias of [current_date](#current_date)._
 - [array_max](#array_max)
 - [array_min](#array_min)
 - [array_ndims](#array_ndims)
+- [array_normalize](#array_normalize)
 - [array_pop_back](#array_pop_back)
 - [array_pop_front](#array_pop_front)
 - [array_position](#array_position)
@@ -3312,6 +3314,7 @@ _Alias of [current_date](#current_date)._
 - [list_empty](#list_empty)
 - [list_except](#list_except)
 - [list_extract](#list_extract)
+- [list_filter](#list_filter)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
@@ -3321,6 +3324,7 @@ _Alias of [current_date](#current_date)._
 - [list_length](#list_length)
 - [list_max](#list_max)
 - [list_ndims](#list_ndims)
+- [list_normalize](#list_normalize)
 - [list_pop_back](#list_pop_back)
 - [list_pop_front](#list_pop_front)
 - [list_position](#list_position)
@@ -3658,6 +3662,34 @@ array_except(array1, array2)
 
 _Alias of [array_element](#array_element)._
 
+### `array_filter`
+
+filters the values of an array using a boolean lambda
+
+```sql
+array_filter(array, x -> x > 2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda that returns a boolean. Elements for which the lambda returns true are kept.
+
+#### Example
+
+```sql
+> select array_filter([1, 2, 3, 4, 5], x -> x > 2);
++--------------------------------------------+
+| array_filter([1, 2, 3, 4, 5], x -> x > 2) |
++--------------------------------------------+
+| [3, 4, 5]                                  |
++--------------------------------------------+
+```
+
+#### Aliases
+
+- list_filter
+
 ### `array_has`
 
 Returns true if the array contains the element.
@@ -3892,6 +3924,33 @@ array_ndims(array, element)
 #### Aliases
 
 - list_ndims
+
+### `array_normalize`
+
+Returns the L2-normalized vector for the input numeric array, computed as `array[i] / sqrt(sum(array[i]^2))` per element. Returns NULL if the input is NULL, contains NULL elements, or has zero magnitude (all elements are zero). Returns an empty array for an empty input array.
+
+```sql
+array_normalize(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_normalize([3.0, 4.0]);
++-----------------------------+
+| array_normalize(List([3.0,4.0])) |
++-----------------------------+
+| [0.6, 0.8]                  |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_normalize
 
 ### `array_pop_back`
 
@@ -4742,6 +4801,10 @@ _Alias of [array_except](#array_except)._
 
 _Alias of [array_element](#array_element)._
 
+### `list_filter`
+
+_Alias of [array_filter](#array_filter)._
+
 ### `list_has`
 
 _Alias of [array_has](#array_has)._
@@ -4777,6 +4840,10 @@ _Alias of [array_max](#array_max)._
 ### `list_ndims`
 
 _Alias of [array_ndims](#array_ndims)._
+
+### `list_normalize`
+
+_Alias of [array_normalize](#array_normalize)._
 
 ### `list_pop_back`
 

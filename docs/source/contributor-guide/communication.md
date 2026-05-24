@@ -44,7 +44,7 @@ all technical designs are recorded and formalized in GitHub issues.
 
 Historically, the most active discussion forum has been the [Arrow Rust Discord
 server][discord-link] which has specific channels for Arrow, DataFusion, and
-DataFusion subprojects such as Ballista, Comet, Python, etc.
+DataFusion subprojects such as Ballista, Comet, Java, Python, etc.
 DataFusion specific channels are prefixed with the `#datafusion-` tag.
 We recommend new users join this server for real-time discussions with the community.
 

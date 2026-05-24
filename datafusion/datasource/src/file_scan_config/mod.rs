@@ -30,7 +30,6 @@ use crate::{
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
 };
@@ -82,9 +81,7 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
 /// # use object_store::ObjectStore;
 /// # use datafusion_common::Result;
-/// # use datafusion_common::tree_node::TreeNodeRecursion;
 /// # use datafusion_datasource::file::FileSource;
-/// # use datafusion_physical_plan::PhysicalExpr;
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -114,7 +111,6 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// #  fn file_type(&self) -> &str { "parquet" }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
-/// #  fn apply_expressions(&self, _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 /// #  }
 /// # impl ParquetSource {
 /// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
@@ -941,14 +937,19 @@ impl DataSource for FileScanConfig {
     ///   │     → SortExec removed, fetch (LIMIT) pushed to DataSourceExec
     ///   │
     ///   ├─► FileSource returns Inexact
-    ///   │     (reverse_row_groups=true)
-    ///   │     → SortExec kept, scan optimized
+    ///   │     (e.g. column_in_file_schema: opener will reorder RGs at runtime)
+    ///   │     → rebuild_with_source: sort files by stats; if the post-sort
+    ///   │       file groups are non-overlapping AND the request now validates
+    ///   │       AND no NULLs sit in the sort columns of non-last files,
+    ///   │       upgrade back to Exact (SortExec removed). Otherwise stays
+    ///   │       Inexact and SortExec is kept while the scan is still
+    ///   │       optimised via `sort_order_for_reorder` / `reverse_row_groups`.
     ///   │
     ///   └─► FileSource returns Unsupported
-    ///         (ordering stripped because files in wrong order)
+    ///         (e.g. expression sort key or partition column)
     ///         → try_sort_file_groups_by_statistics():
     ///           1. Sort files within each group by min/max statistics
-    ///           2. Re-check: non-overlapping + ordering valid?
+    ///           2. Re-check: non-overlapping + ordering valid + no NULLs?
     ///              YES → Exact → SortExec removed
     ///              NO  → Inexact (files reordered, Sort stays)
     /// ```
@@ -977,8 +978,42 @@ impl DataSource for FileScanConfig {
                 }
             }
             SortOrderPushdownResult::Inexact { inner } => {
-                Ok(SortOrderPushdownResult::Inexact {
-                    inner: Arc::new(self.rebuild_with_source(inner, false, order)?),
+                let mut config = self.rebuild_with_source(inner, false, order)?;
+                // `rebuild_with_source` reorders files by stats; if the
+                // post-sort files are non-overlapping AND the request now
+                // validates against the new file groups, `output_ordering`
+                // is preserved and we can upgrade back to Exact. This
+                // restores the sort-elimination behaviour that lived in
+                // the `Unsupported` → `try_sort_file_groups_by_statistics`
+                // path before #21956 routed `column_in_file_schema` cases
+                // here.
+                if config.output_ordering.is_empty() {
+                    return Ok(SortOrderPushdownResult::Inexact {
+                        inner: Arc::new(config),
+                    });
+                }
+                // Upgrading to Exact: the post-sort file groups are
+                // non-overlapping and each file's declared ordering
+                // re-validates, so reading the files in their natural
+                // (declared-sorted) order already yields the requested
+                // ordering — exactly like the `Unsupported` → Exact path,
+                // which reads files in natural order too.
+                //
+                // Drop the runtime row-group reorder hints the Inexact
+                // source carried (`sort_order_for_reorder` /
+                // `reverse_row_groups`) by restoring the original,
+                // hint-free source. With the `SortExec` removed those
+                // hints are not just redundant but unsafe: for a DESC
+                // request the opener sorts row groups ASC-by-min and then
+                // reverses them, which reorders two row groups within a
+                // single file that share the same `min` incorrectly
+                // (e.g. a file `[10,8,8,8]` whose row groups are
+                // `[10,8]` and `[8,8]` would stream as `8,8,10,8`).
+                // The `SortExec` used to mask this; once it is gone the
+                // reordered stream is the final, wrong answer.
+                config.file_source = Arc::clone(&self.file_source);
+                Ok(SortOrderPushdownResult::Exact {
+                    inner: Arc::new(config),
                 })
             }
             SortOrderPushdownResult::Unsupported => {
@@ -997,14 +1032,6 @@ impl DataSource for FileScanConfig {
             ..self.clone()
         };
         Some(Arc::new(new_config))
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Delegate to the file source
-        self.file_source.apply_expressions(f)
     }
 
     /// Create any shared state that should be passed between sibling streams
@@ -1408,11 +1435,9 @@ mod tests {
     use arrow::datatypes::Field;
     use datafusion_common::ColumnStatistics;
     use datafusion_common::stats::Precision;
-    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_common::{Result, assert_batches_eq, internal_err};
     use datafusion_execution::TaskContext;
     use datafusion_expr::SortExpr;
-    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::projection::ProjectionExpr;
@@ -1474,13 +1499,6 @@ mod tests {
             Ok(SortOrderPushdownResult::Inexact {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
     }
 
@@ -2623,13 +2641,6 @@ mod tests {
             Ok(SortOrderPushdownResult::Exact {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
     }
 

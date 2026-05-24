@@ -115,6 +115,26 @@ pub struct PagePruningAccessPlanFilter {
     predicates: Vec<PruningPredicate>,
 }
 
+/// Result of applying page-index pruning to a [`ParquetAccessPlan`].
+pub(crate) struct PagePruningResult {
+    pub(crate) access_plan: ParquetAccessPlan,
+    /// Pages skipped because the containing row group was fully matched by
+    /// row-group statistics.
+    pub(crate) pages_skipped_by_fully_matched: usize,
+}
+
+impl PagePruningResult {
+    fn new(
+        access_plan: ParquetAccessPlan,
+        pages_skipped_by_fully_matched: usize,
+    ) -> Self {
+        Self {
+            access_plan,
+            pages_skipped_by_fully_matched,
+        }
+    }
+}
+
 impl PagePruningAccessPlanFilter {
     /// Create a new [`PagePruningAccessPlanFilter`] from a physical
     /// expression.
@@ -155,23 +175,43 @@ impl PagePruningAccessPlanFilter {
     /// parquet page index, if any
     pub fn prune_plan_with_page_index(
         &self,
+        access_plan: ParquetAccessPlan,
+        arrow_schema: &Schema,
+        parquet_schema: &SchemaDescriptor,
+        parquet_metadata: &ParquetMetaData,
+        file_metrics: &ParquetFileMetrics,
+    ) -> ParquetAccessPlan {
+        self.prune_plan_with_page_index_and_metrics(
+            access_plan,
+            arrow_schema,
+            parquet_schema,
+            parquet_metadata,
+            file_metrics,
+        )
+        .access_plan
+    }
+
+    /// Returns an updated [`ParquetAccessPlan`] and metrics by applying predicates
+    /// to the parquet page index, if any.
+    pub(crate) fn prune_plan_with_page_index_and_metrics(
+        &self,
         mut access_plan: ParquetAccessPlan,
         arrow_schema: &Schema,
         parquet_schema: &SchemaDescriptor,
         parquet_metadata: &ParquetMetaData,
         file_metrics: &ParquetFileMetrics,
-    ) -> (ParquetAccessPlan, usize) {
+    ) -> PagePruningResult {
         // scoped timer updates on drop
         let _timer_guard = file_metrics.page_index_eval_time.timer();
         if self.predicates.is_empty() {
-            return (access_plan, 0);
+            return PagePruningResult::new(access_plan, 0);
         }
 
         let page_index_predicates = &self.predicates;
         let groups = parquet_metadata.row_groups();
 
         if groups.is_empty() {
-            return (access_plan, 0);
+            return PagePruningResult::new(access_plan, 0);
         }
 
         if parquet_metadata.offset_index().is_none()
@@ -182,7 +222,7 @@ impl PagePruningAccessPlanFilter {
                 parquet_metadata.offset_index().is_some(),
                 parquet_metadata.column_index().is_some()
             );
-            return (access_plan, 0);
+            return PagePruningResult::new(access_plan, 0);
         };
 
         // track the total number of rows that should be skipped
@@ -329,7 +369,7 @@ impl PagePruningAccessPlanFilter {
         file_metrics
             .page_index_pages_pruned
             .add_matched(total_pages_select);
-        (access_plan, total_pages_skipped_by_fully_matched)
+        PagePruningResult::new(access_plan, total_pages_skipped_by_fully_matched)
     }
 
     /// Returns the number of filters in the [`PagePruningAccessPlanFilter`]
