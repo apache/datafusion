@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
     Array, BooleanArray, Capacities, MutableArrayData, Scalar, cast::AsArray, make_array,
@@ -252,6 +252,16 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
     }
 }
 
+/// The shared `get_field` UDF, reused whenever simplification needs to build a
+/// fresh `get_field` node (e.g. re-wrapping the remaining access path).
+fn get_field_udf() -> Arc<ScalarUDF> {
+    static GET_FIELD_UDF: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
+    Arc::clone(
+        GET_FIELD_UDF
+            .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(GetFieldFunc::new()))),
+    )
+}
+
 /// Try to simplify a `get_field` call whose base is an inline struct
 /// constructor by resolving the field access at plan time.
 ///
@@ -337,7 +347,7 @@ fn simplify_get_field_over_struct_constructor(args: &[Expr]) -> Option<Expr> {
     new_args.push(value);
     new_args.extend_from_slice(rest);
     Some(Expr::ScalarFunction(ScalarFunction::new_udf(
-        Arc::new(ScalarUDF::new_from_impl(GetFieldFunc::new())),
+        get_field_udf(),
         new_args,
     )))
 }
@@ -616,10 +626,7 @@ impl ScalarUDFImpl for GetFieldFunc {
 
         if did_flatten {
             return Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
-                ScalarFunction::new_udf(
-                    Arc::new(ScalarUDF::new_from_impl(GetFieldFunc::new())),
-                    merged_args,
-                ),
+                ScalarFunction::new_udf(get_field_udf(), merged_args),
             )));
         }
 
