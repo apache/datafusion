@@ -18,9 +18,14 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 mod file_pruner;
+mod pruning_conjunction;
 mod pruning_predicate;
 
 pub use file_pruner::FilePruner;
+pub use pruning_conjunction::{
+    ConjunctStatsObserver, NoopObserver, PerConjunctPruneStats, PruningConjunction,
+    PruningConjunctionBuilder, PruningObserver, Tag,
+};
 pub use pruning_predicate::{
     PredicateRewriter, PruningPredicate, PruningStatistics, RequiredColumns,
     UnhandledPredicateHook, build_pruning_predicate,
