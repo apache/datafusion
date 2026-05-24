@@ -138,31 +138,51 @@ impl FileScanConfig {
             false
         };
 
-        if is_exact && all_non_overlapping {
-            // Truly exact: within-file ordering guaranteed and files are non-overlapping.
-            // Keep output_ordering so SortExec can be eliminated for each partition.
-            //
-            // We intentionally do NOT redistribute files across groups here.
-            // The planning-phase bin-packing may interleave file ranges across groups:
-            //
-            //   Group 0: [f1(1-10), f3(21-30)]   ← interleaved with group 1
-            //   Group 1: [f2(11-20), f4(31-40)]
-            //
-            // This interleaving is actually beneficial because SPM pulls from both
-            // partitions concurrently, keeping parallel I/O active:
-            //
-            //   SPM: pull P0 [1-10] → pull P1 [11-20] → pull P0 [21-30] → pull P1 [31-40]
-            //        ^^^^^^^^^^^^     ^^^^^^^^^^^^
-            //        both partitions scanning files simultaneously
-            //
-            // If we were to redistribute files consecutively:
-            //   Group 0: [f1(1-10), f2(11-20)]   ← all values < group 1
-            //   Group 1: [f3(21-30), f4(31-40)]
-            //
-            // SPM would read ALL of group 0 first (values always smaller), then group 1.
-            // This degrades to single-threaded sequential I/O — the other partition
-            // sits idle the entire time, losing the parallelism benefit.
+        // Decide whether to keep `output_ordering` (i.e. let the outer
+        // pushdown report `Exact` and drop `SortExec`).
+        //
+        // Two paths can produce a keep:
+        //
+        //   1. `is_exact && all_non_overlapping`: the source already had
+        //      validated ordering and the post-sort files still don't
+        //      overlap — Exact carries through unchanged.
+        //
+        //   2. `!is_exact && all_non_overlapping`: source returned
+        //      `Inexact` because pre-sort `validated_output_ordering()`
+        //      stripped the declaration (files were listed out of order
+        //      on disk). After our stats-based sort the files are now
+        //      non-overlapping — re-validate against the new file
+        //      groups and, if it passes, upgrade back to Exact so the
+        //      outer wrapper drops the `SortExec`. Without this, the
+        //      `Inexact` branch stayed Inexact even when reorder
+        //      restored a perfectly valid ordering, leaving an
+        //      unnecessary `SortExec` above the source (regression
+        //      after #21956's `column_in_file_schema` signal pushed
+        //      this scenario into the Inexact branch instead of the
+        //      `try_sort_file_groups_by_statistics` fallback).
+        //
+        // We intentionally do NOT redistribute files across groups here.
+        // The planning-phase bin-packing may interleave file ranges across groups:
+        //
+        //   Group 0: [f1(1-10), f3(21-30)]   ← interleaved with group 1
+        //   Group 1: [f2(11-20), f4(31-40)]
+        //
+        // This interleaving is actually beneficial because SPM pulls from both
+        // partitions concurrently, keeping parallel I/O active.
+        let keep_ordering = if all_non_overlapping {
+            if is_exact {
+                true
+            } else {
+                // Re-validate: now that files are sorted, can the
+                // request be satisfied?
+                let new_eq_props = new_config.eq_properties();
+                new_eq_props.ordering_satisfy(order.iter().cloned())?
+            }
         } else {
+            false
+        };
+
+        if !keep_ordering {
             new_config.output_ordering = vec![];
         }
 

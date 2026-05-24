@@ -973,9 +973,24 @@ impl DataSource for FileScanConfig {
                 }
             }
             SortOrderPushdownResult::Inexact { inner } => {
-                Ok(SortOrderPushdownResult::Inexact {
-                    inner: Arc::new(self.rebuild_with_source(inner, false, order)?),
-                })
+                let config = self.rebuild_with_source(inner, false, order)?;
+                // `rebuild_with_source` reorders files by stats; if the
+                // post-sort files are non-overlapping AND the request now
+                // validates against the new file groups, `output_ordering`
+                // is preserved and we can upgrade back to Exact. This
+                // restores the sort-elimination behaviour that lived in
+                // the `Unsupported` → `try_sort_file_groups_by_statistics`
+                // path before #21956 routed `column_in_file_schema` cases
+                // here.
+                if config.output_ordering.is_empty() {
+                    Ok(SortOrderPushdownResult::Inexact {
+                        inner: Arc::new(config),
+                    })
+                } else {
+                    Ok(SortOrderPushdownResult::Exact {
+                        inner: Arc::new(config),
+                    })
+                }
             }
             SortOrderPushdownResult::Unsupported => {
                 self.try_sort_file_groups_by_statistics(order)
