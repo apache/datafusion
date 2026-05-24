@@ -283,6 +283,13 @@ fn get_field_udf() -> Arc<ScalarUDF> {
 /// cannot be proven safe, e.g. a non-literal field name, a `named_struct`
 /// with a non-literal field name (which might shadow the requested field at
 /// runtime), or a field the constructor does not produce.
+///
+/// Replacing the access with the selected field expression drops the
+/// expressions for the other (unaccessed) fields, so they are no longer
+/// evaluated — e.g. `get_field(named_struct('a', 1/0, 'b', x), 'b')` becomes
+/// `x` and the `1/0` is never evaluated. This is intentional and matches the
+/// optimizer's contract for immutable expressions: a simplification may drop
+/// sub-expressions whose value is not observed.
 fn simplify_get_field_over_struct_constructor(args: &[Expr]) -> Option<Expr> {
     let [base, field_name, rest @ ..] = args else {
         return None;
