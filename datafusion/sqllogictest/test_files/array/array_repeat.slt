@@ -222,6 +222,9 @@ select column1, array_repeat(column1, column2) from array_repeat_large_nested_nu
 [[NULL, NULL]] [[[NULL, NULL]]]
 NULL [NULL, NULL, NULL]
 
+query error DataFusion error: Execution error: array_repeat: repeated inner array length exceeds capacity
+select array_repeat([1, 2, 3], 9223372036854775807);
+
 statement ok
 drop table array_repeat_large_nested_null_table
 

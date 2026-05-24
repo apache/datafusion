@@ -238,18 +238,48 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     for i in 0..count_array.len() {
         let count = get_count_with_validity(count_array, i);
         if count > 0 {
-            outer_total += count;
+            outer_total = outer_total.checked_add(count).ok_or_else(|| {
+                DataFusionError::Execution(
+                    "array_repeat: repeated list count exceeds capacity".to_string(),
+                )
+            })?;
             if list_array.is_valid(i) {
                 let len = list_offsets[i + 1].to_usize().unwrap()
                     - list_offsets[i].to_usize().unwrap();
-                inner_total += len * count;
+                let repeated_len = len.checked_mul(count).ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "array_repeat: repeated inner array length exceeds capacity"
+                            .to_string(),
+                    )
+                })?;
+                inner_total = inner_total.checked_add(repeated_len).ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "array_repeat: repeated inner array length exceeds capacity"
+                            .to_string(),
+                    )
+                })?;
             }
         }
     }
+    if O::from_usize(outer_total).is_none() {
+        return Err(DataFusionError::Execution(format!(
+            "array_repeat: offset {outer_total} exceeds the maximum value for offset type"
+        )));
+    }
+    if O::from_usize(inner_total).is_none() {
+        return Err(DataFusionError::Execution(format!(
+            "array_repeat: offset {inner_total} exceeds the maximum value for offset type"
+        )));
+    }
 
     // Build inner structures
-    let mut inner_offsets = Vec::with_capacity(outer_total + 1);
-    let mut take_indices = Vec::with_capacity(inner_total);
+    let inner_offsets_capacity = outer_total.checked_add(1).ok_or_else(|| {
+        DataFusionError::Execution(
+            "array_repeat: repeated list count exceeds capacity".to_string(),
+        )
+    })?;
+    let mut inner_offsets = vec_with_capacity(inner_offsets_capacity, "inner offsets")?;
+    let mut take_indices = vec_with_capacity(inner_total, "take indices")?;
     let mut inner_nulls = BooleanBufferBuilder::new(outer_total);
     let mut inner_running = 0usize;
     inner_offsets.push(O::zero());
@@ -318,5 +348,39 @@ fn get_count_with_validity(count_array: &Int64Array, idx: usize) -> usize {
     } else {
         let c = count_array.value(idx);
         if c > 0 { c as usize } else { 0 }
+    }
+}
+
+fn vec_with_capacity<T>(capacity: usize, name: &str) -> Result<Vec<T>> {
+    let mut values = Vec::new();
+    values.try_reserve_exact(capacity).map_err(|_| {
+        DataFusionError::Execution(format!(
+            "array_repeat: {name} capacity exceeds allocation limit"
+        ))
+    })?;
+    Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::ListArray;
+    use arrow::datatypes::Int64Type;
+    use datafusion_common::assert_contains;
+    use std::sync::Arc;
+
+    #[test]
+    fn list_repeat_rejects_inner_count_overflow() {
+        let list = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+        ])) as ArrayRef;
+        let count = Arc::new(Int64Array::from(vec![i64::MAX])) as ArrayRef;
+
+        let err = array_repeat_inner(&[list, count]).unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "array_repeat: repeated inner array length exceeds capacity"
+        );
     }
 }
