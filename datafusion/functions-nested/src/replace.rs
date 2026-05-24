@@ -244,7 +244,16 @@ impl ScalarUDFImpl for ArrayReplaceN {
                 let from_array = from_arg.to_array(num_rows)?;
                 let to_array = to_arg.to_array(num_rows)?;
                 let max_array = max_arg.to_array(num_rows)?;
-                let arr_n = as_int64_array(&max_array)?.values().to_vec();
+                let max_array = as_int64_array(&max_array)?;
+                let arr_n = (0..max_array.len())
+                    .map(|i| {
+                        if max_array.is_null(i) {
+                            0
+                        } else {
+                            max_array.value(i)
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 let result =
                     array_replace_internal(&list_array, &from_array, &to_array, &arr_n)?;
                 Ok(ColumnarValue::Array(result))

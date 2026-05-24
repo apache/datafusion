@@ -370,6 +370,16 @@ select
 ----
 [1, 2, 2] [1, 2, 2]
 
+# array_replace_n with null max from column
+query ?
+select array_replace_n(column1, column2, column3, column4) from (values
+  (make_array(1, 2, 2), 2, 9, 2),
+  (make_array(3, 4, 4), 4, 8, null)
+) as t(column1, column2, column3, column4);
+----
+[1, 9, 9]
+[3, 4, 4]
+
 # array_replace_n scalar function with columns #1
 query ?
 select
