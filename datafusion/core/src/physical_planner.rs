@@ -2623,8 +2623,6 @@ impl DefaultPhysicalPlanner {
                             e.plan.display_tree(config.tree_maximum_render_width)
                         ),
                     ));
-                } else {
-                    stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
                 }
 
                 stringified_plans.push(StringifiedPlan::new(
