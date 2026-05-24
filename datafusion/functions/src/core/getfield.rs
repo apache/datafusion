@@ -319,9 +319,16 @@ fn simplify_get_field_over_struct_constructor(args: &[Expr]) -> Option<Expr> {
         }
         let mut matched = None;
         for pair in ctor_args.chunks_exact(2) {
-            // Every name must be a literal string: a non-literal name could
-            // evaluate to `field_name` at runtime and shadow a later match,
-            // so we cannot safely pick a field unless all names are known.
+            // Every name must be a literal string: a non-literal name appearing
+            // *before* the first match could evaluate to `field_name` at runtime
+            // and become the real first match (Arrow's `column_by_name` returns
+            // the first match), so we cannot resolve the access.
+            //
+            // We conservatively bail on *any* non-literal name. Once a literal
+            // match has been found, a later non-literal name is in fact harmless
+            // — it can never precede the first match — so bailing there is a
+            // deliberate approximation we accept to keep this check simple, not a
+            // correctness requirement.
             let Expr::Literal(name, _) = &pair[0] else {
                 return None;
             };
