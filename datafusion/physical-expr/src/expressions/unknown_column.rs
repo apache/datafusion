@@ -28,8 +28,6 @@ use arrow::{
 };
 use datafusion_common::{Result, internal_err};
 
-#[cfg(feature = "proto")]
-use datafusion_proto_models::protobuf;
 use datafusion_expr::ColumnarValue;
 
 #[derive(Debug, Clone, Eq)]
@@ -92,7 +90,9 @@ impl PhysicalExpr for UnKnownColumn {
     fn try_to_proto(
         &self,
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<protobuf::PhysicalExprNode>> {
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
@@ -108,14 +108,79 @@ impl PhysicalExpr for UnKnownColumn {
 impl UnKnownColumn {
     /// Reconstruct an [`UnKnownColumn`] from its protobuf representation.
     pub fn try_from_proto(
-        node: &protobuf::PhysicalExprNode,
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_proto_models::protobuf;
+
         let protobuf::UnknownColumn { name } = match &node.expr_type {
             Some(protobuf::physical_expr_node::ExprType::UnknownColumn(c)) => c,
-            _ => return internal_err!("PhysicalExprNode is not an UnKnownColumn"),
+            other => {
+                return internal_err!(
+                    "PhysicalExprNode is not an UnKnownColumn (expr_id={:?}, expr_type={other:?})",
+                    node.expr_id
+                );
+            }
         };
         Ok(Arc::new(UnKnownColumn::new(name)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "proto")]
+    use std::sync::Arc;
+
+    #[cfg(feature = "proto")]
+    use arrow::datatypes::Schema;
+
+    #[cfg(feature = "proto")]
+    use datafusion_common::{Result, internal_err};
+
+    #[cfg(feature = "proto")]
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+
+    #[cfg(feature = "proto")]
+    struct DummyDecode;
+
+    #[cfg(feature = "proto")]
+    impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode
+        for DummyDecode
+    {
+        fn decode(
+            &self,
+            _node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+            _schema: &Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            internal_err!("decode should not be called")
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    #[test]
+    fn try_from_proto_reports_found_variant() {
+        use datafusion_proto_models::protobuf;
+
+        let node = protobuf::PhysicalExprNode {
+            expr_id: Some(7),
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
+                protobuf::PhysicalColumn {
+                    name: "col_a".to_string(),
+                    index: 0,
+                },
+            )),
+        };
+        let schema = Schema::empty();
+        let decoder = DummyDecode;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = UnKnownColumn::try_from_proto(&node, &ctx).unwrap_err();
+        let err = err.to_string();
+
+        assert!(err.contains("expr_id=Some(7)"));
+        assert!(err.contains("PhysicalColumn"));
     }
 }
 
