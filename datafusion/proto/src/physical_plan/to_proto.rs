@@ -36,8 +36,8 @@ use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
-    CaseExpr, CastExpr, DynamicFilterPhysicalExpr, InListExpr, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    CaseExpr, CastExpr, InListExpr, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
+    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -526,39 +526,6 @@ pub fn serialize_physical_expr_with_converter(
                     nullable: expr.nullable(),
                     index: expr.index().as_usize() as u32,
                 },
-            )),
-        })
-    } else if let Some(df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
-        let children = df
-            .original_children()
-            .iter()
-            .map(|child| proto_converter.physical_expr_to_proto(child, codec))
-            .collect::<Result<Vec<_>>>()?;
-
-        let remapped_children = if let Some(remapped) = df.remapped_children() {
-            remapped
-                .iter()
-                .map(|child| proto_converter.physical_expr_to_proto(child, codec))
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            vec![]
-        };
-
-        // Atomic snapshot of inner state.
-        let inner = df.inner();
-        let inner_expr =
-            Box::new(proto_converter.physical_expr_to_proto(&inner.expr, codec)?);
-
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::DynamicFilter(
-                Box::new(protobuf::PhysicalDynamicFilterNode {
-                    children,
-                    remapped_children,
-                    generation: inner.generation,
-                    inner_expr: Some(inner_expr),
-                    is_complete: inner.is_complete,
-                }),
             )),
         })
     } else {
