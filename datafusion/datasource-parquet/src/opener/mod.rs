@@ -1247,16 +1247,21 @@ impl RowGroupsPrunedParquetOpen {
         }
         .into_stream();
 
-        // Wrap the stream so a dynamic filter can stop the file scan early.
-        if let Some(file_pruner) = prepared.file_pruner {
-            Ok(EarlyStoppingStream::new(
-                stream,
-                file_pruner,
-                files_ranges_pruned_statistics,
-            )
-            .boxed())
-        } else {
-            Ok(stream)
+        // Wrap the stream so a dynamic filter can stop the file scan early, but
+        // only when the pruner is still watching a filter that can change
+        // mid-scan. For a static (or already-complete) predicate the up-front
+        // `prune_file` check already captured everything that can be pruned, so
+        // per-batch re-checking would only add overhead.
+        match prepared.file_pruner {
+            Some(file_pruner) if file_pruner.is_watching() => {
+                Ok(EarlyStoppingStream::new(
+                    stream,
+                    file_pruner,
+                    files_ranges_pruned_statistics,
+                )
+                .boxed())
+            }
+            _ => Ok(stream),
         }
     }
 }
