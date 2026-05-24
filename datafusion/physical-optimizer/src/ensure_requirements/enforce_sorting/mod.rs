@@ -15,38 +15,39 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! EnforceSorting optimizer rule inspects the physical plan with respect
-//! to local sorting requirements and does the following:
+//! Sort enforcement helpers. The standalone `EnforceSorting` rule that
+//! previously lived here has been retired in favour of `EnsureRequirements`
+//! (which composes distribution and sorting enforcement into a single
+//! idempotent pass). The helpers in this module — `ensure_sorting`,
+//! `parallelize_sorts`, `PlanWithCorrespondingSort`, and the submodules
+//! `replace_with_order_preserving_variants` and `sort_pushdown` — are
+//! used directly by `EnsureRequirements`.
+//!
+//! Sort enforcement inspects the physical plan with respect to local
+//! sorting requirements and does the following:
 //! - Adds a [`SortExec`] when a requirement is not met,
 //! - Removes an already-existing [`SortExec`] if it is possible to prove
 //!   that this sort is unnecessary
 //!
-//! The rule can work on valid *and* invalid physical plans with respect to
-//! sorting requirements, but always produces a valid physical plan in this sense.
+//! The helpers can work on valid *and* invalid physical plans with respect
+//! to sorting requirements, but always produce a valid plan in this sense.
 //!
-//! A non-realistic but easy to follow example for sort removals: Assume that we
-//! somehow get the fragment
+//! A non-realistic but easy to follow example for sort removals: assume the
+//! fragment
 //!
 //! ```text
 //! SortExec: expr=[nullable_col@0 ASC]
 //!   SortExec: expr=[non_nullable_col@1 ASC]
 //! ```
 //!
-//! in the physical plan. The first sort is unnecessary since its result is overwritten
-//! by another [`SortExec`]. Therefore, this rule removes it from the physical plan.
+//! reaches this stage. The first sort is unnecessary since its result is
+//! overwritten by another [`SortExec`], so it is removed.
 
 pub mod replace_with_order_preserving_variants;
 pub mod sort_pushdown;
 
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
-use crate::enforce_sorting::replace_with_order_preserving_variants::{
-    OrderPreservationContext, replace_with_order_preserving_variants,
-};
-use crate::enforce_sorting::sort_pushdown::{
-    SortPushDown, assign_initial_requirements, pushdown_sorts,
-};
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_limit,
@@ -54,9 +55,8 @@ use crate::utils::{
 };
 
 use datafusion_common::Result;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_err;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::Transformed;
 use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -73,19 +73,13 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, InputOrde
 
 use itertools::izip;
 
-/// This rule inspects [`SortExec`]'s in the given physical plan in order to
-/// remove unnecessary sorts, and optimize sort performance across the plan.
-#[derive(Default, Debug)]
-pub struct EnforceSorting {}
+// The `EnforceSorting` rule was retired in favour of `EnsureRequirements`,
+// which composes distribution and sorting enforcement into a single idempotent
+// pass. The helper functions and contexts below (`ensure_sorting`,
+// `parallelize_sorts`, `PlanWithCorrespondingSort`, etc.) remain —
+// `EnsureRequirements` calls into them directly.
 
-impl EnforceSorting {
-    #[expect(missing_docs)]
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-/// This context object is used within the [`EnforceSorting`] rule to track the closest
+/// Context object used by sort enforcement to track the closest
 /// [`SortExec`] descendant(s) for every child of a plan. The data attribute
 /// stores whether the plan is a `SortExec` or is connected to a `SortExec`
 /// via its children.
@@ -135,7 +129,7 @@ fn update_sort_ctx_children_data(
     Ok(node_and_ctx)
 }
 
-/// This object is used within the [`EnforceSorting`] rule to track the closest
+/// Tracks the closest
 /// [`CoalescePartitionsExec`] descendant(s) for every child of a plan. The data
 /// attribute stores whether the plan is a `CoalescePartitionsExec` or is
 /// connected to a `CoalescePartitionsExec` via its children.
@@ -191,78 +185,11 @@ fn update_coalesce_ctx_children(
     };
 }
 
-/// Performs optimizations based upon a series of subrules.
-/// Refer to each subrule for detailed descriptions of the optimizations performed:
-/// Subrule application is ordering dependent.
-///
-/// Optimizer consists of 5 main parts which work sequentially
-/// 1. [`ensure_sorting`] Works down-to-top to be able to remove unnecessary [`SortExec`]s, [`SortPreservingMergeExec`]s
-///    add [`SortExec`]s if necessary by a requirement and adjusts window operators.
-/// 2. [`parallelize_sorts`] (Optional, depends on the `repartition_sorts` configuration)
-///    Responsible to identify and remove unnecessary partition unifier operators
-///    such as [`SortPreservingMergeExec`], [`CoalescePartitionsExec`] follows [`SortExec`]s does possible simplifications.
-/// 3. [`replace_with_order_preserving_variants()`] Replaces with alternative operators, for example can merge
-///    a [`SortExec`] and a [`CoalescePartitionsExec`] into one [`SortPreservingMergeExec`]
-///    or a [`SortExec`] + [`RepartitionExec`] combination into an order preserving [`RepartitionExec`]
-/// 4. [`sort_pushdown`] Works top-down. Responsible to push down sort operators as deep as possible in the plan.
-/// 5. `replace_with_partial_sort` Checks if it's possible to replace [`SortExec`]s with [`PartialSortExec`] operators
-impl PhysicalOptimizerRule for EnforceSorting {
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan_requirements = PlanWithCorrespondingSort::new_default(plan);
-        // Execute a bottom-up traversal to enforce sorting requirements,
-        // remove unnecessary sorts, and optimize sort-sensitive operators:
-        let adjusted = plan_requirements.transform_up(ensure_sorting)?.data;
-        let new_plan = if config.optimizer.repartition_sorts {
-            let plan_with_coalesce_partitions =
-                PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
-            let parallel = plan_with_coalesce_partitions
-                .transform_up(parallelize_sorts)
-                .data()?;
-            parallel.plan
-        } else {
-            adjusted.plan
-        };
-
-        let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
-        let updated_plan = plan_with_pipeline_fixer
-            .transform_up(|plan_with_pipeline_fixer| {
-                replace_with_order_preserving_variants(
-                    plan_with_pipeline_fixer,
-                    false,
-                    true,
-                    config,
-                )
-            })
-            .data()?;
-        // Execute a top-down traversal to exploit sort push-down opportunities
-        // missed by the bottom-up traversal:
-        let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
-        assign_initial_requirements(&mut sort_pushdown);
-        let adjusted = pushdown_sorts(sort_pushdown)?;
-        adjusted
-            .plan
-            .transform_up(|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
-            .data()
-    }
-
-    fn name(&self) -> &str {
-        "EnforceSorting"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
-
 /// Only interested with [`SortExec`]s and their unbounded children.
 /// If the plan is not a [`SortExec`] or its child is not unbounded, returns the original plan.
 /// Otherwise, by checking the requirement satisfaction searches for a replacement chance.
 /// If there's one replaces the [`SortExec`] plan with a [`PartialSortExec`]
-fn replace_with_partial_sort(
+pub fn replace_with_partial_sort(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let Some(sort_plan) = plan.downcast_ref::<SortExec>() else {
