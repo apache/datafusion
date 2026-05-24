@@ -16,6 +16,7 @@
 // under the License.
 
 //! Math function: `power()`.
+
 use super::log::LogFunc;
 
 use crate::utils::{

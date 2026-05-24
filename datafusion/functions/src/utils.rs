@@ -770,11 +770,11 @@ pub mod test {
     use super::*;
     use arrow::array::{Decimal128Array, Float64Array, Int64Array, PrimitiveArray};
     use arrow::datatypes::{
-        DECIMAL128_MAX_PRECISION, DataType, Decimal128Type, Float64Type, Int64Type,
+        DECIMAL128_MAX_PRECISION, Decimal128Type, Float64Type, Int64Type,
     };
 
     #[cfg(test)]
-    #[ctor::ctor]
+    #[ctor::ctor(unsafe)]
     fn init() {
         // Enable RUST_LOG logging configuration for test
         let _ = env_logger::try_init();

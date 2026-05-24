@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use crate::utils::{calculate_binary_math_decimal, calculate_binary_math_numeric};
-use crate::utils::{calculate_binary_decimal_math, calculate_binary_math};
 
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::DataType::{
@@ -470,26 +467,30 @@ fn round_columnar(
         && matches!(decimal_places, ColumnarValue::Scalar(_));
     let decimal_places_is_array = matches!(decimal_places, ColumnarValue::Array(_));
 
-    let arr: ArrayRef = match (value_array.data_type(), return_type) {
-        (Float64, _) => {
-            let result = calculate_binary_math::<Float64Type, Int32Type, Float64Type, _>(
-                value_array.as_ref(),
-                decimal_places,
-                round_float::<f64>,
-            )?;
+    let arr: ArrayRef = match value_array.data_type() {
+        Float64 => {
+            let result =
+                calculate_binary_math_numeric::<Float64Type, Int32Type, Float64Type, _>(
+                    value_array.as_ref(),
+                    decimal_places,
+                    |l, r, _| round_float::<f64>(l, r),
+                    return_type,
+                )?;
             result as _
         }
-        (Float32, _) => {
-            let result = calculate_binary_math::<Float32Type, Int32Type, Float32Type, _>(
-                value_array.as_ref(),
-                decimal_places,
-                round_float::<f32>,
-            )?;
+        Float32 => {
+            let result =
+                calculate_binary_math_numeric::<Float32Type, Int32Type, Float32Type, _>(
+                    value_array.as_ref(),
+                    decimal_places,
+                    |l, r, _| round_float::<f32>(l, r),
+                    return_type,
+                )?;
             result as _
         }
-        (Decimal32(input_precision, scale), Decimal32(precision, new_scale)) => {
+        Decimal32(input_precision, scale) => {
             // reduce scale to reclaim integer precision
-            let result = calculate_binary_decimal_math::<
+            let result = calculate_binary_math_decimal::<
                 Decimal32Type,
                 Int32Type,
                 Decimal32Type,
@@ -497,15 +498,16 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| {
+                |v, dp, dec_scale| {
+                    let (new_precision, new_scale) = dec_scale.expect("decimal");
                     let rounded = round_decimal_or_zero(
                         v,
                         *input_precision,
                         *scale,
-                        *new_scale,
+                        new_scale,
                         dp,
                     )?;
-                    if *precision == Decimal32Type::MAX_PRECISION
+                    if new_precision == Decimal32Type::MAX_PRECISION
                         && (decimal_places_is_array || (*scale == 0 && dp < 0))
                     {
                         // If we're already at max precision, we can't widen the result type. For
@@ -513,19 +515,20 @@ fn round_columnar(
                         // fixed-precision type. Validate per-row and return an error instead of
                         // producing an invalid decimal that Arrow may display incorrectly.
                         validate_decimal_precision::<Decimal32Type>(
-                            rounded, *precision, *new_scale,
+                            rounded,
+                            new_precision,
+                            new_scale,
                         )
                     } else {
                         Ok(rounded)
                     }
                 },
-                *precision,
-                *new_scale,
+                return_type,
             )?;
             result as _
         }
-        (Decimal64(input_precision, scale), Decimal64(precision, new_scale)) => {
-            let result = calculate_binary_decimal_math::<
+        Decimal64(input_precision, scale) => {
+            let result = calculate_binary_math_decimal::<
                 Decimal64Type,
                 Int32Type,
                 Decimal64Type,
@@ -533,32 +536,34 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| {
+                |v, dp, dec_scale| {
+                    let (new_precision, new_scale) = dec_scale.expect("decimal");
                     let rounded = round_decimal_or_zero(
                         v,
                         *input_precision,
                         *scale,
-                        *new_scale,
+                        new_scale,
                         dp,
                     )?;
-                    if *precision == Decimal64Type::MAX_PRECISION
+                    if new_precision == Decimal64Type::MAX_PRECISION
                         && (decimal_places_is_array || (*scale == 0 && dp < 0))
                     {
                         // See Decimal32 branch for details.
                         validate_decimal_precision::<Decimal64Type>(
-                            rounded, *precision, *new_scale,
+                            rounded,
+                            new_precision,
+                            new_scale,
                         )
                     } else {
                         Ok(rounded)
                     }
                 },
-                *precision,
-                *new_scale,
+                return_type,
             )?;
             result as _
         }
-        (Decimal128(input_precision, scale), Decimal128(precision, new_scale)) => {
-            let result = calculate_binary_decimal_math::<
+        Decimal128(input_precision, scale) => {
+            let result = calculate_binary_math_decimal::<
                 Decimal128Type,
                 Int32Type,
                 Decimal128Type,
@@ -566,32 +571,34 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| {
+                |v, dp, dec_scale| {
+                    let (new_precision, new_scale) = dec_scale.expect("decimal");
                     let rounded = round_decimal_or_zero(
                         v,
                         *input_precision,
                         *scale,
-                        *new_scale,
+                        new_scale,
                         dp,
                     )?;
-                    if *precision == Decimal128Type::MAX_PRECISION
+                    if new_precision == Decimal128Type::MAX_PRECISION
                         && (decimal_places_is_array || (*scale == 0 && dp < 0))
                     {
                         // See Decimal32 branch for details.
                         validate_decimal_precision::<Decimal128Type>(
-                            rounded, *precision, *new_scale,
+                            rounded,
+                            new_precision,
+                            new_scale,
                         )
                     } else {
                         Ok(rounded)
                     }
                 },
-                *precision,
-                *new_scale,
+                return_type,
             )?;
             result as _
         }
-        (Decimal256(input_precision, scale), Decimal256(precision, new_scale)) => {
-            let result = calculate_binary_decimal_math::<
+        Decimal256(input_precision, scale) => {
+            let result = calculate_binary_math_decimal::<
                 Decimal256Type,
                 Int32Type,
                 Decimal256Type,
@@ -599,31 +606,33 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| {
+                |v, dp, dec_scale| {
+                    let (new_precision, new_scale) = dec_scale.expect("decimal");
                     let rounded = round_decimal_or_zero(
                         v,
                         *input_precision,
                         *scale,
-                        *new_scale,
+                        new_scale,
                         dp,
                     )?;
-                    if *precision == Decimal256Type::MAX_PRECISION
+                    if new_precision == Decimal256Type::MAX_PRECISION
                         && (decimal_places_is_array || (*scale == 0 && dp < 0))
                     {
                         // See Decimal32 branch for details.
                         validate_decimal_precision::<Decimal256Type>(
-                            rounded, *precision, *new_scale,
+                            rounded,
+                            new_precision,
+                            new_scale,
                         )
                     } else {
                         Ok(rounded)
                     }
                 },
-                *precision,
-                *new_scale,
+                return_type,
             )?;
             result as _
         }
-        (other, _) => exec_err!("Unsupported data type {other:?} for function round")?,
+        other => exec_err!("Unsupported data type {other:?} for function round")?,
     };
 
     if both_scalars {
