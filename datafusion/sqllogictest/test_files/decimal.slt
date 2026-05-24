@@ -1118,11 +1118,6 @@ SELECT power(2.5::decimal(38, 3), 4), arrow_typeof(power(2.5::decimal(38, 3), 4)
 ----
 39.062 Decimal128(38, 3)
 
-# `power(decimal, float)` returns Float64: the result can grow beyond the
-# base's Decimal precision (e.g. `2.5 ^ 4.0 = 39.0625` does not fit in
-# `Decimal128(2, 1)`), so the function widens to Float64 instead of
-# silently truncating. Inf / NaN are representable in Float64, so the
-# edge cases below succeed rather than erroring on Decimal cast.
 query RT
 SELECT power(2.5, 4.0), arrow_typeof(power(2.5, 4.0));
 ----

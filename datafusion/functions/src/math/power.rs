@@ -370,8 +370,6 @@ fn pow_decimal256_float_fallback(
 
 /// Compute `power(decimal_base, float_exponent)` by casting the base to
 /// `Float64` and running `pow` in float space; returns `Float64`.
-/// `calculate_binary_math` casts the exponent internally and preserves
-/// scalar shape, so we only need to materialize the base here.
 fn pow_decimal_via_float64(
     base: &ColumnarValue,
     exponent: &ColumnarValue,
@@ -399,11 +397,9 @@ impl ScalarUDFImpl for PowerFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         // Return type as a function of (base, exponent). After signature
-        // coercion the operands are one of three shapes, plus a NULL on
-        // either side when an operand is a literal NULL:
+        // coercion, we have to handle the following cases:
         //
-        //   - NULL on either side -> Float64 (matches the other math
-        //     UDFs, which all return Float64 for NULL input)
+        //   - NULL on either side -> Float64 (typed NULL)
         //   - (Decimal, Float64)  -> Float64
         //   - (Decimal, Int64)    -> the base's Decimal type
         //   - (Float64, Float64)  -> Float64
@@ -424,8 +420,8 @@ impl ScalarUDFImpl for PowerFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [base, exponent] = take_function_args(self.name(), &args.args)?;
 
-        // No native kernel exists for `(Decimal, Float64)`; bridge via
-        // Float64. The match below handles the remaining coerced shapes.
+        // No native kernel exists for `(Decimal, Float64)`; bridge by casting
+        // the base to Float64.
         if base.data_type().is_decimal() && exponent.data_type().is_floating() {
             return pow_decimal_via_float64(base, exponent, args.number_rows);
         }
