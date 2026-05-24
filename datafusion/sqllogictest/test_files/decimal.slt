@@ -598,6 +598,25 @@ select arrow_typeof(null <= a), null <= a from (values (1.1::decimal)) as t(a);
 ----
 Boolean NULL
 
+# Float wins over Decimal in comparison coercion (issue #14272).
+# Decimal cannot represent NaN/±Inf, so the common super-type must be the
+# float — otherwise comparing a Decimal against +Inf would error trying to
+# cast +Inf into the Decimal range.
+query B
+select '1'::decimal(10,0) = arrow_cast('inf', 'Float64');
+----
+false
+
+query B
+select '1'::decimal(10,0) < arrow_cast('inf', 'Float64');
+----
+true
+
+query B
+select arrow_cast('NaN', 'Float64') = '1'::decimal(10,0);
+----
+false
+
 query R
 select try_cast(1234567 as decimal(7,3));
 ----

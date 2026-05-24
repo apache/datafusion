@@ -31,13 +31,14 @@ fn test_decimal_binary_comparison_coercion() -> Result<()> {
         DataType::Decimal128(20, 8),
         DataType::Null,
     ];
+    // Float types win over Decimal because Decimal cannot represent NaN/±Inf.
     let result_types = [
         DataType::Decimal128(20, 3),
         DataType::Decimal128(20, 3),
         DataType::Decimal128(20, 3),
         DataType::Decimal128(23, 3),
-        DataType::Decimal128(24, 7),
-        DataType::Decimal128(32, 15),
+        DataType::Float32,
+        DataType::Float64,
         DataType::Decimal128(38, 10),
         DataType::Decimal128(25, 8),
         DataType::Decimal128(20, 3),
@@ -460,11 +461,13 @@ fn test_type_coercion_compare() -> Result<()> {
         Operator::Lt,
         DataType::Decimal128(22, 2)
     );
+    // Float wins over Decimal in comparison coercion: Decimal cannot
+    // represent NaN/±Inf, so the common super-type must be the float.
     test_coercion_binary_rule!(
         DataType::Float64,
         DataType::Decimal128(10, 3),
         Operator::Gt,
-        DataType::Decimal128(30, 15)
+        DataType::Float64
     );
     test_coercion_binary_rule!(
         DataType::Int64,

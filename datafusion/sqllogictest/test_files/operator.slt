@@ -299,22 +299,23 @@ physical_plan
 01)FilterExec: int64@3 < -5 AND CAST(uint64@7 AS Decimal128(20, 0)) < Some(-5),20,0 AND float64@9 < -5 AND decimal@10 < Some(-500),5,2
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-## < decimal (expect casts for integers to float)
+## < decimal (expect casts for integers and decimal to float, since Float wins
+## over Decimal in comparison coercion — Decimal cannot hold NaN/±Inf)
 query TT
 EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 < 5.1 AND uint64 < 5.1 AND float64 < 5.1 AND decimal < 5.1;
 ----
 physical_plan
-01)FilterExec: CAST(int64@3 AS Float64) < 5.1 AND CAST(uint64@7 AS Float64) < 5.1 AND float64@9 < 5.1 AND decimal@10 < Some(510),5,2
+01)FilterExec: CAST(int64@3 AS Float64) < 5.1 AND CAST(uint64@7 AS Float64) < 5.1 AND float64@9 < 5.1 AND CAST(decimal@10 AS Float64) < 5.1
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-## < negative decimal (expect casts for integers to float)
+## < negative decimal (same Float-wins behavior as above)
 query TT
 EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 < -5.1 AND uint64 < -5.1 AND float64 < -5.1 AND decimal < -5.1;
 ----
 physical_plan
-01)FilterExec: CAST(int64@3 AS Float64) < -5.1 AND CAST(uint64@7 AS Float64) < -5.1 AND float64@9 < -5.1 AND decimal@10 < Some(-510),5,2
+01)FilterExec: CAST(int64@3 AS Float64) < -5.1 AND CAST(uint64@7 AS Float64) < -5.1 AND float64@9 < -5.1 AND CAST(decimal@10 AS Float64) < -5.1
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -338,22 +339,23 @@ physical_plan
 01)FilterExec: int64@3 = -5 AND CAST(uint64@7 AS Decimal128(20, 0)) = Some(-5),20,0 AND float64@9 = -5 AND decimal@10 = Some(-500),5,2
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-## = decimal (expect casts for integers to float)
+## = decimal (expect casts for integers and decimal to float, since Float wins
+## over Decimal in comparison coercion — Decimal cannot hold NaN/±Inf)
 query TT
 EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 = 5.1 AND uint64 = 5.1 AND float64 = 5.1 AND decimal = 5.1;
 ----
 physical_plan
-01)FilterExec: CAST(int64@3 AS Float64) = 5.1 AND CAST(uint64@7 AS Float64) = 5.1 AND float64@9 = 5.1 AND decimal@10 = Some(510),5,2
+01)FilterExec: CAST(int64@3 AS Float64) = 5.1 AND CAST(uint64@7 AS Float64) = 5.1 AND float64@9 = 5.1 AND CAST(decimal@10 AS Float64) = 5.1
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-## = negative decimal (expect casts for integers to float)
+## = negative decimal (same Float-wins behavior as above)
 query TT
 EXPLAIN SELECT * FROM numeric_types
 WHERE  int64 = -5.1 AND uint64 = -5.1 AND float64 = -5.1 AND decimal = -5.1;
 ----
 physical_plan
-01)FilterExec: CAST(int64@3 AS Float64) = -5.1 AND CAST(uint64@7 AS Float64) = -5.1 AND float64@9 = -5.1 AND decimal@10 = Some(-510),5,2
+01)FilterExec: CAST(int64@3 AS Float64) = -5.1 AND CAST(uint64@7 AS Float64) = -5.1 AND float64@9 = -5.1 AND CAST(decimal@10 AS Float64) = -5.1
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
