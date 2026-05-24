@@ -43,8 +43,7 @@ use super::scale::get_scale;
 ///  - Spark does not check for decimal overflow; DataFusion errors on overflow
 ///
 /// Two-argument form `ceil(expr, scale)` returns the same type as `expr` for
-/// integer and floating-point inputs (regardless of `scale`).  Decimal inputs
-/// are not yet supported in the 2-arg form (see TODO in execution path).
+/// integer and floating-point inputs (regardless of `scale`).
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
@@ -93,9 +92,9 @@ impl ScalarUDFImpl for SparkCeil {
         let has_scale = arg_types.len() == 2;
 
         match &arg_types[0] {
-            // 2-arg decimal is not yet supported; report input type so the planner
-            // does not reject the call before we surface a proper error at execution.
-            DataType::Decimal128(p, s) if has_scale => Ok(DataType::Decimal128(*p, *s)),
+            DataType::Decimal128(_, _) if has_scale => {
+                exec_err!("2-argument ceil is not yet supported for decimal inputs")
+            }
             DataType::Decimal128(p, s) => {
                 if *s > 0 {
                     Ok(DataType::Decimal128(decimal128_ceil_precision(*p, *s), 0))
@@ -304,11 +303,9 @@ fn spark_ceil_array(
             let result = array
                 .try_unary::<_, Int64Type, datafusion_common::DataFusionError>(|x| {
                     let v = i64::try_from(x).map_err(|_| {
-                        (exec_err!(
+                        datafusion_common::exec_datafusion_err!(
                         "ceil: UInt64 value {x} exceeds i64::MAX and cannot be processed"
-                    )
-                        as Result<(), _>)
-                        .unwrap_err()
+                        )
                     })?;
                     Ok(ceil_integer(v, scale))
                 })?;
@@ -346,6 +343,11 @@ fn ceil_float<T: num_traits::Float>(value: T, scale: i32) -> T {
     } else {
         let factor = T::from(10.0f64.powi(-scale)).unwrap_or_else(T::infinity);
         if factor.is_infinite() {
+            // Extremely negative scales (e.g. -100) require a rounding factor of
+            // 10^|scale|, which overflows f64 to infinity. In that case we return
+            // 0.0: rounding any finite value to a granularity larger than f64::MAX
+            // necessarily collapses it to zero. This is consistent with how the
+            // integer path handles the same edge case.
             return T::zero();
         }
         (value / factor).ceil() * factor
