@@ -39,7 +39,6 @@ use datafusion_physical_plan::expressions::{
     CaseExpr, CastExpr, DynamicFilterPhysicalExpr, IsNotNullExpr, IsNullExpr, Literal,
     NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
-use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -445,21 +444,6 @@ pub fn serialize_physical_expr_with_converter(
                         .return_field(&Schema::empty())?
                         .name()
                         .to_string(),
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<HashExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
-                protobuf::PhysicalHashExprNode {
-                    on_columns: serialize_physical_exprs(
-                        expr.on_columns(),
-                        codec,
-                        proto_converter,
-                    )?,
-                    seed0: expr.seed(),
-                    description: expr.description().to_string(),
                 },
             )),
         })

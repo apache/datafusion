@@ -39,14 +39,18 @@ workspace = true
 
 [features]
 force_hash_collisions = []
-test_utils = ["arrow/test_utils"]
-tokio_coop = []
-tokio_coop_fallback = []
+# Enables `PhysicalExpr::try_to_proto` / `try_from_proto` hooks on the
+# physical expressions defined in this crate (e.g. `HashExpr`). Off by
+# default so consumers that never serialize plans pay nothing.
 proto = [
     "dep:datafusion-proto-models",
     "dep:datafusion-proto-common",
+    "datafusion-physical-expr/proto",
     "datafusion-physical-expr-common/proto",
 ]
+test_utils = ["arrow/test_utils"]
+tokio_coop = []
+tokio_coop_fallback = []
 
 [lib]
 name = "datafusion_physical_plan"
