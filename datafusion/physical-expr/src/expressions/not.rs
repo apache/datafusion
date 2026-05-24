@@ -238,6 +238,45 @@ mod tests {
     use arrow::{array::BooleanArray, datatypes::*};
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
+    #[cfg(feature = "proto")]
+    #[test]
+    fn test_from_proto_missing_child() {
+        use datafusion_common::DataFusionError;
+        use datafusion_physical_expr_common::physical_expr::proto_decode::{
+            PhysicalExprDecode, PhysicalExprDecodeCtx,
+        };
+        use datafusion_proto_models::protobuf::{
+            PhysicalExprNode, PhysicalNot, physical_expr_node,
+        };
+
+        struct NoopDecoder;
+
+        impl PhysicalExprDecode for NoopDecoder {
+            fn decode(
+                &self,
+                _node: &PhysicalExprNode,
+                _schema: &Schema,
+            ) -> Result<Arc<dyn PhysicalExpr>> {
+                unreachable!("missing child should be rejected before decoding")
+            }
+        }
+
+        let node = PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::NotExpr(Box::new(
+                PhysicalNot { expr: None },
+            ))),
+        };
+        let schema = Schema::empty();
+        let decoder = NoopDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = NotExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg == "NotExpr is missing required field 'expr'")
+        );
+    }
+
     #[test]
     fn neg_op() -> Result<()> {
         let schema = schema();
