@@ -58,12 +58,47 @@ use datafusion_common::{Result, internal_err};
 
 impl FormattedTreeNode for LogicalPlan {
     fn node_name(&self) -> String {
-        self.display()
-            .to_string()
-            .split(":")
-            .next()
-            .unwrap_or("")
-            .to_string()
+        match self {
+            LogicalPlan::Projection(_) => "Projection",
+            LogicalPlan::Filter(_) => "Filter",
+            LogicalPlan::Window(_) => "WindowAggr",
+            LogicalPlan::Aggregate(_) => "Aggregate",
+            LogicalPlan::Sort(_) => "Sort",
+            LogicalPlan::Join(join) => {
+                let join_type = if join.filter.is_none()
+                    && join.on.is_empty()
+                    && join.join_type == datafusion_common::JoinType::Inner
+                {
+                    "Cross".to_string()
+                } else {
+                    join.join_type.to_string()
+                };
+                return format!("{join_type} Join");
+            }
+            LogicalPlan::Repartition(_) => "Repartition",
+            LogicalPlan::Union(_) => "Union",
+            LogicalPlan::TableScan(_) => "TableScan",
+            LogicalPlan::EmptyRelation(_) => "EmptyRelation",
+            LogicalPlan::Subquery(_) => "Subquery",
+            LogicalPlan::SubqueryAlias(_) => "SubqueryAlias",
+            LogicalPlan::Limit(_) => "Limit",
+            LogicalPlan::Statement(stmt) => return stmt.name().to_string(),
+            LogicalPlan::Values(_) => "Values",
+            LogicalPlan::Explain(_) => "Explain",
+            LogicalPlan::Analyze(_) => "Analyze",
+            LogicalPlan::Extension(ext) => return ext.node.name().to_string(),
+            LogicalPlan::Distinct(distinct) => match distinct {
+                Distinct::All(_) => "Distinct",
+                Distinct::On(_) => "DistinctOn",
+            },
+            LogicalPlan::Dml(_) => "Dml",
+            LogicalPlan::Ddl(ddl) => return ddl.name().to_string(),
+            LogicalPlan::Copy(_) => "CopyTo",
+            LogicalPlan::DescribeTable(_) => "DescribeTable",
+            LogicalPlan::Unnest(_) => "Unnest",
+            LogicalPlan::RecursiveQuery(_) => "RecursiveQuery",
+        }
+        .to_string()
     }
 }
 
