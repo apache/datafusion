@@ -9680,6 +9680,13 @@ mod tests {
         assert_eq!(decimal128.to_string(), "0.1");
         assert_eq!(format!("{decimal128:?}"), "Decimal128(0.1,1,1)");
 
+        let decimal128_trailing_zero = ScalarValue::Decimal128(Some(120), 3, 2);
+        assert_eq!(decimal128_trailing_zero.to_string(), "1.20");
+        assert_eq!(
+            format!("{decimal128_trailing_zero:?}"),
+            "Decimal128(1.20,3,2)"
+        );
+
         let decimal256 = ScalarValue::Decimal256(Some(i256::from(100123)), 28, 3);
         assert_eq!(decimal256.to_string(), "100.123");
         assert_eq!(format!("{decimal256:?}"), "Decimal256(100.123,28,3)");
