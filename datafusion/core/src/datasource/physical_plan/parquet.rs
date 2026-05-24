@@ -1642,9 +1642,8 @@ mod tests {
             ),
         ]);
 
-        let table_schema = TableSchema::new(
-            Arc::clone(&schema),
-            vec![
+        let table_schema = TableSchema::builder(Arc::clone(&schema))
+            .with_table_partition_cols(vec![
                 Arc::new(Field::new("year", DataType::Utf8, false)),
                 Arc::new(Field::new("month", DataType::UInt8, false)),
                 Arc::new(Field::new(
@@ -1655,8 +1654,8 @@ mod tests {
                     ),
                     false,
                 )),
-            ],
-        );
+            ])
+            .build();
         let source = Arc::new(ParquetSource::new(table_schema.clone()));
         let config = FileScanConfigBuilder::new(object_store_url, source)
             .with_file(partitioned_file)

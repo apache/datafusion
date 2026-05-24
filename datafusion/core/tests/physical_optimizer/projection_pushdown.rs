@@ -1574,10 +1574,13 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
         quote: b'"',
         ..Default::default()
     };
-    let table_schema = TableSchema::new(
-        Arc::clone(&file_schema),
-        vec![Arc::new(Field::new("partition_col", DataType::Utf8, true))],
-    );
+    let table_schema = TableSchema::builder(Arc::clone(&file_schema))
+        .with_table_partition_cols(vec![Arc::new(Field::new(
+            "partition_col",
+            DataType::Utf8,
+            true,
+        ))])
+        .build();
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         Arc::new(CsvSource::new(table_schema).with_csv_options(options)),

@@ -120,6 +120,10 @@ impl TableSchema {
     ///
     /// This is a convenience for
     /// `TableSchema::builder(file_schema).with_table_partition_cols(cols).build()`.
+    #[deprecated(
+        since = "55.0.0",
+        note = "use TableSchema::builder(file_schema).with_table_partition_cols(cols).build() (or TableSchema::from(file_schema) for no partition columns)"
+    )]
     pub fn new(file_schema: SchemaRef, table_partition_cols: Vec<FieldRef>) -> Self {
         TableSchemaBuilder::new(file_schema)
             .with_table_partition_cols(table_partition_cols)
@@ -127,6 +131,10 @@ impl TableSchema {
     }
 
     /// Create a new TableSchema with no partition columns.
+    #[deprecated(
+        since = "55.0.0",
+        note = "use TableSchema::from(file_schema) / file_schema.into()"
+    )]
     pub fn from_file_schema(file_schema: SchemaRef) -> Self {
         TableSchemaBuilder::new(file_schema).build()
     }
@@ -169,7 +177,7 @@ impl TableSchema {
 
 impl From<SchemaRef> for TableSchema {
     fn from(schema: SchemaRef) -> Self {
-        Self::from_file_schema(schema)
+        TableSchemaBuilder::new(schema).build()
     }
 }
 
@@ -247,7 +255,9 @@ mod tests {
             Arc::new(Field::new("region", DataType::Utf8, false)),
         ];
 
-        let table_schema = TableSchema::new(file_schema.clone(), partition_cols.clone());
+        let table_schema = TableSchema::builder(file_schema.clone())
+            .with_table_partition_cols(partition_cols.clone())
+            .build();
 
         // Verify file schema
         assert_eq!(table_schema.file_schema().as_ref(), file_schema.as_ref());
@@ -341,10 +351,13 @@ mod tests {
         // It is safe on a shared clone because partition columns are immutable.
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
-        let original = TableSchema::new(
-            file_schema,
-            vec![Arc::new(Field::new("country", DataType::Utf8, false))],
-        );
+        let original = TableSchema::builder(file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "country",
+                DataType::Utf8,
+                false,
+            ))])
+            .build();
 
         let replaced =
             original

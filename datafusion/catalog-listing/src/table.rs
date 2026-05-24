@@ -321,14 +321,15 @@ impl ListingTable {
 
     /// Creates a file source for this table
     fn create_file_source(&self) -> Arc<dyn FileSource> {
-        let table_schema = TableSchema::new(
-            Arc::clone(&self.file_schema),
-            self.options
-                .table_partition_cols
-                .iter()
-                .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
-                .collect(),
-        );
+        let table_schema = TableSchema::builder(Arc::clone(&self.file_schema))
+            .with_table_partition_cols(
+                self.options
+                    .table_partition_cols
+                    .iter()
+                    .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
+                    .collect::<Vec<_>>(),
+            )
+            .build();
 
         self.options.format.file_source(table_schema)
     }

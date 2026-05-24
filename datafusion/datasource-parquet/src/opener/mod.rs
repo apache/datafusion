@@ -1495,7 +1495,7 @@ mod test {
 
         /// Create a simple table schema from a file schema (for files without partition columns).
         fn with_schema(mut self, file_schema: SchemaRef) -> Self {
-            self.table_schema = Some(TableSchema::from_file_schema(file_schema));
+            self.table_schema = Some(TableSchema::from(file_schema));
             self
         }
 
@@ -1882,10 +1882,13 @@ mod test {
             Field::new("a", DataType::Int32, false),
         ]));
 
-        let table_schema_for_opener = TableSchema::new(
-            file_schema.clone(),
-            vec![Arc::new(Field::new("part", DataType::Int32, false))],
-        );
+        let table_schema_for_opener = TableSchema::builder(file_schema.clone())
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Int32,
+                false,
+            ))])
+            .build();
         let make_opener = |predicate| {
             ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
@@ -1951,10 +1954,13 @@ mod test {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Float32, true),
         ]));
-        let table_schema_for_opener = TableSchema::new(
-            file_schema.clone(),
-            vec![Arc::new(Field::new("part", DataType::Int32, false))],
-        );
+        let table_schema_for_opener = TableSchema::builder(file_schema.clone())
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Int32,
+                false,
+            ))])
+            .build();
         let make_opener = |predicate| {
             ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
@@ -2023,10 +2029,13 @@ mod test {
             Field::new("a", DataType::Int32, false),
         ]));
 
-        let table_schema_for_opener = TableSchema::new(
-            file_schema.clone(),
-            vec![Arc::new(Field::new("part", DataType::Int32, false))],
-        );
+        let table_schema_for_opener = TableSchema::builder(file_schema.clone())
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Int32,
+                false,
+            ))])
+            .build();
         let make_opener = |predicate| {
             ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
@@ -2104,10 +2113,13 @@ mod test {
             Field::new("part", DataType::Int32, false),
         ]));
 
-        let table_schema_for_opener = TableSchema::new(
-            file_schema.clone(),
-            vec![Arc::new(Field::new("part", DataType::Int32, false))],
-        );
+        let table_schema_for_opener = TableSchema::builder(file_schema.clone())
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Int32,
+                false,
+            ))])
+            .build();
         let make_opener = |predicate| {
             ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))

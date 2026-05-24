@@ -223,10 +223,13 @@ mod tests {
         partitioned_file.partition_values = vec![ScalarValue::from("2021-10-26")];
 
         let projection = Some(vec![0, 1, file_schema.fields().len(), 2]);
-        let table_schema = TableSchema::new(
-            file_schema.clone(),
-            vec![Arc::new(Field::new("date", DataType::Utf8, false))],
-        );
+        let table_schema = TableSchema::builder(file_schema.clone())
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "date",
+                DataType::Utf8,
+                false,
+            ))])
+            .build();
         let source = Arc::new(AvroSource::new(table_schema.clone()));
         let conf = FileScanConfigBuilder::new(object_store_url, source)
             // select specific columns of the files as well as the partitioning

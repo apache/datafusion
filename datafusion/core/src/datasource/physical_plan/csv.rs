@@ -122,7 +122,7 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(Arc::clone(&file_schema));
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =
@@ -194,7 +194,7 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(Arc::clone(&file_schema));
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =
@@ -265,7 +265,7 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(Arc::clone(&file_schema));
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =
@@ -335,7 +335,7 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(Arc::clone(&file_schema));
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =
@@ -400,10 +400,13 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let table_schema = TableSchema::new(
-            Arc::clone(&file_schema),
-            vec![Arc::new(Field::new("date", DataType::Utf8, false))],
-        );
+        let table_schema = TableSchema::builder(Arc::clone(&file_schema))
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "date",
+                DataType::Utf8,
+                false,
+            ))])
+            .build();
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =
@@ -508,7 +511,7 @@ mod tests {
             quote: b'"',
             ..Default::default()
         };
-        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(Arc::clone(&file_schema));
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =

@@ -197,10 +197,9 @@ impl FileFormat for ArrowFormat {
             .object_meta
             .location;
 
-        let table_schema = TableSchema::new(
-            Arc::clone(conf.file_schema()),
-            conf.table_partition_cols().to_vec(),
-        );
+        let table_schema = TableSchema::builder(Arc::clone(conf.file_schema()))
+            .with_table_partition_cols(conf.table_partition_cols().clone())
+            .build();
 
         let mut source: Arc<dyn FileSource> =
             match is_object_in_arrow_ipc_file_format(object_store, object_location).await
