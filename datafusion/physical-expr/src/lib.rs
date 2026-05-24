@@ -40,6 +40,10 @@ mod partitioning;
 mod physical_expr;
 pub mod planner;
 pub mod projection;
+/// Shared test helpers for the `try_to_proto` / `try_from_proto` migration
+/// (issue #22418). Compiled only under `cfg(test)` with the `proto` feature.
+#[cfg(all(test, feature = "proto"))]
+pub(crate) mod proto_test_util;
 mod scalar_function;
 pub mod scalar_subquery;
 pub mod simplifier;

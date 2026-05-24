@@ -346,3 +346,192 @@ mod test {
         Ok(())
     }
 }
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks (issue #22418).
+///
+/// These drive the encode/decode hooks directly with small stub
+/// encoder/decoders so every branch can be covered without depending on
+/// `datafusion-proto`: the happy path, the wrong-node and missing-child
+/// rejections, and child encode/decode error propagation.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::{Column, col};
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalLikeExprNode, physical_expr_node,
+    };
+
+    /// Build a `LikeExpr` proto node with the given children.
+    fn like_node(
+        negated: bool,
+        case_insensitive: bool,
+        expr: Option<Box<PhysicalExprNode>>,
+        pattern: Option<Box<PhysicalExprNode>>,
+    ) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::LikeExpr(Box::new(
+                PhysicalLikeExprNode {
+                    negated,
+                    case_insensitive,
+                    expr,
+                    pattern,
+                },
+            ))),
+        }
+    }
+
+    /// A `LikeExpr` over two `Utf8` columns with both flags set, so the
+    /// `negated` / `case_insensitive` wiring is actually exercised.
+    fn like_fixture() -> LikeExpr {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        LikeExpr::new(
+            true,
+            true,
+            col("a", &schema).unwrap(),
+            col("b", &schema).unwrap(),
+        )
+    }
+
+    #[test]
+    fn try_to_proto_encodes_like_expr() {
+        let like = like_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = like
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("LikeExpr should encode to Some(node)");
+
+        // Built-in exprs never set expr_id; only dynamic filters do.
+        assert!(node.expr_id.is_none());
+        let like_node = match node.expr_type {
+            Some(physical_expr_node::ExprType::LikeExpr(boxed)) => *boxed,
+            other => panic!("expected a LikeExpr node, got {other:?}"),
+        };
+        assert!(like_node.negated);
+        assert!(like_node.case_insensitive);
+        assert!(like_node.expr.is_some());
+        assert!(like_node.pattern.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let like = like_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = like.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_to_proto_propagates_pattern_encode_error() {
+        let like = like_fixture();
+        let encoder = StubEncoder::failing_on(2);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = like.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_like_expr() {
+        let node = like_node(
+            true,
+            true,
+            Some(Box::new(column_node("a"))),
+            Some(Box::new(column_node("b"))),
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = LikeExpr::try_from_proto(&node, &ctx).unwrap();
+        let like = decoded
+            .downcast_ref::<LikeExpr>()
+            .expect("decoded expr should be a LikeExpr");
+        assert!(like.negated());
+        assert!(like.case_insensitive());
+        assert!(like.expr().downcast_ref::<Column>().is_some());
+        assert!(like.pattern().downcast_ref::<Column>().is_some());
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_like_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = LikeExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg == "PhysicalExprNode is not a LikeExpr"
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_expr() {
+        let node = like_node(false, false, None, Some(Box::new(column_node("b"))));
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = LikeExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg == "LikeExpr is missing required field 'expr'"
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_pattern() {
+        let node = like_node(false, false, Some(Box::new(column_node("a"))), None);
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = LikeExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg == "LikeExpr is missing required field 'pattern'"
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_propagates_expr_decode_error() {
+        let node = like_node(
+            false,
+            false,
+            Some(Box::new(column_node("a"))),
+            Some(Box::new(column_node("b"))),
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = LikeExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_from_proto_propagates_pattern_decode_error() {
+        let node = like_node(
+            false,
+            false,
+            Some(Box::new(column_node("a"))),
+            Some(Box::new(column_node("b"))),
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(2);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = LikeExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));
+    }
+}
