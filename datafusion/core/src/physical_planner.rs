@@ -82,8 +82,8 @@ use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_expr::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, GroupingSet, NullTreatment,
-    WindowFunction, WindowFunctionParams, physical_name,
+    Alias, GroupingSet, NullTreatment, WindowFunction, WindowFunctionParams,
+    physical_name,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::Subquery;
@@ -94,7 +94,9 @@ use datafusion_expr::{
     FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
     WindowFrame, WindowFrameBound, WriteOp,
 };
-use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
+use datafusion_physical_expr::aggregate::{
+    AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
+};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
@@ -1063,12 +1065,14 @@ impl DefaultPhysicalPlanner {
                 let agg_filter = aggr_expr
                     .iter()
                     .map(|e| {
-                        create_aggregate_expr_and_maybe_filter(
+                        LoweredAggregateBuilder::new(
                             e,
                             logical_input_schema,
                             &physical_input_schema,
                             execution_props,
                         )
+                        .build()
+                        .map(lowered_aggregate_to_tuple)
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -2484,10 +2488,13 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
-        _ => (e.schema_name().to_string(), e),
+        Expr::Alias(alias) => (
+            alias.name.clone(),
+            alias.expr.as_ref().clone().unalias_nested().data,
+        ),
+        _ => (e.schema_name().to_string(), e.clone()),
     };
-    create_window_expr_with_name(e, name, logical_schema, execution_props)
+    create_window_expr_with_name(&e, name, logical_schema, execution_props)
 }
 
 type AggregateExprWithOptionalArgs = (
@@ -2499,88 +2506,46 @@ type AggregateExprWithOptionalArgs = (
 );
 
 /// Create an aggregate expression with a name from a logical expression
+#[deprecated(note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
-    human_displan: String,
+    human_display: String,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
-    match e {
-        Expr::AggregateFunction(AggregateFunction {
-            func,
-            params:
-                AggregateFunctionParams {
-                    args,
-                    distinct,
-                    filter,
-                    order_by,
-                    null_treatment,
-                },
-        }) => {
-            let name = if let Some(name) = name {
-                name
-            } else {
-                physical_name(e)?
-            };
+    let mut builder = LoweredAggregateBuilder::new(
+        e,
+        logical_input_schema,
+        physical_input_schema,
+        execution_props,
+    )
+    .with_human_display(human_display);
 
-            let physical_args =
-                create_physical_exprs(args, logical_input_schema, execution_props)?;
-            let filter = match filter {
-                Some(e) => Some(create_physical_expr(
-                    e,
-                    logical_input_schema,
-                    execution_props,
-                )?),
-                None => None,
-            };
-
-            let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
-                == NullTreatment::IgnoreNulls;
-
-            let (agg_expr, filter, order_bys) = {
-                let order_bys = create_physical_sort_exprs(
-                    order_by,
-                    logical_input_schema,
-                    execution_props,
-                )?;
-
-                let agg_expr =
-                    AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
-                        .order_by(order_bys.clone())
-                        .schema(Arc::new(physical_input_schema.to_owned()))
-                        .alias(name)
-                        .human_display(human_displan)
-                        .with_ignore_nulls(ignore_nulls)
-                        .with_distinct(*distinct)
-                        .build()
-                        .map(Arc::new)?;
-
-                (agg_expr, filter, order_bys)
-            };
-
-            Ok((agg_expr, filter, order_bys))
-        }
-        other => internal_err!("Invalid aggregate expression '{other:?}'"),
+    if let Some(name) = name {
+        builder = builder.with_name(name);
     }
+
+    builder.build().map(lowered_aggregate_to_tuple)
 }
 
 /// Create an aggregate expression from a logical expression or an alias
+#[deprecated(note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_and_maybe_filter(
     e: &Expr,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
-    // Unpack (potentially nested) aliased logical expressions, e.g. "sum(col) as total"
-    // Some functions like `count_all()` create internal aliases,
-    // Unwrap all alias layers to get to the underlying aggregate function
+    // Preserve the pre-builder behavior for callers that still use this helper:
+    // use a single display string and do not attach a separate display alias.
     let (name, human_display, e) = match e {
-        Expr::Alias(Alias { name, .. }) => {
-            let unaliased = e.clone().unalias_nested().data;
-            (Some(name.clone()), e.human_display().to_string(), unaliased)
-        }
+        Expr::Alias(alias) => (
+            Some(alias.name.clone()),
+            e.human_display().to_string(),
+            e.clone(),
+        ),
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
             e.human_display().to_string(),
@@ -2589,14 +2554,25 @@ pub fn create_aggregate_expr_and_maybe_filter(
         _ => (None, String::default(), e.clone()),
     };
 
-    create_aggregate_expr_with_name_and_maybe_filter(
+    let mut builder = LoweredAggregateBuilder::new(
         &e,
-        name,
-        human_display,
         logical_input_schema,
         physical_input_schema,
         execution_props,
     )
+    .with_human_display(human_display);
+
+    if let Some(name) = name {
+        builder = builder.with_name(name);
+    }
+
+    builder.build().map(lowered_aggregate_to_tuple)
+}
+
+fn lowered_aggregate_to_tuple(
+    lowered: LoweredAggregate,
+) -> AggregateExprWithOptionalArgs {
+    (lowered.aggregate, lowered.filter, lowered.order_bys)
 }
 
 impl DefaultPhysicalPlanner {
@@ -3235,6 +3211,7 @@ impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
 mod tests {
     use std::cmp::Ordering;
     use std::fmt::{self, Debug};
+    use std::mem::size_of_val;
     use std::ops::{BitAnd, Not};
 
     use super::*;
@@ -3250,18 +3227,23 @@ mod tests {
     use crate::execution::session_state::SessionStateBuilder;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
-    use arrow_schema::SchemaRef;
+    use arrow_schema::{FieldRef, SchemaRef};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
-        DFSchemaRef, TableReference, ToDFSchema as _, assert_batches_eq, assert_contains,
+        DFSchemaRef, ScalarValue, TableReference, ToDFSchema as _, assert_batches_eq,
+        assert_contains,
     };
     use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::builder::subquery_alias;
+    use datafusion_expr::expr::AggregateFunctionParams;
+    use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
     use datafusion_expr::{
-        LogicalPlanBuilder, TableSource, UserDefinedLogicalNodeCore, col, lit,
+        Accumulator, AggregateUDF, AggregateUDFImpl, ExprFunctionExt, LogicalPlanBuilder,
+        Signature, TableSource, UserDefinedLogicalNodeCore, Volatility,
+        WindowFunctionDefinition, col, lit,
     };
-    use datafusion_functions_aggregate::count::count_all;
+    use datafusion_functions_aggregate::count::{count_all, count_udaf};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -3285,6 +3267,127 @@ mod tests {
         planner
             .create_physical_plan(&logical_plan, &session_state)
             .await
+    }
+
+    async fn aggregate_explain(logical_plan: &LogicalPlan) -> Result<String> {
+        let physical_plan = plan(logical_plan).await?;
+        Ok(displayable(physical_plan.as_ref()).indent(true).to_string())
+    }
+
+    async fn aggregate_explain_for(
+        schema: Schema,
+        aggr_expr: Vec<Expr>,
+    ) -> Result<String> {
+        let logical_plan = scan_empty(None, &schema, None)?
+            .aggregate(Vec::<Expr>::new(), aggr_expr)?
+            .build()?;
+
+        aggregate_explain(&logical_plan).await
+    }
+
+    fn int64_field(name: &str, nullable: bool) -> Field {
+        Field::new(name, DataType::Int64, nullable)
+    }
+
+    #[test]
+    fn test_create_window_expr_unwraps_alias_with_metadata() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion_common::metadata::FieldMetadata;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "column1",
+            DataType::Int64,
+            true,
+        )]));
+        let logical_schema = schema.as_ref().clone().to_dfschema_ref()?;
+        let metadata = FieldMetadata::from(HashMap::from([(
+            "some_key".to_string(),
+            "some_value".to_string(),
+        )]));
+        let expr = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            vec![col("column1")],
+        ))
+        .alias_with_metadata("window_alias", Some(metadata));
+
+        let window_expr =
+            create_window_expr(&expr, &logical_schema, &ExecutionProps::new())?;
+
+        assert_eq!(window_expr.name(), "window_alias");
+        Ok(())
+    }
+
+    #[derive(Debug, Default)]
+    struct NullAccumulator;
+
+    impl Accumulator for NullAccumulator {
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![self.evaluate()?])
+        }
+
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(None))
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct CustomHumanDisplayUdaf {
+        signature: Signature,
+    }
+
+    impl CustomHumanDisplayUdaf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for CustomHumanDisplayUdaf {
+        fn name(&self) -> &str {
+            "custom_human_display_udaf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            Ok(Box::new(NullAccumulator))
+        }
+
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            Ok(vec![
+                Field::new("custom_state", DataType::Int64, true).into(),
+            ])
+        }
+
+        fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+            Ok(format!(
+                "custom_display({})",
+                params.args[0].human_display()
+            ))
+        }
     }
 
     async fn plan_sql(query: &str) -> Result<Arc<dyn ExecutionPlan>> {
@@ -4035,6 +4138,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_aggregate_explain_shows_quoted_user_alias() -> Result<()> {
+        assert_contains!(
+            aggregate_explain_for(
+                Schema::new(vec![int64_field("column1", false)]),
+                vec![sum(col("column1")).alias("total rows")],
+            )
+            .await?,
+            "AggregateExec: mode=Single, gby=[], aggr=[sum(?table?.column1) as total rows]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_explain_shows_aliased_filter_expression() -> Result<()> {
+        let expr = sum(col("column1"))
+            .filter(col("column2").lt_eq(lit(0_i64)))
+            .build()?
+            .alias("agg");
+
+        assert_contains!(
+            aggregate_explain_for(
+                Schema::new(vec![
+                    int64_field("column1", false),
+                    int64_field("column2", false),
+                ]),
+                vec![expr],
+            )
+            .await?,
+            "AggregateExec: mode=Single, gby=[], aggr=[sum(?table?.column1) FILTER (WHERE ?table?.column2 <= Int64(0)) as agg]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_explain_shows_aliased_respect_nulls() -> Result<()> {
+        let expr = datafusion_functions_aggregate::first_last::first_value_udaf()
+            .call(vec![col("column1")])
+            .order_by(vec![col("column2").sort(true, true)])
+            .null_treatment(NullTreatment::RespectNulls)
+            .build()?
+            .alias("agg");
+
+        assert_contains!(
+            aggregate_explain_for(
+                Schema::new(vec![
+                    int64_field("column1", true),
+                    int64_field("column2", false),
+                ]),
+                vec![expr],
+            )
+            .await?,
+            "AggregateExec: mode=Single, gby=[], aggr=[first_value(?table?.column1) RESPECT NULLS ORDER BY [?table?.column2 ASC NULLS FIRST] as agg]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_explain_shows_count_all() -> Result<()> {
+        let logical_plan = test_csv_scan()
+            .await?
+            .aggregate(Vec::<Expr>::new(), vec![count_all()])?
+            .build()?;
+
+        assert_contains!(
+            aggregate_explain(&logical_plan).await?,
+            "aggr=[count(1) as count(*)]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_explain_shows_count_all_with_user_alias() -> Result<()> {
+        let logical_plan = test_csv_scan()
+            .await?
+            .aggregate(Vec::<Expr>::new(), vec![count_all().alias("total_rows")])?
+            .build()?;
+
+        assert_contains!(
+            aggregate_explain(&logical_plan).await?,
+            "aggr=[count(1) as total_rows]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_explain_shows_aliased_custom_human_display() -> Result<()> {
+        assert_contains!(
+            aggregate_explain_for(
+                Schema::new(vec![int64_field("column1", false)]),
+                vec![
+                    AggregateUDF::from(CustomHumanDisplayUdaf::new())
+                        .call(vec![col("column1")])
+                        .alias("agg"),
+                ],
+            )
+            .await?,
+            "AggregateExec: mode=Single, gby=[], aggr=[custom_display(?table?.column1) as agg]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_explain() {
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
@@ -4276,20 +4487,6 @@ mod tests {
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
         }
-
-        fn apply_expressions(
-            &self,
-            f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            // Visit expressions in the output ordering from equivalence properties
-            let mut tnr = TreeNodeRecursion::Continue;
-            if let Some(ordering) = self.cache.output_ordering() {
-                for sort_expr in ordering {
-                    tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-                }
-            }
-            Ok(tnr)
-        }
     }
 
     //  Produces an execution plan where the schema is mismatched from
@@ -4429,12 +4626,6 @@ digraph {
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
         }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
-        }
     }
     impl DisplayAs for OkExtensionNode {
         fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
@@ -4480,12 +4671,6 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
-        }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for InvariantFailsExtensionNode {
@@ -4604,12 +4789,6 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
-        }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for ExecutableInvariantFails {

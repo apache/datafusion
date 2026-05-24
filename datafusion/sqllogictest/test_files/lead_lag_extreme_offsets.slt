@@ -1,0 +1,66 @@
+# Tests for extreme lead offsets regression cases (#22221, #22231)
+
+statement ok
+CREATE TABLE lead_lag_extreme_offsets(id INT, value INT) AS VALUES
+  (1, 10),
+  (2, 20),
+  (3, 30);
+
+# i64::MIN lead offset should not panic and should produce the provided default
+query I
+SELECT lead(value, -9223372036854775808, 0) OVER (ORDER BY id) FROM lead_lag_extreme_offsets ORDER BY id;
+----
+0
+0
+0
+
+# Very large lead offset should not panic and should produce the provided default
+query I
+SELECT lead(value, 9223372036854775807, 0) OVER (ORDER BY id) FROM lead_lag_extreme_offsets ORDER BY id;
+----
+0
+0
+0
+
+# i64::MIN lead offset without explicit default should return NULL
+query I
+SELECT lead(value, -9223372036854775808) OVER (ORDER BY id) FROM lead_lag_extreme_offsets ORDER BY id;
+----
+NULL
+NULL
+NULL
+
+# Out-of-range offset literal should fail as a non-integer offset
+query error DataFusion error: Execution error: Expected an integer value
+SELECT lead(value, -9223372036854775809, 0) OVER (ORDER BY id) FROM lead_lag_extreme_offsets;
+
+# Very large lag offset should not panic and should produce the provided default
+query I
+SELECT lag(value, 9223372036854775807, 0) OVER (ORDER BY id) FROM lead_lag_extreme_offsets ORDER BY id;
+----
+0
+0
+0
+
+# i64::MIN lag offset should not panic and should produce the provided default
+query I
+SELECT lag(value, -9223372036854775808, 0) OVER (ORDER BY id) FROM lead_lag_extreme_offsets ORDER BY id;
+----
+0
+0
+0
+
+# Very large lag offset without explicit default should return NULL
+query I
+SELECT lag(value, 9223372036854775807) OVER (ORDER BY id) FROM lead_lag_extreme_offsets ORDER BY id;
+----
+NULL
+NULL
+NULL
+
+# Out-of-range lag offset literal should fail as a non-integer offset
+query error DataFusion error: Execution error: Expected an integer value
+SELECT lag(value, -9223372036854775809, 0) OVER (ORDER BY id) FROM lead_lag_extreme_offsets;
+
+statement ok
+DROP TABLE lead_lag_extreme_offsets;

@@ -1117,6 +1117,27 @@ async fn aggregate_identical_grouping_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_identical_measures() -> Result<()> {
+    // Two identical aggregate measures share the same schema_name; without
+    // NameTracker dedup over measures, building the Aggregate's output
+    // DFSchema fails with "Schema contains duplicate unqualified field name".
+    let proto_plan = read_json(
+        "tests/testdata/test_plans/aggregate_identical_measures.substrait.json",
+    );
+
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: __common_expr_1 AS sum_a_1, __common_expr_1 AS sum(data.a)__temp__0 AS sum_a_2
+      Aggregate: groupBy=[[]], aggr=[[sum(data.a) AS __common_expr_1]]
+        TableScan: data projection=[a]
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn simple_intersect_consume() -> Result<()> {
     let proto_plan = read_json("tests/testdata/test_plans/intersect.substrait.json");
 
@@ -1563,6 +1584,40 @@ async fn roundtrip_values_duplicate_column_join() -> Result<()> {
     // Execute to ensure plan validity
     DataFrame::new(ctx.state(), plan2).show().await?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_preserves_field_nullability() -> Result<()> {
+    use datafusion::arrow::datatypes::Fields;
+
+    // Verify that required and nullable fields, including nested struct fields,
+    // preserve their nullability through a Substrait round-trip.
+    //
+    // List child nullability is intentionally omitted because it is not
+    // preserved today.
+    let ctx = create_context().await?;
+    let df_schema = DFSchema::try_from(Schema::new(vec![
+        Field::new("required_int", DataType::Int32, false),
+        Field::new("nullable_int", DataType::Int32, true),
+        Field::new(
+            "required_struct",
+            DataType::Struct(Fields::from(vec![
+                Field::new("required_inner", DataType::Boolean, false),
+                Field::new("nullable_inner", DataType::Utf8, true),
+            ])),
+            false,
+        ),
+    ]))?;
+    let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: false,
+        schema: DFSchemaRef::new(df_schema),
+    });
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    assert_eq!(plan.schema(), plan2.schema());
     Ok(())
 }
 

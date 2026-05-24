@@ -30,11 +30,9 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_expr::PhysicalExpr;
 
 use futures::StreamExt;
 
@@ -149,13 +147,6 @@ impl ExecutionPlan for AnalyzeExec {
         vec![Distribution::UnspecifiedDistribution]
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -214,6 +205,7 @@ impl ExecutionPlan for AnalyzeExec {
             while let Some(batch) = input_stream.next().await.transpose()? {
                 total_rows += batch.num_rows();
             }
+            drop(input_stream);
 
             let duration = Instant::now() - start;
             create_output_batch(

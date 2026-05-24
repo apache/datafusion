@@ -1,0 +1,217 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## array_filter Tests
+#############
+
+statement ok
+set datafusion.sql_parser.dialect = databricks;
+
+statement ok
+CREATE TABLE t (list array<int>, number int)
+AS VALUES
+([1, 50], 10),
+([4, 50], 40),
+([7, 50], 60);
+
+statement ok
+CREATE TABLE with_null_list (list array<int>)
+AS VALUES
+([1, 2]),
+(NULL);
+
+statement ok
+CREATE TABLE fully_null_list (list array<int>)
+AS VALUES
+(NULL),
+(NULL);
+
+query ?
+SELECT array_filter([1, 2, 3, 4, 5], v -> v > 2);
+----
+[3, 4, 5]
+
+# alias list_filter works
+query ?
+SELECT list_filter([1, 2, 3, 4, 5], v -> v > 2);
+----
+[3, 4, 5]
+
+# multiple sublists — t.list rows are [1,50], [4,50], [7,50]
+query ?
+SELECT array_filter(list, v -> v > 40) from t;
+----
+[50]
+[50]
+[50]
+
+# filter with column capture in predicate
+query ?
+SELECT array_filter(list, v -> v > t.number) from t;
+----
+[50]
+[50]
+[]
+
+# null sublist is preserved
+query ?
+SELECT array_filter(list, v -> v > 1) from with_null_list;
+----
+[2]
+NULL
+
+# all null fast path
+query ?
+SELECT array_filter(list, v -> v > 1) from fully_null_list;
+----
+NULL
+NULL
+
+# empty array input
+query ?
+SELECT array_filter([], v -> v > 1);
+----
+[]
+
+# scalar true: return list unchanged
+query ?
+SELECT array_filter([1, 2, 3], v -> true);
+----
+[1, 2, 3]
+
+# scalar false: return empty sublists
+query ?
+SELECT array_filter([1, 2, 3], v -> false);
+----
+[]
+
+# all filtered out
+query ?
+SELECT array_filter([1, 2], v -> v > 10);
+----
+[]
+
+# nothing filtered — all elements pass predicate
+query ?
+SELECT array_filter([3, 4, 5], v -> v > 2);
+----
+[3, 4, 5]
+
+# coercion: ListView input is coerced to List during planning
+query ?
+SELECT array_filter(arrow_cast(list, 'ListView(Int32)'), v -> v > 2) from t;
+----
+[50]
+[4, 50]
+[7, 50]
+
+# null array argument returns null
+query ?
+SELECT array_filter(arrow_cast(NULL, 'List(Int32)'), v -> v > 0);
+----
+NULL
+
+# lambda returns null for some elements — null treated as false (element dropped)
+query ?
+SELECT array_filter([1, 2, 3], v -> CASE WHEN v = 2 THEN NULL ELSE v > 1 END);
+----
+[3]
+
+# lambda always returns null — scalar null short-circuit returns empty list
+query ?
+SELECT array_filter([1, 2, 3], v -> CAST(NULL AS BOOLEAN));
+----
+[]
+
+query error DataFusion error: Error during planning: The function 'array_filter' expected 2 argument\(s\) but received 0
+SELECT array_filter();
+
+query error DataFusion error: Error during planning: array_filter expected a list as first argument, got Int64
+SELECT array_filter(1, v -> v > 0);
+
+query error DataFusion error: Error during planning: The function 'array_filter' expected a value at position 0 but received a lambda
+SELECT array_filter(v -> v > 0, [1, 2, 3]);
+
+##############
+## array_filter + array_transform combinations
+##############
+
+# filter then transform on literal
+query ?
+SELECT array_transform(array_filter([1, 2, 3, 4, 5], v -> v > 2), v -> v * 10);
+----
+[30, 40, 50]
+
+# transform then filter on literal
+query ?
+SELECT array_filter(array_transform([1, 2, 3, 4, 5], v -> v * 2), v -> v > 4);
+----
+[6, 8, 10]
+
+# filter evens then square
+query ?
+SELECT array_transform(array_filter([1, 2, 3, 4, 5, 6], v -> v % 2 = 0), v -> v * v);
+----
+[4, 16, 36]
+
+# double filter
+query ?
+SELECT array_filter(array_filter([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], v -> v % 2 = 0), v -> v > 5);
+----
+[6, 8, 10]
+
+# double transform
+query ?
+SELECT array_transform(array_transform([1, 2, 3], v -> v + 1), v -> v * 2);
+----
+[4, 6, 8]
+
+# filter then transform on table column
+query ?
+SELECT array_transform(array_filter(list, v -> v > 3), v -> v * 2) FROM t ORDER BY 1;
+----
+[8, 100]
+[14, 100]
+[100]
+
+# transform then filter on table column
+query ?
+SELECT array_filter(array_transform(list, v -> v * 2), v -> v > 10) FROM t ORDER BY 1;
+----
+[14, 100]
+[100]
+[100]
+
+# filter then transform with null list
+query ?
+SELECT array_transform(array_filter(list, v -> v > 1), v -> v * 3) FROM with_null_list;
+----
+[6]
+NULL
+
+statement ok
+drop table t;
+
+statement ok
+drop table with_null_list;
+
+statement ok
+drop table fully_null_list;
+
+statement ok
+set datafusion.sql_parser.dialect = generic;

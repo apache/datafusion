@@ -321,7 +321,11 @@ impl Interval {
 
 // return time in nanoseconds that the source timestamp falls into based on the stride and origin
 fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> Result<i64> {
-    let time_diff = source - origin;
+    let time_diff = source.checked_sub(origin).ok_or_else(|| {
+        arrow::error::ArrowError::InvalidArgumentError(format!(
+            "date_bin source timestamp {source} - origin {origin} overflows i64"
+        ))
+    })?;
 
     // distance from origin to bin
     let time_delta = compute_distance(time_diff, stride_nanos);
