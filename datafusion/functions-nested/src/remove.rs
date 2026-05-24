@@ -19,8 +19,8 @@
 
 use crate::utils;
 use arrow::array::{
-    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
-    Scalar, cast::AsArray, make_array,
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetBufferBuilder,
+    OffsetSizeTrait, Scalar, cast::AsArray, make_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, FieldRef};
@@ -117,15 +117,18 @@ impl ScalarUDFImpl for ArrayRemove {
         let [list_arg, element_arg] = take_function_args(self.name(), &args.args)?;
         let num_rows = args.number_rows;
         let list_array = list_arg.to_array(num_rows)?;
-        let arr_n = vec![1; num_rows];
         match element_arg {
-            ColumnarValue::Array(element_array) => {
-                let result = array_remove_internal(&list_array, element_array, &arr_n)?;
+            ColumnarValue::Scalar(scalar_element)
+                if !scalar_element.is_null()
+                    && !scalar_element.data_type().is_nested() =>
+            {
+                let result =
+                    array_remove_with_scalar_args(&list_array, scalar_element, 1i64)?;
                 Ok(ColumnarValue::Array(result))
             }
-            ColumnarValue::Scalar(scalar_element) => {
-                let result =
-                    remove_with_scalar_needle(&list_array, scalar_element, &arr_n)?;
+            element_arg => {
+                let element_array = element_arg.to_array(num_rows)?;
+                let result = array_remove_internal(&list_array, &element_array, &[1])?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -233,16 +236,33 @@ impl ScalarUDFImpl for ArrayRemoveN {
             take_function_args(self.name(), &args.args)?;
         let num_rows = args.number_rows;
         let list_array = list_arg.to_array(num_rows)?;
-        let max_array = max_arg.to_array(num_rows)?;
-        let arr_n = as_int64_array(&max_array)?.values().to_vec();
-        match element_arg {
-            ColumnarValue::Array(element_array) => {
-                let result = array_remove_internal(&list_array, element_array, &arr_n)?;
+        match (element_arg, max_arg) {
+            (
+                ColumnarValue::Scalar(scalar_element),
+                ColumnarValue::Scalar(scalar_max),
+            ) if !scalar_element.is_null() && !scalar_element.data_type().is_nested() => {
+                let ScalarValue::Int64(Some(n)) = scalar_max else {
+                    // null max means no remove
+                    return Ok(ColumnarValue::Array(list_array));
+                };
+                let result =
+                    array_remove_with_scalar_args(&list_array, scalar_element, *n)?;
                 Ok(ColumnarValue::Array(result))
             }
-            ColumnarValue::Scalar(scalar_element) => {
-                let result =
-                    remove_with_scalar_needle(&list_array, scalar_element, &arr_n)?;
+            (element_arg, max_arg) => {
+                let element_array = element_arg.to_array(num_rows)?;
+                let max_array = max_arg.to_array(num_rows)?;
+                let max_array = as_int64_array(&max_array)?;
+                let arr_n = (0..max_array.len())
+                    .map(|i| {
+                        if max_array.is_null(i) {
+                            0
+                        } else {
+                            max_array.value(i)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let result = array_remove_internal(&list_array, &element_array, &arr_n)?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -338,15 +358,19 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         let [list_arg, element_arg] = take_function_args(self.name(), &args.args)?;
         let num_rows = args.number_rows;
         let list_array = list_arg.to_array(num_rows)?;
-        let arr_n = vec![i64::MAX; num_rows];
         match element_arg {
-            ColumnarValue::Array(element_array) => {
-                let result = array_remove_internal(&list_array, element_array, &arr_n)?;
+            ColumnarValue::Scalar(scalar_element)
+                if !scalar_element.is_null()
+                    && !scalar_element.data_type().is_nested() =>
+            {
+                let result =
+                    array_remove_with_scalar_args(&list_array, scalar_element, i64::MAX)?;
                 Ok(ColumnarValue::Array(result))
             }
-            ColumnarValue::Scalar(scalar_element) => {
+            element_arg => {
+                let element_array = element_arg.to_array(num_rows)?;
                 let result =
-                    remove_with_scalar_needle(&list_array, scalar_element, &arr_n)?;
+                    array_remove_internal(&list_array, &element_array, &[i64::MAX])?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -381,44 +405,25 @@ fn array_remove_internal(
     }
 }
 
-/// Dispatches scalar-needle array removal by list offset type.
-///
-/// `needle` must be a length-1 array containing the scalar element to remove.
-fn array_remove_dispatch_scalar(
+/// Fast path for `array_remove` when the needle is a non-null, non-nested scalar.
+/// Dispatches to the bulk `distinct` comparison kernel.
+fn array_remove_with_scalar_args(
     array: &ArrayRef,
-    needle: &ArrayRef,
-    arr_n: &[i64],
+    scalar_needle: &ScalarValue,
+    max_removals: i64,
 ) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_remove_with_scalar::<i32>(list_array, needle, arr_n)
+            general_remove_with_scalar::<i32>(list_array, scalar_needle, max_removals)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_remove_with_scalar::<i64>(list_array, needle, arr_n)
+            general_remove_with_scalar::<i64>(list_array, scalar_needle, max_removals)
         }
         array_type => exec_err!(
             "array_remove/array_remove_n/array_remove_all does not support type '{array_type}'."
         ),
-    }
-}
-
-/// Removes elements matching a scalar needle from a list array.
-///
-/// Uses a bulk `distinct` comparison for non-null, non-nested scalar elements,
-/// falling back to the per-row `general_remove` path for null or nested types.
-fn remove_with_scalar_needle(
-    list_array: &ArrayRef,
-    scalar_element: &ScalarValue,
-    arr_n: &[i64],
-) -> Result<ArrayRef> {
-    if !scalar_element.is_null() && !scalar_element.data_type().is_nested() {
-        let needle = scalar_element.to_array_of_size(1)?;
-        array_remove_dispatch_scalar(list_array, &needle, arr_n)
-    } else {
-        let needle_array = scalar_element.to_array_of_size(list_array.len())?;
-        array_remove_internal(list_array, &needle_array, arr_n)
     }
 }
 
@@ -476,7 +481,11 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
         let start = offset_window[0].to_usize().unwrap();
         let end = offset_window[1].to_usize().unwrap();
         // n is the number of elements to remove in this row
-        let n = arr_n[row_index];
+        let n = if arr_n.len() == 1 {
+            arr_n[0]
+        } else {
+            arr_n[row_index]
+        };
 
         // compare each element in the list, `false` means the element matches and should be removed
         let eq_array = utils::compare_element_to_list(
@@ -533,16 +542,20 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     )?))
 }
 
-/// For each element of `list_array[i]`, removed up to `arr_n[i]` occurrences
-/// of `needle[0]` (scalar element broadcasted).
+/// For each element of `list_array[i]`, removes up to `max_removals` occurrences
+/// of the scalar needle.
 ///
 /// This is a specialized version of `general_remove` for scalar elements that
 /// uses bulk comparison for better performance.
 fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
-    needle: &ArrayRef,
-    arr_n: &[i64],
+    scalar_needle: &ScalarValue,
+    max_removals: i64,
 ) -> Result<ArrayRef> {
+    if max_removals <= 0 {
+        return Ok(Arc::new(list_array.clone()));
+    }
+
     let list_field = match list_array.data_type() {
         DataType::List(field) | DataType::LargeList(field) => field,
         _ => {
@@ -559,8 +572,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
     let values_range_len = last_offset - first_offset;
     let values_slice = list_array.values().slice(first_offset, values_range_len);
     let original_data = values_slice.to_data();
-    let mut offsets = Vec::<OffsetSize>::with_capacity(list_array.len() + 1);
-    offsets.push(OffsetSize::zero());
+    let mut offsets = OffsetBufferBuilder::<OffsetSize>::new(list_array.len());
 
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data],
@@ -568,58 +580,46 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         Capacities::Array(original_data.len()),
     );
     let nulls = list_array.nulls().cloned();
-    let keep_mask =
-        arrow_ord::cmp::distinct(&values_slice, &Scalar::new(Arc::clone(needle)))?;
-    let remove_bits = match keep_mask.nulls() {
-        Some(validity) => !(&(keep_mask.values() & validity.inner())),
-        None => !keep_mask.values(),
-    };
+    let needle = scalar_needle.to_array_of_size(1)?;
+    let keep_mask = arrow_ord::cmp::distinct(&values_slice, &Scalar::new(needle))?;
+    let remove_bits = !keep_mask.values();
 
     for (row_index, offset_window) in list_offsets.windows(2).enumerate() {
         if nulls.as_ref().is_some_and(|nulls| nulls.is_null(row_index)) {
-            offsets.push(offsets[row_index]);
+            offsets.push_length(0);
             continue;
         }
 
         let start = offset_window[0].to_usize().unwrap() - first_offset;
         let end = offset_window[1].to_usize().unwrap() - first_offset;
-
-        let n = arr_n[row_index];
-
-        if n <= 0 {
-            mutable.extend(0, start, end);
-            offsets.push(offsets[row_index] + OffsetSize::usize_as(end - start));
-            continue;
-        }
-
         let row_len = end - start;
+
         let row_remove_bits = remove_bits.slice(start, row_len);
         let num_to_remove = row_remove_bits.count_set_bits();
 
         if num_to_remove == 0 {
             mutable.extend(0, start, end);
-            offsets.push(offsets[row_index] + OffsetSize::usize_as(row_len));
+            offsets.push_length(row_len);
             continue;
         }
 
-        let max_removals = n.min(num_to_remove as i64) as usize;
+        let removals_to_apply = max_removals.min(num_to_remove as i64) as usize;
 
         // Iterate only over the removal positions via set_indices. This is
         // efficient when the number of removals is small relative to the row
         // length (common case), since it skips over retained elements.
         let mut removed = 0usize;
         let mut copied = 0usize;
-        let mut prev_end = start; // end of last copied range (absolute index into values_slice)
+        let mut prev_end = start;
         for remove_pos in row_remove_bits.set_indices() {
             let abs_pos = start + remove_pos;
-            // Copy the range before this removal position
             if abs_pos > prev_end {
                 mutable.extend(0, prev_end, abs_pos);
                 copied += abs_pos - prev_end;
             }
             prev_end = abs_pos + 1;
             removed += 1;
-            if removed == max_removals {
+            if removed == removals_to_apply {
                 break;
             }
         }
@@ -629,13 +629,13 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
             copied += end - prev_end;
         }
 
-        offsets.push(offsets[row_index] + OffsetSize::usize_as(copied));
+        offsets.push_length(copied);
     }
 
     let new_values = make_array(mutable.freeze());
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
         Arc::clone(list_field),
-        OffsetBuffer::new(offsets.into()),
+        offsets.finish(),
         new_values,
         nulls,
     )?))
