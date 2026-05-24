@@ -1088,6 +1088,15 @@ mod tests {
     }
 
     #[test]
+    fn simplify_get_field_null_field_name_left_alone() {
+        // A NULL string literal field name resolves to no field, so the
+        // `try_as_str().flatten()` guard must leave the expression untouched.
+        let null_field_name = Expr::Literal(ScalarValue::Utf8(None), None);
+        let args = vec![named_struct(vec![("a", col("x"))]), null_field_name];
+        assert_not_simplified(args);
+    }
+
+    #[test]
     fn simplify_get_field_dynamic_struct_name_left_alone() {
         // A non-literal name inside named_struct could shadow the requested
         // field at runtime, so the rewrite must bail out entirely.
