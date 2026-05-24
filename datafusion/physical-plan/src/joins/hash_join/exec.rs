@@ -31,7 +31,8 @@ use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::Map;
+use crate::joins::{Map, RoaringMapData};
+use roaring::RoaringBitmap;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
@@ -1994,7 +1995,7 @@ async fn collect_left_input(
             let batch = concat_batches(&schema, &batches)?;
             let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
             let key_col = &left_values[0];
-            let bitmap = match key_col.data_type() {
+            let bitmap: RoaringBitmap = match key_col.data_type() {
                 DataType::UInt32 => key_col
                     .as_any()
                     .downcast_ref::<UInt32Array>()
@@ -2013,7 +2014,13 @@ async fn collect_left_input(
                 _ => return internal_err!("unsupported data type to build bitmap"),
             };
             roaring_map_created_count.add(1);
-            (Map::RoaringMap(bitmap), batch, left_values)
+            let min = bitmap.min().unwrap_or(u32::MAX);
+            let max = bitmap.max().unwrap_or(u32::MIN);
+            (
+                Map::RoaringMap(RoaringMapData { bitmap, min, max }),
+                batch,
+                left_values,
+            )
         } else if let Some((array_map, batch, left_value)) = try_create_array_map(
             &bounds,
             &schema,

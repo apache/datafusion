@@ -336,7 +336,7 @@ impl PhysicalExpr for HashTableLookupExpr {
                 let array = map.contain_keys(&join_keys)?;
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
-            Map::RoaringMap(bitmap) => {
+            Map::RoaringMap(data) => {
                 // For roaring bitmap, check membership directly
                 // Roaring only supports u32 values, so we handle Int32 and UInt32 types
                 if join_keys.len() != 1 {
@@ -346,6 +346,12 @@ impl PhysicalExpr for HashTableLookupExpr {
                     );
                 }
                 let key_col = &join_keys[0];
+                // Bounds were cached at build time so out-of-range probes
+                // short-circuit before the binary-search inside
+                // `RoaringBitmap::contains`.
+                let min = data.min;
+                let max = data.max;
+                let bitmap = &data.bitmap;
                 let contains: BooleanArray = match key_col.data_type() {
                     DataType::Int32 => {
                         let arr = key_col
@@ -356,7 +362,8 @@ impl PhysicalExpr for HashTableLookupExpr {
                             if arr.is_null(i) {
                                 return false;
                             }
-                            bitmap.contains(arr.value(i) as u32)
+                            let v = arr.value(i) as u32;
+                            v >= min && v <= max && bitmap.contains(v)
                         });
                         BooleanArray::new(buffer, None)
                     }
@@ -369,7 +376,8 @@ impl PhysicalExpr for HashTableLookupExpr {
                             if arr.is_null(i) {
                                 return false;
                             }
-                            bitmap.contains(arr.value(i))
+                            let v = arr.value(i);
+                            v >= min && v <= max && bitmap.contains(v)
                         });
                         BooleanArray::new(buffer, None)
                     }

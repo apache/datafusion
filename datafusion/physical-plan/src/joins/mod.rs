@@ -51,11 +51,20 @@ pub mod join_hash_map;
 use array_map::ArrayMap;
 use utils::JoinHashMapType;
 
+pub struct RoaringMapData {
+    pub bitmap: RoaringBitmap,
+    /// Smallest key in `bitmap`. Cached at build time so probe loops can
+    /// short-circuit out-of-range keys without invoking `RoaringBitmap::contains`.
+    pub min: u32,
+    /// Largest key in `bitmap`. See [`Self::min`].
+    pub max: u32,
+}
+
 pub enum Map {
     HashMap(Box<dyn JoinHashMapType>),
     ArrayMap(ArrayMap),
     // optimized path for single int join keys
-    RoaringMap(RoaringBitmap),
+    RoaringMap(RoaringMapData),
 }
 
 impl Map {
@@ -64,7 +73,7 @@ impl Map {
         match self {
             Map::HashMap(map) => map.len(),
             Map::ArrayMap(array_map) => array_map.num_of_distinct_key(),
-            Map::RoaringMap(bitmap) => bitmap.len() as usize,
+            Map::RoaringMap(data) => data.bitmap.len() as usize,
         }
     }
 

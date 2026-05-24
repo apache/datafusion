@@ -732,9 +732,15 @@ impl HashJoinStream {
                     next_offset,
                 )
             }
-            Map::RoaringMap(bitmap) => {
+            Map::RoaringMap(data) => {
                 let key_col = &state.values[0];
                 let is_semi = matches!(self.join_type, JoinType::RightSemi);
+                // Bounds were cached at build time so out-of-range probes
+                // short-circuit before the binary-search inside
+                // `RoaringBitmap::contains`.
+                let min = data.min;
+                let max = data.max;
+                let bitmap = &data.bitmap;
                 let mask: BooleanArray = match key_col.data_type() {
                     DataType::Int32 => {
                         let arr = key_col.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -742,7 +748,10 @@ impl HashJoinStream {
                             if arr.is_null(i) {
                                 return !is_semi;
                             }
-                            bitmap.contains(arr.value(i) as u32) == is_semi
+                            let v = arr.value(i) as u32;
+                            let in_set =
+                                v >= min && v <= max && bitmap.contains(v);
+                            in_set == is_semi
                         });
                         BooleanArray::new(buffer, None)
                     }
@@ -752,7 +761,10 @@ impl HashJoinStream {
                             if arr.is_null(i) {
                                 return !is_semi;
                             }
-                            bitmap.contains(arr.value(i)) == is_semi
+                            let v = arr.value(i);
+                            let in_set =
+                                v >= min && v <= max && bitmap.contains(v);
+                            in_set == is_semi
                         });
                         BooleanArray::new(buffer, None)
                     }
