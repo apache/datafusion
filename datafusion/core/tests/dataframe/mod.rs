@@ -6310,12 +6310,12 @@ async fn test_alias_nested() -> Result<()> {
     // Only the outermost alias is visible
     let select2 = df.select(vec![col("alias1.a")]);
     assert_snapshot!(
-                select2.unwrap_err().strip_backtrace(),
-                @r"
+                    select2.unwrap_err().strip_backtrace(),
+                    @r"
 Schema error: No field named alias1.a. Did you mean 'alias2.a'?
 Valid fields are alias2.a, alias2.b, alias2.one.
 "
-            );
+                );
     Ok(())
 }
 
