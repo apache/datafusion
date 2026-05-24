@@ -988,34 +988,33 @@ impl DataSource for FileScanConfig {
                 // path before #21956 routed `column_in_file_schema` cases
                 // here.
                 if config.output_ordering.is_empty() {
-                    Ok(SortOrderPushdownResult::Inexact {
+                    return Ok(SortOrderPushdownResult::Inexact {
                         inner: Arc::new(config),
-                    })
-                } else {
-                    // Upgrading to Exact: the post-sort file groups are
-                    // non-overlapping and each file's declared ordering
-                    // re-validates, so reading the files in their natural
-                    // (declared-sorted) order already yields the requested
-                    // ordering — exactly like the `Unsupported` → Exact path,
-                    // which reads files in natural order too.
-                    //
-                    // Drop the runtime row-group reorder hints the Inexact
-                    // source carried (`sort_order_for_reorder` /
-                    // `reverse_row_groups`) by restoring the original,
-                    // hint-free source. With the `SortExec` removed those
-                    // hints are not just redundant but unsafe: for a DESC
-                    // request the opener sorts row groups ASC-by-min and then
-                    // reverses them, which mis-orders two row groups within a
-                    // single file that share the same `min` (e.g. a file
-                    // `[10,8,8,8]` whose row groups are `[10,8]` and `[8,8]`
-                    // would stream as `8,8,10,8`). The `SortExec` used to
-                    // mask this; once it is gone the reordered stream is the
-                    // final, wrong answer.
-                    config.file_source = Arc::clone(&self.file_source);
-                    Ok(SortOrderPushdownResult::Exact {
-                        inner: Arc::new(config),
-                    })
+                    });
                 }
+                // Upgrading to Exact: the post-sort file groups are
+                // non-overlapping and each file's declared ordering
+                // re-validates, so reading the files in their natural
+                // (declared-sorted) order already yields the requested
+                // ordering — exactly like the `Unsupported` → Exact path,
+                // which reads files in natural order too.
+                //
+                // Drop the runtime row-group reorder hints the Inexact
+                // source carried (`sort_order_for_reorder` /
+                // `reverse_row_groups`) by restoring the original,
+                // hint-free source. With the `SortExec` removed those
+                // hints are not just redundant but unsafe: for a DESC
+                // request the opener sorts row groups ASC-by-min and then
+                // reverses them, which reorders two row groups within a
+                // single file that share the same `min` incorrectly
+                // (e.g. a file `[10,8,8,8]` whose row groups are
+                // `[10,8]` and `[8,8]` would stream as `8,8,10,8`).
+                // The `SortExec` used to mask this; once it is gone the
+                // reordered stream is the final, wrong answer.
+                config.file_source = Arc::clone(&self.file_source);
+                Ok(SortOrderPushdownResult::Exact {
+                    inner: Arc::new(config),
+                })
             }
             SortOrderPushdownResult::Unsupported => {
                 self.try_sort_file_groups_by_statistics(order)
