@@ -39,9 +39,12 @@ use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::SubqueryIndex;
+use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion_physical_expr::{
+    HigherOrderFunctionExpr, LexOrdering, PhysicalSortExpr, ScalarFunctionExpr,
+};
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
     NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
@@ -426,6 +429,31 @@ pub fn parse_physical_expr_with_converter(
                 .with_nullable(e.nullable),
             )
         }
+        ExprType::HigherOrderUdf(e) => {
+            let func = match &e.fun_definition {
+                Some(buf) => {
+                    ctx.codec().try_decode_higher_order_function(&e.name, buf)?
+                }
+                None => ctx
+                    .task_ctx()
+                    .higher_order_function(e.name.as_str())
+                    .or_else(|_| {
+                        ctx.codec().try_decode_higher_order_function(&e.name, &[])
+                    })?,
+            };
+            let func_def = Arc::clone(&func);
+
+            let args = parse_physical_exprs(&e.args, ctx, input_schema, proto_converter)?;
+
+            let config_options = Arc::clone(ctx.task_ctx().session_config().options());
+
+            Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
+                func_def,
+                args,
+                input_schema,
+                config_options,
+            )?)
+        }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
             like_expr.negated,
             like_expr.case_insensitive,
@@ -534,6 +562,20 @@ pub fn parse_physical_expr_with_converter(
             ctx.codec()
                 .try_decode_expr(extension.expr.as_slice(), &inputs)? as _
         }
+        ExprType::Lambda(lambda) => Arc::new(LambdaExpr::try_new(
+            lambda.params.clone(),
+            parse_required_physical_expr(
+                lambda.body.as_deref(),
+                ctx,
+                "body",
+                input_schema,
+                proto_converter,
+            )?,
+        )?),
+        ExprType::LambdaVariable(var) => Arc::new(LambdaVariable::new(
+            var.index as usize,
+            Arc::new(convert_required!(var.field)?),
+        )),
     };
 
     Ok(pexpr)

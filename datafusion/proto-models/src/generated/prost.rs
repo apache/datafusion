@@ -584,7 +584,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -665,6 +665,12 @@ pub mod logical_expr_node {
         /// Subquery expressions
         #[prost(message, tag = "36")]
         ScalarSubqueryExpr(::prost::alloc::boxed::Box<super::ScalarSubqueryExprNode>),
+        #[prost(message, tag = "37")]
+        HigherOrderUdfExpr(super::HigherOrderUdfExprNode),
+        #[prost(message, tag = "38")]
+        Lambda(::prost::alloc::boxed::Box<super::Lambda>),
+        #[prost(message, tag = "39")]
+        LambdaVariable(super::LambdaVariable),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -852,6 +858,29 @@ pub struct ScalarUdfExprNode {
     pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(bytes = "vec", optional, tag = "3")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HigherOrderUdfExprNode {
+    #[prost(string, tag = "1")]
+    pub fun_name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Lambda {
+    #[prost(string, repeated, tag = "1")]
+    pub params: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub body: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LambdaVariable {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WindowExprNode {
@@ -1338,7 +1367,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1395,6 +1424,12 @@ pub mod physical_expr_node {
         ScalarSubquery(super::PhysicalScalarSubqueryExprNode),
         #[prost(message, tag = "23")]
         DynamicFilter(::prost::alloc::boxed::Box<super::PhysicalDynamicFilterNode>),
+        #[prost(message, tag = "24")]
+        HigherOrderUdf(super::PhysicalHigherOrderUdfNode),
+        #[prost(message, tag = "25")]
+        Lambda(::prost::alloc::boxed::Box<super::PhysicalLambdaExprNode>),
+        #[prost(message, tag = "26")]
+        LambdaVariable(super::PhysicalLambdaVariableExprNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1424,6 +1459,29 @@ pub struct PhysicalScalarUdfNode {
     pub nullable: bool,
     #[prost(string, tag = "6")]
     pub return_field_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalHigherOrderUdfNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub args: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalLambdaExprNode {
+    #[prost(string, repeated, tag = "1")]
+    pub params: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub body: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalLambdaVariableExprNode {
+    #[prost(uint32, tag = "1")]
+    pub index: u32,
+    #[prost(message, optional, tag = "2")]
+    pub field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalAggregateExprNode {

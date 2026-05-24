@@ -52,7 +52,7 @@ use datafusion::physical_expr::aggregate::{AggregateExprBuilder, AggregateFuncti
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
-    LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
+    HigherOrderFunctionExpr, LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
 };
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
@@ -108,7 +108,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, HigherOrderUDF,
     ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
     WindowFrame, WindowFrameBound, WindowUDF,
     execution_props::{ScalarSubqueryResults, SubqueryIndex},
@@ -135,9 +135,10 @@ use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
 
 use crate::cases::{
-    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
-    MyRegexUdfNode,
+    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyHigherOrderUDF,
+    MyHigherOrderUdfNode, MyRegexUdf, MyRegexUdfNode,
 };
+use datafusion_physical_expr::expressions::{LambdaVariable, is_not_null, lambda};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
@@ -1347,6 +1348,39 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         }
         Ok(())
     }
+
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        buf: &[u8],
+    ) -> Result<Arc<dyn HigherOrderUDF>> {
+        if name == "higher_order_udf" {
+            let proto = MyHigherOrderUdfNode::decode(buf).map_err(|err| {
+                internal_datafusion_err!("failed to decode higher_order_udf: {err}")
+            })?;
+
+            Ok(Arc::new(MyHigherOrderUDF::new(proto.payload)))
+        } else {
+            not_impl_err!("unrecognized higher order UDF implementation, cannot decode")
+        }
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        node: &dyn HigherOrderUDF,
+        buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        if let Some(hof) = (node as &dyn std::any::Any).downcast_ref::<MyHigherOrderUDF>()
+        {
+            let proto = MyHigherOrderUdfNode {
+                payload: hof.payload.clone(),
+            };
+            proto.encode(buf).map_err(|err| {
+                internal_datafusion_err!("failed to encode hof: {err:?}")
+            })?;
+        }
+        Ok(())
+    }
 }
 
 #[test]
@@ -1404,6 +1438,88 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     let ctx = SessionContext::new();
     let proto_converter = DefaultPhysicalProtoConverter {};
     roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_converter)?;
+    Ok(())
+}
+
+#[test]
+fn roundtrip_higher_order_udf() -> Result<()> {
+    let element_field = Arc::new(Field::new("v", DataType::Int32, true));
+    let list_field = Field::new(
+        "list_col",
+        DataType::List(Arc::clone(&element_field)),
+        false,
+    );
+    let schema = Arc::new(Schema::new(vec![list_field]));
+
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    let hof = Arc::new(MyHigherOrderUDF::new("payload".to_string())) as _;
+
+    let expr = HigherOrderFunctionExpr::try_new_with_schema(
+        Arc::clone(&hof),
+        vec![
+            col("list_col", &schema)?,
+            lambda(
+                ["v"],
+                is_not_null(Arc::new(LambdaVariable::new(1, element_field)))?,
+            )?,
+        ],
+        &schema,
+        Arc::new(ConfigOptions::default()),
+    )?;
+
+    let project = ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: Arc::new(expr),
+            alias: "a".to_string(),
+        }],
+        input,
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_higher_order_function(hof);
+
+    roundtrip_test_with_context(Arc::new(project), &ctx)
+}
+
+#[test]
+fn roundtrip_higher_order_udf_extension_codec() -> Result<()> {
+    let element_field = Arc::new(Field::new("v", DataType::Int32, true));
+    let list_field = Field::new(
+        "list_col",
+        DataType::List(Arc::clone(&element_field)),
+        false,
+    );
+    let schema = Arc::new(Schema::new(vec![list_field]));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    let lambda_body = Arc::new(LambdaVariable::new(1, Arc::clone(&element_field)));
+    let lambda_expr = lambda(["v"], lambda_body)?;
+
+    let hof = Arc::new(MyHigherOrderUDF::new("payload".to_string()));
+    let hof_expr = Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
+        hof,
+        vec![col("list_col", &schema)?, lambda_expr],
+        &schema,
+        Arc::new(ConfigOptions::default()),
+    )?);
+
+    let project = ProjectionExec::try_new(
+        vec![ProjectionExpr {
+            expr: hof_expr,
+            alias: "out".to_string(),
+        }],
+        input,
+    )?;
+
+    let ctx = SessionContext::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    roundtrip_test_and_return(
+        Arc::new(project),
+        &ctx,
+        &UDFExtensionCodec,
+        &proto_converter,
+    )?;
     Ok(())
 }
 

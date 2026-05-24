@@ -21,8 +21,10 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, LimitEffect, PartitionEvaluator, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, Volatility, WindowUDFImpl,
+    Accumulator, AggregateUDFImpl, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
+    HigherOrderSignature, HigherOrderUDF, LambdaParametersProgress, LimitEffect,
+    PartitionEvaluator, ScalarFunctionArgs, ScalarUDFImpl, Signature, ValueOrLambda,
+    Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -177,6 +179,69 @@ impl PartitionEvaluator for CustomUDWFEvaluator {}
 
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub(in crate::cases) struct CustomUDWFNode {
+    #[prost(string, tag = "1")]
+    pub payload: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(in crate::cases) struct MyHigherOrderUDF {
+    signature: HigherOrderSignature,
+    pub payload: String,
+}
+
+impl MyHigherOrderUDF {
+    pub fn new(payload: String) -> Self {
+        Self {
+            signature: HigherOrderSignature::any(2, Volatility::Immutable),
+            payload,
+        }
+    }
+}
+
+impl HigherOrderUDF for MyHigherOrderUDF {
+    fn name(&self) -> &str {
+        "higher_order_udf"
+    }
+
+    fn signature(&self) -> &HigherOrderSignature {
+        &self.signature
+    }
+
+    fn lambda_parameters(
+        &self,
+        _step: usize,
+        fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ) -> datafusion_common::Result<LambdaParametersProgress> {
+        let list = match fields.first() {
+            Some(ValueOrLambda::Value(field)) => field,
+            _ => return plan_err!("higher_order_udf expects a list as first argument"),
+        };
+        let element = match list.data_type() {
+            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+            other => {
+                return plan_err!("higher_order_udf expected a list, got {other}");
+            }
+        };
+        Ok(LambdaParametersProgress::Complete(vec![vec![element]]))
+    }
+
+    fn return_field_from_args(
+        &self,
+        _args: HigherOrderReturnFieldArgs,
+    ) -> datafusion_common::Result<FieldRef> {
+        Ok(Arc::new(Field::new("", DataType::Int64, true)))
+    }
+
+    fn invoke_with_args(
+        &self,
+        _args: HigherOrderFunctionArgs,
+    ) -> datafusion_common::Result<ColumnarValue> {
+        unimplemented!()
+    }
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub(in crate::cases) struct MyHigherOrderUdfNode {
     #[prost(string, tag = "1")]
     pub payload: String,
 }
