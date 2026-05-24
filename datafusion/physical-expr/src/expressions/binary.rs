@@ -20,11 +20,13 @@ mod kernels;
 use crate::PhysicalExpr;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use std::hash::Hash;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
-use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use arrow::compute::kernels::concat_elements::{
+    concat_element_binary, concat_elements_utf8,
+};
 use arrow::compute::{SlicesIterator, cast, filter_record_batch};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
@@ -34,7 +36,9 @@ use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
 use datafusion_expr::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
+#[expect(deprecated)]
 use datafusion_expr::statistics::{
     Distribution, combine_bernoullis, combine_gaussians,
     create_bernoulli_from_comparison, new_generic_from_binary_op,
@@ -46,7 +50,8 @@ use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
-    concat_elements_utf8view, regex_match_dyn, regex_match_dyn_scalar,
+    concat_elements_binary_view_array, concat_elements_utf8view, regex_match_dyn,
+    regex_match_dyn_scalar,
 };
 
 /// Binary expression
@@ -130,7 +135,7 @@ impl std::fmt::Display for BinaryExpr {
             expr: &dyn PhysicalExpr,
             precedence: u8,
         ) -> std::fmt::Result {
-            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if let Some(child) = expr.downcast_ref::<BinaryExpr>() {
                 let p = child.op.precedence();
                 if p == 0 || p < precedence {
                     write!(f, "({child})")?;
@@ -252,11 +257,6 @@ fn duration_to_days(array: &ArrayRef) -> Result<ArrayRef> {
 }
 
 impl PhysicalExpr for BinaryExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         BinaryTypeCoercer::new(
             &self.left.data_type(input_schema)?,
@@ -294,11 +294,11 @@ impl PhysicalExpr for BinaryExpr {
                     ColumnarValue::Array(array) => {
                         // When the array on the right is all true or all false, skip the scatter process
                         let boolean_array = array.as_boolean();
-                        let true_count = boolean_array.true_count();
-                        let length = boolean_array.len();
-                        if true_count == length {
+                        if boolean_array.null_count() == 0 && !boolean_array.has_false() {
                             return Ok(lhs);
-                        } else if true_count == 0 && boolean_array.null_count() == 0 {
+                        } else if boolean_array.null_count() == 0
+                            && !boolean_array.has_true()
+                        {
                             // If the right-hand array is returned at this point,the lengths will be inconsistent;
                             // returning a scalar can avoid this issue
                             return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
@@ -503,6 +503,7 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         let (left, right) = (children[0], children[1]);
 
@@ -590,7 +591,7 @@ impl PhysicalExpr for BinaryExpr {
             expr: &dyn PhysicalExpr,
             precedence: u8,
         ) -> std::fmt::Result {
-            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if let Some(child) = expr.downcast_ref::<BinaryExpr>() {
                 let p = child.op.precedence();
                 if p == 0 || p < precedence {
                     write!(f, "(")?;
@@ -608,6 +609,124 @@ impl PhysicalExpr for BinaryExpr {
         write_child(f, self.left.as_ref(), precedence)?;
         write!(f, " {} ", self.op)?;
         write_child(f, self.right.as_ref(), precedence)
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Linearize a nested binary expression tree of the same operator
+        // into a flat vector of operands to avoid deep recursion in proto.
+        let op = self.op;
+        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![&self.right];
+        let mut current_expr: &BinaryExpr = self;
+        loop {
+            match current_expr.left.downcast_ref::<BinaryExpr>() {
+                Some(bin) if bin.op == op => {
+                    operand_refs.push(&bin.right);
+                    current_expr = bin;
+                }
+                _ => {
+                    operand_refs.push(&current_expr.left);
+                    break;
+                }
+            }
+        }
+        // Reverse so operands are ordered from left innermost to right outermost.
+        operand_refs.reverse();
+
+        let operands = operand_refs
+            .iter()
+            .map(|e| ctx.encode_child(e))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::BinaryExpr(
+                Box::new(protobuf::PhysicalBinaryExprNode {
+                    l: None,
+                    r: None,
+                    op: format!("{op:?}"),
+                    operands,
+                }),
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl BinaryExpr {
+    /// Reconstruct a [`BinaryExpr`] (or a left-deep tree of them when the proto
+    /// uses the linearized `operands` form) from its protobuf representation.
+    ///
+    /// Takes the whole [`PhysicalExprNode`] — the exact inverse of what
+    /// [`PhysicalExpr::try_to_proto`] produces — so every expression's
+    /// `try_from_proto` shares one signature. The operator string is parsed
+    /// via the canonical [`Operator::from_proto_name`] mapping, so no `op`
+    /// argument needs to be threaded in by the caller.
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    /// [`PhysicalExpr::try_to_proto`]: datafusion_physical_expr_common::physical_expr::PhysicalExpr::try_to_proto
+    /// [`PhysicalExprDecodeCtx::decode`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::decode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_proto_models::protobuf;
+        let node = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::BinaryExpr(b)) => b.as_ref(),
+            _ => return internal_err!("PhysicalExprNode is not a BinaryExpr"),
+        };
+        let op = Operator::from_proto_name(&node.op).ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(format!(
+                "Unsupported binary operator '{}'",
+                node.op
+            ))
+        })?;
+
+        if !node.operands.is_empty() {
+            // New linearized format: reduce the flat operands list back into
+            // a nested binary expression tree.
+            let operands = node
+                .operands
+                .iter()
+                .map(|e| ctx.decode(e))
+                .collect::<Result<Vec<_>>>()?;
+
+            if operands.len() < 2 {
+                return Err(datafusion_common::DataFusionError::Internal(
+                    "A binary expression must always have at least 2 operands"
+                        .to_string(),
+                ));
+            }
+
+            Ok(operands
+                .into_iter()
+                .reduce(|left, right| {
+                    Arc::new(BinaryExpr::new(left, op, right)) as Arc<dyn PhysicalExpr>
+                })
+                .expect("Binary expression could not be reduced to a single expression."))
+        } else {
+            // Legacy format with l/r fields.
+            let left = node.l.as_deref().ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(
+                    "BinaryExpr is missing required field 'left'".to_string(),
+                )
+            })?;
+            let right = node.r.as_deref().ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(
+                    "BinaryExpr is missing required field 'right'".to_string(),
+                )
+            })?;
+            Ok(Arc::new(BinaryExpr::new(
+                ctx.decode(left)?,
+                op,
+                ctx.decode(right)?,
+            )))
+        }
     }
 }
 
@@ -715,7 +834,7 @@ impl BinaryExpr {
             StringConcat => concat_elements(&left, &right),
             AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
             | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
-            | IntegerDivide => {
+            | IntegerDivide | Colon => {
                 not_impl_err!(
                     "Binary operator '{:?}' is not supported in the physical expr",
                     self.op
@@ -945,6 +1064,18 @@ fn concat_elements(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
         DataType::Utf8View => Arc::new(concat_elements_utf8view(
             left.as_string_view(),
             right.as_string_view(),
+        )?),
+        DataType::Binary => Arc::new(concat_element_binary::<i32>(
+            left.as_binary(),
+            right.as_binary(),
+        )?),
+        DataType::LargeBinary => Arc::new(concat_element_binary::<i64>(
+            left.as_binary(),
+            right.as_binary(),
+        )?),
+        DataType::BinaryView => Arc::new(concat_elements_binary_view_array(
+            left.as_binary_view(),
+            right.as_binary_view(),
         )?),
         other => {
             return internal_err!(
@@ -4656,7 +4787,6 @@ mod tests {
         schema: &Schema,
     ) -> Result<BinaryExpr> {
         Ok(binary_op(left, op, right, schema)?
-            .as_any()
             .downcast_ref::<BinaryExpr>()
             .unwrap()
             .clone())
@@ -4664,6 +4794,7 @@ mod tests {
 
     /// Test for Uniform-Uniform, Unknown-Uniform, Uniform-Unknown and Unknown-Unknown evaluation.
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
@@ -4731,6 +4862,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics_bernoulli() -> Result<()> {
         let schema = &Schema::new(vec![
             Field::new("a", DataType::Int64, false),
@@ -4766,6 +4898,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_propagate_statistics_combination_of_range_holders_arithmetic() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
@@ -4835,6 +4968,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_propagate_statistics_combination_of_range_holders_comparison() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;

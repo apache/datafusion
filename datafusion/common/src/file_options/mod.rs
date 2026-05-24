@@ -84,7 +84,7 @@ mod tests {
         .build();
 
         // Verify the expected options propagated down to parquet crate WriterProperties struct
-        assert_eq!(properties.max_row_group_size(), 123);
+        assert_eq!(properties.max_row_group_row_count(), Some(123));
         assert_eq!(properties.data_page_size_limit(), 123);
         assert_eq!(properties.write_batch_size(), 123);
         assert_eq!(properties.writer_version(), WriterVersion::PARQUET_2_0);

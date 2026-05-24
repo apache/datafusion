@@ -212,7 +212,12 @@ fn rewrite_children(
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,
 ) -> Result<Transformed<LogicalPlan>> {
-    let transformed_plan = plan.map_children(|input| optimizer.rewrite(input, config))?;
+    // Process uncorrelated subqueries in expressions, then direct children.
+    let transformed_plan = plan
+        .map_uncorrelated_subqueries(|input| optimizer.rewrite(input, config))?
+        .transform_sibling(|plan| {
+            plan.map_children(|input| optimizer.rewrite(input, config))
+        })?;
 
     // recompute schema if the plan was transformed
     if transformed_plan.transformed {
@@ -524,7 +529,7 @@ mod tests {
             plan,
             @ r"
         Filter: t1.a = t2.a OR t2.b = t1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
+          Cross Join: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
             TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
             TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
         "
@@ -610,7 +615,7 @@ mod tests {
             plan,
             @ r"
         Filter: t1.a = t2.a AND t2.c < UInt32(15) OR t1.b = t2.b AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
+          Cross Join: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
             TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
             TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
         "
@@ -636,7 +641,7 @@ mod tests {
             plan,
             @ r"
         Filter: t1.a = t2.a AND t2.c < UInt32(15) OR t1.a = t2.a OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
+          Cross Join: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
             TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
             TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
         "
@@ -858,7 +863,7 @@ mod tests {
             plan,
             @ r"
         Filter: t3.a = t1.a AND t4.c < UInt32(15) OR t3.a = t1.a OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
+          Cross Join: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
             Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
               Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
                 TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
@@ -938,7 +943,7 @@ mod tests {
                 TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
                 TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
             Filter: t3.a = t4.a AND t4.c < UInt32(15) OR t3.a = t4.a AND t3.c = UInt32(688) OR t3.a = t4.a OR t3.b = t4.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
+              Cross Join: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
                 TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
                 TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]
         "
@@ -1012,7 +1017,7 @@ mod tests {
         Filter: t4.c < UInt32(15) OR t4.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
           Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
             Filter: t1.a = t2.a OR t2.c < UInt32(15) OR t1.a = t2.a AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-              Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
+              Cross Join: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
                 TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
                 TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
             Filter: t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
@@ -1248,7 +1253,7 @@ mod tests {
             plan,
             @ r"
         Filter: t1.a + UInt32(100) = t2.a * UInt32(2) OR t2.b = t1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
-          Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
+          Cross Join: [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
             TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
             TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
         "

@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use crate::function::url::parse_url::{ParseUrl, spark_handled_parse_url};
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
@@ -52,10 +50,6 @@ impl TryParseUrl {
 }
 
 impl ScalarUDFImpl for TryParseUrl {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "try_parse_url"
     }

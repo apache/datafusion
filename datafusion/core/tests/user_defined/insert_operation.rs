@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
@@ -57,7 +57,7 @@ async fn insert_operation_is_passed_correctly_to_table_provider() {
 async fn assert_insert_op(ctx: &SessionContext, sql: &str, insert_op: InsertOp) {
     let df = ctx.sql(sql).await.unwrap();
     let plan = df.create_physical_plan().await.unwrap();
-    let exec = plan.as_any().downcast_ref::<TestInsertExec>().unwrap();
+    let exec = plan.downcast_ref::<TestInsertExec>().unwrap();
     assert_eq!(exec.op, insert_op);
 }
 
@@ -87,10 +87,6 @@ impl TestInsertTableProvider {
 
 #[async_trait]
 impl TableProvider for TestInsertTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -122,20 +118,22 @@ impl TableProvider for TestInsertTableProvider {
 #[derive(Debug)]
 struct TestInsertExec {
     op: InsertOp,
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
 }
 
 impl TestInsertExec {
     fn new(op: InsertOp) -> Self {
         Self {
             op,
-            plan_properties: PlanProperties::new(
-                EquivalenceProperties::new(make_count_schema()),
-                Partitioning::UnknownPartitioning(1),
-                EmissionType::Incremental,
-                Boundedness::Bounded,
-            )
-            .with_scheduling_type(SchedulingType::Cooperative),
+            plan_properties: Arc::new(
+                PlanProperties::new(
+                    EquivalenceProperties::new(make_count_schema()),
+                    Partitioning::UnknownPartitioning(1),
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )
+                .with_scheduling_type(SchedulingType::Cooperative),
+            ),
         }
     }
 }
@@ -155,11 +153,7 @@ impl ExecutionPlan for TestInsertExec {
         "TestInsertExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 

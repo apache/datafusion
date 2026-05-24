@@ -33,6 +33,7 @@ pub const TPCH_TABLES: &[&str] = &[
 
 pub const TPCH_QUERY_START_ID: usize = 1;
 pub const TPCH_QUERY_END_ID: usize = 22;
+const TPCH_Q11_FRACTION_SENTINEL: &str = "0.0001 /* __TPCH_Q11_FRACTION__ */";
 
 /// The `.tbl` file contains a trailing column
 pub fn get_tbl_tpch_table_schema(table: &str) -> Schema {
@@ -139,6 +140,21 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
 
 /// Get the SQL statements from the specified query file
 pub fn get_query_sql(query: usize) -> Result<Vec<String>> {
+    get_query_sql_for_scale_factor(query, 1.0)
+}
+
+/// Get the SQL statements from the specified query file using the provided scale factor for
+/// TPC-H substitutions such as Q11 FRACTION.
+pub fn get_query_sql_for_scale_factor(
+    query: usize,
+    scale_factor: f64,
+) -> Result<Vec<String>> {
+    if !(scale_factor.is_finite() && scale_factor > 0.0) {
+        return plan_err!(
+            "invalid scale factor. Expected a positive finite value, got {scale_factor}"
+        );
+    }
+
     if query > 0 && query < 23 {
         let possibilities = vec![
             format!("queries/q{query}.sql"),
@@ -148,6 +164,7 @@ pub fn get_query_sql(query: usize) -> Result<Vec<String>> {
         for filename in possibilities {
             match fs::read_to_string(&filename) {
                 Ok(contents) => {
+                    let contents = customize_query_sql(query, contents, scale_factor)?;
                     return Ok(contents
                         .split(';')
                         .map(|s| s.trim())
@@ -162,6 +179,27 @@ pub fn get_query_sql(query: usize) -> Result<Vec<String>> {
     } else {
         plan_err!("invalid query. Expected value between 1 and 22")
     }
+}
+
+fn customize_query_sql(
+    query: usize,
+    contents: String,
+    scale_factor: f64,
+) -> Result<String> {
+    if query != 11 {
+        return Ok(contents);
+    }
+
+    if !contents.contains(TPCH_Q11_FRACTION_SENTINEL) {
+        return plan_err!(
+            "invalid query 11. Missing fraction marker {TPCH_Q11_FRACTION_SENTINEL}"
+        );
+    }
+
+    Ok(contents.replace(
+        TPCH_Q11_FRACTION_SENTINEL,
+        &format!("(0.0001 / {scale_factor})"),
+    ))
 }
 
 pub const QUERY_LIMIT: [Option<usize>; 22] = [
@@ -188,3 +226,51 @@ pub const QUERY_LIMIT: [Option<usize>; 22] = [
     Some(100),
     None,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{get_query_sql, get_query_sql_for_scale_factor};
+    use datafusion::error::Result;
+
+    fn get_single_query(query: usize) -> Result<String> {
+        let mut queries = get_query_sql(query)?;
+        assert_eq!(queries.len(), 1);
+        Ok(queries.remove(0))
+    }
+
+    fn get_single_query_for_scale_factor(
+        query: usize,
+        scale_factor: f64,
+    ) -> Result<String> {
+        let mut queries = get_query_sql_for_scale_factor(query, scale_factor)?;
+        assert_eq!(queries.len(), 1);
+        Ok(queries.remove(0))
+    }
+
+    #[test]
+    fn q11_uses_scale_factor_substitution() -> Result<()> {
+        let sf1_sql = get_single_query(11)?;
+        assert!(sf1_sql.contains("(0.0001 / 1)"));
+
+        let sf01_sql = get_single_query_for_scale_factor(11, 0.1)?;
+        assert!(sf01_sql.contains("(0.0001 / 0.1)"));
+
+        let sf10_sql = get_single_query_for_scale_factor(11, 10.0)?;
+        assert!(sf10_sql.contains("(0.0001 / 10)"));
+
+        let sf30_sql = get_single_query_for_scale_factor(11, 30.0)?;
+        assert!(sf30_sql.contains("(0.0001 / 30)"));
+        assert!(!sf10_sql.contains("__TPCH_Q11_FRACTION__"));
+        Ok(())
+    }
+
+    #[test]
+    fn interval_queries_use_interval_arithmetic() -> Result<()> {
+        assert!(get_single_query(5)?.contains("date '1994-01-01' + interval '1' year"));
+        assert!(get_single_query(6)?.contains("date '1994-01-01' + interval '1' year"));
+        assert!(get_single_query(10)?.contains("date '1993-10-01' + interval '3' month"));
+        assert!(get_single_query(12)?.contains("date '1994-01-01' + interval '1' year"));
+        assert!(get_single_query(14)?.contains("date '1995-09-01' + interval '1' month"));
+        Ok(())
+    }
+}

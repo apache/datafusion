@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::sync::Arc;
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
-use DataType::{LargeUtf8, Utf8, Utf8View};
-use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringBuilder, OffsetSizeTrait, StringArrayType,
+use crate::strings::{
+    BulkNullStringArrayBuilder, GenericStringArrayBuilder, StringViewArrayBuilder,
 };
+use crate::utils::make_scalar_function;
+use DataType::{LargeUtf8, Utf8, Utf8View};
+use arrow::array::{Array, ArrayRef, AsArray, StringArrayType};
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -69,10 +68,6 @@ impl ReverseFunc {
 }
 
 impl ScalarUDFImpl for ReverseFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "reverse"
     }
@@ -82,17 +77,13 @@ impl ScalarUDFImpl for ReverseFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "reverse")
+        Ok(arg_types[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
         match args[0].data_type() {
-            Utf8 | Utf8View => make_scalar_function(reverse::<i32>, vec![])(args),
-            LargeUtf8 => make_scalar_function(reverse::<i64>, vec![])(args),
+            Utf8 | Utf8View | LargeUtf8 => make_scalar_function(reverse, vec![])(args),
             other => {
                 exec_err!("Unsupported data type {other:?} for function reverse")
             }
@@ -106,48 +97,89 @@ impl ScalarUDFImpl for ReverseFunc {
 
 /// Reverses the order of the characters in the string `reverse('abcde') = 'edcba'`.
 /// The implementation uses UTF-8 code points as characters
-fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args[0].data_type() == &Utf8View {
-        reverse_impl::<T, _>(&args[0].as_string_view())
-    } else {
-        reverse_impl::<T, _>(&args[0].as_string::<T>())
+fn reverse(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let len = args[0].len();
+
+    match args[0].data_type() {
+        LargeUtf8 => reverse_impl(
+            &args[0].as_string::<i64>(),
+            GenericStringArrayBuilder::<i64>::with_capacity(len, 1024),
+        ),
+        Utf8 => reverse_impl(
+            &args[0].as_string::<i32>(),
+            GenericStringArrayBuilder::<i32>::with_capacity(len, 1024),
+        ),
+        Utf8View => reverse_impl(
+            &args[0].as_string_view(),
+            StringViewArrayBuilder::with_capacity(len),
+        ),
+        _ => unreachable!(
+            "Reverse can only be applied to Utf8View, Utf8 and LargeUtf8 types"
+        ),
     }
 }
 
-fn reverse_impl<'a, T: OffsetSizeTrait, V: StringArrayType<'a>>(
-    string_array: &V,
-) -> Result<ArrayRef> {
-    let mut builder = GenericStringBuilder::<T>::with_capacity(string_array.len(), 1024);
-
+fn reverse_impl<'a, StringArrType, B>(
+    string_array: &StringArrType,
+    mut array_builder: B,
+) -> Result<ArrayRef>
+where
+    StringArrType: StringArrayType<'a>,
+    B: BulkNullStringArrayBuilder,
+{
+    let item_len = string_array.len();
+    // Null-preserving: reuse the input null buffer as the output null buffer.
+    let nulls = string_array.nulls().cloned();
     let mut string_buf = String::new();
     let mut byte_buf = Vec::<u8>::new();
-    for string in string_array.iter() {
-        if let Some(s) = string {
-            if s.is_ascii() {
-                // reverse bytes directly since ASCII characters are single bytes
-                byte_buf.extend(s.as_bytes());
-                byte_buf.reverse();
-                // SAFETY: Since the original string was ASCII, reversing the bytes still results in valid UTF-8.
-                let reversed = unsafe { std::str::from_utf8_unchecked(&byte_buf) };
-                builder.append_value(reversed);
-                byte_buf.clear();
+
+    if let Some(ref n) = nulls {
+        for i in 0..item_len {
+            if n.is_null(i) {
+                array_builder.append_placeholder();
             } else {
-                string_buf.extend(s.chars().rev());
-                builder.append_value(&string_buf);
-                string_buf.clear();
+                // SAFETY: `n.is_null(i)` was false in the branch above.
+                let s = unsafe { string_array.value_unchecked(i) };
+                append_reversed(s, &mut array_builder, &mut byte_buf, &mut string_buf);
             }
-        } else {
-            builder.append_null();
+        }
+    } else {
+        for i in 0..item_len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_array.value_unchecked(i) };
+            append_reversed(s, &mut array_builder, &mut byte_buf, &mut string_buf);
         }
     }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    array_builder.finish(nulls)
+}
+
+#[inline]
+fn append_reversed<B: BulkNullStringArrayBuilder>(
+    s: &str,
+    builder: &mut B,
+    byte_buf: &mut Vec<u8>,
+    string_buf: &mut String,
+) {
+    if s.is_ascii() {
+        // reverse bytes directly since ASCII characters are single bytes
+        byte_buf.extend(s.as_bytes());
+        byte_buf.reverse();
+        // SAFETY: input was ASCII, so reversed bytes are still valid UTF-8.
+        let reversed = unsafe { std::str::from_utf8_unchecked(byte_buf) };
+        builder.append_value(reversed);
+        byte_buf.clear();
+    } else {
+        string_buf.extend(s.chars().rev());
+        builder.append_value(string_buf);
+        string_buf.clear();
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, LargeStringArray, StringArray};
-    use arrow::datatypes::DataType::{LargeUtf8, Utf8};
+    use arrow::array::{Array, LargeStringArray, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -180,8 +212,8 @@ mod tests {
                 vec![ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 &str,
-                Utf8,
-                StringArray
+                Utf8View,
+                StringViewArray
             );
         };
     }
@@ -201,5 +233,59 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_array_with_nulls() {
+        use crate::unicode::reverse::reverse;
+        use arrow::array::ArrayRef;
+        use std::sync::Arc;
+
+        let input_values = vec![Some("abcd"), None, Some("XYZ"), Some("héllo"), None];
+        let expected: Vec<Option<&str>> =
+            vec![Some("dcba"), None, Some("ZYX"), Some("olléh"), None];
+
+        let cases: Vec<(&str, ArrayRef)> = vec![
+            (
+                "StringArray",
+                Arc::new(StringArray::from(input_values.clone())),
+            ),
+            (
+                "LargeStringArray",
+                Arc::new(LargeStringArray::from(input_values.clone())),
+            ),
+            (
+                "StringViewArray",
+                Arc::new(StringViewArray::from(input_values.clone())),
+            ),
+        ];
+
+        for (label, input) in cases {
+            let out = reverse(&[input]).unwrap();
+            assert_eq!(out.len(), expected.len(), "{label}: length mismatch");
+
+            let actual: Vec<Option<&str>> = match out.data_type() {
+                Utf8 => out
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .iter()
+                    .collect(),
+                LargeUtf8 => out
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .unwrap()
+                    .iter()
+                    .collect(),
+                Utf8View => out
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .unwrap()
+                    .iter()
+                    .collect(),
+                other => panic!("{label}: unexpected output type {other:?}"),
+            };
+            assert_eq!(actual, expected, "{label}: value mismatch");
+        }
     }
 }

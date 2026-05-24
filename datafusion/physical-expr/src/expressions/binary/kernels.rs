@@ -18,6 +18,7 @@
 //! This module contains computation kernels that are specific to
 //! datafusion and not (yet) targeted to  port upstream to arrow
 use arrow::array::*;
+use arrow::buffer::{MutableBuffer, NullBuffer};
 use arrow::compute::kernels::bitwise::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
@@ -160,11 +161,11 @@ create_left_integral_dyn_scalar_kernel!(
     bitwise_shift_left_scalar
 );
 
-/// Concatenates two `StringViewArray`s element-wise.  
+/// Concatenates two `StringViewArray`s element-wise.
 /// If either element is `Null`, the result element is also `Null`.
 ///
 /// # Errors
-/// - Returns an error if the input arrays have different lengths.  
+/// - Returns an error if the input arrays have different lengths.
 /// - Returns an error if any concatenated string exceeds `u32::MAX` (≈4 GB) in length.
 pub fn concat_elements_utf8view(
     left: &StringViewArray,
@@ -177,24 +178,71 @@ pub fn concat_elements_utf8view(
             right.len()
         )));
     }
-    let capacity = left.len();
-    let mut result = StringViewBuilder::with_capacity(capacity);
+    let mut result = StringViewBuilder::with_capacity(left.len());
 
-    // Avoid reallocations by writing to a reused buffer (note we
-    // could be even more efficient r by creating the view directly
-    // here and avoid the buffer but that would be more complex)
+    // Avoid reallocations by writing to a reused buffer (note we could be even
+    // more efficient by creating the view directly here and avoid the buffer
+    // but that would be more complex)
     let mut buffer = String::new();
 
-    for (left, right) in left.iter().zip(right.iter()) {
-        if let (Some(left), Some(right)) = (left, right) {
-            use std::fmt::Write;
-            buffer.clear();
-            write!(&mut buffer, "{left}{right}")
-                .expect("writing into string buffer failed");
-            result.try_append_value(&buffer)?;
+    // Pre-compute combined null bitmap, so the per-row NULL check is more
+    // efficient
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+
+    for i in 0..left.len() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            result.append_null();
         } else {
-            // at least one of the values is null, so the output is also null
-            result.append_null()
+            let l = left.value(i);
+            let r = right.value(i);
+            buffer.clear();
+            buffer.push_str(l);
+            buffer.push_str(r);
+            result.try_append_value(&buffer)?;
+        }
+    }
+    Ok(result.finish())
+}
+
+/// Concatenates two `BinaryViewArray`s element-wise.
+/// If either element is `Null`, the result element is also `Null`.
+///
+/// # Errors
+/// - Returns an error if the input arrays have different lengths.
+/// - Returns an error if any concatenated string exceeds `u32::MAX` in length.
+pub fn concat_elements_binary_view_array(
+    left: &BinaryViewArray,
+    right: &BinaryViewArray,
+) -> std::result::Result<BinaryViewArray, ArrowError> {
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Arrays must have the same length: {} != {}",
+            left.len(),
+            right.len()
+        )));
+    }
+    let mut result = BinaryViewBuilder::with_capacity(left.len());
+
+    // Avoid reallocations by writing to a reused buffer (note we could be even
+    // more efficient by creating the view directly here and avoid the buffer
+    // but that would be more complex)
+    let mut buffer = MutableBuffer::new(0);
+
+    // Pre-compute combined null bitmap, so the per-row NULL check is more
+    // efficient
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+
+    for i in 0..left.len() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            result.append_null();
+        } else {
+            let l = left.value(i);
+            let r = right.value(i);
+            buffer.clear();
+            buffer.extend_from_slice(l);
+            buffer.extend_from_slice(r);
+            // No try-version of append_value
+            result.try_append_value(&buffer)?;
         }
     }
     Ok(result.finish())

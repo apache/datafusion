@@ -17,11 +17,16 @@
 
 use std::sync::Arc;
 
-use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
+use super::LogicalExtensionCodec;
+use crate::convert::FromProto;
+use crate::protobuf::{
+    CsvOptions as CsvOptionsProto, CsvQuoteStyle as CsvQuoteStyleProto,
+    JsonOptions as JsonOptionsProto,
+};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     TableReference, exec_datafusion_err, exec_err, not_impl_err,
-    parsers::CompressionTypeVariant,
+    parsers::{CompressionTypeVariant, CsvQuoteStyle},
 };
 use datafusion_datasource::file_format::FileFormatFactory;
 use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
@@ -30,13 +35,11 @@ use datafusion_datasource_json::file_format::JsonFormatFactory;
 use datafusion_execution::TaskContext;
 use prost::Message;
 
-use super::LogicalExtensionCodec;
-
 #[derive(Debug)]
 pub struct CsvLogicalExtensionCodec;
 
-impl CsvOptionsProto {
-    fn from_factory(factory: &CsvFormatFactory) -> Self {
+impl FromProto<&CsvFormatFactory> for CsvOptionsProto {
+    fn from_proto(factory: &CsvFormatFactory) -> Self {
         if let Some(options) = &factory.options {
             CsvOptionsProto {
                 has_header: options.has_header.map_or(vec![], |v| vec![v as u8]),
@@ -63,6 +66,13 @@ impl CsvOptionsProto {
                     .map_or(vec![], |v| vec![v as u8]),
                 truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
                 compression_level: options.compression_level,
+                quote_style: options.quote_style as i32,
+                ignore_leading_whitespace: options
+                    .ignore_leading_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
+                ignore_trailing_whitespace: options
+                    .ignore_trailing_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
             }
         } else {
             CsvOptionsProto::default()
@@ -70,8 +80,8 @@ impl CsvOptionsProto {
     }
 }
 
-impl From<&CsvOptionsProto> for CsvOptions {
-    fn from(proto: &CsvOptionsProto) -> Self {
+impl FromProto<&CsvOptionsProto> for CsvOptions {
+    fn from_proto(proto: &CsvOptionsProto) -> Self {
         CsvOptions {
             has_header: if !proto.has_header.is_empty() {
                 Some(proto.has_header[0] != 0)
@@ -154,6 +164,23 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 Some(proto.truncated_rows[0] != 0)
             },
             compression_level: proto.compression_level,
+            quote_style: match CsvQuoteStyleProto::try_from(proto.quote_style) {
+                Ok(CsvQuoteStyleProto::Always) => CsvQuoteStyle::Always,
+                Ok(CsvQuoteStyleProto::NonNumeric) => CsvQuoteStyle::NonNumeric,
+                Ok(CsvQuoteStyleProto::Never) => CsvQuoteStyle::Never,
+                Ok(CsvQuoteStyleProto::Necessary) => CsvQuoteStyle::Necessary,
+                _ => CsvQuoteStyle::Necessary,
+            },
+            ignore_leading_whitespace: if proto.ignore_leading_whitespace.is_empty() {
+                None
+            } else {
+                Some(proto.ignore_leading_whitespace[0] != 0)
+            },
+            ignore_trailing_whitespace: if proto.ignore_trailing_whitespace.is_empty() {
+                None
+            } else {
+                Some(proto.ignore_trailing_whitespace[0] != 0)
+            },
         }
     }
 }
@@ -204,7 +231,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         let proto = CsvOptionsProto::decode(buf).map_err(|e| {
             exec_datafusion_err!("Failed to decode CsvOptionsProto: {e:?}")
         })?;
-        let options: CsvOptions = (&proto).into();
+        let options = CsvOptions::from_proto(&proto);
         Ok(Arc::new(CsvFormatFactory {
             options: Some(options),
         }))
@@ -215,14 +242,13 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         buf: &mut Vec<u8>,
         node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
-        let options =
-            if let Some(csv_factory) = node.as_any().downcast_ref::<CsvFormatFactory>() {
-                csv_factory.options.clone().unwrap_or_default()
-            } else {
-                return exec_err!("{}", "Unsupported FileFormatFactory type".to_string());
-            };
+        let options = if let Some(csv_factory) = node.downcast_ref::<CsvFormatFactory>() {
+            csv_factory.options.clone().unwrap_or_default()
+        } else {
+            return exec_err!("{}", "Unsupported FileFormatFactory type".to_string());
+        };
 
-        let proto = CsvOptionsProto::from_factory(&CsvFormatFactory {
+        let proto = CsvOptionsProto::from_proto(&CsvFormatFactory {
             options: Some(options),
         });
 
@@ -234,13 +260,14 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
     }
 }
 
-impl JsonOptionsProto {
-    fn from_factory(factory: &JsonFormatFactory) -> Self {
+impl FromProto<&JsonFormatFactory> for JsonOptionsProto {
+    fn from_proto(factory: &JsonFormatFactory) -> Self {
         if let Some(options) = &factory.options {
             JsonOptionsProto {
                 compression: options.compression as i32,
                 schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
                 compression_level: options.compression_level,
+                newline_delimited: Some(options.newline_delimited),
             }
         } else {
             JsonOptionsProto::default()
@@ -248,8 +275,8 @@ impl JsonOptionsProto {
     }
 }
 
-impl From<&JsonOptionsProto> for JsonOptions {
-    fn from(proto: &JsonOptionsProto) -> Self {
+impl FromProto<&JsonOptionsProto> for JsonOptions {
+    fn from_proto(proto: &JsonOptionsProto) -> Self {
         JsonOptions {
             compression: match proto.compression {
                 0 => CompressionTypeVariant::GZIP,
@@ -260,6 +287,7 @@ impl From<&JsonOptionsProto> for JsonOptions {
             },
             schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
             compression_level: proto.compression_level,
+            newline_delimited: proto.newline_delimited.unwrap_or(true),
         }
     }
 }
@@ -313,7 +341,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         let proto = JsonOptionsProto::decode(buf).map_err(|e| {
             exec_datafusion_err!("Failed to decode JsonOptionsProto: {e:?}")
         })?;
-        let options: JsonOptions = (&proto).into();
+        let options = JsonOptions::from_proto(&proto);
         Ok(Arc::new(JsonFormatFactory {
             options: Some(options),
         }))
@@ -324,15 +352,14 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         buf: &mut Vec<u8>,
         node: Arc<dyn FileFormatFactory>,
     ) -> datafusion_common::Result<()> {
-        let options = if let Some(json_factory) =
-            node.as_any().downcast_ref::<JsonFormatFactory>()
+        let options = if let Some(json_factory) = node.downcast_ref::<JsonFormatFactory>()
         {
             json_factory.options.clone().unwrap_or_default()
         } else {
             return exec_err!("Unsupported FileFormatFactory type");
         };
 
-        let proto = JsonOptionsProto::from_factory(&JsonFormatFactory {
+        let proto = JsonOptionsProto::from_proto(&JsonFormatFactory {
             options: Some(options),
         });
 
@@ -349,18 +376,18 @@ mod parquet {
     use super::*;
 
     use crate::protobuf::{
-        ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
-        ParquetOptions as ParquetOptionsProto,
+        CdcOptions as CdcOptionsProto, ParquetColumnOptions as ParquetColumnOptionsProto,
+        ParquetColumnSpecificOptions, ParquetOptions as ParquetOptionsProto,
         TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
         parquet_options,
     };
     use datafusion_common::config::{
-        ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        CdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     };
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
-    impl TableParquetOptionsProto {
-        fn from_factory(factory: &ParquetFormatFactory) -> Self {
+    impl FromProto<&ParquetFormatFactory> for TableParquetOptionsProto {
+        fn from_proto(factory: &ParquetFormatFactory) -> Self {
             let global_options = if let Some(ref options) = factory.options {
                 options.clone()
             } else {
@@ -421,8 +448,18 @@ mod parquet {
                 coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
                     parquet_options::CoerceInt96Opt::CoerceInt96(compression)
                 }),
+                coerce_int96_tz_opt: global_options.global.coerce_int96_tz.map(|tz| {
+                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz)
+                }),
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
+                }),
+                content_defined_chunking: global_options.global.use_content_defined_chunking.as_ref().map(|cdc| {
+                    CdcOptionsProto {
+                        min_chunk_size: cdc.min_chunk_size as u64,
+                        max_chunk_size: cdc.max_chunk_size as u64,
+                        norm_level: cdc.norm_level,
+                    }
                 }),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
@@ -463,8 +500,8 @@ mod parquet {
         }
     }
 
-    impl From<&ParquetOptionsProto> for ParquetOptions {
-        fn from(proto: &ParquetOptionsProto) -> Self {
+    impl FromProto<&ParquetOptionsProto> for ParquetOptions {
+        fn from_proto(proto: &ParquetOptionsProto) -> Self {
             ParquetOptions {
             enable_page_index: proto.enable_page_index,
             pruning: proto.pruning,
@@ -520,15 +557,29 @@ mod parquet {
             coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
                 parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
             }),
+            coerce_int96_tz: proto.coerce_int96_tz_opt.as_ref().map(|opt| match opt {
+                parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => tz.clone(),
+            }),
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
+            }),
+            use_content_defined_chunking: proto.content_defined_chunking.map(|cdc| {
+                let defaults = CdcOptions::default();
+                CdcOptions {
+                    // proto3 uses 0 as the wire default for uint64; a zero chunk size is
+                    // invalid, so treat it as "field not set" and fall back to the default.
+                    min_chunk_size: if cdc.min_chunk_size != 0 { cdc.min_chunk_size as usize } else { defaults.min_chunk_size },
+                    max_chunk_size: if cdc.max_chunk_size != 0 { cdc.max_chunk_size as usize } else { defaults.max_chunk_size },
+                    // norm_level = 0 is a valid value (and the default), so pass it through directly.
+                    norm_level: cdc.norm_level,
+                }
             }),
         }
         }
     }
 
-    impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
-        fn from(proto: ParquetColumnOptionsProto) -> Self {
+    impl FromProto<ParquetColumnOptionsProto> for ParquetColumnOptions {
+        fn from_proto(proto: ParquetColumnOptionsProto) -> Self {
             ParquetColumnOptions {
             bloom_filter_enabled: proto.bloom_filter_enabled_opt.map(
                 |parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)| v,
@@ -555,13 +606,13 @@ mod parquet {
         }
     }
 
-    impl From<&TableParquetOptionsProto> for TableParquetOptions {
-        fn from(proto: &TableParquetOptionsProto) -> Self {
+    impl FromProto<&TableParquetOptionsProto> for TableParquetOptions {
+        fn from_proto(proto: &TableParquetOptionsProto) -> Self {
             TableParquetOptions {
                 global: proto
                     .global
                     .as_ref()
-                    .map(ParquetOptions::from)
+                    .map(ParquetOptions::from_proto)
                     .unwrap_or_default(),
                 column_specific_options: proto
                     .column_specific_options
@@ -569,7 +620,7 @@ mod parquet {
                     .map(|parquet_column_options| {
                         (
                             parquet_column_options.column_name.clone(),
-                            ParquetColumnOptions::from(
+                            ParquetColumnOptions::from_proto(
                                 parquet_column_options
                                     .options
                                     .clone()
@@ -583,7 +634,7 @@ mod parquet {
                     .iter()
                     .map(|(k, v)| (k.clone(), Some(v.clone())))
                     .collect(),
-                crypto: Default::default(),
+                ..Default::default()
             }
         }
     }
@@ -638,7 +689,7 @@ mod parquet {
             let proto = TableParquetOptionsProto::decode(buf).map_err(|e| {
                 exec_datafusion_err!("Failed to decode TableParquetOptionsProto: {e:?}")
             })?;
-            let options: TableParquetOptions = (&proto).into();
+            let options = TableParquetOptions::from_proto(&proto);
             Ok(Arc::new(
                 datafusion_datasource_parquet::file_format::ParquetFormatFactory {
                     options: Some(options),
@@ -654,14 +705,14 @@ mod parquet {
             use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
             let options = if let Some(parquet_factory) =
-                node.as_any().downcast_ref::<ParquetFormatFactory>()
+                node.downcast_ref::<ParquetFormatFactory>()
             {
                 parquet_factory.options.clone().unwrap_or_default()
             } else {
                 return exec_err!("Unsupported FileFormatFactory type");
             };
 
-            let proto = TableParquetOptionsProto::from_factory(&ParquetFormatFactory {
+            let proto = TableParquetOptionsProto::from_proto(&ParquetFormatFactory {
                 options: Some(options),
             });
 

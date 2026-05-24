@@ -61,7 +61,7 @@ impl ExpressionEvaluatorMetrics {
             .map(|(idx, label)| {
                 MetricBuilder::new(metrics)
                     .with_new_label("expr", label.into())
-                    .with_type(MetricType::DEV)
+                    .with_type(MetricType::Dev)
                     // Existing PhysicalExpr formatter is a bit verbose, so use simple name
                     .subset_time(format!("expr_{idx}_eval_time"), partition)
             })

@@ -17,7 +17,6 @@
 
 use arrow::compute::kernels::length::bit_length;
 use arrow::datatypes::DataType;
-use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
 use datafusion_common::types::logical_string;
@@ -70,10 +69,6 @@ impl BitLengthFunc {
 }
 
 impl ScalarUDFImpl for BitLengthFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bit_length"
     }

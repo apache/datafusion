@@ -29,7 +29,7 @@ use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics,
+    SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
@@ -62,13 +62,16 @@ fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
 #[derive(Debug)]
 struct CustomPlan {
     batches: Vec<RecordBatch>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CustomPlan {
     fn new(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
         let cache = Self::compute_properties(schema);
-        Self { batches, cache }
+        Self {
+            batches,
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -105,11 +108,7 @@ impl ExecutionPlan for CustomPlan {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -149,12 +148,6 @@ impl ExecutionPlan for CustomPlan {
             })),
         )))
     }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // here we could provide more accurate statistics
-        // but we want to test the filter pushdown not the CBOs
-        Ok(Statistics::new_unknown(&self.schema()))
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -165,10 +158,6 @@ struct CustomProvider {
 
 #[async_trait]
 impl TableProvider for CustomProvider {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.zero_batch.schema()
     }
@@ -193,7 +182,7 @@ impl TableProvider for CustomProvider {
                     Expr::Literal(ScalarValue::Int16(Some(i)), _) => *i as i64,
                     Expr::Literal(ScalarValue::Int32(Some(i)), _) => *i as i64,
                     Expr::Literal(ScalarValue::Int64(Some(i)), _) => *i,
-                    Expr::Cast(Cast { expr, data_type: _ }) => match expr.deref() {
+                    Expr::Cast(Cast { expr, field: _ }) => match expr.deref() {
                         Expr::Literal(lit_value, _) => match lit_value {
                             ScalarValue::Int8(Some(v)) => *v as i64,
                             ScalarValue::Int16(Some(v)) => *v as i64,

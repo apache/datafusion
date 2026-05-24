@@ -25,6 +25,8 @@
 #[cfg(test)]
 mod tests {
     use crate::utils::test::add_plan_schemas_to_ctx;
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::arrow::util::pretty::pretty_format_batches;
     use datafusion::common::Result;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
@@ -32,6 +34,34 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
     use substrait::proto::Plan;
+
+    async fn execute_plan(name: &str) -> Result<Vec<RecordBatch>> {
+        let path = format!("tests/testdata/test_plans/{name}");
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+        let ctx = SessionContext::new();
+        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        ctx.execute_logical_plan(plan).await?.collect().await
+    }
+
+    /// Pretty-print batches as a table with header on top and data rows sorted.
+    fn pretty_sorted(batches: &[RecordBatch]) -> String {
+        let pretty = pretty_format_batches(batches).unwrap().to_string();
+        let all_lines: Vec<&str> = pretty.trim().lines().collect();
+        let header = &all_lines[..3];
+        let mut data: Vec<&str> = all_lines[3..all_lines.len() - 1].to_vec();
+        data.sort();
+        let footer = &all_lines[all_lines.len() - 1..];
+        header
+            .iter()
+            .copied()
+            .chain(data)
+            .chain(footer.iter().copied())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 
     async fn tpch_plan_to_string(query_id: i32) -> Result<String> {
         let path =
@@ -77,18 +107,18 @@ mod tests {
                 Subquery:
                   Aggregate: groupBy=[[]], aggr=[[min(PARTSUPP.PS_SUPPLYCOST)]]
                     Projection: PARTSUPP.PS_SUPPLYCOST
-                      Filter: PARTSUPP.PS_PARTKEY = PARTSUPP.PS_PARTKEY AND SUPPLIER.S_SUPPKEY = PARTSUPP.PS_SUPPKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_REGIONKEY = REGION.R_REGIONKEY AND REGION.R_NAME = Utf8("EUROPE")
-                        Cross Join: 
-                          Cross Join: 
-                            Cross Join: 
+                      Filter: outer_ref(PART.P_PARTKEY) = PARTSUPP.PS_PARTKEY AND SUPPLIER.S_SUPPKEY = PARTSUPP.PS_SUPPKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_REGIONKEY = REGION.R_REGIONKEY AND REGION.R_NAME = Utf8("EUROPE")
+                        Cross Join:
+                          Cross Join:
+                            Cross Join:
                               TableScan: PARTSUPP
                               TableScan: SUPPLIER
                             TableScan: NATION
                           TableScan: REGION
-                Cross Join: 
-                  Cross Join: 
-                    Cross Join: 
-                      Cross Join: 
+                Cross Join:
+                  Cross Join:
+                    Cross Join:
+                      Cross Join:
                         TableScan: PART
                         TableScan: SUPPLIER
                       TableScan: PARTSUPP
@@ -112,8 +142,8 @@ mod tests {
                 Aggregate: groupBy=[[LINEITEM.L_ORDERKEY, ORDERS.O_ORDERDATE, ORDERS.O_SHIPPRIORITY]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT)]]
                   Projection: LINEITEM.L_ORDERKEY, ORDERS.O_ORDERDATE, ORDERS.O_SHIPPRIORITY, LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
                     Filter: CUSTOMER.C_MKTSEGMENT = Utf8("BUILDING") AND CUSTOMER.C_CUSTKEY = ORDERS.O_CUSTKEY AND LINEITEM.L_ORDERKEY = ORDERS.O_ORDERKEY AND ORDERS.O_ORDERDATE < CAST(Utf8("1995-03-15") AS Date32) AND LINEITEM.L_SHIPDATE > CAST(Utf8("1995-03-15") AS Date32)
-                      Cross Join: 
-                        Cross Join: 
+                      Cross Join:
+                        Cross Join:
                           TableScan: LINEITEM
                           TableScan: CUSTOMER
                         TableScan: ORDERS
@@ -134,7 +164,7 @@ mod tests {
               Projection: ORDERS.O_ORDERPRIORITY
                 Filter: ORDERS.O_ORDERDATE >= CAST(Utf8("1993-07-01") AS Date32) AND ORDERS.O_ORDERDATE < CAST(Utf8("1993-10-01") AS Date32) AND EXISTS (<subquery>)
                   Subquery:
-                    Filter: LINEITEM.L_ORDERKEY = LINEITEM.L_ORDERKEY AND LINEITEM.L_COMMITDATE < LINEITEM.L_RECEIPTDATE
+                    Filter: LINEITEM.L_ORDERKEY = outer_ref(ORDERS.O_ORDERKEY) AND LINEITEM.L_COMMITDATE < LINEITEM.L_RECEIPTDATE
                       TableScan: LINEITEM
                   TableScan: ORDERS
         "#
@@ -153,11 +183,11 @@ mod tests {
             Aggregate: groupBy=[[NATION.N_NAME]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT)]]
               Projection: NATION.N_NAME, LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
                 Filter: CUSTOMER.C_CUSTKEY = ORDERS.O_CUSTKEY AND LINEITEM.L_ORDERKEY = ORDERS.O_ORDERKEY AND LINEITEM.L_SUPPKEY = SUPPLIER.S_SUPPKEY AND CUSTOMER.C_NATIONKEY = SUPPLIER.S_NATIONKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_REGIONKEY = REGION.R_REGIONKEY AND REGION.R_NAME = Utf8("ASIA") AND ORDERS.O_ORDERDATE >= CAST(Utf8("1994-01-01") AS Date32) AND ORDERS.O_ORDERDATE < CAST(Utf8("1995-01-01") AS Date32)
-                  Cross Join: 
-                    Cross Join: 
-                      Cross Join: 
-                        Cross Join: 
-                          Cross Join: 
+                  Cross Join:
+                    Cross Join:
+                      Cross Join:
+                        Cross Join:
+                          Cross Join:
                             TableScan: CUSTOMER
                             TableScan: ORDERS
                           TableScan: LINEITEM
@@ -221,9 +251,9 @@ mod tests {
                 Aggregate: groupBy=[[CUSTOMER.C_CUSTKEY, CUSTOMER.C_NAME, CUSTOMER.C_ACCTBAL, CUSTOMER.C_PHONE, NATION.N_NAME, CUSTOMER.C_ADDRESS, CUSTOMER.C_COMMENT]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT)]]
                   Projection: CUSTOMER.C_CUSTKEY, CUSTOMER.C_NAME, CUSTOMER.C_ACCTBAL, CUSTOMER.C_PHONE, NATION.N_NAME, CUSTOMER.C_ADDRESS, CUSTOMER.C_COMMENT, LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
                     Filter: CUSTOMER.C_CUSTKEY = ORDERS.O_CUSTKEY AND LINEITEM.L_ORDERKEY = ORDERS.O_ORDERKEY AND ORDERS.O_ORDERDATE >= CAST(Utf8("1993-10-01") AS Date32) AND ORDERS.O_ORDERDATE < CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_RETURNFLAG = Utf8("R") AND CUSTOMER.C_NATIONKEY = NATION.N_NATIONKEY
-                      Cross Join: 
-                        Cross Join: 
-                          Cross Join: 
+                      Cross Join:
+                        Cross Join:
+                          Cross Join:
                             TableScan: CUSTOMER
                             TableScan: ORDERS
                           TableScan: LINEITEM
@@ -247,16 +277,16 @@ mod tests {
                   Aggregate: groupBy=[[]], aggr=[[sum(PARTSUPP.PS_SUPPLYCOST * PARTSUPP.PS_AVAILQTY)]]
                     Projection: PARTSUPP.PS_SUPPLYCOST * CAST(PARTSUPP.PS_AVAILQTY AS Decimal128(19, 0))
                       Filter: PARTSUPP.PS_SUPPKEY = SUPPLIER.S_SUPPKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_NAME = Utf8("JAPAN")
-                        Cross Join: 
-                          Cross Join: 
+                        Cross Join:
+                          Cross Join:
                             TableScan: PARTSUPP
                             TableScan: SUPPLIER
                           TableScan: NATION
               Aggregate: groupBy=[[PARTSUPP.PS_PARTKEY]], aggr=[[sum(PARTSUPP.PS_SUPPLYCOST * PARTSUPP.PS_AVAILQTY)]]
                 Projection: PARTSUPP.PS_PARTKEY, PARTSUPP.PS_SUPPLYCOST * CAST(PARTSUPP.PS_AVAILQTY AS Decimal128(19, 0))
                   Filter: PARTSUPP.PS_SUPPKEY = SUPPLIER.S_SUPPKEY AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_NAME = Utf8("JAPAN")
-                    Cross Join: 
-                      Cross Join: 
+                    Cross Join:
+                      Cross Join:
                         TableScan: PARTSUPP
                         TableScan: SUPPLIER
                       TableScan: NATION
@@ -276,7 +306,7 @@ mod tests {
             Aggregate: groupBy=[[LINEITEM.L_SHIPMODE]], aggr=[[sum(CASE WHEN ORDERS.O_ORDERPRIORITY = Utf8("1-URGENT") OR ORDERS.O_ORDERPRIORITY = Utf8("2-HIGH") THEN Int32(1) ELSE Int32(0) END), sum(CASE WHEN ORDERS.O_ORDERPRIORITY != Utf8("1-URGENT") AND ORDERS.O_ORDERPRIORITY != Utf8("2-HIGH") THEN Int32(1) ELSE Int32(0) END)]]
               Projection: LINEITEM.L_SHIPMODE, CASE WHEN ORDERS.O_ORDERPRIORITY = Utf8("1-URGENT") OR ORDERS.O_ORDERPRIORITY = Utf8("2-HIGH") THEN Int32(1) ELSE Int32(0) END, CASE WHEN ORDERS.O_ORDERPRIORITY != Utf8("1-URGENT") AND ORDERS.O_ORDERPRIORITY != Utf8("2-HIGH") THEN Int32(1) ELSE Int32(0) END
                 Filter: ORDERS.O_ORDERKEY = LINEITEM.L_ORDERKEY AND (LINEITEM.L_SHIPMODE = CAST(Utf8("MAIL") AS Utf8) OR LINEITEM.L_SHIPMODE = CAST(Utf8("SHIP") AS Utf8)) AND LINEITEM.L_COMMITDATE < LINEITEM.L_RECEIPTDATE AND LINEITEM.L_SHIPDATE < LINEITEM.L_COMMITDATE AND LINEITEM.L_RECEIPTDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_RECEIPTDATE < CAST(Utf8("1995-01-01") AS Date32)
-                  Cross Join: 
+                  Cross Join:
                     TableScan: ORDERS
                     TableScan: LINEITEM
         "#
@@ -314,7 +344,7 @@ mod tests {
           Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN PART.P_TYPE LIKE Utf8("PROMO%") THEN LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT ELSE Decimal128(Some(0),19,4) END), sum(LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT)]]
             Projection: CASE WHEN PART.P_TYPE LIKE CAST(Utf8("PROMO%") AS Utf8) THEN LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT) ELSE Decimal128(Some(0),19,4) END, LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
               Filter: LINEITEM.L_PARTKEY = PART.P_PARTKEY AND LINEITEM.L_SHIPDATE >= Date32("1995-09-01") AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-10-01") AS Date32)
-                Cross Join: 
+                Cross Join:
                   TableScan: LINEITEM
                   TableScan: PART
         "#
@@ -345,7 +375,7 @@ mod tests {
                     Projection: SUPPLIER.S_SUPPKEY
                       Filter: SUPPLIER.S_COMMENT LIKE CAST(Utf8("%Customer%Complaints%") AS Utf8)
                         TableScan: SUPPLIER
-                  Cross Join: 
+                  Cross Join:
                     TableScan: PARTSUPP
                     TableScan: PART
         "#
@@ -353,11 +383,27 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
     #[tokio::test]
     async fn tpch_test_17() -> Result<()> {
         let plan_str = tpch_plan_to_string(17).await?;
-        assert_snapshot!(plan_str, "panics due to out of bounds field access");
+        assert_snapshot!(
+        plan_str,
+        @r#"
+        Projection: sum(LINEITEM.L_EXTENDEDPRICE) / Decimal128(Some(70),2,1) AS AVG_YEARLY
+          Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE)]]
+            Projection: LINEITEM.L_EXTENDEDPRICE
+              Filter: PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#23") AND PART.P_CONTAINER = Utf8("MED BOX") AND LINEITEM.L_QUANTITY < (<subquery>)
+                Subquery:
+                  Projection: Decimal128(Some(2),2,1) * avg(LINEITEM.L_QUANTITY)
+                    Aggregate: groupBy=[[]], aggr=[[avg(LINEITEM.L_QUANTITY)]]
+                      Projection: LINEITEM.L_QUANTITY
+                        Filter: LINEITEM.L_PARTKEY = outer_ref(PART.P_PARTKEY)
+                          TableScan: LINEITEM
+                Cross Join:
+                  TableScan: LINEITEM
+                  TableScan: PART
+        "#
+                );
         Ok(())
     }
 
@@ -379,8 +425,8 @@ mod tests {
                           Aggregate: groupBy=[[LINEITEM.L_ORDERKEY]], aggr=[[sum(LINEITEM.L_QUANTITY)]]
                             Projection: LINEITEM.L_ORDERKEY, LINEITEM.L_QUANTITY
                               TableScan: LINEITEM
-                    Cross Join: 
-                      Cross Join: 
+                    Cross Join:
+                      Cross Join:
                         TableScan: CUSTOMER
                         TableScan: ORDERS
                       TableScan: LINEITEM
@@ -397,7 +443,7 @@ mod tests {
         Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE * Int32(1) - LINEITEM.L_DISCOUNT) AS REVENUE]]
           Projection: LINEITEM.L_EXTENDEDPRICE * (CAST(Int32(1) AS Decimal128(15, 2)) - LINEITEM.L_DISCOUNT)
             Filter: PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#12") AND (PART.P_CONTAINER = CAST(Utf8("SM CASE") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("SM BOX") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("SM PACK") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("SM PKG") AS Utf8)) AND LINEITEM.L_QUANTITY >= CAST(Int32(1) AS Decimal128(15, 2)) AND LINEITEM.L_QUANTITY <= CAST(Int32(1) + Int32(10) AS Decimal128(15, 2)) AND PART.P_SIZE >= Int32(1) AND PART.P_SIZE <= Int32(5) AND (LINEITEM.L_SHIPMODE = CAST(Utf8("AIR") AS Utf8) OR LINEITEM.L_SHIPMODE = CAST(Utf8("AIR REG") AS Utf8)) AND LINEITEM.L_SHIPINSTRUCT = Utf8("DELIVER IN PERSON") OR PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#23") AND (PART.P_CONTAINER = CAST(Utf8("MED BAG") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("MED BOX") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("MED PKG") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("MED PACK") AS Utf8)) AND LINEITEM.L_QUANTITY >= CAST(Int32(10) AS Decimal128(15, 2)) AND LINEITEM.L_QUANTITY <= CAST(Int32(10) + Int32(10) AS Decimal128(15, 2)) AND PART.P_SIZE >= Int32(1) AND PART.P_SIZE <= Int32(10) AND (LINEITEM.L_SHIPMODE = CAST(Utf8("AIR") AS Utf8) OR LINEITEM.L_SHIPMODE = CAST(Utf8("AIR REG") AS Utf8)) AND LINEITEM.L_SHIPINSTRUCT = Utf8("DELIVER IN PERSON") OR PART.P_PARTKEY = LINEITEM.L_PARTKEY AND PART.P_BRAND = Utf8("Brand#34") AND (PART.P_CONTAINER = CAST(Utf8("LG CASE") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("LG BOX") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("LG PACK") AS Utf8) OR PART.P_CONTAINER = CAST(Utf8("LG PKG") AS Utf8)) AND LINEITEM.L_QUANTITY >= CAST(Int32(20) AS Decimal128(15, 2)) AND LINEITEM.L_QUANTITY <= CAST(Int32(20) + Int32(10) AS Decimal128(15, 2)) AND PART.P_SIZE >= Int32(1) AND PART.P_SIZE <= Int32(15) AND (LINEITEM.L_SHIPMODE = CAST(Utf8("AIR") AS Utf8) OR LINEITEM.L_SHIPMODE = CAST(Utf8("AIR REG") AS Utf8)) AND LINEITEM.L_SHIPINSTRUCT = Utf8("DELIVER IN PERSON")
-              Cross Join: 
+              Cross Join:
                 TableScan: LINEITEM
                 TableScan: PART
         "#
@@ -425,10 +471,10 @@ mod tests {
                       Projection: Decimal128(Some(5),2,1) * sum(LINEITEM.L_QUANTITY)
                         Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_QUANTITY)]]
                           Projection: LINEITEM.L_QUANTITY
-                            Filter: LINEITEM.L_PARTKEY = LINEITEM.L_ORDERKEY AND LINEITEM.L_SUPPKEY = LINEITEM.L_PARTKEY AND LINEITEM.L_SHIPDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-01-01") AS Date32)
+                            Filter: LINEITEM.L_PARTKEY = outer_ref(PARTSUPP.PS_PARTKEY) AND LINEITEM.L_SUPPKEY = outer_ref(PARTSUPP.PS_SUPPKEY) AND LINEITEM.L_SHIPDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-01-01") AS Date32)
                               TableScan: LINEITEM
                     TableScan: PARTSUPP
-              Cross Join: 
+              Cross Join:
                 TableScan: SUPPLIER
                 TableScan: NATION
         "#
@@ -449,14 +495,14 @@ mod tests {
                 Projection: SUPPLIER.S_NAME
                   Filter: SUPPLIER.S_SUPPKEY = LINEITEM.L_SUPPKEY AND ORDERS.O_ORDERKEY = LINEITEM.L_ORDERKEY AND ORDERS.O_ORDERSTATUS = Utf8("F") AND LINEITEM.L_RECEIPTDATE > LINEITEM.L_COMMITDATE AND EXISTS (<subquery>) AND NOT EXISTS (<subquery>) AND SUPPLIER.S_NATIONKEY = NATION.N_NATIONKEY AND NATION.N_NAME = Utf8("SAUDI ARABIA")
                     Subquery:
-                      Filter: LINEITEM.L_ORDERKEY = LINEITEM.L_TAX AND LINEITEM.L_SUPPKEY != LINEITEM.L_LINESTATUS
+                      Filter: LINEITEM.L_ORDERKEY = outer_ref(LINEITEM.L_ORDERKEY) AND LINEITEM.L_SUPPKEY != outer_ref(LINEITEM.L_SUPPKEY)
                         TableScan: LINEITEM
                     Subquery:
-                      Filter: LINEITEM.L_ORDERKEY = LINEITEM.L_TAX AND LINEITEM.L_SUPPKEY != LINEITEM.L_LINESTATUS AND LINEITEM.L_RECEIPTDATE > LINEITEM.L_COMMITDATE
+                      Filter: LINEITEM.L_ORDERKEY = outer_ref(LINEITEM.L_ORDERKEY) AND LINEITEM.L_SUPPKEY != outer_ref(LINEITEM.L_SUPPKEY) AND LINEITEM.L_RECEIPTDATE > LINEITEM.L_COMMITDATE
                         TableScan: LINEITEM
-                    Cross Join: 
-                      Cross Join: 
-                        Cross Join: 
+                    Cross Join:
+                      Cross Join:
+                        Cross Join:
                           TableScan: SUPPLIER
                           TableScan: LINEITEM
                         TableScan: ORDERS
@@ -483,11 +529,57 @@ mod tests {
                         Filter: CUSTOMER.C_ACCTBAL > Decimal128(Some(0),3,2) AND (substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("13") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("31") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("23") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("29") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("30") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("18") AS Utf8) OR substr(CUSTOMER.C_PHONE, Int32(1), Int32(2)) = CAST(Utf8("17") AS Utf8))
                           TableScan: CUSTOMER
                   Subquery:
-                    Filter: ORDERS.O_CUSTKEY = ORDERS.O_ORDERKEY
+                    Filter: ORDERS.O_CUSTKEY = outer_ref(CUSTOMER.C_CUSTKEY)
                       TableScan: ORDERS
                   TableScan: CUSTOMER
         "#
                         );
+        Ok(())
+    }
+
+    /// Tests nested correlated subqueries where the innermost subquery
+    /// references the outermost query (steps_out=2).
+    ///
+    /// This tests the outer schema stack with depth > 1.
+    /// The plan represents:
+    /// ```sql
+    /// SELECT * FROM A
+    /// WHERE EXISTS (
+    ///     SELECT * FROM B
+    ///     WHERE B.b1 = A.a1              -- steps_out=1 (references immediate parent)
+    ///       AND EXISTS (
+    ///         SELECT * FROM C
+    ///         WHERE C.c1 = A.a1          -- steps_out=2 (references grandparent)
+    ///           AND C.c2 = B.b2          -- steps_out=1 (references immediate parent)
+    ///     )
+    /// )
+    /// ```
+    ///
+    #[tokio::test]
+    async fn test_nested_correlated_subquery() -> Result<()> {
+        let path = "tests/testdata/test_plans/nested_correlated_subquery.substrait.json";
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        let plan_str = format!("{plan}");
+
+        assert_snapshot!(
+            plan_str,
+            @r#"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            Filter: B.b1 = outer_ref(A.a1) AND EXISTS (<subquery>)
+              Subquery:
+                Filter: C.c1 = outer_ref(A.a1) AND C.c2 = outer_ref(B.b2)
+                  TableScan: C
+              TableScan: B
+          TableScan: A
+        "#
+        );
         Ok(())
     }
 
@@ -651,31 +743,23 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_unions() -> Result<()> {
         let plan_str = test_plan_to_string("multiple_unions.json").await?;
-
-        let mut settings = insta::Settings::clone_current();
-        settings.add_filter(
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            "[UUID]",
+        assert_snapshot!(
+        plan_str,
+        @r#"
+        Projection: Utf8("people") AS product_category, Utf8("people")__temp__0 AS product_type, product_key
+          Union
+            Projection: Utf8("people"), Utf8("people") AS Utf8("people")__temp__0, sales.product_key
+              Left Join: sales.product_key = food.@food_id
+                TableScan: sales
+                TableScan: food
+            Union
+              Projection: people.$f3, people.$f5, people.product_key0
+                Left Join: people.product_key0 = food.@food_id
+                  TableScan: people
+                  TableScan: food
+              TableScan: more_products
+        "#
         );
-        settings.bind(|| {
-            assert_snapshot!(
-            plan_str,
-            @r#"
-            Projection: [UUID] AS product_category, [UUID] AS product_type, product_key
-              Union
-                Projection: Utf8("people") AS [UUID], Utf8("people") AS [UUID], sales.product_key
-                  Left Join: sales.product_key = food.@food_id
-                    TableScan: sales
-                    TableScan: food
-                Union
-                  Projection: people.$f3, people.$f5, people.product_key0
-                    Left Join: people.product_key0 = food.@food_id
-                      TableScan: people
-                      TableScan: food
-                  TableScan: more_products
-            "#
-        );
-        });
 
         Ok(())
     }
@@ -704,6 +788,82 @@ mod tests {
                           Filter: index_name = Utf8("aaa")
                             Values: (Utf8("aaa"), Utf8("host-a"), Int64(128)), (Utf8("bbb"), Utf8("host-b"), Int64(256))
         "#
+        );
+
+        Ok(())
+    }
+
+    /// Substrait join with both `equal` and `is_not_distinct_from` must demote
+    /// `IS NOT DISTINCT FROM` to the join filter.
+    #[tokio::test]
+    async fn test_mixed_join_equal_and_indistinct_inner_join() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("mixed_join_equal_and_indistinct.json").await?;
+        // Eq becomes the equijoin key; IS NOT DISTINCT FROM is demoted to filter.
+        assert_snapshot!(
+            plan_str,
+            @r#"
+        Projection: left.id, left.val, left.comment, right.id AS id0, right.val AS val0, right.comment AS comment0
+          Inner Join: left.id = right.id Filter: left.val IS NOT DISTINCT FROM right.val
+            SubqueryAlias: left
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+            SubqueryAlias: right
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+        "#
+        );
+
+        // Execute and verify actual rows, including NULL=NULL matches (ids 3,4).
+        let results = execute_plan("mixed_join_equal_and_indistinct.json").await?;
+        assert_snapshot!(pretty_sorted(&results),
+            @r"
+        +----+-----+---------+-----+------+----------+
+        | id | val | comment | id0 | val0 | comment0 |
+        +----+-----+---------+-----+------+----------+
+        | 1  | a   | c1      | 1   | a    | c1       |
+        | 2  | b   | c2      | 2   | b    | c2       |
+        | 3  |     | c3      | 3   |      | c3       |
+        | 4  |     | c4      | 4   |      | c4       |
+        | 5  | e   | c5      | 5   | e    | c5       |
+        | 6  | f   | c6      | 6   | f    | c6       |
+        +----+-----+---------+-----+------+----------+
+        "
+        );
+
+        Ok(())
+    }
+
+    /// Substrait join with both `equal` and `is_not_distinct_from` must demote
+    /// `IS NOT DISTINCT FROM` to the join filter.
+    #[tokio::test]
+    async fn test_mixed_join_equal_and_indistinct_left_join() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("mixed_join_equal_and_indistinct_left.json").await?;
+        assert_snapshot!(
+            plan_str,
+            @r#"
+        Projection: left.id, left.val, left.comment, right.id AS id0, right.val AS val0, right.comment AS comment0
+          Left Join: left.id = right.id Filter: left.val IS NOT DISTINCT FROM right.val
+            SubqueryAlias: left
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+            SubqueryAlias: right
+              Values: (Utf8("1"), Utf8("a"), Utf8("c1")), (Utf8("2"), Utf8("b"), Utf8("c2")), (Utf8("3"), Utf8(NULL), Utf8("c3")), (Utf8("4"), Utf8(NULL), Utf8("c4")), (Utf8("5"), Utf8("e"), Utf8("c5"))...
+        "#
+        );
+
+        let results = execute_plan("mixed_join_equal_and_indistinct_left.json").await?;
+        assert_snapshot!(pretty_sorted(&results),
+            @r"
+        +----+-----+---------+-----+------+----------+
+        | id | val | comment | id0 | val0 | comment0 |
+        +----+-----+---------+-----+------+----------+
+        | 1  | a   | c1      | 1   | a    | c1       |
+        | 2  | b   | c2      | 2   | b    | c2       |
+        | 3  |     | c3      | 3   |      | c3       |
+        | 4  |     | c4      | 4   |      | c4       |
+        | 5  | e   | c5      | 5   | e    | c5       |
+        | 6  | f   | c6      | 6   | f    | c6       |
+        +----+-----+---------+-----+------+----------+
+        "
         );
 
         Ok(())

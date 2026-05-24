@@ -349,7 +349,7 @@ impl TestFull {
 
         // add the access plan, if any, as an extension
         if let Some(access_plan) = access_plan {
-            partitioned_file = partitioned_file.with_extensions(Arc::new(access_plan));
+            partitioned_file = partitioned_file.with_extension(access_plan);
         }
 
         // Create a DataSourceExec to read the file
@@ -409,7 +409,7 @@ fn get_test_data() -> TestData {
         .expect("tempfile creation");
 
     let props = WriterProperties::builder()
-        .set_max_row_group_size(row_per_group)
+        .set_max_row_group_row_count(Some(row_per_group))
         .build();
 
     let batches = create_data_batch(scenario);

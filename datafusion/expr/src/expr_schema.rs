@@ -16,18 +16,22 @@
 // under the License.
 
 use super::{Between, Expr, Like, predicate_bounds};
+use crate::ValueOrLambda;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
-    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
-use crate::type_coercion::functions::fields_with_udf;
+use crate::expr::{FieldMetadata, LambdaVariable};
+use crate::higher_order_function::HigherOrderReturnFieldArgs;
+use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
+use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::FieldRef;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     not_impl_err, plan_datafusion_err, plan_err,
@@ -63,6 +67,24 @@ pub trait ExprSchemable {
     )]
     fn data_type_and_nullable(&self, schema: &dyn ExprSchema)
     -> Result<(DataType, bool)>;
+}
+
+/// Derives the output field for a cast expression from the source field.
+/// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
+fn cast_output_field(
+    source_field: &FieldRef,
+    target_type: &DataType,
+    force_nullable: bool,
+) -> Arc<Field> {
+    let mut f = source_field
+        .as_ref()
+        .clone()
+        .with_data_type(target_type.clone())
+        .with_metadata(source_field.metadata().clone());
+    if force_nullable {
+        f = f.with_nullable(true);
+    }
+    Arc::new(f)
 }
 
 impl ExprSchemable for Expr {
@@ -132,15 +154,18 @@ impl ExprSchemable for Expr {
                     .as_ref()
                     .map_or(Ok(DataType::Null), |e| e.get_type(schema))
             }
-            Expr::Cast(Cast { data_type, .. })
-            | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
+            Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
+                Ok(field.data_type().clone())
+            }
             Expr::Unnest(Unnest { expr }) => {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
                 match arg_data_type {
                     DataType::List(field)
                     | DataType::LargeList(field)
-                    | DataType::FixedSizeList(field, _) => Ok(field.data_type().clone()),
+                    | DataType::FixedSizeList(field, _)
+                    | DataType::ListView(field)
+                    | DataType::LargeListView(field) => Ok(field.data_type().clone()),
                     DataType::Struct(_) => Ok(arg_data_type),
                     DataType::Null => {
                         not_impl_err!("unnest() does not support null yet")
@@ -152,44 +177,10 @@ impl ExprSchemable for Expr {
                     }
                 }
             }
-            Expr::ScalarFunction(_func) => {
-                let return_type = self.to_field(schema)?.1.data_type().clone();
-                Ok(return_type)
-            }
-            Expr::WindowFunction(window_function) => Ok(self
-                .window_function_field(schema, window_function)?
-                .data_type()
-                .clone()),
-            Expr::AggregateFunction(AggregateFunction {
-                func,
-                params: AggregateFunctionParams { args, .. },
-            }) => {
-                let fields = args
-                    .iter()
-                    .map(|e| e.to_field(schema).map(|(_, f)| f))
-                    .collect::<Result<Vec<_>>>()?;
-                let new_fields = fields_with_udf(&fields, func.as_ref())
-                    .map_err(|err| {
-                        let data_types = fields
-                            .iter()
-                            .map(|f| f.data_type().clone())
-                            .collect::<Vec<_>>();
-                        plan_datafusion_err!(
-                            "{} {}",
-                            match err {
-                                DataFusionError::Plan(msg) => msg,
-                                err => err.to_string(),
-                            },
-                            utils::generate_signature_error_msg(
-                                func.name(),
-                                func.signature().clone(),
-                                &data_types
-                            )
-                        )
-                    })?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                Ok(func.return_field(&new_fields)?.data_type().clone())
+            Expr::ScalarFunction(_)
+            | Expr::WindowFunction(_)
+            | Expr::AggregateFunction(_) => {
+                Ok(self.to_field(schema)?.1.data_type().clone())
             }
             Expr::Not(_)
             | Expr::IsNull(_)
@@ -230,6 +221,16 @@ impl ExprSchemable for Expr {
                 // Grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
+            Expr::HigherOrderFunction(_func) => {
+                Ok(self.to_field(schema)?.1.data_type().clone())
+            }
+            Expr::Lambda(_lambda) => Ok(DataType::Null),
+            Expr::LambdaVariable(LambdaVariable { field, .. }) => match field {
+                Some(f) => Ok(f.data_type().clone()),
+                // If the lambda variable's field hasn't been specified, treat it as
+                // null (unspecified lambda variables generate an error during planning)
+                None => Ok(DataType::Null),
+            },
         }
     }
 
@@ -350,18 +351,9 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
-            Expr::ScalarFunction(_func) => {
-                let field = self.to_field(input_schema)?.1;
-
-                let nullable = field.is_nullable();
-                Ok(nullable)
-            }
-            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
-                Ok(func.is_nullable())
-            }
-            Expr::WindowFunction(window_function) => Ok(self
-                .window_function_field(input_schema, window_function)?
-                .is_nullable()),
+            Expr::ScalarFunction(_)
+            | Expr::AggregateFunction(_)
+            | Expr::WindowFunction(_) => Ok(self.to_field(input_schema)?.1.is_nullable()),
             Expr::ScalarVariable(field, _) => Ok(field.is_nullable()),
             Expr::TryCast { .. } | Expr::Unnest(_) | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
@@ -392,6 +384,16 @@ impl ExprSchemable for Expr {
                 // in projections
                 Ok(true)
             }
+            Expr::HigherOrderFunction(_func) => {
+                Ok(self.to_field(input_schema)?.1.is_nullable())
+            }
+            Expr::Lambda(_lambda) => Ok(true),
+            Expr::LambdaVariable(LambdaVariable { field, .. }) => match field {
+                Some(f) => Ok(f.is_nullable()),
+                // If the lambda variable's field hasn't been specified, treat it as
+                // null (unspecified lambda variables generate an error during planning)
+                None => Ok(true),
+            },
         }
     }
 
@@ -534,69 +536,49 @@ impl ExprSchemable for Expr {
                 )))
             }
             Expr::WindowFunction(window_function) => {
-                self.window_function_field(schema, window_function)
-            }
-            Expr::AggregateFunction(aggregate_function) => {
-                let AggregateFunction {
-                    func,
-                    params: AggregateFunctionParams { args, .. },
+                let WindowFunction {
+                    fun,
+                    params: WindowFunctionParams { args, .. },
                     ..
-                } = aggregate_function;
+                } = window_function.as_ref();
 
                 let fields = args
                     .iter()
                     .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?;
-                // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                let new_fields = fields_with_udf(&fields, func.as_ref())
-                    .map_err(|err| {
-                        let arg_types = fields
-                            .iter()
-                            .map(|f| f.data_type())
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        plan_datafusion_err!(
-                            "{} {}",
-                            match err {
-                                DataFusionError::Plan(msg) => msg,
-                                err => err.to_string(),
-                            },
-                            utils::generate_signature_error_msg(
-                                func.name(),
-                                func.signature().clone(),
-                                &arg_types,
-                            )
-                        )
-                    })?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-
+                match fun {
+                    WindowFunctionDefinition::AggregateUDF(udaf) => {
+                        let new_fields =
+                            verify_function_arguments(udaf.as_ref(), &fields)?;
+                        let return_field = udaf.return_field(&new_fields)?;
+                        Ok(return_field)
+                    }
+                    WindowFunctionDefinition::WindowUDF(udwf) => {
+                        let new_fields =
+                            verify_function_arguments(udwf.as_ref(), &fields)?;
+                        let return_field = udwf
+                            .field(WindowUDFFieldArgs::new(&new_fields, &schema_name))?;
+                        Ok(return_field)
+                    }
+                }
+            }
+            Expr::AggregateFunction(AggregateFunction {
+                func,
+                params: AggregateFunctionParams { args, .. },
+            }) => {
+                let fields = args
+                    .iter()
+                    .map(|e| e.to_field(schema).map(|(_, f)| f))
+                    .collect::<Result<Vec<_>>>()?;
+                let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
                 func.return_field(&new_fields)
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                let (arg_types, fields): (Vec<DataType>, Vec<Arc<Field>>) = args
+                let fields = args
                     .iter()
                     .map(|e| e.to_field(schema).map(|(_, f)| f))
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .map(|f| (f.data_type().clone(), f))
-                    .unzip();
-                // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                let new_fields =
-                    fields_with_udf(&fields, func.as_ref()).map_err(|err| {
-                        plan_datafusion_err!(
-                            "{} {}",
-                            match err {
-                                DataFusionError::Plan(msg) => msg,
-                                err => err.to_string(),
-                            },
-                            utils::generate_signature_error_msg(
-                                func.name(),
-                                func.signature().clone(),
-                                &arg_types,
-                            )
-                        )
-                    })?;
+                    .collect::<Result<Vec<_>>>()?;
+                let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
 
                 let arguments = args
                     .iter()
@@ -613,30 +595,79 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, data_type }) => expr
-                .to_field(schema)
-                .map(|(_, f)| f.retyped(data_type.clone())),
+            Expr::Cast(Cast { expr, field }) => {
+                expr.to_field(schema).map(|(_table_ref, src)| {
+                    cast_output_field(&src, field.data_type(), false)
+                })
+            }
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
+            }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::TryCast(TryCast { expr, field }) => {
+                expr.to_field(schema).map(|(_table_ref, src)| {
+                    cast_output_field(&src, field.data_type(), true)
+                })
+            }
+            Expr::LambdaVariable(LambdaVariable {
+                field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::Between(_)
             | Expr::Case(_)
-            | Expr::TryCast(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::Unnest(_) => Ok(Arc::new(Field::new(
+            | Expr::Unnest(_)
+            | Expr::Lambda(_)
+            | Expr::LambdaVariable(_) => Ok(Arc::new(Field::new(
                 &schema_name,
                 self.get_type(schema)?,
                 self.nullable(schema)?,
             ))),
+            Expr::HigherOrderFunction(func) => {
+                let arg_fields = func
+                    .args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Lambda(Lambda { params: _, body }) => {
+                            // use the name of the lambda instead of just the body to help with debugging
+                            Ok(ValueOrLambda::Lambda(Arc::new(Field::new(
+                                arg.qualified_name().1,
+                                body.get_type(schema)?,
+                                body.nullable(schema)?,
+                            ))))
+                        }
+                        _ => Ok(ValueOrLambda::Value(arg.to_field(schema)?.1)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let new_fields = value_fields_with_higher_order_udf_and_lambdas(
+                    &arg_fields,
+                    func.func.as_ref(),
+                )?;
+
+                let arguments = func
+                    .args
+                    .iter()
+                    .map(|e| match e {
+                        Expr::Literal(sv, _) => Some(sv),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+
+                let args = HigherOrderReturnFieldArgs {
+                    arg_fields: &new_fields,
+                    scalar_arguments: &arguments,
+                };
+
+                func.func.return_field_from_args(args)
+            }
         }?;
 
         Ok((
@@ -662,7 +693,16 @@ impl ExprSchemable for Expr {
         // like all of the binary expressions below. Perhaps Expr should track the
         // type of the expression?
 
-        if can_cast_types(&this_type, cast_to_type) {
+        // Special handling for struct-to-struct casts with name-based field matching
+        let can_cast = match (&this_type, cast_to_type) {
+            (DataType::Struct(_), DataType::Struct(_)) => {
+                // Always allow struct-to-struct casts; field matching happens at runtime
+                true
+            }
+            _ => can_cast_types(&this_type, cast_to_type),
+        };
+
+        if can_cast {
             match self {
                 Expr::ScalarSubquery(subquery) => {
                     Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
@@ -675,6 +715,33 @@ impl ExprSchemable for Expr {
     }
 }
 
+/// Verify that function is invoked with correct number and type of arguments as
+/// defined in `TypeSignature`.
+fn verify_function_arguments<F: UDFCoercionExt>(
+    function: &F,
+    input_fields: &[FieldRef],
+) -> Result<Vec<FieldRef>> {
+    fields_with_udf(input_fields, function).map_err(|err| {
+        let data_types = input_fields
+            .iter()
+            .map(|f| f.data_type())
+            .cloned()
+            .collect::<Vec<_>>();
+        plan_datafusion_err!(
+            "{}. {}",
+            match err {
+                DataFusionError::Plan(msg) => msg,
+                err => err.to_string(),
+            },
+            utils::generate_signature_error_message(
+                function.name(),
+                function.signature(),
+                &data_types
+            )
+        )
+    })
+}
+
 /// Returns the innermost [Expr] that is provably null if `expr` is null.
 fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
     match expr {
@@ -682,90 +749,6 @@ fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
         Expr::Negative(e) => unwrap_certainly_null_expr(e),
         Expr::Cast(e) => unwrap_certainly_null_expr(e.expr.as_ref()),
         _ => expr,
-    }
-}
-
-impl Expr {
-    /// Common method for window functions that applies type coercion
-    /// to all arguments of the window function to check if it matches
-    /// its signature.
-    ///
-    /// If successful, this method returns the data type and
-    /// nullability of the window function's result.
-    ///
-    /// Otherwise, returns an error if there's a type mismatch between
-    /// the window function's signature and the provided arguments.
-    fn window_function_field(
-        &self,
-        schema: &dyn ExprSchema,
-        window_function: &WindowFunction,
-    ) -> Result<FieldRef> {
-        let WindowFunction {
-            fun,
-            params: WindowFunctionParams { args, .. },
-            ..
-        } = window_function;
-
-        let fields = args
-            .iter()
-            .map(|e| e.to_field(schema).map(|(_, f)| f))
-            .collect::<Result<Vec<_>>>()?;
-        match fun {
-            WindowFunctionDefinition::AggregateUDF(udaf) => {
-                let data_types = fields
-                    .iter()
-                    .map(|f| f.data_type())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let new_fields = fields_with_udf(&fields, udaf.as_ref())
-                    .map_err(|err| {
-                        plan_datafusion_err!(
-                            "{} {}",
-                            match err {
-                                DataFusionError::Plan(msg) => msg,
-                                err => err.to_string(),
-                            },
-                            utils::generate_signature_error_msg(
-                                fun.name(),
-                                fun.signature(),
-                                &data_types
-                            )
-                        )
-                    })?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-
-                udaf.return_field(&new_fields)
-            }
-            WindowFunctionDefinition::WindowUDF(udwf) => {
-                let data_types = fields
-                    .iter()
-                    .map(|f| f.data_type())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let new_fields = fields_with_udf(&fields, udwf.as_ref())
-                    .map_err(|err| {
-                        plan_datafusion_err!(
-                            "{} {}",
-                            match err {
-                                DataFusionError::Plan(msg) => msg,
-                                err => err.to_string(),
-                            },
-                            utils::generate_signature_error_msg(
-                                fun.name(),
-                                fun.signature(),
-                                &data_types
-                            )
-                        )
-                    })?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                let (_, function_name) = self.qualified_name();
-                let field_args = WindowUDFFieldArgs::new(&new_fields, &function_name);
-
-                udwf.field(field_args)
-            }
-        }
     }
 }
 
@@ -815,8 +798,7 @@ mod tests {
     use super::*;
     use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
 
-    use arrow::datatypes::FieldRef;
-    use datafusion_common::{DFSchema, ScalarValue, assert_or_internal_err};
+    use datafusion_common::{DFSchema, assert_or_internal_err};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -1089,6 +1071,27 @@ mod tests {
             Column::from_name("foo"),
         );
         assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
+    }
+
+    #[test]
+    fn test_alias_metadata_is_preserved_in_field_metadata() {
+        let schema = MockExprSchema::new().with_data_type(DataType::Int32);
+        let alias_metadata = FieldMetadata::from(HashMap::from([(
+            "some_key".to_string(),
+            "some_value".to_string(),
+        )]));
+
+        let Expr::Alias(alias) = col("foo").alias("alias") else {
+            unreachable!();
+        };
+        let expr = Expr::Alias(alias.with_metadata(Some(alias_metadata.clone())));
+
+        let field = expr.to_field(&schema).unwrap().1;
+        assert_eq!(
+            field.metadata().get("some_key"),
+            Some(&"some_value".to_string())
+        );
+        assert_eq!(expr.metadata(&schema).unwrap(), alias_metadata);
     }
 
     #[test]

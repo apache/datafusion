@@ -117,13 +117,7 @@ pub fn display_schema(schema: &Schema) -> impl fmt::Display + '_ {
                     write!(f, ", ")?;
                 }
                 let nullable_str = if field.is_nullable() { ";N" } else { "" };
-                write!(
-                    f,
-                    "{}:{:?}{}",
-                    field.name(),
-                    field.data_type(),
-                    nullable_str
-                )?;
+                write!(f, "{}:{}{}", field.name(), field.data_type(), nullable_str)?;
             }
             write!(f, "]")
         }

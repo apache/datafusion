@@ -17,7 +17,6 @@
 
 //! Literal expressions for physical operations
 
-use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -33,6 +32,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Expr;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 
 /// Represents a literal value
@@ -91,11 +91,6 @@ impl std::fmt::Display for Literal {
 }
 
 impl PhysicalExpr for Literal {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.value.data_type())
     }
@@ -134,6 +129,10 @@ impl PhysicalExpr for Literal {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
     }
+
+    fn placement(&self) -> ExpressionPlacement {
+        ExpressionPlacement::Literal
+    }
 }
 
 /// Create a literal expression
@@ -150,7 +149,6 @@ mod tests {
     use super::*;
 
     use arrow::array::Int32Array;
-    use arrow::datatypes::Field;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 

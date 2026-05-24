@@ -17,7 +17,6 @@
 
 //! Utilities for testing datafusion-physical-plan
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -75,7 +74,7 @@ pub struct TestMemoryExec {
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     fetch: Option<usize>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DisplayAs for TestMemoryExec {
@@ -130,11 +129,7 @@ impl ExecutionPlan for TestMemoryExec {
         "DataSourceExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -169,15 +164,11 @@ impl ExecutionPlan for TestMemoryExec {
         unimplemented!()
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.statistics_inner()
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_some() {
-            Ok(Statistics::new_unknown(&self.schema))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema)))
         } else {
-            self.statistics_inner()
+            Ok(Arc::new(self.statistics_inner()?))
         }
     }
 
@@ -239,7 +230,7 @@ impl TestMemoryExec {
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
-            cache: PlanProperties::new(
+            cache: Arc::new(PlanProperties::new(
                 EquivalenceProperties::new_with_orderings(
                     Arc::clone(&projected_schema),
                     Vec::<LexOrdering>::new(),
@@ -247,7 +238,7 @@ impl TestMemoryExec {
                 Partitioning::UnknownPartitioning(partitions.len()),
                 EmissionType::Incremental,
                 Boundedness::Bounded,
-            ),
+            )),
             projected_schema,
             projection,
             sort_information: vec![],
@@ -265,7 +256,7 @@ impl TestMemoryExec {
     ) -> Result<Arc<TestMemoryExec>> {
         let mut source = Self::try_new(partitions, schema, projection)?;
         let cache = source.compute_properties();
-        source.cache = cache;
+        source.cache = Arc::new(cache);
         Ok(Arc::new(source))
     }
 
@@ -273,7 +264,7 @@ impl TestMemoryExec {
     pub fn update_cache(source: &Arc<TestMemoryExec>) -> TestMemoryExec {
         let cache = source.compute_properties();
         let mut source = (**source).clone();
-        source.cache = cache;
+        source.cache = Arc::new(cache);
         source
     }
 
@@ -342,7 +333,7 @@ impl TestMemoryExec {
         }
 
         self.sort_information = sort_information;
-        self.cache = self.compute_properties();
+        self.cache = Arc::new(self.compute_properties());
         Ok(self)
     }
 

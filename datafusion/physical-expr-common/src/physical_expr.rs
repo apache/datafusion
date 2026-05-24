@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::utils::scatter;
 
-use arrow::array::{ArrayRef, BooleanArray, new_empty_array};
+use arrow::array::{Array, ArrayRef, BooleanArray, new_empty_array};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
@@ -35,7 +35,9 @@ use datafusion_common::{
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr_common::statistics::Distribution;
 
 use itertools::izip;
@@ -71,10 +73,9 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 /// [`Column`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/expressions/struct.Column.html
 pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
-    /// Returns the physical expression as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-    /// Get the data type of this expression, given the schema of the input
+    /// Get the data type of this expression, given the schema of the input.
+    /// Returns an error if the data type cannot be determined, ex. if the
+    /// schema is missing a required field.
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         Ok(self.return_field(input_schema)?.data_type().to_owned())
     }
@@ -111,17 +112,15 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             );
         }
 
-        let selection_count = selection.true_count();
-
         // First, check if we can avoid filtering altogether.
-        if selection_count == row_count {
+        if selection.null_count() == 0 && !selection.has_false() {
             // All values from the `selection` filter are true and match the input batch.
             // No need to perform any filtering.
             return self.evaluate(batch);
         }
 
         // Next, prepare the result array for each 'true' row in the selection vector.
-        let filtered_result = if selection_count == 0 {
+        let filtered_result = if !selection.has_true() {
             // Do not call `evaluate` when the selection is empty.
             // `evaluate_selection` is used to conditionally evaluate expressions.
             // When the expression in question is fallible, evaluating it with an empty
@@ -134,7 +133,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             // If we reach this point, there's no other option than to filter the batch.
             // This is a fairly costly operation since it requires creating partial copies
             // (worst case of length `row_count - 1`) of all the arrays in the record batch.
-            // The resulting `filtered_batch` will contain `selection_count` rows.
+            // The resulting `filtered_batch` will contain one row per true in `selection`.
             let filtered_batch = filter_record_batch(batch, selection)?;
             self.evaluate(&filtered_batch)?
         };
@@ -165,6 +164,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>;
 
     /// Returns a new PhysicalExpr where all children were replaced by new exprs.
+    ///
+    /// If the implementation returns a [`PhysicalExpr::expression_id`], then
+    /// the identifier should be preserved by the new expression.
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
@@ -183,10 +185,18 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// A `Result` containing the output interval for the expression in
     /// case of success, or an error object in case of failure.
     ///
+    /// Note that the output bounds must form an **envelope** that contains all
+    /// possible outputs of the expression given the input bounds. While
+    /// expressions should output the tightest possible bounds, they do not need
+    /// to be exact and can be conservative.
+    ///
     /// # Example
     ///
     /// If the expression is `a + b`, and the input intervals are `a: [1, 2]`
     /// and `b: [3, 4]`, then the output interval would be `[4, 6]`.
+    ///
+    /// If the expression is `sin(a)`, it is correct (though not precise) to
+    /// produce the interval `[-1, 1]` for any input interval for `a`.
     fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
         not_impl_err!("Not implemented for {self}")
     }
@@ -243,6 +253,11 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// statistics accordingly. The default implementation simply creates an
     /// unknown output distribution by combining input ranges. This logic loses
     /// distribution information, but is a safe default.
+    #[deprecated(
+        since = "54.0.0",
+        note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+    )]
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         let children_ranges = children
             .iter()
@@ -291,6 +306,11 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// default implementation simply creates an unknown distribution if it can
     /// narrow the range by propagating ranges. This logic loses distribution
     /// information, but is a safe default.
+    #[deprecated(
+        since = "54.0.0",
+        note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+    )]
+    #[expect(deprecated)]
     fn propagate_statistics(
         &self,
         parent: &Distribution,
@@ -430,6 +450,207 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn is_volatile_node(&self) -> bool {
         false
     }
+
+    /// Returns placement information for this expression.
+    ///
+    /// This is used by optimizers to make decisions about expression placement,
+    /// such as whether to push expressions down through projections.
+    ///
+    /// The default implementation returns [`ExpressionPlacement::KeepInPlace`].
+    fn placement(&self) -> ExpressionPlacement {
+        ExpressionPlacement::KeepInPlace
+    }
+
+    /// Return a stable, globally-unique identifier for this [`PhysicalExpr`], if it
+    /// has one.
+    ///
+    /// This identifier tracks which expressions which are connected (e.g. `DynamicFilterPhysicalExpr`
+    /// where two expressions may be different but store the same mutable inner state). Tracking
+    /// connected expressions helps preserve referential integrity within plan nodes
+    /// during serialization and deserialization.
+    ///
+    /// This id must be preserved across [`PhysicalExpr::with_new_children`] or any other
+    /// methods which may want to preserve identity.
+    ///
+    /// Default is `None`: the expression has no identity worth preserving across a
+    /// serialization boundary.
+    fn expression_id(&self) -> Option<u64> {
+        None
+    }
+
+    /// Serialize this expression to a [`PhysicalExprNode`] proto message.
+    ///
+    /// Returning `Ok(None)` means "this expression does not know how to
+    /// serialize itself"; the caller (typically `datafusion-proto`) will fall
+    /// back to its existing codec / extension paths. This matches today's
+    /// behavior for expressions that aren't built into `datafusion-proto`.
+    ///
+    /// Returning `Ok(Some(node))` means the expression has serialized itself
+    /// fully; the caller should not try any further fallback path.
+    ///
+    /// Returning `Err(_)` means a real serialization failure (e.g. the
+    /// expression knows it should serialize but a child failed).
+    ///
+    /// The motivating use case is letting expressions with private state
+    /// (e.g. `DynamicFilterPhysicalExpr`'s `RwLock`-protected inner fields)
+    /// reach into their own internals for `try_to_proto`/`try_from_proto`
+    /// without having to expose `pub` accessors to `datafusion-proto`. See
+    /// <https://github.com/apache/datafusion/issues/21835>.
+    ///
+    /// The `try_` prefix matches the fallible `try_from_proto` decode
+    /// constructors (and the `TryFromProto` trait in `datafusion-proto`);
+    /// both sides of the round-trip are fallible and named consistently.
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        Ok(None)
+    }
+}
+
+/// Encode-side context for [`PhysicalExpr::try_to_proto`].
+///
+/// Expression authors only ever see [`proto_encode::PhysicalExprEncodeCtx`]:
+/// a concrete struct with stable methods. Internally it dispatches to a
+/// [`proto_encode::PhysicalExprEncode`] implementor that lives in
+/// `datafusion-proto`, which is what lets `physical-expr-common` stay free
+/// of `datafusion-proto` as a dep.
+///
+/// More specialized helpers (e.g. encoding UDFs/UDAFs/UDWFs through the
+/// extension codec) can be added to the context as expressions migrate;
+/// today they're not required because the encoder forwards to the existing
+/// codec via the proto converter.
+#[cfg(feature = "proto")]
+pub mod proto_encode {
+    use std::sync::Arc;
+
+    use datafusion_common::Result;
+    use datafusion_proto_models::protobuf::PhysicalExprNode;
+
+    use super::PhysicalExpr;
+
+    /// Encoder context handed to [`super::PhysicalExpr::try_to_proto`].
+    ///
+    /// Wraps an internal [`PhysicalExprEncode`] trait object so callers see a
+    /// stable concrete type while implementations can evolve in
+    /// `datafusion-proto`.
+    pub struct PhysicalExprEncodeCtx<'a> {
+        encoder: &'a dyn PhysicalExprEncode,
+    }
+
+    impl<'a> PhysicalExprEncodeCtx<'a> {
+        /// Construct a new encode context. Typically called by
+        /// `datafusion-proto`; expression authors receive `&PhysicalExprEncodeCtx`.
+        pub fn new(encoder: &'a dyn PhysicalExprEncode) -> Self {
+            Self { encoder }
+        }
+
+        /// Encode a child expression. Routes through the configured encoder
+        /// so dedup-aware encoding is preserved.
+        pub fn encode_child(
+            &self,
+            expr: &Arc<dyn PhysicalExpr>,
+        ) -> Result<PhysicalExprNode> {
+            self.encoder.encode(expr)
+        }
+    }
+
+    /// Internal dispatch trait. Implementors live in `datafusion-proto` and
+    /// wrap the existing `PhysicalExtensionCodec` +
+    /// `PhysicalProtoConverterExtension` plumbing. Expression authors should
+    /// use [`PhysicalExprEncodeCtx`] instead of calling this directly.
+    pub trait PhysicalExprEncode {
+        /// Encode an expression to a protobuf node.
+        fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode>;
+    }
+}
+
+/// Decode-side counterpart to [`proto_encode`].
+///
+/// Expression authors implement an associated `try_from_proto` on their
+/// concrete type, with the signature
+///
+/// ```ignore
+/// fn try_from_proto(
+///     node: &PhysicalExprNode,
+///     ctx: &PhysicalExprDecodeCtx<'_>,
+/// ) -> Result<Arc<dyn PhysicalExpr>>
+/// ```
+///
+/// It takes the whole [`PhysicalExprNode`] — the exact inverse of what
+/// [`PhysicalExpr::try_to_proto`] returns — so the constructor can also see
+/// outer-node fields such as `expr_id`. The central match in
+/// `datafusion-proto` dispatches `ExprType` variants to these constructors.
+///
+/// As with the encode side, the public surface is a struct (not a `&dyn`
+/// trait) so future fields/helpers (registries for third-party expressions,
+/// schema-resolution caches, etc.) can be added without changing the
+/// signature every expression depends on.
+///
+/// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+#[cfg(feature = "proto")]
+pub mod proto_decode {
+    use std::sync::Arc;
+
+    use arrow::datatypes::Schema;
+    use datafusion_common::Result;
+    use datafusion_proto_models::protobuf::PhysicalExprNode;
+
+    use super::PhysicalExpr;
+
+    /// Decoder context handed to per-expression `try_from_proto` constructors.
+    ///
+    /// Wraps an internal [`PhysicalExprDecode`] trait object plus a borrowed
+    /// schema. The trait stays an implementation detail of `datafusion-proto`;
+    /// expression authors only see this struct.
+    pub struct PhysicalExprDecodeCtx<'a> {
+        schema: &'a Schema,
+        decoder: &'a dyn PhysicalExprDecode,
+    }
+
+    impl<'a> PhysicalExprDecodeCtx<'a> {
+        /// Construct a new decode context. Typically called by
+        /// `datafusion-proto`; expression authors receive
+        /// `&PhysicalExprDecodeCtx`.
+        pub fn new(schema: &'a Schema, decoder: &'a dyn PhysicalExprDecode) -> Self {
+            Self { schema, decoder }
+        }
+
+        /// The schema bound to this decode context. Use it for column lookups,
+        /// data-type resolution, etc.
+        pub fn schema(&self) -> &Schema {
+            self.schema
+        }
+
+        /// Decode an expression node, recursing into child sub-expressions.
+        ///
+        /// Routes built-in `ExprType` variants through `datafusion-proto`'s
+        /// central match and forwards extension nodes to the registered codec
+        /// (today via [`PhysicalExtensionCodec::try_decode_expr`]; later via
+        /// a per-type registry — see #21835).
+        ///
+        /// [`PhysicalExtensionCodec::try_decode_expr`]: https://docs.rs/datafusion-proto/latest/datafusion_proto/physical_plan/trait.PhysicalExtensionCodec.html#method.try_decode_expr
+        pub fn decode(&self, node: &PhysicalExprNode) -> Result<Arc<dyn PhysicalExpr>> {
+            self.decoder.decode(node, self.schema)
+        }
+    }
+
+    /// Internal dispatch trait. Implementors live in `datafusion-proto`.
+    /// Expression authors should use [`PhysicalExprDecodeCtx`] instead of
+    /// calling this directly.
+    pub trait PhysicalExprDecode {
+        /// Decode a proto node into a concrete `PhysicalExpr`. The schema is
+        /// passed alongside so implementations can support recursive children
+        /// and rebind the context per call (e.g. for nested plans).
+        fn decode(
+            &self,
+            node: &PhysicalExprNode,
+            schema: &Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>>;
+    }
 }
 
 #[deprecated(
@@ -438,9 +659,29 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
 )]
 pub use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 
+impl dyn PhysicalExpr {
+    /// Returns `true` if the expression is of type `T`.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn PhysicalExpr>` via auto-deref.
+    pub fn is<T: PhysicalExpr>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this expression to a concrete type `T`, returning
+    /// `None` if the expression is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn PhysicalExpr>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: PhysicalExpr>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 impl PartialEq for dyn PhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.dyn_eq(other.as_any())
+        self.dyn_eq(other as &dyn Any)
     }
 }
 impl Eq for dyn PhysicalExpr {}
@@ -517,7 +758,6 @@ where
 /// # Example
 /// ```
 /// # // The boilerplate needed to create a `PhysicalExpr` for the example
-/// # use std::any::Any;
 /// use std::collections::HashMap;
 /// # use std::fmt::Formatter;
 /// # use std::sync::Arc;
@@ -528,7 +768,7 @@ where
 /// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
 /// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct MyExpr {}
-/// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
+/// # impl PhysicalExpr for MyExpr {
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
 /// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
@@ -673,10 +913,6 @@ mod test {
     struct TestExpr {}
 
     impl PhysicalExpr for TestExpr {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn data_type(&self, _schema: &Schema) -> datafusion_common::Result<DataType> {
             Ok(DataType::Int64)
         }

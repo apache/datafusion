@@ -214,7 +214,7 @@ impl GeneratedSessionContextBuilder {
 
 /// The generated params for [`SessionContext`]
 #[derive(Debug)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub struct SessionContextParams {
     batch_size: usize,
     target_partitions: usize,

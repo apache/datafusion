@@ -67,7 +67,6 @@ macro_rules! create_func {
         create_func!($UDAF, $AGGREGATE_UDF_FN, <$UDAF>::default());
     };
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident, $CREATE:expr) => {
-        paste::paste! {
             #[doc = concat!("AggregateFunction that returns a [`AggregateUDF`](datafusion_expr::AggregateUDF) for [`", stringify!($UDAF), "`]")]
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<datafusion_expr::AggregateUDF> {
                 // Singleton instance of [$UDAF], ensures the UDAF is only created once
@@ -76,7 +75,6 @@ macro_rules! create_func {
                         std::sync::Arc::new(datafusion_expr::AggregateUDF::from($CREATE))
                     });
                 std::sync::Arc::clone(&INSTANCE)
-            }
         }
     }
 }

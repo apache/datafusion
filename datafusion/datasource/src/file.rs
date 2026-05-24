@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
+use crate::morsel::{FileOpenerMorselizer, Morselizer};
 #[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
@@ -39,12 +40,19 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use object_store::ObjectStore;
 
-/// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
+/// Helper function to convert any type implementing [`FileSource`] to `Arc<dyn FileSource>`
 pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
     Arc::new(source)
 }
 
-/// file format specific behaviors for elements in [`DataSource`]
+/// File format specific behaviors for [`DataSource`]
+///
+/// # Schema information
+/// There are two important schemas for a [`FileSource`]:
+/// 1. [`Self::table_schema`] -- the schema for the overall table
+///    (file data plus partition columns)
+/// 2. The logical output schema, comprised of [`Self::table_schema`] with
+///    [`Self::projection`] applied
 ///
 /// See more details on specific implementations:
 /// * [`ArrowSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowSource.html)
@@ -54,34 +62,72 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
 /// * [`ParquetSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ParquetSource.html)
 ///
 /// [`DataSource`]: crate::source::DataSource
-pub trait FileSource: Send + Sync {
-    /// Creates a `dyn FileOpener` based on given parameters
+pub trait FileSource: Any + Send + Sync {
+    /// Creates a `dyn FileOpener` based on given parameters.
+    ///
+    /// Note: File sources with a native morsel implementation should return an
+    /// error from this method and implementing [`Self::create_morselizer`] instead.
     fn create_file_opener(
         &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
     ) -> Result<Arc<dyn FileOpener>>;
-    /// Any
-    fn as_any(&self) -> &dyn Any;
-    /// Returns the table schema for this file source.
+
+    /// Creates a `dyn Morselizer` based on given parameters.
     ///
-    /// This always returns the unprojected schema (the full schema of the data).
+    /// The default implementation preserves existing behavior by adapting the
+    /// legacy [`FileOpener`] API into a [`Morselizer`].
+    ///
+    /// It is preferred to implement the [`Morselizer`] API directly by
+    /// implementing this method.
+    fn create_morselizer(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Result<Box<dyn Morselizer>> {
+        let opener = self.create_file_opener(object_store, base_config, partition)?;
+        Ok(Box::new(FileOpenerMorselizer::new(opener)))
+    }
+
+    /// Returns the table schema for the overall table (including partition columns, if any)
+    ///
+    /// This method returns the unprojected schema: the full schema of the data
+    /// without [`Self::projection`] applied.
+    ///
+    /// The output schema of this `FileSource` is this TableSchema
+    /// with [`Self::projection`] applied.
+    ///
+    /// Use [`ProjectionExprs::project_schema`] to get the projected schema
+    /// after applying the projection.
     fn table_schema(&self) -> &crate::table_schema::TableSchema;
+
     /// Initialize new type with batch size configuration
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
-    /// Returns the filter expression that will be applied during the file scan.
+
+    /// Returns the filter expression that will be applied *during* the file scan.
+    ///
+    /// These expressions are in terms of the unprojected [`Self::table_schema`].
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         None
     }
-    /// Return the projection that will be applied to the output stream on top of the table schema.
+
+    /// Return the projection that will be applied to the output stream on top
+    /// of [`Self::table_schema`].
+    ///
+    /// Note you can use [`ProjectionExprs::project_schema`] on the table
+    /// schema to get the effective output schema of this source.
     fn projection(&self) -> Option<&ProjectionExprs> {
         None
     }
+
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
+
     /// String representation of file source such as "csv", "json", "parquet"
     fn file_type(&self) -> &str;
+
     /// Format FileType specific information
     fn fmt_extra(&self, _t: DisplayFormatType, _f: &mut Formatter) -> fmt::Result {
         Ok(())
@@ -135,6 +181,19 @@ pub trait FileSource: Send + Sync {
     }
 
     /// Try to push down filters into this FileSource.
+    ///
+    /// `filters` must be in terms of the unprojected table schema (file schema
+    /// plus partition columns), before any projection is applied.
+    ///
+    /// Any filters that this FileSource chooses to evaluate itself should be
+    /// returned as `PushedDown::Yes` in the result, along with a FileSource
+    /// instance that incorporates those filters. Such filters are logically
+    /// applied "during" the file scan, meaning they may refer to columns not
+    /// included in the final output projection.
+    ///
+    /// Filters that cannot be pushed down should be marked as `PushedDown::No`,
+    /// and will be evaluated by an execution plan after the file source.
+    ///
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
     /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
@@ -189,7 +248,29 @@ pub trait FileSource: Send + Sync {
     /// * `Inexact` - Created a source optimized for ordering (e.g., reversed row groups) but not perfectly sorted
     /// * `Unsupported` - Cannot optimize for this ordering
     ///
-    /// Default implementation returns `Unsupported`.
+    /// # Deprecation / migration notes
+    /// - [`Self::try_reverse_output`] was renamed to this method and deprecated since `53.0.0`.
+    ///   Per DataFusion's deprecation guidelines, it will be removed in `59.0.0` or later
+    ///   (6 major versions or 6 months, whichever is longer).
+    /// - New implementations should override [`Self::try_pushdown_sort`] directly.
+    /// - For backwards compatibility, the default implementation of
+    ///   [`Self::try_pushdown_sort`] delegates to the deprecated
+    ///   [`Self::try_reverse_output`] until it is removed. After that point, the
+    ///   default implementation will return [`SortOrderPushdownResult::Unsupported`].
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+        eq_properties: &EquivalenceProperties,
+    ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+        #[expect(deprecated)]
+        self.try_reverse_output(order, eq_properties)
+    }
+
+    /// Deprecated: Renamed to [`Self::try_pushdown_sort`].
+    #[deprecated(
+        since = "53.0.0",
+        note = "Renamed to try_pushdown_sort. This method was never limited to reversing output. It will be removed in 59.0.0 or later."
+    )]
     fn try_reverse_output(
         &self,
         _order: &[PhysicalSortExpr],
@@ -198,7 +279,20 @@ pub trait FileSource: Send + Sync {
         Ok(SortOrderPushdownResult::Unsupported)
     }
 
-    /// Try to push down a projection into a this FileSource.
+    /// Reorder files in the shared work queue to optimize query performance.
+    ///
+    /// For example, TopK queries benefit from reading files with the best
+    /// statistics first, so the dynamic filter threshold tightens quickly.
+    ///
+    /// The default implementation returns files unchanged (no reordering).
+    fn reorder_files(
+        &self,
+        files: Vec<crate::PartitionedFile>,
+    ) -> Vec<crate::PartitionedFile> {
+        files
+    }
+
+    /// Try to push down a projection into this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should
     /// override this method and return a new `FileSource` instance with the
@@ -232,7 +326,7 @@ pub trait FileSource: Send + Sync {
     /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
     /// See `upgrading.md` for more details.
     #[deprecated(
-        since = "52.0.0",
+        since = "53.0.0",
         note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
     )]
     #[expect(deprecated)]
@@ -250,11 +344,23 @@ pub trait FileSource: Send + Sync {
     /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
     /// See `upgrading.md` for more details.
     #[deprecated(
-        since = "52.0.0",
+        since = "53.0.0",
         note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
     )]
     #[expect(deprecated)]
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
+    }
+}
+
+impl dyn FileSource {
+    /// Returns `true` if this source is of type `T`.
+    pub fn is<T: FileSource>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this source to a concrete type `T`.
+    pub fn downcast_ref<T: FileSource>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
     }
 }

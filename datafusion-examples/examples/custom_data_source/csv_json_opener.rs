@@ -27,7 +27,9 @@ use datafusion::{
         file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
-        physical_plan::{CsvSource, FileSource, FileStream, JsonOpener, JsonSource},
+        physical_plan::{
+            CsvSource, FileSource, FileStreamBuilder, JsonOpener, JsonSource,
+        },
     },
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
@@ -36,7 +38,7 @@ use datafusion::{
 use datafusion::datasource::physical_plan::FileScanConfigBuilder;
 use datafusion_examples::utils::datasets::ExampleDataset;
 use futures::StreamExt;
-use object_store::{ObjectStore, local::LocalFileSystem, memory::InMemory};
+use object_store::{ObjectStoreExt, local::LocalFileSystem, memory::InMemory};
 
 /// This example demonstrates using the low level [`FileStream`] / [`FileOpener`] APIs to directly
 /// read data from (CSV/JSON) into Arrow RecordBatches.
@@ -80,8 +82,12 @@ async fn csv_opener() -> Result<()> {
             .create_file_opener(object_store, &scan_config, 0)?;
 
     let mut result = vec![];
-    let mut stream =
-        FileStream::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())?;
+    let metrics = ExecutionPlanMetricsSet::new();
+    let mut stream = FileStreamBuilder::new(&scan_config)
+        .with_partition(0)
+        .with_file_opener(opener)
+        .with_metrics(&metrics)
+        .build()?;
     while let Some(batch) = stream.next().await.transpose()? {
         result.push(batch);
     }
@@ -125,6 +131,7 @@ async fn json_opener() -> Result<()> {
         projected,
         FileCompressionType::UNCOMPRESSED,
         Arc::new(object_store),
+        true,
     );
 
     let scan_config = FileScanConfigBuilder::new(
@@ -136,12 +143,12 @@ async fn json_opener() -> Result<()> {
     .with_file(PartitionedFile::new(path.to_string(), 10))
     .build();
 
-    let mut stream = FileStream::new(
-        &scan_config,
-        0,
-        Arc::new(opener),
-        &ExecutionPlanMetricsSet::new(),
-    )?;
+    let metrics = ExecutionPlanMetricsSet::new();
+    let mut stream = FileStreamBuilder::new(&scan_config)
+        .with_partition(0)
+        .with_file_opener(Arc::new(opener))
+        .with_metrics(&metrics)
+        .build()?;
     let mut result = vec![];
     while let Some(batch) = stream.next().await.transpose()? {
         result.push(batch);

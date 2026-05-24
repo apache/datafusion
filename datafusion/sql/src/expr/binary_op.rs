@@ -16,13 +16,15 @@
 // under the License.
 
 use crate::planner::{ContextProvider, SqlToRel};
-use datafusion_common::{Result, not_impl_err};
+use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_expr::Operator;
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::{BinaryExpr, Expr};
 use sqlparser::ast::BinaryOperator;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_sql_binary_op(&self, op: &BinaryOperator) -> Result<Operator> {
-        match *op {
+        match op {
             BinaryOperator::Gt => Ok(Operator::Gt),
             BinaryOperator::GtEq => Ok(Operator::GtEq),
             BinaryOperator::Lt => Ok(Operator::Lt),
@@ -68,7 +70,38 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             BinaryOperator::Question => Ok(Operator::Question),
             BinaryOperator::QuestionAnd => Ok(Operator::QuestionAnd),
             BinaryOperator::QuestionPipe => Ok(Operator::QuestionPipe),
+            BinaryOperator::Custom(s) if s == ":" => Ok(Operator::Colon),
             _ => not_impl_err!("Unsupported binary operator: {:?}", op),
         }
+    }
+
+    pub(crate) fn build_binary_expr(
+        &self,
+        op: &BinaryOperator,
+        left: Expr,
+        right: Expr,
+    ) -> Result<Expr> {
+        if matches!(op, BinaryOperator::PGExp) {
+            let fun_name = "power";
+            let fun = self
+                .context_provider
+                .get_function_meta(fun_name)
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Unable to find expected '{fun_name}' function"
+                    )
+                })?;
+
+            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                fun,
+                vec![left, right],
+            )));
+        }
+
+        Ok(Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            self.parse_sql_binary_op(op)?,
+            Box::new(right),
+        )))
     }
 }

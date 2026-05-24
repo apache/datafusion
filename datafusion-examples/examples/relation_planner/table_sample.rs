@@ -80,7 +80,6 @@
 //! ```
 
 use std::{
-    any::Any,
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
     pin::Pin,
@@ -618,7 +617,7 @@ pub struct SampleExec {
     upper_bound: f64,
     seed: u64,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl SampleExec {
@@ -656,7 +655,7 @@ impl SampleExec {
             upper_bound,
             seed,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -682,11 +681,7 @@ impl ExecutionPlan for SampleExec {
         "SampleExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -727,8 +722,8 @@ impl ExecutionPlan for SampleExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let mut stats = self.input.partition_statistics(partition)?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let ratio = self.upper_bound - self.lower_bound;
 
         // Scale statistics by sampling ratio (inexact due to randomness)
@@ -741,7 +736,7 @@ impl ExecutionPlan for SampleExec {
             .map(|n| (n as f64 * ratio) as usize)
             .to_inexact();
 
-        Ok(stats)
+        Ok(Arc::new(stats))
     }
 }
 

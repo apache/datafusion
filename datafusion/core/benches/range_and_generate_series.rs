@@ -15,13 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-extern crate datafusion;
-
 mod data_utils;
 
-use crate::criterion::Criterion;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::execution::context::SessionContext;
 use parking_lot::Mutex;
 use std::hint::black_box;

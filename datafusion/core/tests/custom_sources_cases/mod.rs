@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -79,7 +78,7 @@ struct CustomTableProvider;
 #[derive(Debug, Clone)]
 struct CustomExecutionPlan {
     projection: Option<Vec<usize>>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CustomExecutionPlan {
@@ -88,7 +87,10 @@ impl CustomExecutionPlan {
         let schema =
             project_schema(&schema, projection.as_ref()).expect("projected schema");
         let cache = Self::compute_properties(schema);
-        Self { projection, cache }
+        Self {
+            projection,
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -153,11 +155,7 @@ impl ExecutionPlan for CustomExecutionPlan {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -180,16 +178,12 @@ impl ExecutionPlan for CustomExecutionPlan {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
+            return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
         }
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
-        Ok(Statistics {
+        Ok(Arc::new(Statistics {
             num_rows: Precision::Exact(batch.num_rows()),
             total_byte_size: Precision::Absent,
             column_statistics: self
@@ -208,16 +202,12 @@ impl ExecutionPlan for CustomExecutionPlan {
                     ..Default::default()
                 })
                 .collect(),
-        })
+        }))
     }
 }
 
 #[async_trait]
 impl TableProvider for CustomTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         TEST_CUSTOM_SCHEMA_REF!()
     }
@@ -319,7 +309,7 @@ async fn optimizers_catch_all_statistics() {
 
 #[expect(clippy::needless_pass_by_value)]
 fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if plan.as_any().is::<PlaceholderRowExec>() {
+    if plan.is::<PlaceholderRowExec>() {
         true
     } else if plan.children().len() != 1 {
         false

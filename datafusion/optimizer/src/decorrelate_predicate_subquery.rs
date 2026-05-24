@@ -89,6 +89,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
 
         // iterate through all exists clauses in predicate, turning each into a join
         let mut cur_input = Arc::unwrap_or_clone(filter.input);
+        let original_schema = cur_input.schema().columns();
         for subquery_expr in with_subqueries {
             match extract_subquery_info(subquery_expr) {
                 // The subquery expression is at the top level of the filter
@@ -115,6 +116,13 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             let new_filter = Filter::try_new(expr, Arc::new(cur_input))?;
             cur_input = LogicalPlan::Filter(new_filter);
         }
+
+        if cur_input.schema().fields().len() != original_schema.len() {
+            cur_input = LogicalPlanBuilder::from(cur_input)
+                .project(original_schema.into_iter().map(Expr::from))?
+                .build()?;
+        }
+
         Ok(Transformed::yes(cur_input))
     }
 
@@ -461,7 +469,7 @@ fn build_join(
     //
     // Additionally, if the join keys are non-nullable on both sides, we don't need
     // null-aware semantics because NULLs cannot exist in the data.
-    let null_aware = matches!(join_type, JoinType::LeftAnti)
+    let null_aware = join_type == JoinType::LeftAnti
         && in_predicate_opt.is_some()
         && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?;
 
@@ -538,7 +546,7 @@ mod tests {
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
-    use datafusion_expr::{and, binary_expr, col, lit, not, out_ref_col, table_scan};
+    use datafusion_expr::{and, binary_expr, col, out_ref_col, table_scan};
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -1736,13 +1744,14 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          Filter: __correlated_sq_1.mark OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, mark:Boolean]
-            LeftMark Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, mark:Boolean]
-              TableScan: customer [c_custkey:Int64, c_name:Utf8]
-              SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
-                Projection: orders.o_custkey [o_custkey:Int64]
-                  Filter: customer.c_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-                    TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+          Projection: customer.c_custkey, customer.c_name [c_custkey:Int64, c_name:Utf8]
+            Filter: __correlated_sq_1.mark OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, mark:Boolean]
+              LeftMark Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, mark:Boolean]
+                TableScan: customer [c_custkey:Int64, c_name:Utf8]
+                SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
+                  Projection: orders.o_custkey [o_custkey:Int64]
+                    Filter: customer.c_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+                      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
         "
         )
     }
@@ -2041,7 +2050,7 @@ mod tests {
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [arr:Int32;N]
               Unnest: lists[sq.arr|depth=1] structs[] [arr:Int32;N]
-                TableScan: sq [arr:List(Field { data_type: Int32, nullable: true });N]
+                TableScan: sq [arr:List(Int32);N]
         "
         )
     }
@@ -2076,7 +2085,7 @@ mod tests {
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [a:UInt32;N]
               Unnest: lists[sq.a|depth=1] structs[] [a:UInt32;N]
-                TableScan: sq [a:List(Field { data_type: UInt32, nullable: true });N]
+                TableScan: sq [a:List(UInt32);N]
         "
         )
     }

@@ -46,12 +46,15 @@ default = ["sql"]
 parquet_encryption = [
     "parquet/encryption",
 ]
+arrow_buffer_pool = [
+    "arrow-buffer/pool",
+]
 sql = []
 
 [dependencies]
 arrow = { workspace = true }
+arrow-buffer = { workspace = true }
 async-trait = { workspace = true }
-chrono = { workspace = true }
 dashmap = { workspace = true }
 datafusion-common = { workspace = true, default-features = false }
 datafusion-expr = { workspace = true, default-features = false }
@@ -66,4 +69,5 @@ tempfile = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 insta = { workspace = true }

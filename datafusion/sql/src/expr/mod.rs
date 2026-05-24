@@ -22,8 +22,8 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
     DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
-    ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript, TrimWhereField,
-    TypedString, Value, ValueWithSpan,
+    ExprWithAlias as SQLExprWithAlias, JsonPath, MapEntry, StructField, Subscript,
+    TrimWhereField, TypedString, Value, ValueWithSpan,
 };
 
 use datafusion_common::{
@@ -36,11 +36,13 @@ use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
-    Operator, TryCast, lit,
+    Operator, TryCast, lit, when,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_functions_nested::expr_fn::array_has;
+use datafusion_functions_nested::expr_fn::{
+    array_has, array_max, array_min, array_position, cardinality,
+};
 
 mod binary_op;
 mod function;
@@ -140,11 +142,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         let RawBinaryExpr { op, left, right } = binary_expr;
-        Ok(Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(left),
-            self.parse_sql_binary_op(&op)?,
-            Box::new(right),
-        )))
+        self.build_binary_expr(&op, left, right)
     }
 
     pub fn sql_to_expr_with_alias(
@@ -267,11 +265,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 planner_context,
             ),
 
+            SQLExpr::Cast { array: true, .. } => {
+                not_impl_err!("`CAST(... AS type ARRAY`) not supported")
+            }
+
             SQLExpr::Cast {
                 kind: CastKind::Cast | CastKind::DoubleColon,
                 expr,
                 data_type,
                 format,
+                array: false,
             } => {
                 self.sql_cast_to_expr(*expr, &data_type, format, schema, planner_context)
             }
@@ -281,20 +284,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 expr,
                 data_type,
                 format,
+                array: false,
             } => {
                 if let Some(format) = format {
                     return not_impl_err!("CAST with format is not supported: {format}");
                 }
 
-                Ok(Expr::TryCast(TryCast::new(
+                Ok(Expr::TryCast(TryCast::new_from_field(
                     Box::new(self.sql_expr_to_logical_expr(
                         *expr,
                         schema,
                         planner_context,
                     )?),
-                    self.convert_data_type_to_field(&data_type)?
-                        .data_type()
-                        .clone(),
+                    self.convert_data_type_to_field(&data_type)?,
                 )))
             }
 
@@ -302,12 +304,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 data_type,
                 value,
                 uses_odbc_syntax: _,
-            }) => Ok(Expr::Cast(Cast::new(
-                Box::new(lit(value.into_string().unwrap())),
-                self.convert_data_type_to_field(&data_type)?
-                    .data_type()
-                    .clone(),
-            ))),
+            }) => {
+                let value = match value.into_string() {
+                    Some(value) => value,
+                    None => {
+                        return plan_err!("Typed literal requires a string payload");
+                    }
+                };
+
+                Ok(Expr::Cast(Cast::new_from_field(
+                    Box::new(lit(value)),
+                    self.convert_data_type_to_field(&data_type)?,
+                )))
+            }
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
@@ -606,17 +615,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                 ),
                 _ => {
-                    if compare_op != BinaryOperator::Eq {
-                        plan_err!(
-                            "Unsupported AnyOp: '{compare_op}', only '=' is supported"
-                        )
-                    } else {
-                        let left_expr =
-                            self.sql_to_expr(*left, schema, planner_context)?;
-                        let right_expr =
-                            self.sql_to_expr(*right, schema, planner_context)?;
-                        Ok(array_has(right_expr, left_expr))
-                    }
+                    let left_expr = self.sql_to_expr(*left, schema, planner_context)?;
+                    let right_expr = self.sql_to_expr(*right, schema, planner_context)?;
+                    plan_any_op(left_expr, right_expr, &compare_op)
                 }
             },
             SQLExpr::AllOp {
@@ -632,7 +633,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     schema,
                     planner_context,
                 ),
-                _ => not_impl_err!("ALL only supports subquery comparison currently"),
+                _ => {
+                    let left_expr = self.sql_to_expr(*left, schema, planner_context)?;
+                    let right_expr = self.sql_to_expr(*right, schema, planner_context)?;
+                    plan_all_op(&left_expr, &right_expr, &compare_op)
+                }
             },
             #[expect(deprecated)]
             SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
@@ -645,8 +650,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 options: Box::new(WildcardOptions::default()),
             }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
+            SQLExpr::JsonAccess { value, path } => {
+                self.parse_json_access(schema, planner_context, value, &path)
+            }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
+    }
+
+    fn parse_json_access(
+        &self,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+        value: Box<SQLExpr>,
+        path: &JsonPath,
+    ) -> Result<Expr> {
+        let json_path = path.to_string();
+        let json_path = if let Some(json_path) = json_path.strip_prefix(":") {
+            // sqlparser's JsonPath display adds an extra `:` at the beginning.
+            json_path.to_owned()
+        } else {
+            json_path
+        };
+        self.build_logical_expr(
+            BinaryOperator::Custom(":".to_owned()),
+            self.sql_to_expr(*value, schema, planner_context)?,
+            // pass json path as a string literal, let the impl parse it when needed.
+            Expr::Literal(ScalarValue::Utf8(Some(json_path)), None),
+            schema,
+        )
     }
 
     /// Parses a struct(..) expression and plans it creation
@@ -855,7 +886,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<Value>,
+        escape_char: Option<ValueWithSpan>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
@@ -865,7 +896,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("ANY in LIKE expression");
         }
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let escape_char = match escape_char {
+        let escape_char = match escape_char.map(|v| v.value) {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
             }
@@ -890,7 +921,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<Value>,
+        escape_char: Option<ValueWithSpan>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -899,7 +930,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
             return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
-        let escape_char = match escape_char {
+        let escape_char = match escape_char.map(|v| v.value) {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
             }
@@ -1029,12 +1060,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => expr,
         };
 
-        // Currently drops metadata attached to the type
-        // https://github.com/apache/datafusion/issues/18060
-        Ok(Expr::Cast(Cast::new(
-            Box::new(expr),
-            dt.data_type().clone(),
-        )))
+        Ok(Expr::Cast(Cast::new_from_field(Box::new(expr), dt)))
     }
 
     /// Extracts the root expression and access chain from a compound expression.
@@ -1219,6 +1245,118 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
+/// Builds a CASE expression that handles NULL semantics for `x <op> ANY(arr)`:
+///
+/// ```text
+/// CASE
+///   WHEN <min_or_max>(arr) IS NOT NULL THEN <comparison>
+///   WHEN arr IS NOT NULL THEN FALSE          -- empty or all-null array
+///   ELSE NULL                                -- NULL array
+/// END
+/// ```
+fn any_op_with_null_handling(bound: Expr, comparison: Expr, arr: Expr) -> Result<Expr> {
+    when(bound.is_not_null(), comparison)
+        .when(arr.is_not_null(), lit(false))
+        .otherwise(lit(ScalarValue::Boolean(None)))
+}
+
+/// Plans a `<left> <op> ANY(<right>)` expression for non-subquery operands.
+fn plan_any_op(
+    left_expr: Expr,
+    right_expr: Expr,
+    compare_op: &BinaryOperator,
+) -> Result<Expr> {
+    match compare_op {
+        BinaryOperator::Eq => Ok(array_has(right_expr, left_expr)),
+        BinaryOperator::NotEq => {
+            let min = array_min(right_expr.clone());
+            let max = array_max(right_expr.clone());
+            // NOT EQ is true when either bound differs from left
+            let comparison = min
+                .not_eq(left_expr.clone())
+                .or(max.clone().not_eq(left_expr));
+            any_op_with_null_handling(max, comparison, right_expr)
+        }
+        BinaryOperator::Gt => {
+            let min = array_min(right_expr.clone());
+            any_op_with_null_handling(min.clone(), min.lt(left_expr), right_expr)
+        }
+        BinaryOperator::Lt => {
+            let max = array_max(right_expr.clone());
+            any_op_with_null_handling(max.clone(), max.gt(left_expr), right_expr)
+        }
+        BinaryOperator::GtEq => {
+            let min = array_min(right_expr.clone());
+            any_op_with_null_handling(min.clone(), min.lt_eq(left_expr), right_expr)
+        }
+        BinaryOperator::LtEq => {
+            let max = array_max(right_expr.clone());
+            any_op_with_null_handling(max.clone(), max.gt_eq(left_expr), right_expr)
+        }
+        _ => plan_err!(
+            "Unsupported AnyOp: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
+        ),
+    }
+}
+
+/// Plans `needle <compare_op> ALL(haystack)` with proper SQL NULL semantics.
+///
+/// CASE/WHEN structure:
+///   WHEN arr IS NULL        → NULL
+///   WHEN empty              → TRUE
+///   WHEN lhs IS NULL        → NULL
+///   WHEN decisive_condition → FALSE
+///   WHEN has_nulls          → NULL
+///   ELSE                    → TRUE
+fn plan_all_op(
+    needle: &Expr,
+    haystack: &Expr,
+    compare_op: &BinaryOperator,
+) -> Result<Expr> {
+    let null_arr_check = haystack.clone().is_null();
+    let empty_check = cardinality(haystack.clone()).eq(lit(0u64));
+    let null_lhs_check = needle.clone().is_null();
+    // DataFusion's array_position uses is_null() checks internally (not equality),
+    // so it can locate NULL elements even though NULL = NULL is NULL in standard SQL.
+    let has_nulls =
+        array_position(haystack.clone(), lit(ScalarValue::Null), lit(1i64)).is_not_null();
+
+    let decisive_condition = match compare_op {
+        BinaryOperator::NotEq => array_has(haystack.clone(), needle.clone()),
+        BinaryOperator::Eq => {
+            let all_equal = array_min(haystack.clone())
+                .eq(needle.clone())
+                .and(array_max(haystack.clone()).eq(needle.clone()));
+            Expr::Not(Box::new(all_equal))
+        }
+        BinaryOperator::Gt => {
+            Expr::Not(Box::new(needle.clone().gt(array_max(haystack.clone()))))
+        }
+        BinaryOperator::Lt => {
+            Expr::Not(Box::new(needle.clone().lt(array_min(haystack.clone()))))
+        }
+        BinaryOperator::GtEq => {
+            Expr::Not(Box::new(needle.clone().gt_eq(array_max(haystack.clone()))))
+        }
+        BinaryOperator::LtEq => {
+            Expr::Not(Box::new(needle.clone().lt_eq(array_min(haystack.clone()))))
+        }
+        _ => {
+            return plan_err!(
+                "Unsupported AllOp: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
+            );
+        }
+    };
+
+    let null_bool = lit(ScalarValue::Boolean(None));
+    when(null_arr_check, null_bool.clone())
+        .when(empty_check, lit(true))
+        .when(null_lhs_check, null_bool.clone())
+        .when(decisive_condition, lit(false))
+        .when(has_nulls, null_bool)
+        .otherwise(lit(true))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1231,7 +1369,9 @@ mod tests {
     use datafusion_common::TableReference;
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
-    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+    use datafusion_expr::{
+        AggregateUDF, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
+    };
 
     use super::*;
 
@@ -1271,6 +1411,10 @@ mod tests {
             None
         }
 
+        fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+            None
+        }
+
         fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
             match name {
                 "sum" => Some(datafusion_functions_aggregate::sum::sum_udaf()),
@@ -1294,6 +1438,10 @@ mod tests {
             Vec::new()
         }
 
+        fn higher_order_function_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
         fn udaf_names(&self) -> Vec<String> {
             vec!["sum".to_string()]
         }
@@ -1310,46 +1458,42 @@ mod tests {
     }
 
     macro_rules! test_stack_overflow {
-        ($num_expr:expr) => {
-            paste::item! {
-                #[test]
-                fn [<test_stack_overflow_ $num_expr>]() {
-                    let schema = DFSchema::empty();
-                    let mut planner_context = PlannerContext::default();
+        ($name:ident, $num_expr:expr) => {
+            #[test]
+            fn $name() {
+                let schema = DFSchema::empty();
+                let mut planner_context = PlannerContext::default();
 
-                    let expr_str = (0..$num_expr)
-                        .map(|i| format!("column1 = 'value{:?}'", i))
-                        .collect::<Vec<String>>()
-                        .join(" OR ");
+                let expr_str = (0..$num_expr)
+                    .map(|i| format!("column1 = 'value{:?}'", i))
+                    .collect::<Vec<String>>()
+                    .join(" OR ");
 
-                    let dialect = GenericDialect{};
-                    let mut parser = Parser::new(&dialect)
-                        .try_with_sql(expr_str.as_str())
-                        .unwrap();
-                    let sql_expr = parser.parse_expr().unwrap();
+                let dialect = GenericDialect {};
+                let mut parser = Parser::new(&dialect)
+                    .try_with_sql(expr_str.as_str())
+                    .unwrap();
+                let sql_expr = parser.parse_expr().unwrap();
 
-                    let context_provider = TestContextProvider::new();
-                    let sql_to_rel = SqlToRel::new(&context_provider);
+                let context_provider = TestContextProvider::new();
+                let sql_to_rel = SqlToRel::new(&context_provider);
 
-                    // Should not stack overflow
-                    sql_to_rel.sql_expr_to_logical_expr(
-                        sql_expr,
-                        &schema,
-                        &mut planner_context,
-                    ).unwrap();
-                }
+                // Should not stack overflow
+                sql_to_rel
+                    .sql_expr_to_logical_expr(sql_expr, &schema, &mut planner_context)
+                    .unwrap();
             }
         };
     }
 
-    test_stack_overflow!(64);
-    test_stack_overflow!(128);
-    test_stack_overflow!(256);
-    test_stack_overflow!(512);
-    test_stack_overflow!(1024);
-    test_stack_overflow!(2048);
-    test_stack_overflow!(4096);
-    test_stack_overflow!(8192);
+    test_stack_overflow!(test_stack_overflow_64, 64);
+    test_stack_overflow!(test_stack_overflow_128, 128);
+    test_stack_overflow!(test_stack_overflow_256, 256);
+    test_stack_overflow!(test_stack_overflow_512, 512);
+    test_stack_overflow!(test_stack_overflow_1024, 1024);
+    test_stack_overflow!(test_stack_overflow_2048, 2048);
+    test_stack_overflow!(test_stack_overflow_4096, 4096);
+    test_stack_overflow!(test_stack_overflow_8192, 8192);
     #[test]
     fn test_sql_to_expr_with_alias() {
         let schema = DFSchema::empty();

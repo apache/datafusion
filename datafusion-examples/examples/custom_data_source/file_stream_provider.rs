@@ -22,7 +22,7 @@
 ///
 /// On non-Windows systems, this example creates a named pipe (FIFO) and
 /// writes rows into it asynchronously while DataFusion reads the data
-/// through a `FileStreamProvider`.  
+/// through a `FileStreamProvider`.
 ///
 /// This illustrates how to integrate dynamically updated data sources
 /// with DataFusion without needing to reload the entire dataset each time.
@@ -126,7 +126,6 @@ mod non_windows {
         let broken_pipe_timeout = Duration::from_secs(10);
         let sa = file_path;
         // Spawn a new thread to write to the FIFO file
-        #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
         tasks.spawn_blocking(move || {
             let file = OpenOptions::new().write(true).open(sa).unwrap();
             // Reference time to use when deciding to fail the test

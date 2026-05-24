@@ -183,6 +183,11 @@ message Map {
   bool keys_sorted = 2;
 }
 
+message RunEndEncoded {
+  Field run_ends_field = 1;
+  Field values_field = 2;
+}
+
 enum UnionMode{
   sparse = 0;
   dense = 1;
@@ -194,7 +199,7 @@ message Union{
   repeated int32 type_ids = 3;
 }
 
-// Used for List/FixedSizeList/LargeList/Struct/Map
+// Used for List/FixedSizeList/LargeList/ListView/LargeListView/Struct/Map
 message ScalarNestedValue {
   message Dictionary {
     bytes ipc_message = 1;
@@ -234,6 +239,12 @@ message ScalarTimestampValue {
 message ScalarDictionaryValue {
   ArrowType index_type = 1;
   ScalarValue value = 2;
+}
+
+message ScalarRunEndEncodedValue {
+  Field run_ends_field = 1;
+  Field values_field = 2;
+  ScalarValue value = 3;
 }
 
 message IntervalDayTimeValue {
@@ -295,6 +306,8 @@ message ScalarValue{
     ScalarNestedValue large_list_value = 16;
     ScalarNestedValue list_value = 17;
     ScalarNestedValue fixed_size_list_value = 18;
+    ScalarNestedValue list_view_value = 46;
+    ScalarNestedValue large_list_view_value = 47;
     ScalarNestedValue struct_value = 32;
     ScalarNestedValue map_value = 41;
 
@@ -321,6 +334,8 @@ message ScalarValue{
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
     ScalarFixedSizeBinary fixed_size_binary_value = 34;
     UnionValue union_value = 42;
+
+    ScalarRunEndEncodedValue run_end_encoded_value = 45;
   }
 }
 
@@ -385,10 +400,13 @@ message ArrowType{
     List LIST = 25;
     List LARGE_LIST = 26;
     FixedSizeList FIXED_SIZE_LIST = 27;
+    List LIST_VIEW = 43;
+    List LARGE_LIST_VIEW = 44;
     Struct STRUCT = 28;
     Union UNION = 29;
     Dictionary DICTIONARY = 30;
     Map MAP = 33;
+    RunEndEncoded RUN_END_ENCODED = 42;
   }
 }
 
@@ -416,6 +434,13 @@ message JsonWriterOptions {
 }
 
 
+enum CsvQuoteStyle {
+  NECESSARY = 0;
+  ALWAYS = 1;
+  NON_NUMERIC = 2;
+  NEVER = 3;
+}
+
 message CsvWriterOptions {
   // Compression type
   CompressionTypeVariant compression = 1;
@@ -439,6 +464,12 @@ message CsvWriterOptions {
   string escape = 10;
   // Optional flag whether to double quotes, instead of escaping. Defaults to `true`
   bool double_quote = 11;
+  // Quote style for CSV writing
+  CsvQuoteStyle quote_style = 12;
+  // Whether to ignore leading whitespace in string values
+  bool ignore_leading_whitespace = 13;
+  // Whether to ignore trailing whitespace in string values
+  bool ignore_trailing_whitespace = 14;
 }
 
 // Options controlling CSV format
@@ -462,6 +493,12 @@ message CsvOptions {
   bytes terminator = 17; // Optional terminator character as a byte
   bytes truncated_rows = 18; // Indicates if truncated rows are allowed
   optional uint32 compression_level = 19; // Optional compression level
+  // Quote style for CSV writing
+  CsvQuoteStyle quote_style = 20;
+  // Whether to ignore leading whitespace in string values
+  bytes ignore_leading_whitespace = 21;
+  // Whether to ignore trailing whitespace in string values
+  bytes ignore_trailing_whitespace = 22;
 }
 
 // Options controlling CSV format
@@ -469,6 +506,7 @@ message JsonOptions {
   CompressionTypeVariant compression = 1; // Compression type
   optional uint64 schema_infer_max_rec = 2; // Optional max records for schema inference
   optional uint32 compression_level = 3; // Optional compression level
+  optional bool newline_delimited = 4; // Whether to read as newline-delimited JSON (default true). When false, expects JSON array format [{},...]
 }
 
 message TableParquetOptions {
@@ -588,6 +626,22 @@ message ParquetOptions {
   oneof max_predicate_cache_size_opt {
     uint64 max_predicate_cache_size = 33;
   }
+
+  CdcOptions content_defined_chunking = 35;
+
+  // Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
+  // is set. When `Some`, INT96 columns coerce to
+  // `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+  // `Timestamp(<coerce_int96>, None)`. No effect when `coerce_int96` is unset.
+  oneof coerce_int96_tz_opt {
+    string coerce_int96_tz = 36;
+  }
+}
+
+message CdcOptions {
+  uint64 min_chunk_size = 1;
+  uint64 max_chunk_size = 2;
+  int32 norm_level = 3;
 }
 
 enum JoinSide {
@@ -622,4 +676,11 @@ message ColumnStats {
   Precision null_count = 3;
   Precision distinct_count = 4;
   Precision byte_size = 6;
+}
+
+enum ExplainFormat {
+  EXPLAIN_FORMAT_INDENT = 0;
+  EXPLAIN_FORMAT_TREE = 1;
+  EXPLAIN_FORMAT_PGJSON = 2;
+  EXPLAIN_FORMAT_GRAPHVIZ = 3;
 }

@@ -226,6 +226,18 @@ impl WindowUDFExpr {
     pub fn fun(&self) -> &Arc<WindowUDF> {
         &self.fun
     }
+
+    /// Returns all arguments passed to this window function.
+    ///
+    /// Unlike [`StandardWindowFunctionExpr::expressions`], which returns
+    /// only the expressions that need batch evaluation (and may filter out
+    /// literal offset/default args like those for `lead`/`lag`), this
+    /// method returns the complete, unfiltered argument list. This is
+    /// needed for serialization so that all arguments survive a
+    /// protobuf round-trip.
+    pub fn args(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.args
+    }
 }
 
 impl StandardWindowFunctionExpr for WindowUDFExpr {

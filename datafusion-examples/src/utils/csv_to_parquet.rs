@@ -18,9 +18,8 @@
 use std::path::{Path, PathBuf};
 
 use datafusion::dataframe::DataFrameWriteOptions;
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
-use datafusion_common::DataFusionError;
 use tempfile::TempDir;
 use tokio::fs::create_dir_all;
 

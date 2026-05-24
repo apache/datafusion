@@ -23,7 +23,6 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};
 
@@ -32,7 +31,7 @@ use std::sync::{Arc, Mutex};
 pub struct OnceExec {
     /// the results to send back
     stream: Mutex<Option<SendableRecordBatchStream>>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl Debug for OnceExec {
@@ -46,7 +45,7 @@ impl OnceExec {
         let cache = Self::compute_properties(stream.schema());
         Self {
             stream: Mutex::new(Some(stream)),
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -79,11 +78,7 @@ impl ExecutionPlan for OnceExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

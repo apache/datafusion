@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, new_null_array};
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -23,7 +23,7 @@ use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    Volatility,
 };
 use datafusion_functions_nested::make_array::{array_array, coerce_types_inner};
 
@@ -45,19 +45,12 @@ impl Default for SparkArray {
 impl SparkArray {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![TypeSignature::UserDefined, TypeSignature::Nullary],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
 
 impl ScalarUDFImpl for SparkArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array"
     }
@@ -104,12 +97,12 @@ impl ScalarUDFImpl for SparkArray {
         make_scalar_function(make_array_inner)(args.as_slice())
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        coerce_types_inner(arg_types, self.name())
+        if arg_types.is_empty() {
+            Ok(vec![])
+        } else {
+            coerce_types_inner(arg_types, self.name())
+        }
     }
 }
 

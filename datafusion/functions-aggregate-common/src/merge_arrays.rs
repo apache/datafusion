@@ -209,13 +209,12 @@ pub fn merge_ordered_arrays(
 mod tests {
     use super::*;
 
-    use std::collections::VecDeque;
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int64Array};
 
+    use datafusion_common::Result;
     use datafusion_common::utils::get_row_at_idx;
-    use datafusion_common::{Result, ScalarValue};
 
     #[test]
     fn test_merge_asc() -> Result<()> {
@@ -268,7 +267,7 @@ mod tests {
             &mut [lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
-        let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+        let merged_vals = ScalarValue::iter_to_array(merged_vals)?;
         let merged_ts = (0..merged_ts[0].len())
             .map(|col_idx| {
                 ScalarValue::iter_to_array(
@@ -335,7 +334,7 @@ mod tests {
             &mut [lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
-        let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+        let merged_vals = ScalarValue::iter_to_array(merged_vals)?;
         let merged_ts = (0..merged_ts[0].len())
             .map(|col_idx| {
                 ScalarValue::iter_to_array(

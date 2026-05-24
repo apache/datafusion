@@ -125,6 +125,36 @@ CREATE TABLE group_median_table_nullable (
 ( 'group1', 125,  32766,  2147483646,  arrow_cast(9223372036854775806,'Int64'),  100,  101,   4294967294, arrow_cast(100,'UInt64'), 3.2,  5.5,   arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
 ( 'group1', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255,  65535, 4294967295, 18446744073709551615,     2.2,  2.2,   arrow_cast('NAN','Float64'), 0.0005, 0.0005 )
 
+query R
+select quantile_cont(col0, 0.75 order by col0)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+2.5
+
+query R
+select quantile_cont(col0, 0.75 order by col0 desc)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+1.5
+
+query R
+select quantile_cont(0.75 order by col0)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+2.5
+
+query R
+select quantile_cont(0.75 order by col0 desc)
+from values (1, 3), (2, 2), (3, 1) t(col0, col1);
+----
+1.5
+
+query R
+select quantile_cont(0.75) within group (order by col0)
+from values (1), (2), (3) t(col0);
+----
+2.5
+
 #######
 # Error tests
 #######
@@ -144,27 +174,21 @@ statement error DataFusion error: Schema error: Schema contains duplicate unqual
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+statement error Function 'approx_percentile_cont_with_weight' failed to match any signature
 SELECT approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c1) FROM aggregate_test_100
 
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+statement error Function 'approx_percentile_cont_with_weight' failed to match any signature
 SELECT approx_percentile_cont_with_weight(c1, 0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+statement error Function 'approx_percentile_cont_with_weight' failed to match any signature
 SELECT approx_percentile_cont_with_weight(c2, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function
+statement error Function 'approx_percentile_cont' failed to match any signature
 SELECT approx_percentile_cont(0.95, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
-
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Int16, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
-SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
-
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Float64, Float64, Float64 to the signature OneOf(.*) failed(.|\n)*
-SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
 SELECT approx_percentile_cont(c12) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
@@ -379,6 +403,59 @@ select array_sort(c1), array_sort(c2) from (
 statement ok
 drop table array_agg_distinct_list_table;
 
+# Test array_agg with DISTINCT and IGNORE NULLS (regression test for issue #19735)
+query ?
+SELECT array_sort(ARRAY_AGG(DISTINCT x IGNORE NULLS)) as result
+FROM (VALUES (1), (2), (NULL), (2), (NULL), (1)) AS t(x);
+----
+[1, 2]
+
+# Test that non-DISTINCT aggregates also preserve IGNORE NULLS when mixed with DISTINCT
+# This tests the two-phase aggregation rewrite in SingleDistinctToGroupBy
+query I?
+SELECT
+  COUNT(DISTINCT x) as distinct_count,
+  array_sort(ARRAY_AGG(y IGNORE NULLS)) as y_agg
+FROM (VALUES
+  (1, 10),
+  (1, 20),
+  (2, 30),
+  (3, NULL),
+  (3, 40),
+  (NULL, 50)
+) AS t(x, y)
+----
+3 [10, 20, 30, 40, 50]
+
+# Test that FILTER clause is preserved in two-phase aggregation rewrite
+query II
+SELECT
+  COUNT(DISTINCT x) as distinct_count,
+  SUM(y) FILTER (WHERE y > 15) as filtered_sum
+FROM (VALUES
+  (1, 10),
+  (1, 20),
+  (2, 5),
+  (2, 30),
+  (3, 25)
+) AS t(x, y)
+----
+3 75
+
+# Test that ORDER BY is preserved in two-phase aggregation rewrite
+query I?
+SELECT
+  COUNT(DISTINCT x) as distinct_count,
+  ARRAY_AGG(y ORDER BY y DESC) as ordered_agg
+FROM (VALUES
+  (1, 10),
+  (1, 30),
+  (2, 20),
+  (2, 40)
+) AS t(x, y)
+----
+2 [40, 30, 20, 10]
+
 statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
@@ -518,6 +595,16 @@ SELECT covar(c2, c12) FROM aggregate_test_100
 ----
 -0.079969012479
 
+query R
+SELECT covar_pop(arrow_cast(c2, 'Float16'), arrow_cast(c12, 'Float16')) FROM aggregate_test_100
+----
+-0.079163311005
+
+query R
+SELECT covar(arrow_cast(c2, 'Float16'), arrow_cast(c12, 'Float16')) FROM aggregate_test_100
+----
+-0.079962940409
+
 # single_row_query_covar_1
 query R
 select covar_samp(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
@@ -605,6 +692,18 @@ select corr(f, b)
 from data
 ----
 1
+
+# correlation_with_group_by_and_nullable_filter
+query IR rowsort
+SELECT g, corr(x, y) FILTER (WHERE b < 1) AS r
+FROM (VALUES
+  (0, 1.0, 1.0, CAST(NULL AS INT)),
+  (0, 2.0, 2.0, CAST(NULL AS INT)),
+  (0, 3.0, 4.0, 2)
+) AS t(g, x, y, b)
+GROUP BY g
+----
+0 NULL
 
 # group correlation_query_with_nans_f32
 query IR
@@ -855,16 +954,16 @@ SELECT c2, var_samp(CASE WHEN c12 > 0.90 THEN c12 ELSE null END) FROM aggregate_
 
 
 # csv_query_approx_median_1
-query I
+query R
 SELECT approx_median(c2) FROM aggregate_test_100
 ----
 3
 
 # csv_query_approx_median_2
-query I
+query R
 SELECT approx_median(c6) FROM aggregate_test_100
 ----
-1146409980542786560
+1146409980542786600
 
 # csv_query_approx_median_3
 query R
@@ -878,16 +977,16 @@ statement error
 SELECT approx_median(c1) FROM aggregate_test_100
 
 # csv_query_median_1
-query I
+query R
 SELECT median(c2) FROM aggregate_test_100
 ----
 3
 
 # csv_query_median_2
-query I
+query R
 SELECT median(c6) FROM aggregate_test_100
 ----
-1125553990140691277
+1125553990140691200
 
 # csv_query_median_3
 query R
@@ -896,24 +995,24 @@ SELECT median(c12) FROM aggregate_test_100
 0.551390054439
 
 # median_i8
-query I
+query R
 SELECT median(col_i8) FROM median_table
 ----
 -14
 
 # distinct_median_i8
-query I
+query R
 SELECT median(distinct col_i8) FROM median_table
 ----
 100
 
-query II
+query RR
 SELECT median(col_i8), median(distinct col_i8) FROM median_table
 ----
 -14 100
 
 # approx_distinct_median_i8
-query I
+query R
 SELECT approx_median(distinct col_i8) FROM median_table
 ----
 100
@@ -929,43 +1028,43 @@ query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS
 SELECT median(c2) RESPECT NULLS FROM aggregate_test_100
 
 # median_i16
-query I
+query R
 SELECT median(col_i16) FROM median_table
 ----
 -16334
 
 # median_i32
-query I
+query R
 SELECT median(col_i32) FROM median_table
 ----
 -1073741774
 
 # median_i64
-query I
+query R
 SELECT median(col_i64) FROM median_table
 ----
--4611686018427387854
+-4611686018427388000
 
 # median_u8
-query I
+query R
 SELECT median(col_u8) FROM median_table
 ----
 50
 
 # median_u16
-query I
+query R
 SELECT median(col_u16) FROM median_table
 ----
 50
 
 # median_u32
-query I
+query R
 SELECT median(col_u32) FROM median_table
 ----
 50
 
 # median_u64
-query I
+query R
 SELECT median(col_u64) FROM median_table
 ----
 50
@@ -996,56 +1095,56 @@ NaN
 
 
 # median_i8_overflow_negative
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(-85, 'Int8')), (arrow_cast(-56, 'Int8'))) AS t(v);
 ----
--70
+-70.5
 
 # median_i8_overflow_positive
 # Test overflow with positive values: 100 + 120 = 220 > 127 (max i8)
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(100, 'Int8')), (arrow_cast(120, 'Int8'))) AS t(v);
 ----
 110
 
 # median_u8_overflow
 # Test unsigned overflow: 200 + 250 = 450 > 255 (max u8)
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(200, 'UInt8')), (arrow_cast(250, 'UInt8'))) AS t(v);
 ----
 225
 
 # median_i8_no_overflow_normal_case
 # Normal case that doesn't overflow for comparison
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(4, 'Int8')), (arrow_cast(5, 'Int8'))) AS t(v);
 ----
-4
+4.5
 
 # median_i8_max_values
 # Test with both i8::MAX values: 127 + 127 = 254 > 127, overflow
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(127, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
 ----
 127
 
 # median_i8_min_values
 # Test with both i8::MIN values: -128 + -128 = -256 < -128, underflow
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(-128, 'Int8'))) AS t(v);
 ----
 -128
 
 # median_i8_min_max_values
 # Test with i8::MIN and i8::MAX: -128 + 127 = -1, no overflow, median = 0 (truncated from -0.5)
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
 ----
-0
+-0.5
 
 # median_u8_max_values
 # Test with both u8::MAX values: 255 + 255 = 510 > 255, overflow
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(255, 'UInt8')), (arrow_cast(255, 'UInt8'))) AS t(v);
 ----
 255
@@ -1129,6 +1228,22 @@ ORDER BY tags, timestamp;
 3 tag2 80 70 80 90
 4 tag2 90 75 80 95
 5 tag2 100 80 80 100
+
+# Test median on a sliding RANGE window with repeated values.
+query RR
+SELECT
+    x,
+    median(x) OVER (
+        ORDER BY x
+        RANGE BETWEEN 1 PRECEDING AND CURRENT ROW
+    ) AS median_val
+FROM (VALUES (1.0), (1.0), (2.0), (5.0)) AS t(x)
+ORDER BY x;
+----
+1 1
+1 1
+2 1
+5 5
 
 ###########
 # Issue #19612: Test that percentile_cont produces correct results
@@ -1226,11 +1341,55 @@ ORDER BY tags, timestamp;
 4 tag2 90 67.5 82.5
 5 tag2 100 70 90
 
+
+# Test distinct median non-sliding window
+query ITRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    median(DISTINCT value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS distinct_median
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10
+2 tag1 20 15
+3 tag1 30 20
+4 tag1 40 25
+5 tag1 50 30
+1 tag2 60 60
+2 tag2 70 65
+3 tag2 80 70
+4 tag2 90 75
+5 tag2 100 80
+
 statement ok
 DROP TABLE median_window_test;
 
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
+----
+2.75 Float16
+
+# This shouldn't be NaN, see:
+# https://github.com/apache/datafusion/issues/18945
+query RT
+select
+  percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')),
+  arrow_typeof(percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
+from median_table;
+----
+2.75 Float16
+
+query RT
+select
+  approx_percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')),
+  arrow_typeof(approx_percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')))
+from median_table;
 ----
 2.75 Float16
 
@@ -1284,7 +1443,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (2), (3), (4), (5);
 
-query I
+query R
 select median(c) from t;
 ----
 3
@@ -1296,10 +1455,10 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (2), (3), (4), (5), (6);
 
-query I
+query R
 select median(c) from t;
 ----
-3
+3.5
 
 statement ok
 drop table t;
@@ -1308,10 +1467,10 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (null), (3), (4), (5);
 
-query I
+query R
 select median(c) from t;
 ----
-3
+3.5
 
 statement ok
 drop table t;
@@ -1320,7 +1479,7 @@ drop table t;
 statement ok
 create table t(c int) as values (null), (null), (null);
 
-query I
+query R
 select median(c) from t;
 ----
 NULL
@@ -1332,7 +1491,7 @@ drop table t;
 statement ok
 create table t(c int unsigned) as values (1), (2), (3), (4), (5);
 
-query I
+query R
 select median(c) from t;
 ----
 3
@@ -1380,7 +1539,7 @@ drop table t;
 statement ok
 create table t(c int) as values (2), (1), (1), (2), (1), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1392,7 +1551,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (1), (3), (1), (1);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1404,7 +1563,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (null), (1), (1), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1416,7 +1575,7 @@ drop table t;
 statement ok
 create table t(c int unsigned) as values (1), (1), (2), (1), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1428,7 +1587,7 @@ drop table t;
 statement ok
 create table t(c int unsigned) as values (1), (1), (1), (1), (3), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1488,7 +1647,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (1), (1), (1), (2), (2), (3), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1506,7 +1665,7 @@ explain select median(distinct c) from t;
 logical_plan
 01)Projection: median(alias1) AS median(DISTINCT t.c)
 02)--Aggregate: groupBy=[[]], aggr=[[median(alias1)]]
-03)----Aggregate: groupBy=[[t.c AS alias1]], aggr=[[]]
+03)----Aggregate: groupBy=[[CAST(t.c AS Float64) AS alias1]], aggr=[[]]
 04)------TableScan: t projection=[c]
 physical_plan
 01)ProjectionExec: expr=[median(alias1)@0 as median(DISTINCT t.c)]
@@ -1515,7 +1674,7 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
 06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
+07)------------AggregateExec: mode=Partial, gby=[CAST(c@0 AS Float64) as alias1], aggr=[]
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
@@ -1669,7 +1828,7 @@ SELECT approx_distinct(null)
 query II
 SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_100
 ----
-100 100
+99 99
 
 # csv_query_approx_count_date_timestamp
 query IIIII
@@ -1879,26 +2038,29 @@ SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c11) AS 
 true
 
 # percentile_cont_with_nulls
-query I
+query R
 SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (NULL), (NULL), (NULL)) as t (v);
 ----
 2
 
 # percentile_cont_with_nulls_only
-query I
+query R
 SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
 ----
 NULL
 
+query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal \(got null\)
+SELECT APPROX_PERCENTILE_CONT(NULL) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
+
 # percentile_cont_with_weight_with_nulls
-query I
+query R
 SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(w, 0.5) WITHIN GROUP (ORDER BY v)
 FROM (VALUES (1, 1), (2, 1), (3, 1), (4, NULL), (NULL, 1), (NULL, NULL)) as t (v, w);
 ----
 2
 
 # percentile_cont_with_weight_nulls_only
-query I
+query R
 SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(1, 0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
 ----
 NULL
@@ -1950,11 +2112,12 @@ statement ok
 INSERT INTO t1 VALUES (TRUE);
 
 # ISSUE: https://github.com/apache/datafusion/issues/12716
-# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN' and returns 'inf'
+# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN'
+# With weight=0, the data point does not contribute, so result is NULL
 query R
 SELECT approx_percentile_cont_with_weight(0, 0) WITHIN GROUP (ORDER BY 'NaN'::DOUBLE) FROM t1 WHERE t1.v1;
 ----
-Infinity
+NULL
 
 statement ok
 DROP TABLE t1;
@@ -2178,36 +2341,36 @@ b 5 NULL 20135.4
 b NULL NULL 7732.315789473684
 
 # csv_query_approx_percentile_cont_with_weight
-query TI
+query TR
 SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 73.55
 b 68
-c 122
-d 124
-e 115
+c 122.5
+d 124.2
+e 115.6
 
 
 # csv_query_approx_percentile_cont_with_weight (should be the same as above)
-query TI
+query TR
 SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 73.55
 b 68
-c 122
-d 124
-e 115
+c 122.5
+d 124.2
+e 115.6
 
 
 # using approx_percentile_cont on 2 columns with same signature
-query TII
+query TRR
 SELECT c1, approx_percentile_cont(c2, 0.95) AS c2, approx_percentile_cont(c3, 0.95) AS c3 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 5 73
+a 5 73.55
 b 5 68
-c 5 122
-d 5 124
-e 5 115
+c 5 122.5
+d 5 124.2
+e 5 115.6
 
 # error is unique to this UDAF
 query TRR
@@ -2221,73 +2384,82 @@ e 3 40.333333333333
 
 
 
-query TI
+query TR
 SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a -101
-b -114
-c -109
-d -98
-e -93
+b -114.3
+c -109.475
+d -98.6
+e -93.65
 
 # csv_query_approx_percentile_cont_with_weight (2)
-query TI
+query TR
 SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 73.55
 b 68
-c 122
-d 124
-e 115
+c 122.5
+d 124.2
+e 115.6
 
 # csv_query_approx_percentile_cont_with_weight alternate syntax
-query TI
+query TR
 SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 73.55
 b 68
-c 122
-d 124
-e 115
+c 122.5
+d 124.2
+e 115.6
 
-
-query TI
+query TR
 SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a -101
-b -114
-c -109
-d -98
-e -93
+b -114.3
+c -109.475
+d -98.6
+e -93.65
 
 # csv_query_approx_percentile_cont_with_histogram_bins
-query TI
+query TR
 SELECT c1, approx_percentile_cont(0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 73
+a 73.55
 b 68
-c 122
-d 124
-e 115
+c 122.5
+d 124.2
+e 115.6
 
-query TI
+query TR
+SELECT c1, approx_percentile_cont(0.95, 200.1) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 73.55
+b 68
+c 122.5
+d 124.2
+e 115.6
+
+
+query TR
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 74
+a 65
 b 68
-c 123
-d 124
-e 115
+c 122
+d 123.15
+e 110.266666666667
 
 # approx_percentile_cont_with_weight with centroids
-query TI
+query TR
 SELECT c1, approx_percentile_cont_with_weight(c2, 0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 74
+a 65
 b 68
-c 123
-d 124
-e 115
+c 122
+d 123.15
+e 110.266666666667
 
 # csv_query_sum_crossjoin
 query TTI
@@ -3680,10 +3852,10 @@ SELECT COUNT(DISTINCT c1) FROM test
 # TODO: aggregate_with_alias
 
 # test_approx_percentile_cont_decimal_support
-query TI
+query TR
 SELECT c1, approx_percentile_cont(cast(0.85 as decimal(10,2))) WITHIN GROUP (ORDER BY c2) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
-a 4
+a 4.175
 b 5
 c 4
 d 4
@@ -3743,9 +3915,9 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[min(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]]
 02)--TableScan: aggregate_test_100 projection=[c2]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]
+01)AggregateExec: mode=Final, gby=[], aggr=[min(aggregate_test_100.c2) as percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]
 02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(aggregate_test_100.c2) as percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
 
@@ -3756,9 +3928,9 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[max(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]]
 02)--TableScan: aggregate_test_100 projection=[c2]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]
+01)AggregateExec: mode=Final, gby=[], aggr=[max(aggregate_test_100.c2) as percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]
 02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(aggregate_test_100.c2) as percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
 
@@ -3769,9 +3941,9 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[min(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(aggregate_test_100.c2,Float64(0))]]
 02)--TableScan: aggregate_test_100 projection=[c2]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(0))]
+01)AggregateExec: mode=Final, gby=[], aggr=[min(aggregate_test_100.c2) as percentile_cont(aggregate_test_100.c2,Float64(0))]
 02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(0))]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(aggregate_test_100.c2) as percentile_cont(aggregate_test_100.c2,Float64(0))]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
 
@@ -3782,9 +3954,9 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[max(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(aggregate_test_100.c2,Float64(1))]]
 02)--TableScan: aggregate_test_100 projection=[c2]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(1))]
+01)AggregateExec: mode=Final, gby=[], aggr=[max(aggregate_test_100.c2) as percentile_cont(aggregate_test_100.c2,Float64(1))]
 02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(1))]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(aggregate_test_100.c2) as percentile_cont(aggregate_test_100.c2,Float64(1))]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
 
@@ -3799,7 +3971,7 @@ SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 4
 
 # Test that percentile_cont(0.5) equals median
-query I
+query R
 SELECT median(c2) FROM aggregate_test_100
 ----
 3
@@ -5422,10 +5594,10 @@ as values
 statement ok
 create table t as
 select
-  arrow_cast(column1, 'Timestamp(Nanosecond, None)') as nanos,
-  arrow_cast(column1, 'Timestamp(Microsecond, None)') as micros,
-  arrow_cast(column1, 'Timestamp(Millisecond, None)') as millis,
-  arrow_cast(column1, 'Timestamp(Second, None)') as secs,
+  arrow_cast(column1, 'Timestamp(ns)') as nanos,
+  arrow_cast(column1, 'Timestamp(µs)') as micros,
+  arrow_cast(column1, 'Timestamp(ms)') as millis,
+  arrow_cast(column1, 'Timestamp(s)') as secs,
   arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))') as nanos_utc,
   arrow_cast(column1, 'Timestamp(Microsecond, Some("UTC"))') as micros_utc,
   arrow_cast(column1, 'Timestamp(Millisecond, Some("UTC"))') as millis_utc,
@@ -5508,7 +5680,7 @@ SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag 
 
 # aggregate_duration_array_agg
 query T?
-SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(Millisecond, None)')) FROM t GROUP BY tag ORDER BY tag;
+SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(ms)')) FROM t GROUP BY tag ORDER BY tag;
 ----
 X [0 days 0 hours 0 mins 0.011 secs, 0 days 0 hours 0 mins 0.123 secs]
 Y [NULL, 0 days 0 hours 0 mins 0.432 secs]
@@ -5819,12 +5991,12 @@ statement ok
 drop table t;
 
 
-query I
+query R
 select median(a) from (select 1 as a where 1=0);
 ----
 NULL
 
-query I
+query R
 select approx_median(a) from (select 1 as a where 1=0);
 ----
 NULL
@@ -6016,6 +6188,14 @@ SELECT
 FROM test_table
 ----
 2
+
+# count_with_group_by_and_nullable_filter
+query II rowsort
+SELECT g, COUNT(a) FILTER (WHERE b < 1) AS count_a
+FROM (VALUES (0, 1, CAST(NULL AS INT)), (0, 2, 2)) AS t(g, a, b)
+GROUP BY g
+----
+0 0
 
 # query_with_and_without_filter
 query III rowsort
@@ -6639,7 +6819,12 @@ from aggregate_test_100;
 ----
 0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
-
+query R
+select
+    regr_slope(arrow_cast(c12, 'Float16'), arrow_cast(c11, 'Float16'))
+from aggregate_test_100;
+----
+0.051477733249
 
 # regr_*() functions ignore NULLs
 query RRIRRRRRR
@@ -6878,7 +7063,7 @@ SELECT STRING_AGG(DISTINCT x,'|' ORDER BY x) FROM strings
 ----
 a|b|i|j|p|x|y|z
 
-query error This feature is not implemented: The second argument of the string_agg function must be a string literal
+query error This feature is not implemented: string_agg delimiter must be a string literal
 SELECT STRING_AGG(DISTINCT x,y) FROM strings
 
 query error Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
@@ -7872,8 +8057,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count()]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(Int64(1)), count(Int64(1))@0 as count()]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(1), count(*) from t;
@@ -7888,8 +8074,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(*)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(Int64(1)), count(Int64(1))@0 as count(*)]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(), count(*) from t;
@@ -7904,8 +8091,9 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[2 as count(), 2 as count(*)]
-02)--PlaceholderRowExec
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(), count(Int64(1))@0 as count(*)]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query TT
 explain select count(1) * count(2) from t;
@@ -7927,147 +8115,147 @@ drop table t;
 #######
 
 # group median i8 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i8) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -14
 group1 100
 
 # group median i16 non-nullable
-query TI
+query TR rowsort
 SELECT col_group, median(col_i16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -16334
 group1 100
 
 # group median i32 non-nullable
-query TI
+query TR rowsort
 SELECT col_group, median(col_i32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -1073741774
 group1 100
 
 # group median i64 non-nullable
-query TI
+query TR rowsort
 SELECT col_group, median(col_i64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
-group0 -4611686018427387854
+group0 -4611686018427388000
 group1 100
 
 # group median u8 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u8) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u16 non-nullable
-query TI
+query TR rowsort
 SELECT col_group, median(col_u16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u32 non-nullable
-query TI
+query TR rowsort
 SELECT col_group, median(col_u32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u64 non-nullable
-query TI
+query TR rowsort
 SELECT col_group, median(col_u64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median f32 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_f32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 2.75
 group1 3.2
 
 # group median f64 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_f64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 2.75
 group1 3.3
 
 # group median f64_nan non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_f64_nan) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 NaN
 group1 NaN
 
 # group median decimal128 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_decimal128) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 0.0002
 group1 0.0003
 
 # group median decimal256 non-nullable
-query TR
+query TR rowsort
 SELECT col_group, median(col_decimal256) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 0.0002
 group1 0.0003
 
 # group median i8 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i8) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 -14
 group1 100
 
 # group median i16 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i16) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 -16334
 group1 100
 
 # group median i32 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i32) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 -1073741774
 group1 100
 
 # group median i64 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i64) FROM group_median_table_nullable GROUP BY col_group
 ----
-group0 -4611686018427387854
+group0 -4611686018427388000
 group1 100
 
 # group median u8 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u8) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u16 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u16) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u32 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u32) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u64 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u64) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
@@ -8121,11 +8309,11 @@ create table group_median_all_nulls(
 ( 'group1', NULL),
 ( 'group1', NULL)
 
-query TIT rowsort
+query TRT rowsort
 SELECT a, median(b), arrow_typeof(median(b)) FROM group_median_all_nulls GROUP BY a
 ----
-group0 NULL Int32
-group1 NULL Int32
+group0 NULL Float64
+group1 NULL Float64
 
 statement ok
 create table t_decimal (c decimal(10, 4)) as values (100.00), (125.00), (175.00), (200.00), (200.00), (300.00), (null), (null);
@@ -8662,9 +8850,171 @@ ORDER BY g;
 2 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
 3 2 1.5 1.5 1.5 1.5 1.5 1.5 1.5 1.5
 
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
 statement ok
 DROP TABLE stream_test;
 
-# Restore default target partitions
+
+#################
+# first_value on strings/binary with groups and ordering
+#################
+
 statement ok
-set datafusion.execution.target_partitions = 4;
+CREATE TABLE first_last_value_str_tests(id INT, sort_key INT, val TEXT) AS VALUES
+(1, 10, 'apple'),
+(1, 2,  'banana'),
+(1, 5,  'cherry'),
+(2, 100, 'dog'),
+(2, 200, 'elephant');
+
+# Utf8
+query IT
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 banana
+2 dog
+
+query IT
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 apple
+2 elephant
+
+# LargeUtf8
+query IT
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeUtf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 banana
+2 dog
+
+query IT
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeUtf8') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 apple
+2 elephant
+
+# Utf8View
+query IT
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8View') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 banana
+2 dog
+
+query IT
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Utf8View') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 apple
+2 elephant
+
+# Binary
+query I?
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Binary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 62616e616e61
+2 646f67
+
+query I?
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'Binary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 6170706c65
+2 656c657068616e74
+
+# LargeBinary
+query I?
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeBinary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 62616e616e61
+2 646f67
+
+query I?
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(val, 'LargeBinary') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 6170706c65
+2 656c657068616e74
+
+# BinaryView
+query I?
+SELECT id, first_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(arrow_cast(val, 'Binary'), 'BinaryView') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 62616e616e61
+2 646f67
+
+query I?
+SELECT id, last_value(val ORDER BY sort_key)
+FROM (SELECT id, sort_key, arrow_cast(arrow_cast(val, 'Binary'), 'BinaryView') as val FROM first_last_value_str_tests)
+GROUP BY id ORDER BY id;
+----
+1 6170706c65
+2 656c657068616e74
+
+statement ok
+DROP TABLE first_last_value_str_tests;
+
+# MIN/MAX over a CAST projection folds from parquet statistics via the
+# aggregate-statistics optimizer. Non-CAST projections (multi-column or
+# self-referenced expressions) must keep returning correct results — guard
+# against future regressions if the optimizer is broadened.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION '../core/tests/data/clickbench_hits_10.parquet';
+
+query II
+SELECT MIN(CAST("EventDate" AS BIGINT)), MAX(CAST("EventDate" AS BIGINT)) FROM hits_raw;
+----
+15901 15901
+
+query II
+SELECT MIN(delta), MAX(delta)
+FROM (
+  SELECT "UserID" - CAST("ClientIP" AS BIGINT) AS delta
+  FROM hits_raw
+);
+----
+-2461439044872611287 7418527518698834918
+
+query II
+SELECT MIN(zero), MAX(zero)
+FROM (
+  SELECT "UserID" - "UserID" AS zero
+  FROM hits_raw
+);
+----
+0 0
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE hits_raw;

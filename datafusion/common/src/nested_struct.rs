@@ -17,11 +17,14 @@
 
 use crate::error::{_plan_err, Result};
 use arrow::{
-    array::{Array, ArrayRef, StructArray, new_null_array},
-    compute::{CastOptions, cast_with_options},
-    datatypes::{DataType::Struct, Field, FieldRef},
+    array::{
+        Array, ArrayRef, DictionaryArray, GenericListArray, GenericListViewArray,
+        StructArray, downcast_integer, new_null_array,
+    },
+    compute::{CastOptions, can_cast_types, cast_with_options},
+    datatypes::{DataType, DataType::Struct, Field, FieldRef},
 };
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 /// Cast a struct column to match target struct fields, handling nested structs recursively.
 ///
@@ -31,6 +34,7 @@ use std::sync::Arc;
 ///
 /// ## Field Matching Strategy
 /// - **By Name**: Source struct fields are matched to target fields by name (case-sensitive)
+/// - **No Positional Mapping**: Structs with no overlapping field names are rejected
 /// - **Type Adaptation**: When a matching field is found, it is recursively cast to the target field's type
 /// - **Missing Fields**: Target fields not present in the source are filled with null values
 /// - **Extra Fields**: Source fields not present in the target are ignored
@@ -54,25 +58,42 @@ fn cast_struct_column(
     target_fields: &[Arc<Field>],
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
-        validate_struct_compatibility(source_struct.fields(), target_fields)?;
+    if source_col.data_type() == &DataType::Null
+        || (!source_col.is_empty() && source_col.null_count() == source_col.len())
+    {
+        return Ok(new_null_array(
+            &Struct(target_fields.to_vec().into()),
+            source_col.len(),
+        ));
+    }
 
+    if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
+        let source_fields = source_struct.fields();
+        validate_struct_compatibility(source_fields, target_fields)?;
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
 
-        for target_child_field in target_fields {
+        // Iterate target fields and pick source child by name when present.
+        for target_child_field in target_fields.iter() {
             fields.push(Arc::clone(target_child_field));
-            match source_struct.column_by_name(target_child_field.name()) {
+
+            let source_child_opt =
+                source_struct.column_by_name(target_child_field.name());
+
+            match source_child_opt {
                 Some(source_child_col) => {
-                    let adapted_child =
-                        cast_column(source_child_col, target_child_field, cast_options)
-                            .map_err(|e| {
-                            e.context(format!(
-                                "While casting struct field '{}'",
-                                target_child_field.name()
-                            ))
-                        })?;
+                    let adapted_child = cast_column(
+                        source_child_col,
+                        target_child_field.data_type(),
+                        cast_options,
+                    )
+                    .map_err(|e| {
+                        e.context(format!(
+                            "While casting struct field '{}'",
+                            target_child_field.name()
+                        ))
+                    })?;
                     arrays.push(adapted_child);
                 }
                 None => {
@@ -112,18 +133,17 @@ fn cast_struct_column(
 /// ```
 /// use arrow::array::{ArrayRef, Int64Array};
 /// use arrow::compute::CastOptions;
-/// use arrow::datatypes::{DataType, Field};
+/// use arrow::datatypes::DataType;
 /// use datafusion_common::nested_struct::cast_column;
 /// use std::sync::Arc;
 ///
 /// let source: ArrayRef = Arc::new(Int64Array::from(vec![1, i64::MAX]));
-/// let target = Field::new("ints", DataType::Int32, true);
 /// // Permit lossy conversions by producing NULL on overflow instead of erroring
 /// let options = CastOptions {
 ///     safe: true,
 ///     ..Default::default()
 /// };
-/// let result = cast_column(&source, &target, &options).unwrap();
+/// let result = cast_column(&source, &DataType::Int32, &options).unwrap();
 /// assert!(result.is_null(1));
 /// ```
 ///
@@ -136,7 +156,7 @@ fn cast_struct_column(
 ///
 /// # Arguments
 /// * `source_col` - The source array to cast
-/// * `target_field` - The target field definition (including type and metadata)
+/// * `target_type` - The target data type to cast to
 /// * `cast_options` - Options that govern strictness and formatting of the cast
 ///
 /// # Returns
@@ -150,18 +170,139 @@ fn cast_struct_column(
 /// - Invalid data type combinations are encountered
 pub fn cast_column(
     source_col: &ArrayRef,
-    target_field: &Field,
+    target_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    match target_field.data_type() {
-        Struct(target_fields) => {
+    match (source_col.data_type(), target_type) {
+        (_, Struct(target_fields)) => {
             cast_struct_column(source_col, target_fields, cast_options)
         }
-        _ => Ok(cast_with_options(
+        (DataType::List(_), DataType::List(target_inner)) => {
+            cast_list_column::<i32>(source_col, target_inner, cast_options)
+        }
+        (DataType::LargeList(_), DataType::LargeList(target_inner)) => {
+            cast_list_column::<i64>(source_col, target_inner, cast_options)
+        }
+        (DataType::ListView(_), DataType::ListView(target_inner)) => {
+            cast_list_view_column::<i32>(source_col, target_inner, cast_options)
+        }
+        (DataType::LargeListView(_), DataType::LargeListView(target_inner)) => {
+            cast_list_view_column::<i64>(source_col, target_inner, cast_options)
+        }
+        (
+            DataType::Dictionary(source_key_type, _),
+            DataType::Dictionary(target_key_type, target_value_type),
+        ) => cast_dictionary_column(
             source_col,
-            target_field.data_type(),
+            source_key_type,
+            target_key_type,
+            target_value_type,
             cast_options,
-        )?),
+        ),
+        _ => Ok(cast_with_options(source_col, target_type, cast_options)?),
+    }
+}
+
+fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
+    source_col: &ArrayRef,
+    target_inner_field: &FieldRef,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    let source_list = source_col
+        .as_any()
+        .downcast_ref::<GenericListArray<O>>()
+        .ok_or_else(|| {
+            crate::error::DataFusionError::Plan(format!(
+                "Expected list array but got {}",
+                source_col.data_type()
+            ))
+        })?;
+
+    let cast_values = cast_column(
+        source_list.values(),
+        target_inner_field.data_type(),
+        cast_options,
+    )?;
+
+    let result = GenericListArray::<O>::new(
+        Arc::clone(target_inner_field),
+        source_list.offsets().clone(),
+        cast_values,
+        source_list.nulls().cloned(),
+    );
+    Ok(Arc::new(result))
+}
+
+fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
+    source_col: &ArrayRef,
+    target_inner_field: &FieldRef,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    let source_list = source_col
+        .as_any()
+        .downcast_ref::<GenericListViewArray<O>>()
+        .ok_or_else(|| {
+            crate::error::DataFusionError::Plan(format!(
+                "Expected list view array but got {}",
+                source_col.data_type()
+            ))
+        })?;
+
+    let cast_values = cast_column(
+        source_list.values(),
+        target_inner_field.data_type(),
+        cast_options,
+    )?;
+
+    let result = GenericListViewArray::<O>::try_new(
+        Arc::clone(target_inner_field),
+        source_list.offsets().clone(),
+        source_list.sizes().clone(),
+        cast_values,
+        source_list.nulls().cloned(),
+    )?;
+    Ok(Arc::new(result))
+}
+
+fn cast_dictionary_column(
+    source_col: &ArrayRef,
+    source_key_type: &DataType,
+    target_key_type: &DataType,
+    target_value_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    // Dispatch on source key type to access keys/values, then recursively
+    // cast values. Rebuild with the source key type first.
+    macro_rules! cast_dict_values {
+        ($t:ty) => {{
+            let source_dict = source_col
+                .as_any()
+                .downcast_ref::<DictionaryArray<$t>>()
+                .expect("downcast must succeed");
+            let cast_values =
+                cast_column(source_dict.values(), target_value_type, cast_options)?;
+            Ok(Arc::new(DictionaryArray::<$t>::new(
+                source_dict.keys().clone(),
+                cast_values,
+            )) as ArrayRef)
+        }};
+    }
+
+    let result: Result<ArrayRef> = downcast_integer! {
+        source_key_type => (cast_dict_values),
+        k => _plan_err!("Unsupported dictionary key type: {k}")
+    };
+    let result = result?;
+
+    // If key types differ, delegate key casting to Arrow.
+    if source_key_type != target_key_type {
+        let target_dict_type = DataType::Dictionary(
+            Box::new(target_key_type.clone()),
+            Box::new(target_value_type.clone()),
+        );
+        Ok(cast_with_options(&result, &target_dict_type, cast_options)?)
+    } else {
+        Ok(result)
     }
 }
 
@@ -200,10 +341,20 @@ pub fn cast_column(
 /// // Target: {a: binary}
 /// // Result: Err(...) - string cannot cast to binary
 /// ```
+///
 pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> Result<()> {
+    let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
+    if !has_overlap {
+        return _plan_err!(
+            "Cannot cast struct with {} fields to {} fields because there is no field name overlap",
+            source_fields.len(),
+            target_fields.len()
+        );
+    }
+
     // Check compatibility for each target field
     for target_field in target_fields {
         // Look for matching field in source by name
@@ -211,55 +362,156 @@ pub fn validate_struct_compatibility(
             .iter()
             .find(|f| f.name() == target_field.name())
         {
-            // Ensure nullability is compatible. It is invalid to cast a nullable
-            // source field to a non-nullable target field as this may discard
-            // null values.
-            if source_field.is_nullable() && !target_field.is_nullable() {
+            validate_field_compatibility(source_field, target_field)?;
+        } else {
+            // Target field is missing from source
+            // If it's non-nullable, we cannot fill it with NULL
+            if !target_field.is_nullable() {
                 return _plan_err!(
-                    "Cannot cast nullable struct field '{}' to non-nullable field",
+                    "Cannot cast struct: target field '{}' is non-nullable but missing from source. \
+                     Cannot fill with NULL.",
                     target_field.name()
                 );
             }
-            // Check if the matching field types are compatible
-            match (source_field.data_type(), target_field.data_type()) {
-                // Recursively validate nested structs
-                (Struct(source_nested), Struct(target_nested)) => {
-                    validate_struct_compatibility(source_nested, target_nested)?;
-                }
-                // For non-struct types, use the existing castability check
-                _ => {
-                    if !arrow::compute::can_cast_types(
-                        source_field.data_type(),
-                        target_field.data_type(),
-                    ) {
-                        return _plan_err!(
-                            "Cannot cast struct field '{}' from type {} to type {}",
-                            target_field.name(),
-                            source_field.data_type(),
-                            target_field.data_type()
-                        );
-                    }
-                }
-            }
         }
-        // Missing fields in source are OK - they'll be filled with nulls
     }
 
     // Extra fields in source are OK - they'll be ignored
     Ok(())
 }
 
+fn validate_field_compatibility(
+    source_field: &Field,
+    target_field: &Field,
+) -> Result<()> {
+    if source_field.data_type() == &DataType::Null {
+        // Validate that target allows nulls before returning early.
+        // It is invalid to cast a NULL source field to a non-nullable target field.
+        if !target_field.is_nullable() {
+            return _plan_err!(
+                "Cannot cast NULL struct field '{}' to non-nullable field '{}'",
+                source_field.name(),
+                target_field.name()
+            );
+        }
+        return Ok(());
+    }
+
+    // Ensure nullability is compatible. It is invalid to cast a nullable
+    // source field to a non-nullable target field as this may discard
+    // null values.
+    if source_field.is_nullable() && !target_field.is_nullable() {
+        return _plan_err!(
+            "Cannot cast nullable struct field '{}' to non-nullable field",
+            target_field.name()
+        );
+    }
+
+    validate_data_type_compatibility(
+        target_field.name(),
+        source_field.data_type(),
+        target_field.data_type(),
+    )
+}
+
+/// Validates that `source_type` can be cast to `target_type`, recursively
+/// handling container types that wrap structs.
+pub fn validate_data_type_compatibility(
+    field_name: &str,
+    source_type: &DataType,
+    target_type: &DataType,
+) -> Result<()> {
+    match (source_type, target_type) {
+        (Struct(source_nested), Struct(target_nested)) => {
+            validate_struct_compatibility(source_nested, target_nested)?;
+        }
+        (DataType::List(s), DataType::List(t))
+        | (DataType::LargeList(s), DataType::LargeList(t))
+        | (DataType::ListView(s), DataType::ListView(t))
+        | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
+            validate_field_compatibility(s, t)?;
+        }
+        (DataType::Dictionary(s_key, s_val), DataType::Dictionary(t_key, t_val)) => {
+            if !can_cast_types(s_key, t_key) {
+                return _plan_err!(
+                    "Cannot cast dictionary key type {} to {} for field '{}'",
+                    s_key,
+                    t_key,
+                    field_name
+                );
+            }
+            validate_data_type_compatibility(field_name, s_val, t_val)?;
+        }
+        _ => {
+            if !can_cast_types(source_type, target_type) {
+                return _plan_err!(
+                    "Cannot cast struct field '{}' from type {} to type {}",
+                    field_name,
+                    source_type,
+                    target_type
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns true if casting from `source_type` to `target_type` requires
+/// name-based nested struct casting logic, rather than Arrow's standard cast.
+///
+/// This is the case when both types are struct types, or both are the same
+/// container type (List, LargeList, ListView, LargeListView, Dictionary) wrapping
+/// types that recursively contain structs.
+///
+/// Use this predicate at both planning time (to decide whether to apply struct
+/// compatibility validation) and execution time (to decide whether to route
+/// through [`cast_column`] instead of Arrow's generic cast).
+pub fn requires_nested_struct_cast(
+    source_type: &DataType,
+    target_type: &DataType,
+) -> bool {
+    match (source_type, target_type) {
+        (Struct(_), Struct(_)) => true,
+        (DataType::List(s), DataType::List(t))
+        | (DataType::LargeList(s), DataType::LargeList(t))
+        | (DataType::ListView(s), DataType::ListView(t))
+        | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
+            requires_nested_struct_cast(s.data_type(), t.data_type())
+        }
+        (DataType::Dictionary(_, s_val), DataType::Dictionary(_, t_val)) => {
+            requires_nested_struct_cast(s_val, t_val)
+        }
+        _ => false,
+    }
+}
+
+/// Check if two field lists have at least one common field by name.
+///
+/// This is useful for validating struct compatibility when casting between structs,
+/// ensuring that source and target fields have overlapping names.
+pub fn has_one_of_more_common_fields(
+    source_fields: &[FieldRef],
+    target_fields: &[FieldRef],
+) -> bool {
+    let source_names: HashSet<&str> = source_fields
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect();
+    target_fields
+        .iter()
+        .any(|field| source_names.contains(field.name().as_str()))
+}
+
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::format::DEFAULT_CAST_OPTIONS;
+    use crate::{assert_contains, format::DEFAULT_CAST_OPTIONS};
     use arrow::{
         array::{
-            BinaryArray, Int32Array, Int32Builder, Int64Array, ListArray, MapArray,
-            MapBuilder, StringArray, StringBuilder,
+            BinaryArray, Int32Array, Int32Builder, Int64Array, ListArray, ListViewArray,
+            MapArray, MapBuilder, NullArray, StringArray, StringBuilder,
         },
-        buffer::NullBuffer,
+        buffer::{NullBuffer, ScalarBuffer},
         datatypes::{DataType, Field, FieldRef, Int32Type},
     };
     /// Macro to extract and downcast a column from a StructArray
@@ -302,7 +554,9 @@ mod tests {
     fn test_cast_simple_column() {
         let source = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
         let target_field = field("ints", DataType::Int64);
-        let result = cast_column(&source, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result =
+            cast_column(&source, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
         let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(result.value(0), 1);
@@ -320,14 +574,15 @@ mod tests {
             safe: false,
             ..DEFAULT_CAST_OPTIONS
         };
-        assert!(cast_column(&source, &target_field, &safe_opts).is_err());
+        assert!(cast_column(&source, target_field.data_type(), &safe_opts).is_err());
 
         let unsafe_opts = CastOptions {
             // safe: true - return Null for failure
             safe: true,
             ..DEFAULT_CAST_OPTIONS
         };
-        let result = cast_column(&source, &target_field, &unsafe_opts).unwrap();
+        let result =
+            cast_column(&source, target_field.data_type(), &unsafe_opts).unwrap();
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(result.value(0), 1);
         assert!(result.is_null(1));
@@ -348,7 +603,8 @@ mod tests {
         );
 
         let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+            cast_column(&source_col, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(struct_array.fields().len(), 2);
         let a_result = get_column_as!(&struct_array, "a", Int32Array);
@@ -366,7 +622,8 @@ mod tests {
         let source = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
         let target_field = struct_field("s", vec![field("a", DataType::Int32)]);
 
-        let result = cast_column(&source, &target_field, &DEFAULT_CAST_OPTIONS);
+        let result =
+            cast_column(&source, target_field.data_type(), &DEFAULT_CAST_OPTIONS);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Cannot cast column of type"));
@@ -386,7 +643,8 @@ mod tests {
 
         let target_field = struct_field("s", vec![field("a", DataType::Int32)]);
 
-        let result = cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS);
+        let result =
+            cast_column(&source_col, target_field.data_type(), &DEFAULT_CAST_OPTIONS);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Cannot cast struct field 'a'"));
@@ -428,11 +686,14 @@ mod tests {
 
     #[test]
     fn test_validate_struct_compatibility_missing_field_in_source() {
-        // Source struct: {field2: String} (missing field1)
-        let source_fields = vec![arc_field("field2", DataType::Utf8)];
+        // Source struct: {field1: Int32} (missing field2)
+        let source_fields = vec![arc_field("field1", DataType::Int32)];
 
-        // Target struct: {field1: Int32}
-        let target_fields = vec![arc_field("field1", DataType::Int32)];
+        // Target struct: {field1: Int32, field2: Utf8}
+        let target_fields = vec![
+            arc_field("field1", DataType::Int32),
+            arc_field("field2", DataType::Utf8),
+        ];
 
         // Should be OK - missing fields will be filled with nulls
         let result = validate_struct_compatibility(&source_fields, &target_fields);
@@ -456,6 +717,20 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_struct_compatibility_no_overlap_mismatch_len() {
+        let source_fields = vec![
+            arc_field("left", DataType::Int32),
+            arc_field("right", DataType::Int32),
+        ];
+        let target_fields = vec![arc_field("alpha", DataType::Int32)];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert_contains!(error_msg, "no field name overlap");
+    }
+
+    #[test]
     fn test_cast_struct_parent_nulls_retained() {
         let a_array = Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef;
         let fields = vec![arc_field("a", DataType::Int32)];
@@ -466,7 +741,8 @@ mod tests {
         let target_field = struct_field("s", vec![field("a", DataType::Int64)]);
 
         let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+            cast_column(&source_col, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(struct_array.null_count(), 1);
         assert!(struct_array.is_valid(0));
@@ -526,6 +802,117 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_struct_compatibility_by_name() {
+        // Source struct: {field1: Int32, field2: String}
+        let source_fields = vec![
+            arc_field("field1", DataType::Int32),
+            arc_field("field2", DataType::Utf8),
+        ];
+
+        // Target struct: {field2: String, field1: Int64}
+        let target_fields = vec![
+            arc_field("field2", DataType::Utf8),
+            arc_field("field1", DataType::Int64),
+        ];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_by_name_with_type_mismatch() {
+        // Source struct: {field1: Binary}
+        let source_fields = vec![arc_field("field1", DataType::Binary)];
+
+        // Target struct: {field1: Int32} (incompatible type)
+        let target_fields = vec![arc_field("field1", DataType::Int32)];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert_contains!(
+            error_msg,
+            "Cannot cast struct field 'field1' from type Binary to type Int32"
+        );
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_no_overlap_equal_len() {
+        let source_fields = vec![
+            arc_field("left", DataType::Int32),
+            arc_field("right", DataType::Utf8),
+        ];
+
+        let target_fields = vec![
+            arc_field("alpha", DataType::Int32),
+            arc_field("beta", DataType::Utf8),
+        ];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert_contains!(error_msg, "no field name overlap");
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_mixed_name_overlap() {
+        // Source struct: {a: Int32, b: String, extra: Boolean}
+        let source_fields = vec![
+            arc_field("a", DataType::Int32),
+            arc_field("b", DataType::Utf8),
+            arc_field("extra", DataType::Boolean),
+        ];
+
+        // Target struct: {b: String, a: Int64, c: Float32}
+        // Name overlap with a and b, missing c (nullable)
+        let target_fields = vec![
+            arc_field("b", DataType::Utf8),
+            arc_field("a", DataType::Int64),
+            arc_field("c", DataType::Float32),
+        ];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_by_name_missing_required_field() {
+        // Source struct: {field1: Int32} (missing field2)
+        let source_fields = vec![arc_field("field1", DataType::Int32)];
+
+        // Target struct: {field1: Int32, field2: Int32 non-nullable}
+        let target_fields = vec![
+            arc_field("field1", DataType::Int32),
+            Arc::new(non_null_field("field2", DataType::Int32)),
+        ];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert_contains!(
+            error_msg,
+            "Cannot cast struct: target field 'field2' is non-nullable but missing from source. Cannot fill with NULL."
+        );
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_partial_name_overlap_with_count_mismatch() {
+        // Source struct: {a: Int32} (only one field)
+        let source_fields = vec![arc_field("a", DataType::Int32)];
+
+        // Target struct: {a: Int32, b: String} (two fields, but 'a' overlaps)
+        let target_fields = vec![
+            arc_field("a", DataType::Int32),
+            arc_field("b", DataType::Utf8),
+        ];
+
+        // This should succeed - partial overlap means by-name mapping
+        // and missing field 'b' is nullable
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn test_cast_nested_struct_with_extra_and_missing_fields() {
         // Source inner struct has fields a, b, extra
         let a = Arc::new(Int32Array::from(vec![Some(1), None])) as ArrayRef;
@@ -565,7 +952,8 @@ mod tests {
         );
 
         let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+            cast_column(&source_col, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
         let outer = result.as_any().downcast_ref::<StructArray>().unwrap();
         let inner = get_column_as!(&outer, "inner", StructArray);
         assert_eq!(inner.fields().len(), 3);
@@ -583,6 +971,34 @@ mod tests {
         let missing = get_column_as!(inner, "missing", Int32Array);
         assert!(missing.is_null(0));
         assert!(missing.is_null(1));
+    }
+
+    #[test]
+    fn test_cast_null_struct_field_to_nested_struct() {
+        let null_inner = Arc::new(NullArray::new(2)) as ArrayRef;
+        let source_struct = StructArray::from(vec![(
+            arc_field("inner", DataType::Null),
+            Arc::clone(&null_inner),
+        )]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        let target_field = struct_field(
+            "outer",
+            vec![struct_field("inner", vec![field("a", DataType::Int32)])],
+        );
+
+        let result =
+            cast_column(&source_col, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
+        let outer = result.as_any().downcast_ref::<StructArray>().unwrap();
+        let inner = get_column_as!(&outer, "inner", StructArray);
+        assert_eq!(inner.len(), 2);
+        assert!(inner.is_null(0));
+        assert!(inner.is_null(1));
+
+        let inner_a = get_column_as!(inner, "a", Int32Array);
+        assert!(inner_a.is_null(0));
+        assert!(inner_a.is_null(1));
     }
 
     #[test]
@@ -654,7 +1070,8 @@ mod tests {
         );
 
         let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+            cast_column(&source_col, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
 
         let arr = get_column_as!(&struct_array, "arr", ListArray);
@@ -693,7 +1110,8 @@ mod tests {
         );
 
         let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+            cast_column(&source_col, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
         let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
 
         let b_col = get_column_as!(&struct_array, "b", Int64Array);
@@ -703,5 +1121,219 @@ mod tests {
         let a_col = get_column_as!(&struct_array, "a", Int32Array);
         assert_eq!(a_col.value(0), 1);
         assert_eq!(a_col.value(1), 2);
+    }
+
+    #[test]
+    fn test_cast_struct_no_overlap_rejected() {
+        let first = Arc::new(Int32Array::from(vec![Some(10), Some(20)])) as ArrayRef;
+        let second =
+            Arc::new(StringArray::from(vec![Some("alpha"), Some("beta")])) as ArrayRef;
+
+        let source_struct = StructArray::from(vec![
+            (arc_field("left", DataType::Int32), first),
+            (arc_field("right", DataType::Utf8), second),
+        ]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        let target_field = struct_field(
+            "s",
+            vec![field("a", DataType::Int64), field("b", DataType::Utf8)],
+        );
+
+        let result =
+            cast_column(&source_col, target_field.data_type(), &DEFAULT_CAST_OPTIONS);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert_contains!(error_msg, "no field name overlap");
+    }
+
+    #[test]
+    fn test_cast_struct_missing_non_nullable_field_fails() {
+        // Source has only field 'a'
+        let a = Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef;
+        let source_struct = StructArray::from(vec![(arc_field("a", DataType::Int32), a)]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        // Target has fields 'a' (nullable) and 'b' (non-nullable)
+        let target_field = struct_field(
+            "s",
+            vec![
+                field("a", DataType::Int32),
+                non_null_field("b", DataType::Int32),
+            ],
+        );
+
+        // Should fail because 'b' is non-nullable but missing from source
+        let result =
+            cast_column(&source_col, target_field.data_type(), &DEFAULT_CAST_OPTIONS);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("target field 'b' is non-nullable but missing from source"),
+            "Unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_missing_nullable_field_succeeds() {
+        // Source has only field 'a'
+        let a = Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef;
+        let source_struct = StructArray::from(vec![(arc_field("a", DataType::Int32), a)]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        // Target has fields 'a' and 'b' (both nullable)
+        let target_field = struct_field(
+            "s",
+            vec![field("a", DataType::Int32), field("b", DataType::Int32)],
+        );
+
+        // Should succeed - 'b' is nullable so can be filled with NULL
+        let result =
+            cast_column(&source_col, target_field.data_type(), &DEFAULT_CAST_OPTIONS)
+                .unwrap();
+        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
+
+        let a_col = get_column_as!(&struct_array, "a", Int32Array);
+        assert_eq!(a_col.value(0), 1);
+        assert_eq!(a_col.value(1), 2);
+
+        let b_col = get_column_as!(&struct_array, "b", Int32Array);
+        assert!(b_col.is_null(0));
+        assert!(b_col.is_null(1));
+    }
+
+    #[test]
+    fn test_validate_dictionary_value_evolution() {
+        let source_inner = struct_type(vec![field("a", DataType::Int32)]);
+        let target_inner = struct_type(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Utf8),
+        ]);
+        let source =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(source_inner));
+        let target =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(target_inner));
+        assert!(validate_data_type_compatibility("col", &source, &target).is_ok());
+    }
+
+    #[test]
+    fn test_cast_dictionary_struct_value() {
+        // Build a Dictionary<Int32, Struct{a: Int32}> and cast to
+        // Dictionary<Int32, Struct{a: Int64, b: Utf8}> (field added, type widened).
+        let struct_arr = StructArray::from(vec![(
+            arc_field("a", DataType::Int32),
+            Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef,
+        )]);
+        // keys: [0, null, 1] mapping into the 2-element struct values array.
+        let keys = Int32Array::from(vec![Some(0), None, Some(1)]);
+        let source_dict = DictionaryArray::<Int32Type>::new(keys, Arc::new(struct_arr));
+        let source_col: ArrayRef = Arc::new(source_dict);
+
+        let target_type = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(struct_type(vec![
+                field("a", DataType::Int64),
+                field("b", DataType::Utf8),
+            ])),
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result_dict = result
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+
+        assert!(result_dict.is_valid(0));
+        assert!(result_dict.is_null(1));
+        assert!(result_dict.is_valid(2));
+
+        let struct_values = result_dict
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let a_col = get_column_as!(&struct_values, "a", Int64Array);
+        assert_eq!(a_col.values(), &[10, 20]);
+        let b_col = get_column_as!(&struct_values, "b", StringArray);
+        assert!(b_col.iter().all(|v| v.is_none()));
+    }
+
+    #[test]
+    fn test_cast_list_view_struct() {
+        // Build a ListView<Struct{a: Int32}> and cast to
+        // ListView<Struct{a: Int64, b: Utf8}>.
+        let struct_arr = StructArray::from(vec![(
+            arc_field("a", DataType::Int32),
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        )]);
+
+        let source_field =
+            arc_field("item", struct_type(vec![field("a", DataType::Int32)]));
+        let target_field = arc_field(
+            "item",
+            struct_type(vec![
+                field("a", DataType::Int64),
+                field("b", DataType::Utf8),
+            ]),
+        );
+
+        // Two list-view entries: [0..2] and [2..3]
+        let list_view = ListViewArray::new(
+            source_field,
+            ScalarBuffer::from(vec![0i32, 2]),
+            ScalarBuffer::from(vec![2i32, 1]),
+            Arc::new(struct_arr),
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(list_view);
+
+        let target_type = DataType::ListView(target_field);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result_lv = result.as_any().downcast_ref::<ListViewArray>().unwrap();
+        assert_eq!(result_lv.len(), 2);
+
+        let struct_values = result_lv
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let a_col = get_column_as!(&struct_values, "a", Int64Array);
+        assert_eq!(a_col.values(), &[1, 2, 3]);
+        let b_col = get_column_as!(&struct_values, "b", StringArray);
+        assert!(b_col.iter().all(|v| v.is_none()));
+    }
+
+    #[test]
+    fn test_requires_nested_struct_cast() {
+        let s1 = struct_type(vec![field("a", DataType::Int32)]);
+        let s2 = struct_type(vec![field("a", DataType::Int64)]);
+
+        assert!(requires_nested_struct_cast(&s1, &s2));
+        assert!(requires_nested_struct_cast(
+            &DataType::List(arc_field("item", s1.clone())),
+            &DataType::List(arc_field("item", s2.clone())),
+        ));
+        assert!(requires_nested_struct_cast(
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(s1.clone())),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(s2.clone())),
+        ));
+        assert!(requires_nested_struct_cast(
+            &DataType::ListView(arc_field("item", s1)),
+            &DataType::ListView(arc_field("item", s2)),
+        ));
+
+        // Non-struct types should return false.
+        assert!(!requires_nested_struct_cast(
+            &DataType::Int32,
+            &DataType::Int64
+        ));
+        assert!(!requires_nested_struct_cast(
+            &DataType::List(arc_field("item", DataType::Int32)),
+            &DataType::List(arc_field("item", DataType::Int64)),
+        ));
     }
 }

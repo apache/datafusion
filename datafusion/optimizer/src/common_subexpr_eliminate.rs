@@ -30,11 +30,13 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, qualified_name};
-use datafusion_expr::expr::{Alias, ScalarFunction};
+use datafusion_expr::expr::{Alias, HigherOrderFunction, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{BinaryExpr, Case, Expr, Operator, SortExpr, col};
+use datafusion_expr::{
+    BinaryExpr, Case, Expr, ExpressionPlacement, Operator, SortExpr, col,
+};
 
 const CSE_PREFIX: &str = "__common_expr";
 
@@ -323,11 +325,7 @@ impl CommonSubexprEliminate {
                                 .map(|expr| Some(name_preserver.save(expr)))
                                 .collect::<Vec<_>>()
                         } else {
-                            new_aggr_expr
-                                .clone()
-                                .into_iter()
-                                .map(|_| None)
-                                .collect::<Vec<_>>()
+                            (0..new_aggr_expr.len()).map(|_| None).collect()
                         };
 
                         let mut agg_exprs = common_exprs
@@ -588,8 +586,12 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_) => {
                 // This rule handles recursion itself in a `ApplyOrder::TopDown` like
-                // manner.
-                plan.map_children(|c| self.rewrite(c, config))?
+                // manner. Process uncorrelated subqueries in expressions
+                // (e.g., Expr::ScalarSubquery), then direct children.
+                plan.map_uncorrelated_subqueries(|c| self.rewrite(c, config))?
+                    .transform_sibling(|plan| {
+                        plan.map_children(|c| self.rewrite(c, config))
+                    })?
             }
         };
 
@@ -649,10 +651,13 @@ impl CSEController for ExprCSEController<'_> {
 
     fn conditional_children(node: &Expr) -> Option<(Vec<&Expr>, Vec<&Expr>)> {
         match node {
-            // In case of `ScalarFunction`s we don't know which children are surely
+            // In case of `ScalarFunction`s and `HigherOrderFunction`s we don't know which children are surely
             // executed so start visiting all children conditionally and stop the
             // recursion with `TreeNodeRecursion::Jump`.
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                func.conditional_arguments(args)
+            }
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
                 func.conditional_arguments(args)
             }
 
@@ -695,18 +700,38 @@ impl CSEController for ExprCSEController<'_> {
 
     fn is_valid(node: &Expr) -> bool {
         !node.is_volatile_node()
+            && !matches!(node, Expr::Lambda(_) | Expr::LambdaVariable(_))
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {
+        // MoveTowardsLeafNodes expressions (e.g. get_field) are cheap struct
+        // field accesses that the ExtractLeafExpressions / PushDownLeafProjections
+        // rules deliberately duplicate when needed (one copy for a filter
+        // predicate, another for an output column). CSE deduplicating them
+        // creates intermediate projections that fight with those rules,
+        // causing optimizer instability — ExtractLeafExpressions will undo
+        // the dedup, creating an infinite loop that runs until the iteration
+        // limit is hit. Skip them.
+        if node.placement() == ExpressionPlacement::MoveTowardsLeafNodes {
+            return true;
+        }
+
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         let is_normal_minus_aggregates = matches!(
             node,
+            // TODO: there's an argument for removing `Literal` from here,
+            // maybe using `Expr::placemement().should_push_to_leaves()` instead
+            // so that we extract common literals and don't broadcast them to num_batch_rows multiple times.
+            // However that currently breaks things like `percentile_cont()` which expect literal arguments
+            // (and would instead be getting `col(__common_expr_n)`).
             Expr::Literal(..)
                 | Expr::Column(..)
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
                 | Expr::Wildcard { .. }
+                | Expr::Lambda(_)
+                | Expr::LambdaVariable(_)
         );
 
         let is_aggr = matches!(node, Expr::AggregateFunction(..));
@@ -810,7 +835,7 @@ fn extract_expressions(expr: &Expr, result: &mut Vec<Expr>) {
 
 #[cfg(test)]
 mod test {
-    use std::any::Any;
+
     use std::iter;
 
     use arrow::datatypes::{DataType, Field, Schema};
@@ -825,6 +850,7 @@ mod test {
     use super::*;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::OptimizerContext;
+    use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
     use datafusion_expr::test::function_stub::{avg, sum};
 
@@ -1680,9 +1706,6 @@ mod test {
     }
 
     impl ScalarUDFImpl for TestUdf {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "my_udf"
         }
@@ -1806,10 +1829,6 @@ mod test {
         }
     }
     impl ScalarUDFImpl for RandomStub {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "random"
         }
@@ -1825,5 +1844,57 @@ mod test {
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             panic!("dummy - not implemented")
         }
+    }
+
+    /// Identical MoveTowardsLeafNodes expressions should NOT be deduplicated
+    /// by CSE — they are cheap (e.g. struct field access) and the extraction
+    /// rules deliberately duplicate them. Deduplicating causes optimizer
+    /// instability where one optimizer rule will undo the work of another,
+    /// resulting in an infinite optimization loop until the
+    /// we hit the max iteration limit and then give up.
+    #[test]
+    fn test_leaf_expression_not_extracted() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let leaf = leaf_udf_expr(col("a"));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![leaf.clone().alias("c1"), leaf.alias("c2")])?
+            .build()?;
+
+        // Plan should be unchanged — no __common_expr introduced
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: leaf_udf(test.a) AS c1, leaf_udf(test.a) AS c2
+          TableScan: test
+        "
+        )
+    }
+
+    /// When a MoveTowardsLeafNodes expression appears as a sub-expression of
+    /// a larger expression that IS duplicated, only the outer expression gets
+    /// deduplicated; the leaf sub-expression stays inline.
+    #[test]
+    fn test_leaf_subexpression_not_extracted() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // leaf_udf(a) + b appears twice — the outer `+` is a common
+        // sub-expression, but leaf_udf(a) by itself is MoveTowardsLeafNodes
+        // and should not be extracted separately.
+        let common = leaf_udf_expr(col("a")) + col("b");
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![common.clone().alias("c1"), common.alias("c2")])?
+            .build()?;
+
+        // The whole `leaf_udf(a) + b` gets deduplicated as __common_expr_1,
+        // but leaf_udf(a) alone is NOT pulled out.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2
+          Projection: leaf_udf(test.a) + test.b AS __common_expr_1, test.a, test.b, test.c
+            TableScan: test
+        "
+        )
     }
 }

@@ -63,10 +63,6 @@ impl UnionTagFunc {
 }
 
 impl ScalarUDFImpl for UnionTagFunc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "union_tag"
     }
@@ -143,7 +139,7 @@ impl ScalarUDFImpl for UnionTagFunc {
                     args.return_field.data_type(),
                 )?)),
             },
-            v => exec_err!("union_tag only support unions, got {:?}", v.data_type()),
+            v => exec_err!("union_tag only support unions, got {}", v.data_type()),
         }
     }
 

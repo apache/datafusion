@@ -184,7 +184,11 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             func,
                             params:
                                 AggregateFunctionParams {
-                                    mut args, distinct, ..
+                                    mut args,
+                                    distinct,
+                                    filter,
+                                    order_by,
+                                    null_treatment,
                                 },
                         }) => {
                             if distinct {
@@ -204,9 +208,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     func,
                                     vec![col(SINGLE_DISTINCT_ALIAS)],
                                     false, // intentional to remove distinct here
-                                    None,
-                                    vec![],
-                                    None,
+                                    filter,
+                                    order_by,
+                                    null_treatment,
                                 )))
                                 // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
                             } else {
@@ -217,9 +221,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         Arc::clone(&func),
                                         args,
                                         false,
-                                        None,
-                                        vec![],
-                                        None,
+                                        filter,
+                                        order_by,
+                                        null_treatment,
                                     ))
                                     .alias(&alias_str),
                                 );

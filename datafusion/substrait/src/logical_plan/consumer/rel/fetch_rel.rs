@@ -30,6 +30,7 @@ pub async fn from_fetch_rel(
         let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
         let offset = match &fetch.offset_mode {
+            #[expect(deprecated)]
             Some(fetch_rel::OffsetMode::Offset(offset)) => Some(lit(*offset)),
             Some(fetch_rel::OffsetMode::OffsetExpr(expr)) => {
                 Some(consumer.consume_expression(expr, &empty_schema).await?)
@@ -37,6 +38,7 @@ pub async fn from_fetch_rel(
             None => None,
         };
         let count = match &fetch.count_mode {
+            #[expect(deprecated)]
             Some(fetch_rel::CountMode::Count(count)) => {
                 // -1 means that ALL records should be returned, equivalent to None
                 (*count != -1).then(|| lit(*count))

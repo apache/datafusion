@@ -129,4 +129,3 @@ SELECT size(column1) FROM VALUES (map(['a'], [1])), (map(['a','b'], [1,2])), (NU
 1
 2
 -1
-

@@ -20,14 +20,19 @@ use crate::datetime::common::*;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
-    description = "Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`). Supports strings, dates, timestamps, integer, unsigned integer, and float types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00`).",
+    description = r#"
+Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`).
+Supports strings, dates, timestamps, integer, unsigned integer, and float types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00`)."#,
     syntax_example = "to_unixtime(expression[, ..., format_n])",
     sql_example = r#"
 ```sql
@@ -74,10 +79,6 @@ impl ToUnixtimeFunc {
 }
 
 impl ScalarUDFImpl for ToUnixtimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_unixtime"
     }
@@ -90,10 +91,7 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
         Ok(DataType::Int64)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let arg_args = &args.args;
         if arg_args.is_empty() {
             return exec_err!("to_unixtime function requires 1 or more arguments, got 0");

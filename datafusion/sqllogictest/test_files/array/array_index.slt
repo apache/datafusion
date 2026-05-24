@@ -1,0 +1,258 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init_data.slt.part
+
+### Array index
+
+
+## array[i]
+
+# single index with scalars #1 (positive index)
+query IRT
+select make_array(1, 2, 3)[1], make_array(1.0, 2.0, 3.0)[2], make_array('h', 'e', 'l', 'l', 'o')[3];
+----
+1 2 l
+
+# single index with scalars #2 (zero index)
+query I
+select make_array(1, 2, 3)[0];
+----
+NULL
+
+# single index with scalars #3 (negative index)
+query IRT
+select make_array(1, 2, 3)[-1], make_array(1.0, 2.0, 3.0)[-2], make_array('h', 'e', 'l', 'l', 'o')[-3];
+----
+3 2 l
+
+# single index with scalars #4 (complex index)
+query IRT
+select make_array(1, 2, 3)[1 + 2 - 1], make_array(1.0, 2.0, 3.0)[2 * 1 * 0 - 2], make_array('h', 'e', 'l', 'l', 'o')[2 - 3];
+----
+2 2 o
+
+# single index with columns #1 (positive index)
+query ?RT
+select column1[2], column2[3], column3[1] from arrays;
+----
+[3, NULL] 3.3 L
+[5, 6] 6.6 i
+[7, 8] 9.9 d
+[9, 10] 12.2 s
+NULL 15.5 a
+[13, 14] NULL ,
+[NULL, 18] 18.8 NULL
+
+# single index with columns #2 (zero index)
+query ?RT
+select column1[0], column2[0], column3[0] from arrays;
+----
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+
+# single index with columns #3 (negative index)
+query ?RT
+select column1[-2], column2[-3], column3[-1] from arrays;
+----
+[NULL, 2] 1.1 m
+[3, 4] NULL m
+[5, 6] 7.7 r
+[7, NULL] 10.1 t
+NULL 13.3 t
+[11, 12] NULL ,
+[15, 16] 16.6 NULL
+
+# single index with columns #4 (complex index)
+query ?RT
+select column1[9 - 7], column2[2 * 0], column3[1 - 3] from arrays;
+----
+[3, NULL] NULL e
+[5, 6] NULL u
+[7, 8] NULL o
+[9, 10] NULL i
+NULL NULL e
+[13, 14] NULL NULL
+[NULL, 18] NULL NULL
+
+# TODO: support index as column
+# single index with columns #5 (index as column)
+# query ?
+# select make_array(1, 2, 3, 4, 5)[column2] from arrays_with_repeating_elements;
+# ----
+
+# TODO: support argument and index as columns
+# single index with columns #6 (argument and index as columns)
+# query I
+# select column1[column2] from arrays_with_repeating_elements;
+# ----
+
+## array[i:j]
+
+# multiple index with columns #1 (positive index)
+query ???
+select make_array(1, 2, 3)[1:2], make_array(1.0, 2.0, 3.0)[2:3], make_array('h', 'e', 'l', 'l', 'o')[2:4];
+----
+[1, 2] [2.0, 3.0] [e, l, l]
+
+query ???
+select arrow_cast([1, 2, 3], 'LargeList(Int64)')[1:2],
+       arrow_cast([1.0, 2.0, 3.0], 'LargeList(Int64)')[2:3],
+       arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)')[2:4]
+;
+----
+[1, 2] [2, 3] [e, l, l]
+
+# multiple index with columns #2 (zero index)
+query ???
+select make_array(1, 2, 3)[0:0], make_array(1.0, 2.0, 3.0)[0:2], make_array('h', 'e', 'l', 'l', 'o')[0:6];
+----
+[] [1.0, 2.0] [h, e, l, l, o]
+
+query ???
+select arrow_cast([1, 2, 3], 'LargeList(Int64)')[0:0],
+       arrow_cast([1.0, 2.0, 3.0], 'LargeList(Int64)')[0:2],
+       arrow_cast(['h', 'e', 'l', 'l', 'o'], 'LargeList(Utf8)')[0:6]
+;
+----
+[] [1, 2] [h, e, l, l, o]
+
+query I
+select arrow_cast([1, 2, 3], 'LargeList(Int64)')[1];
+----
+1
+
+# TODO: support multiple negative index
+# multiple index with columns #3 (negative index)
+# query II
+# select make_array(1, 2, 3)[-3:-1], make_array(1.0, 2.0, 3.0)[-3:-1], make_array('h', 'e', 'l', 'l', 'o')[-2:0];
+# ----
+
+# TODO: support complex index
+# multiple index with columns #4 (complex index)
+# query III
+# select make_array(1, 2, 3)[2 + 1 - 1:10], make_array(1.0, 2.0, 3.0)[2 | 2:10], make_array('h', 'e', 'l', 'l', 'o')[6 ^ 6:10];
+# ----
+
+# multiple index with columns #1 (positive index)
+query ???
+select column1[2:4], column2[1:4], column3[3:4] from arrays;
+----
+[[3, NULL]] [1.1, 2.2, 3.3] [r, e]
+[[5, 6]] [NULL, 5.5, 6.6] [NULL, u]
+[[7, 8]] [7.7, 8.8, 9.9] [l, o]
+[[9, 10]] [10.1, NULL, 12.2] [t]
+NULL [13.3, 14.4, 15.5] [e, t]
+[[13, 14]] NULL []
+[[NULL, 18]] [16.6, 17.7, 18.8] NULL
+
+# multiple index with columns #2 (zero index)
+query ???
+select column1[0:5], column2[0:3], column3[0:9] from arrays;
+----
+[[NULL, 2], [3, NULL]] [1.1, 2.2, 3.3] [L, o, r, e, m]
+[[3, 4], [5, 6]] [NULL, 5.5, 6.6] [i, p, NULL, u, m]
+[[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, NULL, l, o, r]
+[[7, NULL], [9, 10]] [10.1, NULL, 12.2] [s, i, t]
+NULL [13.3, 14.4, 15.5] [a, m, e, t]
+[[11, 12], [13, 14]] NULL [,]
+[[15, 16], [NULL, 18]] [16.6, 17.7, 18.8] NULL
+
+# TODO: support negative index
+# multiple index with columns #3 (negative index)
+# query ?RT
+# select column1[-2:-4], column2[-3:-5], column3[-1:-4] from arrays;
+# ----
+# [NULL, 2] 1.1 m
+
+# TODO: support complex index
+# multiple index with columns #4 (complex index)
+# query ?RT
+# select column1[9 - 7:2 + 2], column2[1 * 0:2 * 3], column3[1 + 1 - 0:5 % 3] from arrays;
+# ----
+
+# TODO: support first index as column
+# multiple index with columns #5 (first index as column)
+# query ?
+# select make_array(1, 2, 3, 4, 5)[column2:4] from arrays_with_repeating_elements
+# ----
+
+# TODO: support last index as column
+# multiple index with columns #6 (last index as column)
+# query ?RT
+# select make_array(1, 2, 3, 4, 5)[2:column3] from arrays_with_repeating_elements;
+# ----
+
+# TODO: support argument and indices as column
+# multiple index with columns #7 (argument and indices as column)
+# query ?RT
+# select column1[column2:column3] from arrays_with_repeating_elements;
+# ----
+
+# array[i:j:k]
+
+# multiple index with columns #1 (positive index)
+query ???
+select make_array(1, 2, 3)[1:2:2], make_array(1.0, 2.0, 3.0)[2:3:2], make_array('h', 'e', 'l', 'l', 'o')[2:4:2];
+----
+[1] [2.0] [e, l]
+
+# multiple index with columns #2 (zero index)
+query ???
+select make_array(1, 2, 3)[0:0:2], make_array(1.0, 2.0, 3.0)[0:2:2], make_array('h', 'e', 'l', 'l', 'o')[0:6:2];
+----
+[] [1.0] [h, l, o]
+
+#TODO: sqlparser does not support negative index
+## multiple index with columns #3 (negative index)
+#query ???
+#select make_array(1, 2, 3)[-1:-2:-2], make_array(1.0, 2.0, 3.0)[-2:-3:-2], make_array('h', 'e', 'l', 'l', 'o')[-2:-4:-2];
+#----
+#[1] [2.0] [e, l]
+
+# multiple index with columns #1 (positive index)
+query ???
+select column1[2:4:2], column2[1:4:2], column3[3:4:2] from arrays;
+----
+[[3, NULL]] [1.1, 3.3] [r]
+[[5, 6]] [NULL, 6.6] [NULL]
+[[7, 8]] [7.7, 9.9] [l]
+[[9, 10]] [10.1, 12.2] [t]
+NULL [13.3, 15.5] [e]
+[[13, 14]] NULL []
+[[NULL, 18]] [16.6, 18.8] NULL
+
+# multiple index with columns #2 (zero index)
+query ???
+select column1[0:5:2], column2[0:3:2], column3[0:9:2] from arrays;
+----
+[[NULL, 2]] [1.1, 3.3] [L, r, m]
+[[3, 4]] [NULL, 6.6] [i, NULL, m]
+[[5, 6]] [7.7, 9.9] [d, l, r]
+[[7, NULL]] [10.1, 12.2] [s, t]
+NULL [13.3, 15.5] [a, e]
+[[11, 12]] NULL [,]
+[[15, 16]] [16.6, 18.8] NULL
+
+
+
+include ./cleanup.slt.part

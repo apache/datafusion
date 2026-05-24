@@ -24,71 +24,187 @@
 ## Original Query: SELECT abs(-1);
 ## PySpark 3.5.5 Result: {'abs(-1)': 1, 'typeof(abs(-1))': 'int', 'typeof(-1)': 'int'}
 
-# abs: signed int and NULL
+# Scalar input
+## Scalar input: signed int and NULL
 query IIIIR
 SELECT abs(-127::TINYINT), abs(-32767::SMALLINT), abs(-2147483647::INT), abs(-9223372036854775807::BIGINT), abs(NULL);
 ----
 127 32767 2147483647 9223372036854775807 NULL
 
-
-# See https://github.com/apache/datafusion/issues/18794 for operator precedence
-# abs: signed int minimal values
+## Scalar input: signed int minimal values
+## See https://github.com/apache/datafusion/issues/18794 for operator precedence
 query IIII
-select abs((-128)::TINYINT), abs((-32768)::SMALLINT), abs((-2147483648)::INT), abs((-9223372036854775808)::BIGINT)
+select abs((-128)::TINYINT), abs((-32768)::SMALLINT), abs((-2147483648)::INT), abs((-9223372036854775808)::BIGINT);
 ----
 -128 -32768 -2147483648 -9223372036854775808
 
-# abs: floats, NULL, NaN, -0, infinity, -infinity
-query RRRRRRRRRRRR
-SELECT abs(-1.0::FLOAT), abs(0.::FLOAT), abs(-0.::FLOAT), abs(-0::FLOAT), abs(NULL::FLOAT), abs('NaN'::FLOAT), abs('inf'::FLOAT), abs('+inf'::FLOAT), abs('-inf'::FLOAT), abs('infinity'::FLOAT), abs('+infinity'::FLOAT), abs('-infinity'::FLOAT)
-----
-1 0 0 0 NULL NaN Infinity Infinity Infinity Infinity Infinity Infinity
-
-# abs: doubles, NULL, NaN, -0, infinity, -infinity
-query RRRRRRRRRRRR
-SELECT abs(-1.0::DOUBLE), abs(0.::DOUBLE), abs(-0.::DOUBLE), abs(-0::DOUBLE), abs(NULL::DOUBLE), abs('NaN'::DOUBLE), abs('inf'::DOUBLE), abs('+inf'::DOUBLE), abs('-inf'::DOUBLE), abs('infinity'::DOUBLE), abs('+infinity'::DOUBLE), abs('-infinity'::DOUBLE)
-----
-1 0 0 0 NULL NaN Infinity Infinity Infinity Infinity Infinity Infinity
-
-# abs: decimal128 and decimal256
+## Scalar input: Spark ANSI mode, signed int minimal values
 statement ok
-CREATE TABLE test_nullable_decimal(
-    c1 DECIMAL(10, 2),    /* Decimal128 */
-    c2 DECIMAL(38, 10),   /* Decimal128 with max precision */
-    c3 DECIMAL(40, 2),    /* Decimal256 */
-    c4 DECIMAL(76, 10)    /* Decimal256 with max precision */
- ) AS VALUES
-    (0, 0, 0, 0),
-    (NULL, NULL, NULL, NULL);
+set datafusion.execution.enable_ansi_mode = true;
+
+query error DataFusion error: Arrow error: Compute error: Int8 overflow on abs\(\-128\)
+select abs((-128)::TINYINT);
+
+query error DataFusion error: Arrow error: Compute error: Int16 overflow on abs\(\-32768\)
+select abs((-32768)::SMALLINT);
+
+query error DataFusion error: Arrow error: Compute error: Int32 overflow on abs\(\-2147483648\)
+select abs((-2147483648)::INT);
+
+query error DataFusion error: Arrow error: Compute error: Int64 overflow on abs\(\-9223372036854775808\)
+select abs((-9223372036854775808)::BIGINT);
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
+
+## Scalar input: float, NULL, NaN, -0, infinity, -infinity
+query RRRRRRRRRRRR
+SELECT abs(-1.0::FLOAT), abs(0.::FLOAT), abs(-0.::FLOAT), abs(-0::FLOAT), abs(NULL::FLOAT), abs('NaN'::FLOAT), abs('inf'::FLOAT), abs('+inf'::FLOAT), abs('-inf'::FLOAT), abs('infinity'::FLOAT), abs('+infinity'::FLOAT), abs('-infinity'::FLOAT);
+----
+1 0 0 0 NULL NaN Infinity Infinity Infinity Infinity Infinity Infinity
+
+## Scalar input: double, NULL, NaN, -0, infinity, -infinity
+query RRRRRRRRRRRR
+SELECT abs(-1.0::DOUBLE), abs(0.::DOUBLE), abs(-0.::DOUBLE), abs(-0::DOUBLE), abs(NULL::DOUBLE), abs('NaN'::DOUBLE), abs('inf'::DOUBLE), abs('+inf'::DOUBLE), abs('-inf'::DOUBLE), abs('infinity'::DOUBLE), abs('+infinity'::DOUBLE), abs('-infinity'::DOUBLE);
+----
+1 0 0 0 NULL NaN Infinity Infinity Infinity Infinity Infinity Infinity
+
+## Scalar input: decimal128
+query RRR
+SELECT abs(('-99999999.99')::DECIMAL(10, 2)), abs(0::DECIMAL(10, 2)), abs(NULL::DECIMAL(10, 2));
+----
+99999999.99 0 NULL
+
+query RRR
+SELECT abs(('-9999999999999999999999999999.9999999999')::DECIMAL(38, 10)), abs(0::DECIMAL(38, 10)), abs(NULL::DECIMAL(38, 10));
+----
+9999999999999999999999999999.9999999999 0 NULL
+
+## Scalar input: decimal256
+query RRR
+SELECT abs(('-99999999999999999999999999999999999999.99')::DECIMAL(40, 2)), abs(0::DECIMAL(40, 2)), abs(NULL::DECIMAL(40, 2));
+----
+99999999999999999999999999999999999999.99 0 NULL
+
+query RRR
+SELECT abs(('-999999999999999999999999999999999999999999999999999999999999999999.9999999999')::DECIMAL(76, 10)), abs(0::DECIMAL(76, 10)), abs(NULL::DECIMAL(76, 10));
+----
+999999999999999999999999999999999999999999999999999999999999999999.9999999999 0 NULL
+
+
+# Array input
+## Array input: signed int, signed int minimal values and NULL
+query I
+SELECT abs(a) FROM (VALUES (-127::TINYINT), ((-128)::TINYINT), (NULL)) AS t(a);
+----
+127
+-128
+NULL
 
 query I
-INSERT into test_nullable_decimal values
-    (
-        -99999999.99,
-        '-9999999999999999999999999999.9999999999',
-        '-99999999999999999999999999999999999999.99',
-        '-999999999999999999999999999999999999999999999999999999999999999999.9999999999'
-    ),
-    (
-        99999999.99,
-        '9999999999999999999999999999.9999999999',
-        '99999999999999999999999999999999999999.99',
-        '999999999999999999999999999999999999999999999999999999999999999999.9999999999'
-    )
+select abs(a) FROM (VALUES (-32767::SMALLINT), ((-32768)::SMALLINT), (NULL)) AS t(a);
 ----
-2
+32767
+-32768
+NULL
 
-query RRRR rowsort
-SELECT abs(c1), abs(c2), abs(c3), abs(c4) FROM test_nullable_decimal
+query I
+select abs(a) FROM (VALUES (-2147483647::INT), ((-2147483648)::INT), (NULL)) AS t(a);
 ----
-0 0 0 0
-99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
-99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
-NULL NULL NULL NULL
+2147483647
+-2147483648
+NULL
 
+query I
+select abs(a) FROM (VALUES (-9223372036854775807::BIGINT), ((-9223372036854775808)::BIGINT), (NULL)) AS t(a);
+----
+9223372036854775807
+-9223372036854775808
+NULL
+
+## Array Input: Spark ANSI mode, signed int minimal values
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+query error DataFusion error: Arrow error: Compute error: Int8Array overflow on abs\(\-128\)
+SELECT abs(a) FROM (VALUES (-127::TINYINT), ((-128)::TINYINT)) AS t(a);
+
+query error DataFusion error: Arrow error: Compute error: Int16Array overflow on abs\(\-32768\)
+select abs(a) FROM (VALUES (-32767::SMALLINT), ((-32768)::SMALLINT)) AS t(a);
+
+query error DataFusion error: Arrow error: Compute error: Int32Array overflow on abs\(\-2147483648\)
+select abs(a) FROM (VALUES (-2147483647::INT), ((-2147483648)::INT)) AS t(a);
+
+query error DataFusion error: Arrow error: Compute error: Int64Array overflow on abs\(\-9223372036854775808\)
+select abs(a) FROM (VALUES (-9223372036854775807::BIGINT), ((-9223372036854775808)::BIGINT)) AS t(a);
 
 statement ok
-drop table test_nullable_decimal
+set datafusion.execution.enable_ansi_mode = false;
+
+## Array input: float, NULL, NaN, -0, infinity, -infinity
+query R
+SELECT abs(a) FROM (VALUES (-1.0::FLOAT), (0.::FLOAT), (-0.::FLOAT), (-0::FLOAT), (NULL::FLOAT), ('NaN'::FLOAT), ('inf'::FLOAT), ('+inf'::FLOAT), ('-inf'::FLOAT), ('infinity'::FLOAT), ('+infinity'::FLOAT), ('-infinity'::FLOAT)) AS t(a);
+----
+1
+0
+0
+0
+NULL
+NaN
+Infinity
+Infinity
+Infinity
+Infinity
+Infinity
+Infinity
+
+
+## Array input: double, NULL, NaN, -0, infinity, -infinity
+query R
+SELECT abs(a) FROM (VALUES (-1.0::DOUBLE), (0.::DOUBLE), (-0.::DOUBLE), (-0::DOUBLE), (NULL::DOUBLE), ('NaN'::DOUBLE), ('inf'::DOUBLE), ('+inf'::DOUBLE), ('-inf'::DOUBLE), ('infinity'::DOUBLE), ('+infinity'::DOUBLE), ('-infinity'::DOUBLE)) AS t(a);
+----
+1
+0
+0
+0
+NULL
+NaN
+Infinity
+Infinity
+Infinity
+Infinity
+Infinity
+Infinity
+
+## Array input: decimal128
+query R
+SELECT abs(a) FROM (VALUES (('-99999999.99')::DECIMAL(10, 2)), (0::DECIMAL(10, 2)), (NULL::DECIMAL(10, 2))) AS t(a);
+----
+99999999.99
+0
+NULL
+
+query R
+SELECT abs(a) FROM (VALUES (('-9999999999999999999999999999.9999999999')::DECIMAL(38, 10)), (0::DECIMAL(38, 10)), (NULL::DECIMAL(38, 10))) AS t(a);
+----
+9999999999999999999999999999.9999999999
+0
+NULL
+
+## Array input: decimal256
+query R
+SELECT abs(a) FROM (VALUES (('-99999999999999999999999999999999999999.99')::DECIMAL(40, 2)), (0::DECIMAL(40, 2)), (NULL::DECIMAL(40, 2))) AS t(a);
+----
+99999999999999999999999999999999999999.99
+0
+NULL
+
+query R
+SELECT abs(a) FROM (VALUES (('-999999999999999999999999999999999999999999999999999999999999999999.9999999999')::DECIMAL(76, 10)), (0::DECIMAL(76, 10)), (NULL::DECIMAL(76, 10))) AS t(a);
+----
+999999999999999999999999999999999999999999999999999999999999999999.9999999999
+0
+NULL
 
 ## Original Query: SELECT abs(INTERVAL -'1-1' YEAR TO MONTH);
 ## PySpark 3.5.5 Result: {"abs(INTERVAL '-1-1' YEAR TO MONTH)": 13, "typeof(abs(INTERVAL '-1-1' YEAR TO MONTH))": 'interval year to month', "typeof(INTERVAL '-1-1' YEAR TO MONTH)": 'interval year to month'}

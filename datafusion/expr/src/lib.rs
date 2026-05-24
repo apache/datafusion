@@ -24,7 +24,6 @@
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-#![deny(clippy::allow_attributes)]
 
 //! [DataFusion](https://github.com/apache/datafusion)
 //! is an extensible query execution framework that uses
@@ -38,6 +37,7 @@
 
 extern crate core;
 
+mod higher_order_function;
 mod literal;
 mod operation;
 mod partition_evaluator;
@@ -53,6 +53,7 @@ pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
+pub mod extension_types;
 pub mod function;
 pub mod select_expr;
 pub mod groups_accumulator {
@@ -77,7 +78,10 @@ pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
 mod predicate_bounds;
+pub mod preimage;
 pub mod ptr_eq;
+#[cfg(not(feature = "sql"))]
+pub mod sql;
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;
@@ -95,6 +99,7 @@ pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
+pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{
     ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature,
     TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
@@ -110,6 +115,11 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
+pub use higher_order_function::{
+    HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    HigherOrderTypeSignature, HigherOrderUDF, LambdaArgument, LambdaParametersProgress,
+    ValueOrLambda,
+};
 pub use literal::{
     Literal, TimestampLiteral, lit, lit_timestamp_nano, lit_with_metadata,
 };
@@ -124,12 +134,14 @@ pub use udaf::{
     udaf_default_schema_name, udaf_default_window_function_display_name,
     udaf_default_window_function_schema_name,
 };
-pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+pub use udf::{
+    ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, StructFieldMapping,
+};
 pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();

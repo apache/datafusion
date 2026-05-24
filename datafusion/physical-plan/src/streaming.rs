@@ -17,7 +17,6 @@
 
 //! Generic plans for deferred execution: [`StreamingTableExec`] and [`PartitionStream`]
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -67,7 +66,7 @@ pub struct StreamingTableExec {
     projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
     limit: Option<usize>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
 }
 
@@ -111,7 +110,7 @@ impl StreamingTableExec {
             projected_output_ordering,
             infinite,
             limit,
-            cache,
+            cache: Arc::new(cache),
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -232,11 +231,7 @@ impl ExecutionPlan for StreamingTableExec {
         "StreamingTableExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -335,7 +330,7 @@ impl ExecutionPlan for StreamingTableExec {
             projected_output_ordering: self.projected_output_ordering.clone(),
             infinite: self.infinite,
             limit,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             metrics: self.metrics.clone(),
         }))
     }

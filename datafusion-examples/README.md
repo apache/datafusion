@@ -71,15 +71,16 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand            | File Path                                                                                             | Description                                   |
-| --------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| csv_sql_streaming     | [`custom_data_source/csv_sql_streaming.rs`](examples/custom_data_source/csv_sql_streaming.rs)         | Run a streaming SQL query against CSV data    |
-| csv_json_opener       | [`custom_data_source/csv_json_opener.rs`](examples/custom_data_source/csv_json_opener.rs)             | Use low-level FileOpener APIs for CSV/JSON    |
-| custom_datasource     | [`custom_data_source/custom_datasource.rs`](examples/custom_data_source/custom_datasource.rs)         | Query a custom TableProvider                  |
-| custom_file_casts     | [`custom_data_source/custom_file_casts.rs`](examples/custom_data_source/custom_file_casts.rs)         | Implement custom casting rules                |
-| custom_file_format    | [`custom_data_source/custom_file_format.rs`](examples/custom_data_source/custom_file_format.rs)       | Write to a custom file format                 |
-| default_column_values | [`custom_data_source/default_column_values.rs`](examples/custom_data_source/default_column_values.rs) | Custom default values using metadata          |
-| file_stream_provider  | [`custom_data_source/file_stream_provider.rs`](examples/custom_data_source/file_stream_provider.rs)   | Read/write via FileStreamProvider for streams |
+| Subcommand            | File Path                                                                                             | Description                                                                                                         |
+| --------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| adapter_serialization | [`custom_data_source/adapter_serialization.rs`](examples/custom_data_source/adapter_serialization.rs) | Preserve custom PhysicalExprAdapter information during plan serialization using PhysicalExtensionCodec interception |
+| csv_json_opener       | [`custom_data_source/csv_json_opener.rs`](examples/custom_data_source/csv_json_opener.rs)             | Use low-level FileOpener APIs for CSV/JSON                                                                          |
+| csv_sql_streaming     | [`custom_data_source/csv_sql_streaming.rs`](examples/custom_data_source/csv_sql_streaming.rs)         | Run a streaming SQL query against CSV data                                                                          |
+| custom_datasource     | [`custom_data_source/custom_datasource.rs`](examples/custom_data_source/custom_datasource.rs)         | Query a custom TableProvider                                                                                        |
+| custom_file_casts     | [`custom_data_source/custom_file_casts.rs`](examples/custom_data_source/custom_file_casts.rs)         | Implement custom casting rules                                                                                      |
+| custom_file_format    | [`custom_data_source/custom_file_format.rs`](examples/custom_data_source/custom_file_format.rs)       | Write to a custom file format                                                                                       |
+| default_column_values | [`custom_data_source/default_column_values.rs`](examples/custom_data_source/default_column_values.rs) | Custom default values using metadata                                                                                |
+| file_stream_provider  | [`custom_data_source/file_stream_provider.rs`](examples/custom_data_source/file_stream_provider.rs)   | Read/write via FileStreamProvider for streams                                                                       |
 
 ## Data IO Examples
 
@@ -87,18 +88,19 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand           | File Path                                                                                 | Description                                            |
-| -------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| catalog              | [`data_io/catalog.rs`](examples/data_io/catalog.rs)                                       | Register tables into a custom catalog                  |
-| json_shredding       | [`data_io/json_shredding.rs`](examples/data_io/json_shredding.rs)                         | Implement filter rewriting for JSON shredding          |
-| parquet_adv_idx      | [`data_io/parquet_advanced_index.rs`](examples/data_io/parquet_advanced_index.rs)         | Create a secondary index across multiple parquet files |
-| parquet_emb_idx      | [`data_io/parquet_embedded_index.rs`](examples/data_io/parquet_embedded_index.rs)         | Store a custom index inside Parquet files              |
-| parquet_enc          | [`data_io/parquet_encrypted.rs`](examples/data_io/parquet_encrypted.rs)                   | Read & write encrypted Parquet files                   |
-| parquet_enc_with_kms | [`data_io/parquet_encrypted_with_kms.rs`](examples/data_io/parquet_encrypted_with_kms.rs) | Encrypted Parquet I/O using a KMS-backed factory       |
-| parquet_exec_visitor | [`data_io/parquet_exec_visitor.rs`](examples/data_io/parquet_exec_visitor.rs)             | Extract statistics by visiting an ExecutionPlan        |
-| parquet_idx          | [`data_io/parquet_index.rs`](examples/data_io/parquet_index.rs)                           | Create a secondary index                               |
-| query_http_csv       | [`data_io/query_http_csv.rs`](examples/data_io/query_http_csv.rs)                         | Query CSV files via HTTP                               |
-| remote_catalog       | [`data_io/remote_catalog.rs`](examples/data_io/remote_catalog.rs)                         | Interact with a remote catalog                         |
+| Subcommand             | File Path                                                                                 | Description                                                               |
+| ---------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| catalog                | [`data_io/catalog.rs`](examples/data_io/catalog.rs)                                       | Register tables into a custom catalog                                     |
+| in_memory_object_store | [`data_io/in_memory_object_store.rs`](examples/data_io/in_memory_object_store.rs)         | Read CSV from an in-memory object store (pattern applies to JSON/Parquet) |
+| json_shredding         | [`data_io/json_shredding.rs`](examples/data_io/json_shredding.rs)                         | Implement filter rewriting for JSON shredding                             |
+| parquet_adv_idx        | [`data_io/parquet_advanced_index.rs`](examples/data_io/parquet_advanced_index.rs)         | Create a secondary index across multiple parquet files                    |
+| parquet_emb_idx        | [`data_io/parquet_embedded_index.rs`](examples/data_io/parquet_embedded_index.rs)         | Store a custom index inside Parquet files                                 |
+| parquet_enc            | [`data_io/parquet_encrypted.rs`](examples/data_io/parquet_encrypted.rs)                   | Read & write encrypted Parquet files                                      |
+| parquet_enc_with_kms   | [`data_io/parquet_encrypted_with_kms.rs`](examples/data_io/parquet_encrypted_with_kms.rs) | Encrypted Parquet I/O using a KMS-backed factory                          |
+| parquet_exec_visitor   | [`data_io/parquet_exec_visitor.rs`](examples/data_io/parquet_exec_visitor.rs)             | Extract statistics by visiting an ExecutionPlan                           |
+| parquet_idx            | [`data_io/parquet_index.rs`](examples/data_io/parquet_index.rs)                           | Create a secondary index                                                  |
+| query_http_csv         | [`data_io/query_http_csv.rs`](examples/data_io/query_http_csv.rs)                         | Query CSV files via HTTP                                                  |
+| remote_catalog         | [`data_io/remote_catalog.rs`](examples/data_io/remote_catalog.rs)                         | Interact with a remote catalog                                            |
 
 ## DataFrame Examples
 
@@ -124,6 +126,16 @@ cargo run --example dataframe -- dataframe
 | mem_pool_tracking  | [`execution_monitoring/memory_pool_tracking.rs`](examples/execution_monitoring/memory_pool_tracking.rs)             | Demonstrates memory tracking             |
 | tracing            | [`execution_monitoring/tracing.rs`](examples/execution_monitoring/tracing.rs)                                       | Demonstrates tracing integration         |
 
+## Extension Types Examples
+
+### Group: `extension_types`
+
+#### Category: Single Process
+
+| Subcommand  | File Path                                                                   | Description                          |
+| ----------- | --------------------------------------------------------------------------- | ------------------------------------ |
+| temperature | [`extension_types/temperature.rs`](examples/extension_types/temperature.rs) | Extension type for temperature data. |
+
 ## External Dependency Examples
 
 ### Group: `external_dependency`
@@ -143,8 +155,8 @@ cargo run --example dataframe -- dataframe
 
 | Subcommand | File Path                                               | Description                                            |
 | ---------- | ------------------------------------------------------- | ------------------------------------------------------ |
-| server     | [`flight/server.rs`](examples/flight/server.rs)         | Run DataFusion server accepting FlightSQL/JDBC queries |
 | client     | [`flight/client.rs`](examples/flight/client.rs)         | Execute SQL queries via Arrow Flight protocol          |
+| server     | [`flight/server.rs`](examples/flight/server.rs)         | Run DataFusion server accepting FlightSQL/JDBC queries |
 | sql_server | [`flight/sql_server.rs`](examples/flight/sql_server.rs) | Standalone SQL server for JDBC clients                 |
 
 ## Proto Examples
@@ -153,9 +165,10 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand               | File Path                                                                         | Description                                                     |
-| ------------------------ | --------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| composed_extension_codec | [`proto/composed_extension_codec.rs`](examples/proto/composed_extension_codec.rs) | Use multiple extension codecs for serialization/deserialization |
+| Subcommand               | File Path                                                                         | Description                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| composed_extension_codec | [`proto/composed_extension_codec.rs`](examples/proto/composed_extension_codec.rs) | Use multiple extension codecs for serialization/deserialization               |
+| expression_deduplication | [`proto/expression_deduplication.rs`](examples/proto/expression_deduplication.rs) | Example of expression caching/deduplication using the codec decorator pattern |
 
 ## Query Planning Examples
 
@@ -205,13 +218,14 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand | File Path                                               | Description                                     |
-| ---------- | ------------------------------------------------------- | ----------------------------------------------- |
-| adv_udaf   | [`udf/advanced_udaf.rs`](examples/udf/advanced_udaf.rs) | Advanced User Defined Aggregate Function (UDAF) |
-| adv_udf    | [`udf/advanced_udf.rs`](examples/udf/advanced_udf.rs)   | Advanced User Defined Scalar Function (UDF)     |
-| adv_udwf   | [`udf/advanced_udwf.rs`](examples/udf/advanced_udwf.rs) | Advanced User Defined Window Function (UDWF)    |
-| async_udf  | [`udf/async_udf.rs`](examples/udf/async_udf.rs)         | Asynchronous User Defined Scalar Function       |
-| udaf       | [`udf/simple_udaf.rs`](examples/udf/simple_udaf.rs)     | Simple UDAF example                             |
-| udf        | [`udf/simple_udf.rs`](examples/udf/simple_udf.rs)       | Simple UDF example                              |
-| udtf       | [`udf/simple_udtf.rs`](examples/udf/simple_udtf.rs)     | Simple UDTF example                             |
-| udwf       | [`udf/simple_udwf.rs`](examples/udf/simple_udwf.rs)     | Simple UDWF example                             |
+| Subcommand      | File Path                                                   | Description                                     |
+| --------------- | ----------------------------------------------------------- | ----------------------------------------------- |
+| adv_udaf        | [`udf/advanced_udaf.rs`](examples/udf/advanced_udaf.rs)     | Advanced User Defined Aggregate Function (UDAF) |
+| adv_udf         | [`udf/advanced_udf.rs`](examples/udf/advanced_udf.rs)       | Advanced User Defined Scalar Function (UDF)     |
+| adv_udwf        | [`udf/advanced_udwf.rs`](examples/udf/advanced_udwf.rs)     | Advanced User Defined Window Function (UDWF)    |
+| async_udf       | [`udf/async_udf.rs`](examples/udf/async_udf.rs)             | Asynchronous User Defined Scalar Function       |
+| udaf            | [`udf/simple_udaf.rs`](examples/udf/simple_udaf.rs)         | Simple UDAF example                             |
+| udf             | [`udf/simple_udf.rs`](examples/udf/simple_udf.rs)           | Simple UDF example                              |
+| udtf            | [`udf/simple_udtf.rs`](examples/udf/simple_udtf.rs)         | Simple UDTF example                             |
+| udwf            | [`udf/simple_udwf.rs`](examples/udf/simple_udwf.rs)         | Simple UDWF example                             |
+| table_list_udtf | [`udf/table_list_udtf.rs`](examples/udf/table_list_udtf.rs) | Session-aware UDTF table list example           |

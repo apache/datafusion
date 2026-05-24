@@ -17,7 +17,6 @@
 
 //! Defines the EXPLAIN operator
 
-use std::any::Any;
 use std::sync::Arc;
 
 use super::{DisplayAs, PlanProperties, SendableRecordBatchStream};
@@ -44,7 +43,7 @@ pub struct ExplainExec {
     stringified_plans: Vec<StringifiedPlan>,
     /// control which plans to print
     verbose: bool,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl ExplainExec {
@@ -59,7 +58,7 @@ impl ExplainExec {
             schema,
             stringified_plans,
             verbose,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -108,11 +107,7 @@ impl ExecutionPlan for ExplainExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

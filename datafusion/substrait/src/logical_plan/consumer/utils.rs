@@ -23,6 +23,7 @@ use datafusion::common::{
 };
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
+use datafusion::sql::TableReference;
 use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::SortField;
@@ -315,6 +316,10 @@ pub(super) fn ensure_schema_compatibility(
 /// 1. They have logically equivalent types.
 /// 2. They have the same nullability OR the Substrait field is nullable and the DataFusion fields
 ///    is not nullable.
+/// 3. For Struct fields, every child field's nullability is compatible by the same rule
+///    (recursively).
+///
+/// TODO: Check nullability for List and Map fields.
 ///
 /// If a Substrait field is not nullable, the Substrait plan may be built around assuming it is not
 /// nullable. As such if DataFusion has that field as nullable the plan should be rejected.
@@ -338,13 +343,54 @@ fn ensure_field_compatibility(
         datafusion_field.is_nullable(),
         substrait_field.is_nullable(),
     ) {
-        // TODO: from_substrait_struct_type needs to be updated to set the nullability correctly. It defaults to true for now.
         return substrait_err!(
             "Field '{}' is nullable in the DataFusion schema but not nullable in the Substrait schema.",
             substrait_field.name()
         );
     }
+
+    ensure_nested_nullability_compatibility(
+        datafusion_field.data_type(),
+        substrait_field.data_type(),
+        substrait_field.name(),
+    )
+}
+
+/// Recurses through nested Struct DataTypes, applying
+/// [`compatible_nullabilities`] to each child field.
+///
+/// TODO: Add support for List/LargeList/FixedSizeList and Map fields.
+fn ensure_nested_nullability_compatibility(
+    datafusion_type: &DataType,
+    substrait_type: &DataType,
+    field_path: &str,
+) -> datafusion::common::Result<()> {
+    if let (DataType::Struct(df_fields), DataType::Struct(sub_fields)) =
+        (datafusion_type, substrait_type)
+    {
+        for (df_f, sub_f) in df_fields.iter().zip(sub_fields.iter()) {
+            check_nested_field(df_f, sub_f, field_path)?;
+        }
+    }
     Ok(())
+}
+
+fn check_nested_field(
+    df_field: &Field,
+    sub_field: &Field,
+    parent_path: &str,
+) -> datafusion::common::Result<()> {
+    let path = format!("{parent_path}.{}", sub_field.name());
+    if !compatible_nullabilities(df_field.is_nullable(), sub_field.is_nullable()) {
+        return substrait_err!(
+            "Field '{path}' is nullable in the DataFusion schema but not nullable in the Substrait schema."
+        );
+    }
+    ensure_nested_nullability_compatibility(
+        df_field.data_type(),
+        sub_field.data_type(),
+        &path,
+    )
 }
 
 /// Returns true if the DataFusion and Substrait nullabilities are compatible, false otherwise
@@ -359,35 +405,71 @@ fn compatible_nullabilities(
 }
 
 pub(super) struct NameTracker {
-    seen_names: HashSet<String>,
-}
-
-pub(super) enum NameTrackerStatus {
-    NeverSeen,
-    SeenBefore,
+    /// Tracks seen schema names (from expr.schema_name()).
+    /// Used to detect duplicates that would fail validate_unique_names.
+    seen_schema_names: HashSet<String>,
+    /// Tracks column names that have been seen with a qualifier.
+    /// Used to detect ambiguous references (qualified + unqualified with same name).
+    qualified_names: HashSet<String>,
+    /// Tracks column names that have been seen without a qualifier.
+    /// Used to detect ambiguous references.
+    unqualified_names: HashSet<String>,
 }
 
 impl NameTracker {
     pub(super) fn new() -> Self {
         NameTracker {
-            seen_names: HashSet::default(),
+            seen_schema_names: HashSet::default(),
+            qualified_names: HashSet::default(),
+            unqualified_names: HashSet::default(),
         }
     }
-    pub(super) fn get_unique_name(
-        &mut self,
-        name: String,
-    ) -> (String, NameTrackerStatus) {
-        match self.seen_names.insert(name.clone()) {
-            true => (name, NameTrackerStatus::NeverSeen),
-            false => {
-                let mut counter = 0;
-                loop {
-                    let candidate_name = format!("{name}__temp__{counter}");
-                    if self.seen_names.insert(candidate_name.clone()) {
-                        return (candidate_name, NameTrackerStatus::SeenBefore);
-                    }
-                    counter += 1;
-                }
+
+    /// Check if the expression would cause a conflict either in:
+    /// 1. validate_unique_names (duplicate schema_name)
+    /// 2. DFSchema::check_names (ambiguous reference)
+    fn would_conflict(&self, expr: &Expr) -> bool {
+        let (qualifier, name) = expr.qualified_name();
+        let schema_name = expr.schema_name().to_string();
+        self.would_conflict_inner((qualifier, &name), &schema_name)
+    }
+
+    fn would_conflict_inner(
+        &self,
+        qualified_name: (Option<TableReference>, &str),
+        schema_name: &str,
+    ) -> bool {
+        // Check for duplicate schema_name (would fail validate_unique_names)
+        if self.seen_schema_names.contains(schema_name) {
+            return true;
+        }
+
+        // Check for ambiguous reference (would fail DFSchema::check_names)
+        // This happens when a qualified field and unqualified field have the same name
+        let (qualifier, name) = qualified_name;
+        match qualifier {
+            Some(_) => {
+                // Adding a qualified name - conflicts if unqualified version exists
+                self.unqualified_names.contains(name)
+            }
+            None => {
+                // Adding an unqualified name - conflicts if qualified version exists
+                self.qualified_names.contains(name)
+            }
+        }
+    }
+
+    fn insert(&mut self, expr: &Expr) {
+        let schema_name = expr.schema_name().to_string();
+        self.seen_schema_names.insert(schema_name);
+
+        let (qualifier, name) = expr.qualified_name();
+        match qualifier {
+            Some(_) => {
+                self.qualified_names.insert(name);
+            }
+            None => {
+                self.unqualified_names.insert(name);
             }
         }
     }
@@ -396,10 +478,25 @@ impl NameTracker {
         &mut self,
         expr: Expr,
     ) -> datafusion::common::Result<Expr> {
-        match self.get_unique_name(expr.name_for_alias()?) {
-            (_, NameTrackerStatus::NeverSeen) => Ok(expr),
-            (name, NameTrackerStatus::SeenBefore) => Ok(expr.alias(name)),
+        if !self.would_conflict(&expr) {
+            self.insert(&expr);
+            return Ok(expr);
         }
+
+        // Name collision - need to generate a unique alias
+        let schema_name = expr.schema_name().to_string();
+        let mut counter = 0;
+        let candidate_name = loop {
+            let candidate_name = format!("{schema_name}__temp__{counter}");
+            // .alias always produces an unqualified name so check for conflicts accordingly.
+            if !self.would_conflict_inner((None, &candidate_name), &candidate_name) {
+                break candidate_name;
+            }
+            counter += 1;
+        };
+        let candidate_expr = expr.alias(&candidate_name);
+        self.insert(&candidate_expr);
+        Ok(candidate_expr)
     }
 }
 
@@ -469,13 +566,14 @@ pub(crate) fn from_substrait_precision(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::make_renamed_schema;
+    use super::{NameTracker, ensure_schema_compatibility, make_renamed_schema};
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::DefaultSubstraitConsumer;
-    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
     use datafusion::common::DFSchema;
     use datafusion::error::Result;
     use datafusion::execution::SessionState;
+    use datafusion::logical_expr::{Expr, col};
     use datafusion::prelude::SessionContext;
     use datafusion::sql::TableReference;
     use std::collections::HashMap;
@@ -640,5 +738,175 @@ pub(crate) mod tests {
             ))
         );
         Ok(())
+    }
+
+    #[test]
+    fn name_tracker_unique_names_pass_through() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First expression should pass through unchanged
+        let expr1 = col("a");
+        let result1 = tracker.get_uniquely_named_expr(expr1.clone())?;
+        assert_eq!(result1, col("a"));
+
+        // Different name should also pass through unchanged
+        let expr2 = col("b");
+        let result2 = tracker.get_uniquely_named_expr(expr2)?;
+        assert_eq!(result2, col("b"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_duplicate_schema_name_gets_alias() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First expression with name "a"
+        let expr1 = col("a");
+        let result1 = tracker.get_uniquely_named_expr(expr1)?;
+        assert_eq!(result1, col("a"));
+
+        // Second expression with same name "a" should get aliased
+        let expr2 = col("a");
+        let result2 = tracker.get_uniquely_named_expr(expr2)?;
+        assert_eq!(result2, col("a").alias("a__temp__0"));
+
+        // Third expression with same name "a" should get a different alias
+        let expr3 = col("a");
+        let result3 = tracker.get_uniquely_named_expr(expr3)?;
+        assert_eq!(result3, col("a").alias("a__temp__1"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_qualified_then_unqualified_conflicts() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First: qualified column "table.a"
+        let qualified_col =
+            Expr::Column(datafusion::common::Column::new(Some("table"), "a"));
+        let result1 = tracker.get_uniquely_named_expr(qualified_col)?;
+        assert_eq!(
+            result1,
+            Expr::Column(datafusion::common::Column::new(Some("table"), "a"))
+        );
+
+        // Second: unqualified column "a" - should conflict (ambiguous reference)
+        let unqualified_col = col("a");
+        let result2 = tracker.get_uniquely_named_expr(unqualified_col)?;
+        // Should be aliased to avoid ambiguous reference
+        assert_eq!(result2, col("a").alias("a__temp__0"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_unqualified_then_qualified_conflicts() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First: unqualified column "a"
+        let unqualified_col = col("a");
+        let result1 = tracker.get_uniquely_named_expr(unqualified_col)?;
+        assert_eq!(result1, col("a"));
+
+        // Second: qualified column "table.a" - should conflict (ambiguous reference)
+        let qualified_col =
+            Expr::Column(datafusion::common::Column::new(Some("table"), "a"));
+        let result2 = tracker.get_uniquely_named_expr(qualified_col)?;
+        // Should be aliased to avoid ambiguous reference
+        assert_eq!(
+            result2,
+            Expr::Column(datafusion::common::Column::new(Some("table"), "a"))
+                .alias("table.a__temp__0")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_different_qualifiers_no_conflict() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First: qualified column "table1.a"
+        let col1 = Expr::Column(datafusion::common::Column::new(Some("table1"), "a"));
+        let result1 = tracker.get_uniquely_named_expr(col1.clone())?;
+        assert_eq!(result1, col1);
+
+        // Second: qualified column "table2.a" - different qualifier, different schema_name
+        // so should NOT conflict
+        let col2 = Expr::Column(datafusion::common::Column::new(Some("table2"), "a"));
+        let result2 = tracker.get_uniquely_named_expr(col2.clone())?;
+        assert_eq!(result2, col2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn name_tracker_aliased_expressions() -> Result<()> {
+        let mut tracker = NameTracker::new();
+
+        // First: col("x").alias("result")
+        let expr1 = col("x").alias("result");
+        let result1 = tracker.get_uniquely_named_expr(expr1.clone())?;
+        assert_eq!(result1, col("x").alias("result"));
+
+        // Second: col("y").alias("result") - same alias name, should conflict
+        let expr2 = col("y").alias("result");
+        let result2 = tracker.get_uniquely_named_expr(expr2)?;
+        assert_eq!(result2, col("y").alias("result").alias("result__temp__0"));
+
+        Ok(())
+    }
+
+    fn schema_with_struct_inner(inner_nullable: bool) -> DFSchema {
+        let inner = Field::new("inner", DataType::Int32, inner_nullable);
+        let outer = Field::new("s", DataType::Struct(Fields::from(vec![inner])), false);
+        DFSchema::try_from(Schema::new(vec![outer])).unwrap()
+    }
+
+    #[test]
+    fn nested_compatibility_accepts_required_df_field() -> Result<()> {
+        // DF makes a stronger guarantee (required) than Substrait expects
+        // (nullable). The stronger guarantee is compatible with the weaker
+        // expectation, so this is accepted.
+        let df = schema_with_struct_inner(false);
+        let sub = schema_with_struct_inner(true);
+        ensure_schema_compatibility(&df, sub)
+    }
+
+    #[test]
+    fn nested_compatibility_rejects_nullable_df_field() {
+        // Substrait says inner is required; DF says inner is nullable. The
+        // Substrait plan may rely on inner being non-null, so reject.
+        let df = schema_with_struct_inner(true);
+        let sub = schema_with_struct_inner(false);
+        let err = ensure_schema_compatibility(&df, sub).unwrap_err();
+        assert!(
+            err.to_string().contains("'s.inner'"),
+            "expected error to identify the nested field path 's.inner', got: {err}"
+        );
+    }
+
+    #[test]
+    fn nested_compatibility_recurses_into_nested_struct() {
+        // Two levels of nesting: outer struct with required field that is
+        // itself a struct, whose `inner` field is required in Substrait but
+        // nullable in DF.
+        fn schema(inner_nullable: bool) -> DFSchema {
+            let inner = Field::new("inner", DataType::Int32, inner_nullable);
+            let middle =
+                Field::new("m", DataType::Struct(Fields::from(vec![inner])), false);
+            let outer =
+                Field::new("s", DataType::Struct(Fields::from(vec![middle])), false);
+            DFSchema::try_from(Schema::new(vec![outer])).unwrap()
+        }
+        let df = schema(true);
+        let sub = schema(false);
+        let err = ensure_schema_compatibility(&df, sub).unwrap_err();
+        assert!(
+            err.to_string().contains("'s.m.inner'"),
+            "expected error to identify the deeply nested field path 's.m.inner', got: {err}"
+        );
     }
 }

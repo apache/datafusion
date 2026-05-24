@@ -15,29 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
+use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use itertools::Itertools;
 
 use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use crate::check_if_same_properties;
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDown, PushedDownPredicate,
+    FilterPushdownPropagation, PushedDown,
 };
+use crate::limit::LocalLimitExec;
 use crate::metrics::{MetricBuilder, MetricType};
 use crate::projection::{
     EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
     try_embed_projection, update_expr,
 };
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, ExecutionPlan,
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics},
@@ -55,9 +60,9 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, lit};
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{
     AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
     conjunction, split_conjunction,
@@ -83,48 +88,168 @@ pub struct FilterExec {
     /// Selectivity for statistics. 0 = no rows, 100 = all rows
     default_selectivity: u8,
     /// Properties equivalence properties, partitioning, etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// The projection indices of the columns in the output schema of join
-    projection: Option<Vec<usize>>,
+    projection: Option<ProjectionRef>,
     /// Target batch size for output batches
     batch_size: usize,
     /// Number of rows to fetch
     fetch: Option<usize>,
 }
 
+/// Builder for [`FilterExec`] to set optional parameters
+pub struct FilterExecBuilder {
+    predicate: Arc<dyn PhysicalExpr>,
+    input: Arc<dyn ExecutionPlan>,
+    projection: Option<ProjectionRef>,
+    default_selectivity: u8,
+    batch_size: usize,
+    fetch: Option<usize>,
+}
+
+impl FilterExecBuilder {
+    /// Create a new builder with required parameters (predicate and input)
+    pub fn new(predicate: Arc<dyn PhysicalExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
+        Self {
+            predicate,
+            input,
+            projection: None,
+            default_selectivity: FILTER_EXEC_DEFAULT_SELECTIVITY,
+            batch_size: FILTER_EXEC_DEFAULT_BATCH_SIZE,
+            fetch: None,
+        }
+    }
+
+    /// Set the input execution plan
+    pub fn with_input(mut self, input: Arc<dyn ExecutionPlan>) -> Self {
+        self.input = input;
+        self
+    }
+
+    /// Set the predicate expression
+    pub fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
+        self.predicate = predicate;
+        self
+    }
+
+    /// Set the projection, composing with any existing projection.
+    ///
+    /// If a projection is already set, the new projection indices are mapped
+    /// through the existing projection. For example, if the current projection
+    /// is `[0, 2, 3]` and `apply_projection(Some(vec![0, 2]))` is called, the
+    /// resulting projection will be `[0, 3]` (indices 0 and 2 of `[0, 2, 3]`).
+    ///
+    /// If no projection is currently set, the new projection is used directly.
+    /// If `None` is passed, the projection is cleared.
+    pub fn apply_projection(self, projection: Option<Vec<usize>>) -> Result<Self> {
+        let projection = projection.map(Into::into);
+        self.apply_projection_by_ref(projection.as_ref())
+    }
+
+    /// The same as [`Self::apply_projection`] but takes projection shared reference.
+    pub fn apply_projection_by_ref(
+        mut self,
+        projection: Option<&ProjectionRef>,
+    ) -> Result<Self> {
+        // Check if the projection is valid against current output schema
+        can_project(&self.input.schema(), projection.map(AsRef::as_ref))?;
+        self.projection = combine_projections(projection, self.projection.as_ref())?;
+        Ok(self)
+    }
+
+    /// Set the default selectivity
+    pub fn with_default_selectivity(mut self, default_selectivity: u8) -> Self {
+        self.default_selectivity = default_selectivity;
+        self
+    }
+
+    /// Set the batch size
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    /// Set the fetch limit
+    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
+        self
+    }
+
+    /// Build the FilterExec, computing properties once with all configured parameters
+    pub fn build(self) -> Result<FilterExec> {
+        // Validate predicate type
+        match self.predicate.data_type(self.input.schema().as_ref())? {
+            DataType::Boolean => {}
+            other => {
+                return plan_err!(
+                    "Filter predicate must return BOOLEAN values, got {other:?}"
+                );
+            }
+        }
+
+        // Validate selectivity
+        if self.default_selectivity > 100 {
+            return plan_err!(
+                "Default filter selectivity value needs to be less than or equal to 100"
+            );
+        }
+
+        // Validate projection if provided
+        can_project(&self.input.schema(), self.projection.as_deref())?;
+
+        // Compute properties once with all parameters
+        let cache = FilterExec::compute_properties(
+            &self.input,
+            &self.predicate,
+            self.default_selectivity,
+            self.projection.as_deref(),
+        )?;
+
+        Ok(FilterExec {
+            predicate: self.predicate,
+            input: self.input,
+            metrics: ExecutionPlanMetricsSet::new(),
+            default_selectivity: self.default_selectivity,
+            cache: Arc::new(cache),
+            projection: self.projection,
+            batch_size: self.batch_size,
+            fetch: self.fetch,
+        })
+    }
+}
+
+impl From<&FilterExec> for FilterExecBuilder {
+    fn from(exec: &FilterExec) -> Self {
+        Self {
+            predicate: Arc::clone(&exec.predicate),
+            input: Arc::clone(&exec.input),
+            projection: exec.projection.clone(),
+            default_selectivity: exec.default_selectivity,
+            batch_size: exec.batch_size,
+            fetch: exec.fetch,
+            // We could cache / copy over PlanProperties
+            // here but that would require invalidating them in FilterExecBuilder::apply_projection, etc.
+            // and currently every call to this method ends up invalidating them anyway.
+            // If useful this can be added in the future as a non-breaking change.
+        }
+    }
+}
+
 impl FilterExec {
-    /// Create a FilterExec on an input
-    #[expect(clippy::needless_pass_by_value)]
+    /// Create a FilterExec on an input using the builder pattern
     pub fn try_new(
         predicate: Arc<dyn PhysicalExpr>,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
-        match predicate.data_type(input.schema().as_ref())? {
-            DataType::Boolean => {
-                let default_selectivity = FILTER_EXEC_DEFAULT_SELECTIVITY;
-                let cache = Self::compute_properties(
-                    &input,
-                    &predicate,
-                    default_selectivity,
-                    None,
-                )?;
-                Ok(Self {
-                    predicate,
-                    input: Arc::clone(&input),
-                    metrics: ExecutionPlanMetricsSet::new(),
-                    default_selectivity,
-                    cache,
-                    projection: None,
-                    batch_size: FILTER_EXEC_DEFAULT_BATCH_SIZE,
-                    fetch: None,
-                })
-            }
-            other => {
-                plan_err!("Filter predicate must return BOOLEAN values, got {other:?}")
-            }
-        }
+        FilterExecBuilder::new(predicate, input).build()
     }
 
+    /// Get a batch size
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
+    /// Set the default selectivity
     pub fn with_default_selectivity(
         mut self,
         default_selectivity: u8,
@@ -139,43 +264,26 @@ impl FilterExec {
     }
 
     /// Return new instance of [FilterExec] with the given projection.
+    ///
+    /// # Deprecated
+    /// Use [`FilterExecBuilder::apply_projection`] instead
+    #[deprecated(
+        since = "52.0.0",
+        note = "Use FilterExecBuilder::apply_projection instead"
+    )]
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
-        //  Check if the projection is valid
-        can_project(&self.schema(), projection.as_ref())?;
-
-        let projection = match projection {
-            Some(projection) => match &self.projection {
-                Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
-                None => Some(projection),
-            },
-            None => None,
-        };
-
-        let cache = Self::compute_properties(
-            &self.input,
-            &self.predicate,
-            self.default_selectivity,
-            projection.as_ref(),
-        )?;
-        Ok(Self {
-            predicate: Arc::clone(&self.predicate),
-            input: Arc::clone(&self.input),
-            metrics: self.metrics.clone(),
-            default_selectivity: self.default_selectivity,
-            cache,
-            projection,
-            batch_size: self.batch_size,
-            fetch: self.fetch,
-        })
+        let builder = FilterExecBuilder::from(self);
+        builder.apply_projection(projection)?.build()
     }
 
+    /// Set the batch size
     pub fn with_batch_size(&self, batch_size: usize) -> Result<Self> {
         Ok(Self {
             predicate: Arc::clone(&self.predicate),
             input: Arc::clone(&self.input),
             metrics: self.metrics.clone(),
             default_selectivity: self.default_selectivity,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             projection: self.projection.clone(),
             batch_size,
             fetch: self.fetch,
@@ -198,43 +306,81 @@ impl FilterExec {
     }
 
     /// Projection
-    pub fn projection(&self) -> Option<&Vec<usize>> {
-        self.projection.as_ref()
+    pub fn projection(&self) -> &Option<ProjectionRef> {
+        &self.projection
     }
 
-    /// Calculates `Statistics` for `FilterExec`, by applying selectivity (either default, or estimated) to input statistics.
-    fn statistics_helper(
+    /// Calculates `Statistics` for `FilterExec`, by applying selectivity
+    /// (either default, or estimated) to input statistics.
+    ///
+    /// Equality predicates (`col = literal`) set NDV to `Exact(1)`, or
+    /// `Exact(0)` when the predicate is contradictory (e.g. `a = 1 AND a = 2`).
+    pub(crate) fn statistics_helper(
         schema: &SchemaRef,
         input_stats: Statistics,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
     ) -> Result<Statistics> {
-        if !check_support(predicate, schema) {
+        let (eq_columns, is_infeasible) = collect_equality_columns(predicate);
+
+        let input_num_rows = input_stats.num_rows;
+        let input_total_byte_size = input_stats.total_byte_size;
+
+        let (selectivity, num_rows, column_statistics) = if is_infeasible {
+            // Contradictory predicate: zero rows, and null/min/max are
+            // undefined on an empty column.
+            let mut cs = input_stats.to_inexact().column_statistics;
+            for col_stat in &mut cs {
+                col_stat.distinct_count = Precision::Exact(0);
+                col_stat.null_count = Precision::Exact(0);
+                col_stat.min_value = Precision::Absent;
+                col_stat.max_value = Precision::Absent;
+                col_stat.sum_value = Precision::Absent;
+                col_stat.byte_size = Precision::Exact(0);
+            }
+            (0.0, Precision::Exact(0), cs)
+        } else if !check_support(predicate, schema) {
+            // Interval analysis is not applicable; fall back to the default
+            // selectivity but still pin NDV=1 for every `col = literal` column.
             let selectivity = default_selectivity as f64 / 100.0;
-            let mut stats = input_stats.to_inexact();
-            stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
-            stats.total_byte_size = stats
-                .total_byte_size
-                .with_estimated_selectivity(selectivity);
-            return Ok(stats);
-        }
+            let mut cs = input_stats.to_inexact().column_statistics;
+            for &idx in &eq_columns {
+                if idx < cs.len() && cs[idx].distinct_count != Precision::Exact(0) {
+                    cs[idx].distinct_count = Precision::Exact(1);
+                }
+            }
+            (
+                selectivity,
+                input_num_rows.with_estimated_selectivity(selectivity),
+                cs,
+            )
+        } else {
+            // Interval-analysis path. `collect_new_statistics` already sets
+            // distinct_count = Exact(1) when an interval collapses to a single
+            // value, so no post-fix is needed here.
+            let input_analysis_ctx = AnalysisContext::try_from_statistics(
+                schema,
+                &input_stats.column_statistics,
+            )?;
+            let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
+            let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
+            let filtered_num_rows =
+                input_num_rows.with_estimated_selectivity(selectivity);
+            let cs = collect_new_statistics(
+                schema,
+                &input_stats.column_statistics,
+                analysis_ctx.boundaries,
+                match &filtered_num_rows {
+                    Precision::Absent => None,
+                    p => Some(*p),
+                },
+            );
+            (selectivity, filtered_num_rows, cs)
+        };
 
-        let num_rows = input_stats.num_rows;
-        let total_byte_size = input_stats.total_byte_size;
-        let input_analysis_ctx =
-            AnalysisContext::try_from_statistics(schema, &input_stats.column_statistics)?;
+        let total_byte_size =
+            input_total_byte_size.with_estimated_selectivity(selectivity);
 
-        let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
-
-        // Estimate (inexact) selectivity of predicate
-        let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-        let num_rows = num_rows.with_estimated_selectivity(selectivity);
-        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
-
-        let column_statistics = collect_new_statistics(
-            &input_stats.column_statistics,
-            analysis_ctx.boundaries,
-        );
         Ok(Statistics {
             num_rows,
             total_byte_size,
@@ -242,48 +388,19 @@ impl FilterExec {
         })
     }
 
-    fn extend_constants(
-        input: &Arc<dyn ExecutionPlan>,
-        predicate: &Arc<dyn PhysicalExpr>,
-    ) -> Vec<ConstExpr> {
-        let mut res_constants = Vec::new();
-        let input_eqs = input.equivalence_properties();
-
-        let conjunctions = split_conjunction(predicate);
-        for conjunction in conjunctions {
-            if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>()
-                && binary.op() == &Operator::Eq
-            {
-                // Filter evaluates to single value for all partitions
-                if input_eqs.is_expr_constant(binary.left()).is_some() {
-                    let across = input_eqs
-                        .is_expr_constant(binary.right())
-                        .unwrap_or_default();
-                    res_constants
-                        .push(ConstExpr::new(Arc::clone(binary.right()), across));
-                } else if input_eqs.is_expr_constant(binary.right()).is_some() {
-                    let across = input_eqs
-                        .is_expr_constant(binary.left())
-                        .unwrap_or_default();
-                    res_constants.push(ConstExpr::new(Arc::clone(binary.left()), across));
-                }
-            }
-        }
-        res_constants
-    }
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
     ) -> Result<PlanProperties> {
         // Combine the equal predicates with the input equivalence properties
         // to construct the equivalence properties:
         let schema = input.schema();
         let stats = Self::statistics_helper(
             &schema,
-            input.partition_statistics(None)?,
+            Arc::unwrap_or_clone(input.partition_statistics(None)?),
             predicate,
             default_selectivity,
         )?;
@@ -308,14 +425,17 @@ impl FilterExec {
         eq_properties.add_constants(constants)?;
         // This is for logical constant (for example: a = '1', then a could be marked as a constant)
         // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
-        eq_properties.add_constants(Self::extend_constants(input, predicate))?;
+        eq_properties.add_constants(ConstExpr::collect_predicate_constants(
+            input.equivalence_properties(),
+            predicate,
+        ))?;
 
         let mut output_partitioning = input.output_partitioning().clone();
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
             let schema = eq_properties.schema();
             let projection_mapping = ProjectionMapping::from_indices(projection, schema)?;
-            let out_schema = project_schema(schema, Some(projection))?;
+            let out_schema = project_schema(schema, Some(&projection))?;
             output_partitioning =
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
@@ -327,6 +447,17 @@ impl FilterExec {
             input.pipeline_behavior(),
             input.boundedness(),
         ))
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -366,6 +497,9 @@ impl DisplayAs for FilterExec {
                 )
             }
             DisplayFormatType::TreeRender => {
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "fetch={fetch}")?;
+                }
                 write!(f, "predicate={}", fmt_sql(self.predicate.as_ref()))
             }
         }
@@ -378,11 +512,7 @@ impl ExecutionPlan for FilterExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -399,13 +529,12 @@ impl ExecutionPlan for FilterExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        FilterExec::try_new(Arc::clone(&self.predicate), children.swap_remove(0))
-            .and_then(|e| {
-                let selectivity = e.default_selectivity();
-                e.with_default_selectivity(selectivity)
-            })
-            .and_then(|e| e.with_projection(self.projection().cloned()))
-            .map(|e| e.with_fetch(self.fetch).unwrap())
+        check_if_same_properties!(self, children);
+        let new_input = children.swap_remove(0);
+        FilterExecBuilder::from(&*self)
+            .with_input(new_input)
+            .build()
+            .map(|e| Arc::new(e) as _)
     }
 
     fn execute(
@@ -440,20 +569,16 @@ impl ExecutionPlan for FilterExec {
 
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let input_stats = self.input.partition_statistics(partition)?;
-        let schema = self.schema();
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let input_stats =
+            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let stats = Self::statistics_helper(
-            &schema,
+            &self.input.schema(),
             input_stats,
             self.predicate(),
             self.default_selectivity,
         )?;
-        Ok(stats.project(self.projection.as_ref()))
+        Ok(Arc::new(stats.project(self.projection.as_ref())))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -472,15 +597,15 @@ impl ExecutionPlan for FilterExec {
             if let Some(new_predicate) =
                 update_expr(self.predicate(), projection.expr(), false)?
             {
-                return FilterExec::try_new(
-                    new_predicate,
-                    make_with_child(projection, self.input())?,
-                )
-                .and_then(|e| {
-                    let selectivity = self.default_selectivity();
-                    e.with_default_selectivity(selectivity)
-                })
-                .map(|e| Some(Arc::new(e) as _));
+                return FilterExecBuilder::from(self)
+                    .with_input(make_with_child(projection, self.input())?)
+                    .with_predicate(new_predicate)
+                    // The original FilterExec projection referenced columns from its old
+                    // input. After the swap the new input is the ProjectionExec which
+                    // already handles column selection, so clear the projection here.
+                    .apply_projection(None)?
+                    .build()
+                    .map(|e| Some(Arc::new(e) as _));
             }
         }
         try_embed_projection(projection, self)
@@ -492,17 +617,10 @@ impl ExecutionPlan for FilterExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        if !matches!(phase, FilterPushdownPhase::Pre) {
-            // For non-pre phase, filters pass through unchanged
-            let filter_supports = parent_filters
-                .into_iter()
-                .map(PushedDownPredicate::supported)
-                .collect();
-
-            return Ok(FilterDescription::new().with_child(ChildFilterDescription {
-                parent_filters: filter_supports,
-                self_filters: vec![],
-            }));
+        if phase != FilterPushdownPhase::Pre {
+            let child =
+                ChildFilterDescription::from_child(&parent_filters, self.input())?;
+            return Ok(FilterDescription::new().with_child(child));
         }
 
         let child = ChildFilterDescription::from_child(&parent_filters, self.input())?
@@ -522,14 +640,30 @@ impl ExecutionPlan for FilterExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        if !matches!(phase, FilterPushdownPhase::Pre) {
+        if phase != FilterPushdownPhase::Pre {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
         // We absorb any parent filters that were not handled by our children
-        let unsupported_parent_filters =
-            child_pushdown_result.parent_filters.iter().filter_map(|f| {
-                matches!(f.all(), PushedDown::No).then_some(Arc::clone(&f.filter))
-            });
+        let mut unsupported_parent_filters: Vec<Arc<dyn PhysicalExpr>> =
+            child_pushdown_result
+                .parent_filters
+                .iter()
+                .filter_map(|f| {
+                    matches!(f.all(), PushedDown::No).then_some(Arc::clone(&f.filter))
+                })
+                .collect();
+
+        // If this FilterExec has a projection, the unsupported parent filters
+        // are in the output schema (after projection) coordinates. We need to
+        // remap them to the input schema coordinates before combining with self filters.
+        if self.projection.is_some() {
+            let input_schema = self.input().schema();
+            unsupported_parent_filters = unsupported_parent_filters
+                .into_iter()
+                .map(|expr| reassign_expr_columns(expr, &input_schema))
+                .collect::<Result<Vec<_>>>()?;
+        }
+
         let unsupported_self_filters = child_pushdown_result
             .self_filters
             .first()
@@ -550,8 +684,23 @@ impl ExecutionPlan for FilterExec {
         let filter_input = Arc::clone(self.input());
         let new_predicate = conjunction(unhandled_filters);
         let updated_node = if new_predicate.eq(&lit(true)) {
-            // FilterExec is no longer needed, but we may need to leave a projection in place
-            match self.projection() {
+            // FilterExec is no longer needed, but we may need to leave a projection in place.
+            // If this FilterExec had a fetch limit, propagate it to the child.
+            // When the child also has a fetch, use the minimum of both to preserve
+            // the tighter constraint.
+            let filter_input = if let Some(outer_fetch) = self.fetch {
+                let effective_fetch = match filter_input.fetch() {
+                    Some(inner_fetch) => outer_fetch.min(inner_fetch),
+                    None => outer_fetch,
+                };
+                match filter_input.with_fetch(Some(effective_fetch)) {
+                    Some(node) => node,
+                    None => Arc::new(LocalLimitExec::new(filter_input, effective_fetch)),
+                }
+            } else {
+                filter_input
+            };
+            match self.projection().as_ref() {
                 Some(projection_indices) => {
                     let filter_child_schema = filter_input.schema();
                     let proj_exprs = projection_indices
@@ -577,19 +726,19 @@ impl ExecutionPlan for FilterExec {
             // The new predicate is the same as our current predicate
             None
         } else {
-            // Create a new FilterExec with the new predicate
+            // Create a new FilterExec with the new predicate, preserving the projection
             let new = FilterExec {
                 predicate: Arc::clone(&new_predicate),
                 input: Arc::clone(&filter_input),
                 metrics: self.metrics.clone(),
                 default_selectivity: self.default_selectivity,
-                cache: Self::compute_properties(
+                cache: Arc::new(Self::compute_properties(
                     &filter_input,
                     &new_predicate,
                     self.default_selectivity,
-                    self.projection.as_ref(),
-                )?,
-                projection: None,
+                    self.projection.as_deref(),
+                )?),
+                projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
             };
@@ -602,13 +751,17 @@ impl ExecutionPlan for FilterExec {
         })
     }
 
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
     fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         Some(Arc::new(Self {
             predicate: Arc::clone(&self.predicate),
             input: Arc::clone(&self.input),
             metrics: self.metrics.clone(),
             default_selectivity: self.default_selectivity,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             projection: self.projection.clone(),
             batch_size: self.batch_size,
             fetch,
@@ -631,7 +784,80 @@ impl ExecutionPlan for FilterExec {
 
 impl EmbeddedProjection for FilterExec {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
-        self.with_projection(projection)
+        FilterExecBuilder::from(self)
+            .apply_projection(projection)?
+            .build()
+    }
+}
+
+/// Collects column equality information from `col = literal` predicates in a
+/// conjunction.
+///
+/// Returns `(eq_columns, is_infeasible)`:
+/// - `eq_columns`: set of column indices constrained to a single literal value.
+/// - `is_infeasible`: `true` when the same column is equated to two different
+///   non-null literals (e.g. `name = 'alice' AND name = 'bob'`), which is
+///   always unsatisfiable.
+///
+/// Only AND conjunctions are traversed; OR is intentionally skipped
+/// since `a = 1 OR a = 2` does not pin NDV to 1.
+fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> (HashSet<usize>, bool) {
+    let mut eq_values: HashMap<usize, ScalarValue> = HashMap::new();
+    let mut infeasible = false;
+
+    for expr in split_conjunction(predicate) {
+        let Some(binary) = expr.downcast_ref::<BinaryExpr>() else {
+            continue;
+        };
+        if *binary.op() != Operator::Eq {
+            continue;
+        }
+        let left = binary.left();
+        let right = binary.right();
+        let pair = if let Some(col) = left.downcast_ref::<Column>()
+            && let Some(lit) = right.downcast_ref::<Literal>()
+            && !lit.value().is_null()
+        {
+            Some((col.index(), lit.value().clone()))
+        } else if let Some(col) = right.downcast_ref::<Column>()
+            && let Some(lit) = left.downcast_ref::<Literal>()
+            && !lit.value().is_null()
+        {
+            Some((col.index(), lit.value().clone()))
+        } else {
+            None
+        };
+
+        if let Some((idx, value)) = pair {
+            match eq_values.entry(idx) {
+                Entry::Occupied(prev) => {
+                    if *prev.get() != value {
+                        infeasible = true;
+                        break;
+                    }
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(value);
+                }
+            }
+        }
+    }
+
+    (eq_values.into_keys().collect(), infeasible)
+}
+
+/// Converts an interval bound to a [`Precision`] value. NULL bounds (which
+/// represent "unbounded" in the interval type) map to [`Precision::Absent`].
+fn interval_bound_to_precision(
+    bound: ScalarValue,
+    is_exact: bool,
+) -> Precision<ScalarValue> {
+    if bound.is_null() {
+        Precision::Absent
+    } else if is_exact {
+        Precision::Exact(bound)
+    } else {
+        Precision::Inexact(bound)
     }
 }
 
@@ -640,8 +866,10 @@ impl EmbeddedProjection for FilterExec {
 /// is adjusted by using the next/previous value for its data type to convert
 /// it into a closed bound.
 fn collect_new_statistics(
+    schema: &SchemaRef,
     input_column_stats: &[ColumnStatistics],
     analysis_boundaries: Vec<ExprBoundaries>,
+    filtered_num_rows: Option<Precision<usize>>,
 ) -> Vec<ColumnStatistics> {
     analysis_boundaries
         .into_iter()
@@ -656,28 +884,43 @@ fn collect_new_statistics(
                 },
             )| {
                 let Some(interval) = interval else {
-                    // If the interval is `None`, we can say that there are no rows:
+                    // If the interval is `None`, we can say that there are no rows.
+                    // Use a typed null to preserve the column's data type, so that
+                    // downstream interval analysis can still intersect intervals
+                    // of the same type.
+                    let typed_null = ScalarValue::try_from(schema.field(idx).data_type())
+                        .unwrap_or(ScalarValue::Null);
                     return ColumnStatistics {
                         null_count: Precision::Exact(0),
-                        max_value: Precision::Exact(ScalarValue::Null),
-                        min_value: Precision::Exact(ScalarValue::Null),
-                        sum_value: Precision::Exact(ScalarValue::Null),
+                        max_value: Precision::Exact(typed_null.clone()),
+                        min_value: Precision::Exact(typed_null.clone()),
+                        sum_value: Precision::Exact(typed_null),
                         distinct_count: Precision::Exact(0),
-                        byte_size: input_column_stats[idx].byte_size,
+                        byte_size: Precision::Exact(0),
                     };
                 };
                 let (lower, upper) = interval.into_bounds();
-                let (min_value, max_value) = if lower.eq(&upper) {
-                    (Precision::Exact(lower), Precision::Exact(upper))
+                let is_single_value =
+                    !lower.is_null() && !upper.is_null() && lower == upper;
+                let min_value = interval_bound_to_precision(lower, is_single_value);
+                let max_value = interval_bound_to_precision(upper, is_single_value);
+                // When the interval collapses to a single value (equality
+                // predicate), the column has exactly 1 distinct value.
+                // Otherwise, cap NDV at the filtered row count.
+                let capped_distinct_count = if is_single_value {
+                    Precision::Exact(1)
                 } else {
-                    (Precision::Inexact(lower), Precision::Inexact(upper))
+                    match filtered_num_rows {
+                        Some(rows) => distinct_count.to_inexact().min(&rows),
+                        None => distinct_count.to_inexact(),
+                    }
                 };
                 ColumnStatistics {
                     null_count: input_column_stats[idx].null_count.to_inexact(),
                     max_value,
                     min_value,
                     sum_value: Precision::Absent,
-                    distinct_count: distinct_count.to_inexact(),
+                    distinct_count: capped_distinct_count,
                     byte_size: input_column_stats[idx].byte_size,
                 }
             },
@@ -697,7 +940,7 @@ struct FilterExecStream {
     /// Runtime metrics recording
     metrics: FilterExecMetrics,
     /// The projection indices of the columns in the input schema
-    projection: Option<Vec<usize>>,
+    projection: Option<ProjectionRef>,
     /// Batch coalescer to combine small batches
     batch_coalescer: LimitedBatchCoalescer,
 }
@@ -717,7 +960,7 @@ impl FilterExecMetrics {
         Self {
             baseline_metrics: BaselineMetrics::new(metrics, partition),
             selectivity: MetricBuilder::new(metrics)
-                .with_type(MetricType::SUMMARY)
+                .with_type(MetricType::Summary)
                 .ratio_metrics("selectivity", partition),
         }
     }
@@ -780,6 +1023,9 @@ impl Stream for FilterExecStream {
             match ready!(self.input.poll_next_unpin(cx)) {
                 None => {
                     self.batch_coalescer.finish()?;
+                    // Release the input pipeline's resources.
+                    let input_schema = self.input.schema();
+                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                     // continue draining the coalescer
                 }
                 Some(Ok(batch)) => {
@@ -788,8 +1034,8 @@ impl Stream for FilterExecStream {
                         .evaluate(&batch)
                         .and_then(|v| v.into_array(batch.num_rows()))
                         .and_then(|array| {
-                            Ok(match self.projection {
-                                Some(ref projection) => {
+                            Ok(match self.projection.as_ref()  {
+                                Some(projection) => {
                                     let projected_batch = batch.project(projection)?;
                                     (array, projected_batch)
                                 },
@@ -820,6 +1066,10 @@ impl Stream for FilterExecStream {
                         PushBatchStatus::LimitReached => {
                             // limit was reached, so stop early
                             self.batch_coalescer.finish()?;
+                            // Release the input pipeline's resources.
+                            let input_schema = self.input.schema();
+                            self.input =
+                                Box::pin(EmptyRecordBatchStream::new(input_schema));
                             // continue draining the coalescer
                         }
                     }
@@ -861,7 +1111,20 @@ fn collect_columns_from_predicate_inner(
 
     let predicates = split_conjunction(predicate);
     predicates.into_iter().for_each(|p| {
-        if let Some(binary) = p.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(binary) = p.downcast_ref::<BinaryExpr>() {
+            // Only extract pairs where at least one side is a Column reference.
+            // Pairs like `complex_expr = literal` should not create equivalence
+            // classes — the literal could appear in many unrelated expressions
+            // (e.g. sort keys), and normalize_expr's deep traversal would
+            // replace those occurrences with the complex expression, corrupting
+            // sort orderings. Constant propagation for such pairs is handled
+            // separately by `extend_constants`.
+            let has_direct_column_operand =
+                binary.left().downcast_ref::<Column>().is_some()
+                    || binary.right().downcast_ref::<Column>().is_some();
+            if !has_direct_column_operand {
+                return;
+            }
             match binary.op() {
                 Operator::Eq => {
                     eq_predicate_columns.push((binary.left(), binary.right()))
@@ -892,7 +1155,6 @@ mod tests {
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
-    use datafusion_common::ScalarValue;
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {
@@ -1219,7 +1481,7 @@ mod tests {
         ];
         let _ = exp_col_stats
             .into_iter()
-            .zip(statistics.column_statistics)
+            .zip(statistics.column_statistics.clone())
             .map(|(expected, actual)| {
                 if let Some(val) = actual.min_value.get_value() {
                     if val.data_type().is_floating() {
@@ -1290,7 +1552,7 @@ mod tests {
             )),
         ));
         // Since filter predicate passes all entries, statistics after filter shouldn't change.
-        let expected = input.partition_statistics(None)?.column_statistics;
+        let expected = input.partition_statistics(None)?.column_statistics.clone();
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
         let statistics = filter.partition_statistics(None)?;
@@ -1354,23 +1616,87 @@ mod tests {
             statistics.column_statistics,
             vec![
                 ColumnStatistics {
-                    min_value: Precision::Exact(ScalarValue::Null),
-                    max_value: Precision::Exact(ScalarValue::Null),
-                    sum_value: Precision::Exact(ScalarValue::Null),
+                    min_value: Precision::Exact(ScalarValue::Int32(None)),
+                    max_value: Precision::Exact(ScalarValue::Int32(None)),
+                    sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
-                    byte_size: Precision::Absent,
+                    byte_size: Precision::Exact(0),
                 },
                 ColumnStatistics {
-                    min_value: Precision::Exact(ScalarValue::Null),
-                    max_value: Precision::Exact(ScalarValue::Null),
-                    sum_value: Precision::Exact(ScalarValue::Null),
+                    min_value: Precision::Exact(ScalarValue::Int32(None)),
+                    max_value: Precision::Exact(ScalarValue::Int32(None)),
+                    sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
-                    byte_size: Precision::Absent,
+                    byte_size: Precision::Exact(0),
                 },
             ]
         );
+
+        Ok(())
+    }
+
+    /// Regression test: stacking two FilterExecs where the inner filter
+    /// proves zero selectivity should not panic with a type mismatch
+    /// during interval intersection.
+    ///
+    /// Previously, when a filter proved no rows could match, the column
+    /// statistics used untyped `ScalarValue::Null` (data type `Null`).
+    /// If an outer FilterExec then tried to analyze its own predicate
+    /// against those statistics, `Interval::intersect` would fail with:
+    ///   "Only intervals with the same data type are intersectable, lhs:Null, rhs:Int32"
+    #[tokio::test]
+    async fn test_nested_filter_with_zero_selectivity_inner() -> Result<()> {
+        // Inner table: a: [1, 100], b: [1, 3]
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(4000),
+                column_statistics: vec![
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(3))),
+                        ..Default::default()
+                    },
+                ],
+            },
+            schema,
+        ));
+
+        // Inner filter: a > 200 (impossible given a max=100 → zero selectivity)
+        let inner_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(200)))),
+        ));
+        let inner_filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(inner_predicate, input)?);
+
+        // Outer filter: a = 50
+        // Before the fix, this would panic because the inner filter's
+        // zero-selectivity statistics produced Null-typed intervals for
+        // column `a`, which couldn't intersect with the Int32 literal.
+        let outer_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
+        ));
+        let outer_filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(outer_predicate, inner_filter)?);
+
+        // Should succeed without error
+        let statistics = outer_filter.partition_statistics(None)?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(0));
 
         Ok(())
     }
@@ -1473,7 +1799,7 @@ mod tests {
             }],
         };
 
-        assert_eq!(filter_statistics, expected_filter_statistics);
+        assert_eq!(*filter_statistics, expected_filter_statistics);
 
         Ok(())
     }
@@ -1581,6 +1907,1339 @@ mod tests {
 
         exec.partition_statistics(None).unwrap();
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_projection() -> Result<()> {
+        // Create a schema with multiple columns
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Create a filter predicate: a > 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+
+        // Create filter with projection [0, 2] (columns a and c) using builder
+        let projection = Some(vec![0, 2]);
+        let filter = FilterExecBuilder::new(predicate, input)
+            .apply_projection(projection.clone())
+            .unwrap()
+            .build()?;
+
+        // Verify projection is set correctly
+        assert_eq!(filter.projection(), &Some([0, 2].into()));
+
+        // Verify schema contains only projected columns
+        let output_schema = filter.schema();
+        assert_eq!(output_schema.fields().len(), 2);
+        assert_eq!(output_schema.field(0).name(), "a");
+        assert_eq!(output_schema.field(1).name(), "c");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_without_projection() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        ));
+
+        // Create filter without projection using builder
+        let filter = FilterExecBuilder::new(predicate, input).build()?;
+
+        // Verify no projection is set
+        assert!(filter.projection().is_none());
+
+        // Verify schema contains all columns
+        let output_schema = filter.schema();
+        assert_eq!(output_schema.fields().len(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_invalid_projection() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        ));
+
+        // Try to create filter with invalid projection (index out of bounds) using builder
+        let result =
+            FilterExecBuilder::new(predicate, input).apply_projection(Some(vec![0, 5])); // 5 is out of bounds
+
+        // Should return an error
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_vs_with_projection() -> Result<()> {
+        // This test verifies that the builder with projection produces the same result
+        // as try_new().with_projection(), but more efficiently (one compute_properties call)
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]);
+
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(4000),
+                column_statistics: vec![
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        ..Default::default()
+                    },
+                ],
+            },
+            schema,
+        ));
+        let input: Arc<dyn ExecutionPlan> = input;
+
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
+        ));
+
+        let projection = Some(vec![0, 2]);
+
+        // Method 1: Builder with projection (one call to compute_properties)
+        let filter1 = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+            .apply_projection(projection.clone())
+            .unwrap()
+            .build()?;
+
+        // Method 2: Also using builder for comparison (deprecated try_new().with_projection() removed)
+        let filter2 = FilterExecBuilder::new(predicate, input)
+            .apply_projection(projection)
+            .unwrap()
+            .build()?;
+
+        // Both methods should produce equivalent results
+        assert_eq!(filter1.schema(), filter2.schema());
+        assert_eq!(filter1.projection(), filter2.projection());
+
+        // Verify statistics are the same
+        let stats1 = filter1.partition_statistics(None)?;
+        let stats2 = filter2.partition_statistics(None)?;
+        assert_eq!(stats1.num_rows, stats2.num_rows);
+        assert_eq!(stats1.total_byte_size, stats2.total_byte_size);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_statistics_with_projection() -> Result<()> {
+        // Test that statistics are correctly computed when using builder with projection
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]);
+
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(12000),
+                column_statistics: vec![
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(10))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(200))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(5))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(50))),
+                        ..Default::default()
+                    },
+                ],
+            },
+            schema,
+        ));
+
+        // Filter: a < 50, Project: [0, 2]
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
+        ));
+
+        let filter = FilterExecBuilder::new(predicate, input)
+            .apply_projection(Some(vec![0, 2]))
+            .unwrap()
+            .build()?;
+
+        let statistics = filter.partition_statistics(None)?;
+
+        // Verify statistics reflect both filtering and projection
+        assert!(matches!(statistics.num_rows, Precision::Inexact(_)));
+
+        // Schema should only have 2 columns after projection
+        assert_eq!(filter.schema().fields().len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_builder_predicate_validation() -> Result<()> {
+        // Test that builder validates predicate type correctly
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Create a predicate that doesn't return boolean (returns Int32)
+        let invalid_predicate = Arc::new(Column::new("a", 0));
+
+        // Should fail because predicate doesn't return boolean
+        let result = FilterExecBuilder::new(invalid_predicate, input)
+            .apply_projection(Some(vec![0]))
+            .unwrap()
+            .build();
+
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_projection_composition() -> Result<()> {
+        // Test that calling apply_projection multiple times composes projections
+        // If initial projection is [0, 2, 3] and we call apply_projection([0, 2]),
+        // the result should be [0, 3] (indices 0 and 2 of [0, 2, 3])
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Create a filter predicate: a > 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+
+        // First projection: [0, 2, 3] -> select columns a, c, d
+        // Second projection: [0, 2] -> select indices 0 and 2 of [0, 2, 3] -> [0, 3]
+        // Final result: columns a and d
+        let filter = FilterExecBuilder::new(predicate, input)
+            .apply_projection(Some(vec![0, 2, 3]))?
+            .apply_projection(Some(vec![0, 2]))?
+            .build()?;
+
+        // Verify composed projection is [0, 3]
+        assert_eq!(filter.projection(), &Some([0, 3].into()));
+
+        // Verify schema contains only columns a and d
+        let output_schema = filter.schema();
+        assert_eq!(output_schema.fields().len(), 2);
+        assert_eq!(output_schema.field(0).name(), "a");
+        assert_eq!(output_schema.field(1).name(), "d");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_projection_composition_none_clears() -> Result<()> {
+        // Test that passing None clears the projection
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+
+        // Set a projection then clear it with None
+        let filter = FilterExecBuilder::new(predicate, input)
+            .apply_projection(Some(vec![0]))?
+            .apply_projection(None)?
+            .build()?;
+
+        // Projection should be cleared
+        assert_eq!(filter.projection(), &None);
+
+        // Schema should have all columns
+        let output_schema = filter.schema();
+        assert_eq!(output_schema.fields().len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_with_projection_remaps_post_phase_parent_filters() -> Result<()> {
+        // Test that FilterExec with a projection must remap parent dynamic
+        // filter column indices from its output schema to the input schema
+        // before passing them to the child.
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Float64, false),
+        ]));
+        let input = Arc::new(EmptyExec::new(Arc::clone(&input_schema)));
+
+        // FilterExec: a > 0, projection=[c@2]
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        ));
+        let filter = FilterExecBuilder::new(predicate, input)
+            .apply_projection(Some(vec![2]))?
+            .build()?;
+
+        // Output schema should be [c:Float64]
+        let output_schema = filter.schema();
+        assert_eq!(output_schema.fields().len(), 1);
+        assert_eq!(output_schema.field(0).name(), "c");
+
+        // Simulate a parent dynamic filter referencing output column c@0
+        let parent_filter: Arc<dyn PhysicalExpr> = Arc::new(Column::new("c", 0));
+
+        let config = ConfigOptions::new();
+        let desc = filter.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![parent_filter],
+            &config,
+        )?;
+
+        // The filter pushed to the child must reference c@2 (input schema),
+        // not c@0 (output schema).
+        let parent_filters = desc.parent_filters();
+        assert_eq!(parent_filters.len(), 1); // one child
+        assert_eq!(parent_filters[0].len(), 1); // one filter
+        let remapped = &parent_filters[0][0].predicate;
+        let display = format!("{remapped}");
+        assert_eq!(
+            display, "c@2",
+            "Post-phase parent filter column index must be remapped \
+             from output schema (c@0) to input schema (c@2)"
+        );
+
+        Ok(())
+    }
+
+    /// Regression test for https://github.com/apache/datafusion/issues/20194
+    ///
+    /// `collect_columns_from_predicate_inner` should only extract equality
+    /// pairs where at least one side is a Column. Pairs like
+    /// `complex_expr = literal` must not create equivalence classes because
+    /// `normalize_expr`'s deep traversal would replace the literal inside
+    /// unrelated expressions (e.g. sort keys) with the complex expression.
+    #[test]
+    fn test_collect_columns_skips_non_column_pairs() -> Result<()> {
+        let schema = test::aggr_test_schema();
+
+        // Simulate: nvl(c2, 0) = 0  →  (c2 IS DISTINCT FROM 0) = 0
+        // Neither side is a Column, so this should NOT be extracted.
+        let complex_expr: Arc<dyn PhysicalExpr> = binary(
+            col("c2", &schema)?,
+            Operator::IsDistinctFrom,
+            lit(0u32),
+            &schema,
+        )?;
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(complex_expr, Operator::Eq, lit(0u32), &schema)?;
+
+        let (equal_pairs, _) = collect_columns_from_predicate_inner(&predicate);
+        assert_eq!(
+            0,
+            equal_pairs.len(),
+            "Should not extract equality pairs where neither side is a Column"
+        );
+
+        // But col = literal should still be extracted
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("c2", &schema)?, Operator::Eq, lit(0u32), &schema)?;
+        let (equal_pairs, _) = collect_columns_from_predicate_inner(&predicate);
+        assert_eq!(
+            1,
+            equal_pairs.len(),
+            "Should extract equality pairs where one side is a Column"
+        );
+
+        Ok(())
+    }
+
+    /// Columns with Absent min/max statistics should remain Absent after
+    /// FilterExec.
+    #[tokio::test]
+    async fn test_filter_statistics_absent_columns_stay_absent() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![
+                    ColumnStatistics::default(),
+                    ColumnStatistics::default(),
+                ],
+            },
+            schema.clone(),
+        ));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let statistics = filter.partition_statistics(None)?;
+        let col_b_stats = &statistics.column_statistics[1];
+        assert_eq!(col_b_stats.min_value, Precision::Absent);
+        assert_eq!(col_b_stats.max_value, Precision::Absent);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_ndv() -> Result<()> {
+        #[expect(clippy::type_complexity)]
+        let cases: Vec<(
+            &str,
+            Vec<Field>,
+            Vec<ColumnStatistics>,
+            Arc<dyn PhysicalExpr>,
+            Vec<Precision<usize>>,
+        )> = vec![
+            (
+                "utf8 equality",
+                vec![Field::new("name", DataType::Utf8, false)],
+                vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("name", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Utf8(Some("hello".to_string())))),
+                )),
+                vec![Precision::Exact(1)],
+            ),
+            (
+                "utf8view equality",
+                vec![Field::new("name", DataType::Utf8View, false)],
+                vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("name", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Utf8View(Some(
+                        "hello".to_string(),
+                    )))),
+                )),
+                vec![Precision::Exact(1)],
+            ),
+            (
+                "largeutf8 equality",
+                vec![Field::new("name", DataType::LargeUtf8, false)],
+                vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("name", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::LargeUtf8(Some(
+                        "hello".to_string(),
+                    )))),
+                )),
+                vec![Precision::Exact(1)],
+            ),
+            (
+                "utf8 reversed (literal = column)",
+                vec![Field::new("name", DataType::Utf8, false)],
+                vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Literal::new(ScalarValue::Utf8(Some("hello".to_string())))),
+                    Operator::Eq,
+                    Arc::new(Column::new("name", 0)),
+                )),
+                vec![Precision::Exact(1)],
+            ),
+            (
+                "OR preserves original NDV",
+                vec![Field::new("name", DataType::Utf8, false)],
+                vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("name", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some("a".to_string())))),
+                    )),
+                    Operator::Or,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("name", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some("b".to_string())))),
+                    )),
+                )),
+                vec![Precision::Inexact(50)],
+            ),
+            (
+                "AND with mixed types (Utf8 + Int32)",
+                vec![
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("age", DataType::Int32, false),
+                ],
+                vec![
+                    ColumnStatistics {
+                        distinct_count: Precision::Inexact(50),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        distinct_count: Precision::Inexact(80),
+                        ..Default::default()
+                    },
+                ],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("name", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                            "hello".to_string(),
+                        )))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("age", 1)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    )),
+                )),
+                vec![Precision::Exact(1), Precision::Exact(1)],
+            ),
+            (
+                "numeric equality with min/max bounds (interval analysis path)",
+                vec![Field::new("a", DataType::Int32, false)],
+                vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                    distinct_count: Precision::Inexact(80),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                )),
+                vec![Precision::Exact(1)],
+            ),
+            (
+                "timestamp equality",
+                vec![Field::new(
+                    "ts",
+                    DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                    false,
+                )],
+                vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(500),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("ts", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::TimestampNanosecond(
+                        Some(1_609_459_200_000_000_000),
+                        None,
+                    ))),
+                )),
+                vec![Precision::Exact(1)],
+            ),
+            (
+                "contradictory numeric equality (infeasible)",
+                vec![Field::new("a", DataType::Int32, false)],
+                vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(99)))),
+                    )),
+                )),
+                vec![Precision::Exact(0)],
+            ),
+            (
+                "utf8 equality with absent input NDV",
+                vec![Field::new("name", DataType::Utf8, false)],
+                vec![ColumnStatistics {
+                    distinct_count: Precision::Absent,
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("name", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Utf8(Some("hello".to_string())))),
+                )),
+                vec![Precision::Exact(1)],
+            ),
+            (
+                "contradictory utf8 equality (infeasible)",
+                vec![Field::new("name", DataType::Utf8, false)],
+                vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(100),
+                    ..Default::default()
+                }],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("name", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                            "alice".to_string(),
+                        )))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("name", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                            "bob".to_string(),
+                        )))),
+                    )),
+                )),
+                vec![Precision::Exact(0)],
+            ),
+            (
+                "redundant same-value equality combined with another column",
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Int32, false),
+                ],
+                vec![
+                    ColumnStatistics {
+                        distinct_count: Precision::Inexact(80),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        distinct_count: Precision::Inexact(40),
+                        ..Default::default()
+                    },
+                ],
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(BinaryExpr::new(
+                            Arc::new(Column::new("a", 0)),
+                            Operator::Eq,
+                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                        )),
+                        Operator::And,
+                        Arc::new(BinaryExpr::new(
+                            Arc::new(Column::new("a", 0)),
+                            Operator::Eq,
+                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                        )),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("b", 1)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+                    )),
+                )),
+                vec![Precision::Exact(1), Precision::Exact(1)],
+            ),
+        ];
+
+        for (desc, fields, col_stats, predicate, expected_ndvs) in cases {
+            let schema = Schema::new(fields);
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Inexact(100),
+                    total_byte_size: Precision::Inexact(1000),
+                    column_statistics: col_stats,
+                },
+                schema.clone(),
+            ));
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(predicate, input)?);
+            let statistics = filter.partition_statistics(None)?;
+
+            for (i, expected) in expected_ndvs.iter().enumerate() {
+                assert_eq!(
+                    statistics.column_statistics[i].distinct_count, *expected,
+                    "case '{desc}': column {i} NDV mismatch"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_and_equality_ndv() -> Result<()> {
+        // a: min=1, max=100, ndv=80
+        // b: min=1, max=50, ndv=40
+        // c: min=1, max=200, ndv=150
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(1200),
+                column_statistics: vec![
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                        distinct_count: Precision::Inexact(80),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(50))),
+                        distinct_count: Precision::Inexact(40),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(200))),
+                        distinct_count: Precision::Inexact(150),
+                        ..Default::default()
+                    },
+                ],
+            },
+            schema.clone(),
+        ));
+
+        // a = 42 AND b > 10 AND c = 7
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                )),
+                Operator::And,
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("b", 1)),
+                    Operator::Gt,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+                )),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c", 2)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(7)))),
+            )),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        // a = 42 collapses to single value
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        // b > 10 narrows to [11, 50] but doesn't collapse to a single value.
+        // The combined selectivity of a=42 (1/80) and c=7 (1/150) on 100 rows
+        // computes num_rows = 1, so NDV is capped at the row count: min(40, 1) = 1.
+        assert_eq!(
+            statistics.column_statistics[1].distinct_count,
+            Precision::Inexact(1)
+        );
+        // c = 7 collapses to single value
+        assert_eq!(
+            statistics.column_statistics[2].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_absent_bounds_ndv() -> Result<()> {
+        // a: ndv=80, no min/max
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(400),
+                column_statistics: vec![ColumnStatistics {
+                    distinct_count: Precision::Inexact(80),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        // a = 42: even without known bounds, interval analysis resolves
+        // the equality to [42, 42], so NDV is correctly set to Exact(1)
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_int8_ndv() -> Result<()> {
+        // a: min=-100, max=100, ndv=50
+        let schema = Schema::new(vec![Field::new("a", DataType::Int8, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(100),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int8(Some(-100))),
+                    max_value: Precision::Inexact(ScalarValue::Int8(Some(100))),
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int8(Some(42)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_int64_ndv() -> Result<()> {
+        // a: min=0, max=1_000_000, ndv=100_000
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100_000),
+                total_byte_size: Precision::Inexact(800_000),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int64(Some(0))),
+                    max_value: Precision::Inexact(ScalarValue::Int64(Some(1_000_000))),
+                    distinct_count: Precision::Inexact(100_000),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_float32_ndv() -> Result<()> {
+        // a: min=0.0, max=100.0, ndv=50
+        let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(400),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Float32(Some(0.0))),
+                    max_value: Precision::Inexact(ScalarValue::Float32(Some(100.0))),
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Float32(Some(42.5)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_reversed_ndv() -> Result<()> {
+        // a: min=1, max=100, ndv=80
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(400),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                    distinct_count: Precision::Inexact(80),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        // 42 = a (literal on the left)
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+            Operator::Eq,
+            Arc::new(Column::new("a", 0)),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_equality_timestamp_ndv() -> Result<()> {
+        // ts: min=1_000_000_000, max=2_000_000_000, ndv=500
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            false,
+        )]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(8000),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::TimestampNanosecond(
+                        Some(1_000_000_000),
+                        None,
+                    )),
+                    max_value: Precision::Inexact(ScalarValue::TimestampNanosecond(
+                        Some(2_000_000_000),
+                        None,
+                    )),
+                    distinct_count: Precision::Inexact(500),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("ts", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::TimestampNanosecond(
+                Some(1_500_000_000),
+                None,
+            ))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_collect_equality_columns() {
+        use std::collections::HashSet;
+        // (description, predicate, expected_column_indices, expected_infeasible)
+        #[expect(clippy::type_complexity)]
+        let cases: Vec<(&str, Arc<dyn PhysicalExpr>, Vec<usize>, bool)> = vec![
+            (
+                "simple col = literal",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                )),
+                vec![0],
+                false,
+            ),
+            (
+                "reversed literal = col",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    Operator::Eq,
+                    Arc::new(Column::new("a", 0)),
+                )),
+                vec![0],
+                false,
+            ),
+            (
+                "AND with two equalities",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("b", 1)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                            "hello".to_string(),
+                        )))),
+                    )),
+                )),
+                vec![0, 1],
+                false,
+            ),
+            (
+                "OR produces empty set",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    )),
+                    Operator::Or,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(99)))),
+                    )),
+                )),
+                vec![],
+                false,
+            ),
+            (
+                "greater-than produces empty set",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Gt,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                )),
+                vec![],
+                false,
+            ),
+            (
+                "col = col produces empty set",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Eq,
+                    Arc::new(Column::new("b", 1)),
+                )),
+                vec![],
+                false,
+            ),
+            (
+                "nested AND with three equalities",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(BinaryExpr::new(
+                            Arc::new(Column::new("a", 0)),
+                            Operator::Eq,
+                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                        )),
+                        Operator::And,
+                        Arc::new(BinaryExpr::new(
+                            Arc::new(Column::new("b", 1)),
+                            Operator::Eq,
+                            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+                        )),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("c", 2)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
+                    )),
+                )),
+                vec![0, 1, 2],
+                false,
+            ),
+            (
+                "AND with mixed equality and non-equality",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("b", 1)),
+                        Operator::Gt,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+                    )),
+                )),
+                vec![0],
+                false,
+            ),
+            (
+                "col = NULL is excluded",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Int32(None))),
+                )),
+                vec![],
+                false,
+            ),
+            (
+                "NULL = col is excluded",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Literal::new(ScalarValue::Utf8(None))),
+                    Operator::Eq,
+                    Arc::new(Column::new("a", 0)),
+                )),
+                vec![],
+                false,
+            ),
+            (
+                "contradictory: same col, different literals",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                            "alice".to_string(),
+                        )))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                            "bob".to_string(),
+                        )))),
+                    )),
+                )),
+                vec![0],
+                true,
+            ),
+            (
+                "same col, same literal is not contradictory",
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+                    )),
+                )),
+                vec![0],
+                false,
+            ),
+        ];
+
+        for (desc, expr, expected_cols, expected_infeasible) in cases {
+            let (result, infeasible) = collect_equality_columns(&expr);
+            let expected: HashSet<usize> = expected_cols.into_iter().collect();
+            if expected_infeasible {
+                // When infeasible, the scan is short-circuited, so we only
+                // assert the infeasibility flag — the partial column set
+                // contents are an implementation detail.
+                assert!(infeasible, "case '{desc}': expected infeasible");
+            } else {
+                assert_eq!(result, expected, "case '{desc}': columns mismatch");
+                assert!(!infeasible, "case '{desc}': expected feasible");
+            }
+        }
+    }
+
+    /// Regression test: ProjectionExec on top of a FilterExec that already has
+    /// an explicit projection must not panic when `try_swapping_with_projection`
+    /// attempts to swap the two nodes.
+    ///
+    /// Before the fix, `FilterExecBuilder::from(self)` copied the old projection
+    /// (e.g. `[0, 1, 2]`) from the FilterExec. After `.with_input` replaced the
+    /// input with the narrower ProjectionExec (2 columns), `.build()` tried to
+    /// validate the stale `[0, 1, 2]` projection against the 2-column schema and
+    /// panicked with "project index 2 out of bounds, max field 2".
+    #[test]
+    fn test_filter_with_projection_swap_does_not_panic() -> Result<()> {
+        use crate::projection::ProjectionExpr;
+        use datafusion_physical_expr::expressions::col;
+
+        // Schema: [ts: Int64, tokens: Int64, svc: Utf8]
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("ts", DataType::Int64, false),
+            Field::new("tokens", DataType::Int64, false),
+            Field::new("svc", DataType::Utf8, false),
+        ]));
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // FilterExec: ts > 0, projection=[ts@0, tokens@1, svc@2] (all 3 cols)
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("ts", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
+        ));
+        let filter = Arc::new(
+            FilterExecBuilder::new(predicate, input)
+                .apply_projection(Some(vec![0, 1, 2]))?
+                .build()?,
+        );
+
+        // ProjectionExec: narrows to [ts, tokens] (drops svc)
+        let proj_exprs = vec![
+            ProjectionExpr {
+                expr: col("ts", &filter.schema())?,
+                alias: "ts".to_string(),
+            },
+            ProjectionExpr {
+                expr: col("tokens", &filter.schema())?,
+                alias: "tokens".to_string(),
+            },
+        ];
+        let projection = Arc::new(ProjectionExec::try_new(
+            proj_exprs,
+            Arc::clone(&filter) as _,
+        )?);
+
+        // This must not panic
+        let result = filter.try_swapping_with_projection(&projection)?;
+        assert!(result.is_some(), "swap should succeed");
+
+        let new_plan = result.unwrap();
+        // Output schema must still be [ts, tokens]
+        let out_schema = new_plan.schema();
+        assert_eq!(out_schema.fields().len(), 2);
+        assert_eq!(out_schema.field(0).name(), "ts");
+        assert_eq!(out_schema.field(1).name(), "tokens");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_ndv_capped_at_row_count() -> Result<()> {
+        // Table: a: min=1, max=100, distinct_count=80, 100 rows
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(400),
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                    distinct_count: Precision::Inexact(80),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        // a <= 10 => ~10 rows out of 100
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("a", &schema)?, Operator::LtEq, lit(10i32), &schema)?;
+
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let statistics = filter.partition_statistics(None)?;
+        // Filter estimates ~10 rows (selectivity = 10/100)
+        assert_eq!(statistics.num_rows, Precision::Inexact(10));
+        // NDV should be capped at the filtered row count (10), not the original 80
+        let ndv = &statistics.column_statistics[0].distinct_count;
+        assert!(
+            ndv.get_value().copied() <= Some(10),
+            "Expected NDV <= 10 (filtered row count), got {ndv:?}"
+        );
         Ok(())
     }
 }

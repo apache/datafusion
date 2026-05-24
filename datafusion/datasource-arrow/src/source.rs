@@ -31,8 +31,8 @@
 //! refers to the Arrow IPC stream format, not streaming I/O. Both formats can be stored
 //! in files on disk or object storage.
 
+use std::io::Cursor;
 use std::sync::Arc;
-use std::{any::Any, io::Cursor};
 
 use datafusion_datasource::{TableSchema, as_file_source};
 
@@ -52,7 +52,7 @@ use datafusion_datasource::file_stream::FileOpenFuture;
 use datafusion_datasource::file_stream::FileOpener;
 use futures::StreamExt;
 use itertools::Itertools;
-use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
+use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
 
 /// Enum indicating which Arrow IPC format to use
 #[derive(Clone, Copy, Debug)]
@@ -311,10 +311,6 @@ impl FileSource for ArrowSource {
             opener,
             self.table_schema.file_schema(),
         )
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {

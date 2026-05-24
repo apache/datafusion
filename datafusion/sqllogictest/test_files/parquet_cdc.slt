@@ -1,0 +1,231 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test parquet content-defined chunking (CDC) end-to-end:
+# write parquet files with CDC enabled, then read them back and verify correctness.
+
+# Create source data
+statement ok
+CREATE TABLE cdc_source AS VALUES
+    (1, 'alice', 100.50),
+    (2, 'bob', 200.75),
+    (3, 'charlie', 300.25),
+    (4, 'diana', 400.00),
+    (5, 'eve', 500.99)
+
+#
+# Test 1: Enable CDC with 'true' (uses default options)
+#
+
+query I
+COPY cdc_source TO 'test_files/scratch/parquet_cdc/enabled_true/'
+STORED AS PARQUET
+OPTIONS (
+    'format.use_content_defined_chunking' 'true'
+)
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE cdc_enabled_true_read
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_cdc/enabled_true/'
+
+query ITR rowsort
+SELECT * FROM cdc_enabled_true_read
+----
+1 alice 100.5
+2 bob 200.75
+3 charlie 300.25
+4 diana 400
+5 eve 500.99
+
+# Verify filtering works on CDC-written files
+query ITR
+SELECT * FROM cdc_enabled_true_read WHERE column1 > 3 ORDER BY column1
+----
+4 diana 400
+5 eve 500.99
+
+# Verify aggregation works on CDC-written files
+query R
+SELECT SUM(column3) FROM cdc_enabled_true_read
+----
+1502.49
+
+#
+# Test 2: Disable CDC with 'false' (same as default behavior)
+#
+
+query I
+COPY cdc_source TO 'test_files/scratch/parquet_cdc/disabled_false/'
+STORED AS PARQUET
+OPTIONS (
+    'format.use_content_defined_chunking' 'false'
+)
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE cdc_disabled_false_read
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_cdc/disabled_false/'
+
+query ITR rowsort
+SELECT * FROM cdc_disabled_false_read
+----
+1 alice 100.5
+2 bob 200.75
+3 charlie 300.25
+4 diana 400
+5 eve 500.99
+
+#
+# Test 3: Enable CDC with custom sub-field options
+#
+
+query I
+COPY cdc_source TO 'test_files/scratch/parquet_cdc/custom_chunks/'
+STORED AS PARQUET
+OPTIONS (
+    'format.use_content_defined_chunking.min_chunk_size' '1024',
+    'format.use_content_defined_chunking.max_chunk_size' '4096',
+    'format.use_content_defined_chunking.norm_level' '1'
+)
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE cdc_custom_read
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_cdc/custom_chunks/'
+
+query ITR rowsort
+SELECT * FROM cdc_custom_read
+----
+1 alice 100.5
+2 bob 200.75
+3 charlie 300.25
+4 diana 400
+5 eve 500.99
+
+#
+# Test 4: Write via external table with CDC enabled
+#
+
+statement ok
+CREATE EXTERNAL TABLE cdc_external_write (
+    id INT,
+    name VARCHAR,
+    value DOUBLE
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_cdc/external_table/' OPTIONS (
+    'format.use_content_defined_chunking' 'true'
+)
+
+query I
+INSERT INTO cdc_external_write SELECT * FROM cdc_source
+----
+5
+
+query ITR rowsort
+SELECT * FROM cdc_external_write
+----
+1 alice 100.5
+2 bob 200.75
+3 charlie 300.25
+4 diana 400
+5 eve 500.99
+
+#
+# Test 5: Write larger dataset to exercise CDC chunking logic
+#
+
+statement ok
+CREATE TABLE cdc_large_source AS
+    SELECT
+        value as id,
+        CONCAT('name_', CAST(value AS VARCHAR)) as name,
+        CAST(value AS DOUBLE) * 1.5 as amount,
+        CASE WHEN value % 2 = 0 THEN true ELSE false END as flag
+    FROM generate_series(1, 1000) t
+
+query I
+COPY cdc_large_source TO 'test_files/scratch/parquet_cdc/large/'
+STORED AS PARQUET
+OPTIONS (
+    'format.use_content_defined_chunking' 'true'
+)
+----
+1000
+
+statement ok
+CREATE EXTERNAL TABLE cdc_large_read
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_cdc/large/'
+
+query I
+SELECT COUNT(*) FROM cdc_large_read
+----
+1000
+
+query IR
+SELECT MIN(id), MIN(amount) FROM cdc_large_read
+----
+1 1.5
+
+query IR
+SELECT MAX(id), MAX(amount) FROM cdc_large_read
+----
+1000 1500
+
+query I
+SELECT COUNT(*) FROM cdc_large_read WHERE flag = true
+----
+500
+
+#
+# Test 6: CDC with different data types including NULLs
+#
+
+statement ok
+CREATE TABLE cdc_types_source AS VALUES
+    (1::INT, 'text'::VARCHAR, 3.14::DOUBLE, true::BOOLEAN, DATE '2024-01-15', TIMESTAMP '2024-01-15 10:30:00'),
+    (2::INT, 'more'::VARCHAR, 2.72::DOUBLE, false::BOOLEAN, DATE '2024-06-20', TIMESTAMP '2024-06-20 14:45:00'),
+    (3::INT, NULL::VARCHAR, NULL::DOUBLE, NULL::BOOLEAN, NULL::DATE, NULL::TIMESTAMP)
+
+query I
+COPY cdc_types_source TO 'test_files/scratch/parquet_cdc/types/'
+STORED AS PARQUET
+OPTIONS (
+    'format.use_content_defined_chunking' 'true'
+)
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE cdc_types_read
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_cdc/types/'
+
+query ITRBDP rowsort
+SELECT * FROM cdc_types_read
+----
+1 text 3.14 true 2024-01-15 2024-01-15T10:30:00
+2 more 2.72 false 2024-06-20 2024-06-20T14:45:00
+3 NULL NULL NULL NULL NULL

@@ -15,56 +15,64 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
-use arrow::array::GenericStringBuilder;
+use arrow::array::{Array, ArrayRef, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 use arrow::datatypes::DataType::Utf8;
 
-use crate::utils::make_scalar_function;
+use crate::strings::GenericStringArrayBuilder;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 /// Returns the character with the given code.
 /// chr(65) = 'A'
-fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let integer_array = as_int64_array(&args[0])?;
-
-    let mut builder = GenericStringBuilder::<i32>::with_capacity(
-        integer_array.len(),
-        // 1 byte per character, assuming that is the common case
-        integer_array.len(),
+fn chr_array(integer_array: &Int64Array) -> Result<ArrayRef> {
+    let len = integer_array.len();
+    let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(
+        len, // 1 byte per character, assuming that is the common case
+        len,
     );
 
     let mut buf = [0u8; 4];
+    let nulls = integer_array.nulls();
 
-    for integer in integer_array {
-        match integer {
-            Some(integer) => {
-                if let Ok(u) = u32::try_from(integer)
-                    && let Some(c) = core::char::from_u32(u)
-                {
-                    builder.append_value(c.encode_utf8(&mut buf));
-                    continue;
-                }
-
-                return exec_err!("invalid Unicode scalar value: {integer}");
+    if let Some(n) = nulls {
+        for i in 0..len {
+            if n.is_null(i) {
+                builder.append_placeholder();
+                continue;
             }
-            None => {
-                builder.append_null();
+            // SAFETY: bounds + null check above.
+            let integer = unsafe { integer_array.value_unchecked(i) };
+            if let Ok(u) = u32::try_from(integer)
+                && let Some(c) = core::char::from_u32(u)
+            {
+                builder.append_value(c.encode_utf8(&mut buf));
+                continue;
             }
+            return exec_err!("invalid Unicode scalar value: {integer}");
+        }
+    } else {
+        for i in 0..len {
+            // SAFETY: no null buffer means every index is valid.
+            let integer = unsafe { integer_array.value_unchecked(i) };
+            if let Ok(u) = u32::try_from(integer)
+                && let Some(c) = core::char::from_u32(u)
+            {
+                builder.append_value(c.encode_utf8(&mut buf));
+                continue;
+            }
+            return exec_err!("invalid Unicode scalar value: {integer}");
         }
     }
 
-    let result = builder.finish();
-
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls.cloned())?) as ArrayRef)
 }
 
 #[user_doc(
@@ -102,10 +110,6 @@ impl ChrFunc {
 }
 
 impl ScalarUDFImpl for ChrFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "chr"
     }
@@ -119,7 +123,32 @@ impl ScalarUDFImpl for ChrFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(chr, vec![])(&args.args)
+        let [arg] = take_function_args(self.name(), args.args)?;
+
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(code_point))) => {
+                if let Ok(u) = u32::try_from(code_point)
+                    && let Some(c) = core::char::from_u32(u)
+                {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                        c.to_string(),
+                    ))))
+                } else {
+                    exec_err!("invalid Unicode scalar value: {code_point}")
+                }
+            }
+            ColumnarValue::Scalar(ScalarValue::Int64(None)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+            }
+            ColumnarValue::Array(array) => {
+                let integer_array = as_int64_array(&array)?;
+                Ok(ColumnarValue::Array(chr_array(integer_array)?))
+            }
+            other => internal_err!(
+                "Unexpected data type {:?} for function chr",
+                other.data_type()
+            ),
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -130,13 +159,26 @@ impl ScalarUDFImpl for ChrFunc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, Int64Array, StringArray};
+
+    use arrow::array::{Array, StringArray};
+    use arrow::datatypes::Field;
     use datafusion_common::assert_contains;
+    use datafusion_common::config::ConfigOptions;
+
+    fn invoke_chr(arg: ColumnarValue, number_rows: usize) -> Result<ColumnarValue> {
+        ChrFunc::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![arg],
+            arg_fields: vec![Field::new("a", Int64, true).into()],
+            number_rows,
+            return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        })
+    }
 
     #[test]
     fn test_chr_normal() {
         let input = Arc::new(Int64Array::from(vec![
-            Some(0),        // null
+            Some(0),        // \u{0000}
             Some(65),       // A
             Some(66),       // B
             Some(67),       // C
@@ -149,8 +191,13 @@ mod tests {
             Some(9),        // tab
             Some(0x10FFFF), // 0x10FFFF, the largest Unicode code point
         ]));
-        let result = chr(&[input]).unwrap();
-        let string_array = result.as_any().downcast_ref::<StringArray>().unwrap();
+
+        let result = invoke_chr(ColumnarValue::Array(input), 12).unwrap();
+        let ColumnarValue::Array(arr) = result else {
+            panic!("Expected array");
+        };
+        let string_array = arr.as_any().downcast_ref::<StringArray>().unwrap();
+
         let expected = [
             "\u{0000}",
             "A",
@@ -167,62 +214,61 @@ mod tests {
         ];
 
         assert_eq!(string_array.len(), expected.len());
+        assert_eq!(string_array.null_count(), 1);
+        assert!(string_array.is_null(7));
         for (i, e) in expected.iter().enumerate() {
+            if i == 7 {
+                continue;
+            }
+            assert!(!string_array.is_null(i));
             assert_eq!(string_array.value(i), *e);
         }
     }
 
     #[test]
     fn test_chr_error() {
-        // invalid Unicode code points (too large)
         let input = Arc::new(Int64Array::from(vec![i64::MAX]));
-        let result = chr(&[input]);
+        let result = invoke_chr(ColumnarValue::Array(input), 1);
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
             "invalid Unicode scalar value: 9223372036854775807"
         );
 
-        // invalid Unicode code points (too large) case 2
         let input = Arc::new(Int64Array::from(vec![0x10FFFF + 1]));
-        let result = chr(&[input]);
+        let result = invoke_chr(ColumnarValue::Array(input), 1);
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
             "invalid Unicode scalar value: 1114112"
         );
 
-        // invalid Unicode code points (surrogate code point)
-        // link: <https://learn.microsoft.com/en-us/globalization/encoding/unicode-standard#surrogate-pairs>
         let input = Arc::new(Int64Array::from(vec![0xD800 + 1]));
-        let result = chr(&[input]);
+        let result = invoke_chr(ColumnarValue::Array(input), 1);
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
             "invalid Unicode scalar value: 55297"
         );
 
-        // negative input
-        let input = Arc::new(Int64Array::from(vec![i64::MIN + 2i64])); // will be 2 if cast to u32
-        let result = chr(&[input]);
+        let input = Arc::new(Int64Array::from(vec![i64::MIN + 2i64]));
+        let result = invoke_chr(ColumnarValue::Array(input), 1);
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
             "invalid Unicode scalar value: -9223372036854775806"
         );
 
-        // negative input case 2
         let input = Arc::new(Int64Array::from(vec![-1]));
-        let result = chr(&[input]);
+        let result = invoke_chr(ColumnarValue::Array(input), 1);
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
             "invalid Unicode scalar value: -1"
         );
 
-        // one error with valid values after
-        let input = Arc::new(Int64Array::from(vec![65, -1, 66])); // A, -1, B
-        let result = chr(&[input]);
+        let input = Arc::new(Int64Array::from(vec![65, -1, 66]));
+        let result = invoke_chr(ColumnarValue::Array(input), 3);
         assert!(result.is_err());
         assert_contains!(
             result.err().unwrap().to_string(),
@@ -232,10 +278,36 @@ mod tests {
 
     #[test]
     fn test_chr_empty() {
-        // empty input array
         let input = Arc::new(Int64Array::from(Vec::<i64>::new()));
-        let result = chr(&[input]).unwrap();
-        let string_array = result.as_any().downcast_ref::<StringArray>().unwrap();
+        let result = invoke_chr(ColumnarValue::Array(input), 0).unwrap();
+        let ColumnarValue::Array(arr) = result else {
+            panic!("Expected array");
+        };
+        let string_array = arr.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(string_array.len(), 0);
+    }
+
+    #[test]
+    fn test_chr_scalar() {
+        let result =
+            invoke_chr(ColumnarValue::Scalar(ScalarValue::Int64(Some(65))), 1).unwrap();
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => {
+                assert_eq!(s, "A");
+            }
+            other => panic!("Unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_chr_scalar_null() {
+        let result =
+            invoke_chr(ColumnarValue::Scalar(ScalarValue::Int64(None)), 1).unwrap();
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {}
+            other => panic!("Unexpected result: {other:?}"),
+        }
     }
 }

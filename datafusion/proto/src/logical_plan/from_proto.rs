@@ -17,15 +17,18 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::Field;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
     NullEquality, RecursionUnnestOption, Result, ScalarValue, TableReference,
     UnnestOptions, exec_datafusion_err, internal_err, plan_datafusion_err,
 };
+use datafusion_execution::TaskContext;
 use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{Alias, NullTreatment, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
+use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
@@ -51,10 +54,12 @@ use crate::protobuf::{
     },
 };
 
-use super::LogicalExtensionCodec;
+use crate::convert::{FromProto, TryFromProto};
 
-impl From<&protobuf::UnnestOptions> for UnnestOptions {
-    fn from(opts: &protobuf::UnnestOptions) -> Self {
+use super::{AsLogicalPlan, LogicalExtensionCodec};
+
+impl FromProto<&protobuf::UnnestOptions> for UnnestOptions {
+    fn from_proto(opts: &protobuf::UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
             recursions: opts
@@ -70,8 +75,8 @@ impl From<&protobuf::UnnestOptions> for UnnestOptions {
     }
 }
 
-impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
-    fn from(units: protobuf::WindowFrameUnits) -> Self {
+impl FromProto<protobuf::WindowFrameUnits> for WindowFrameUnits {
+    fn from_proto(units: protobuf::WindowFrameUnits) -> Self {
         match units {
             protobuf::WindowFrameUnits::Rows => Self::Rows,
             protobuf::WindowFrameUnits::Range => Self::Range,
@@ -80,10 +85,10 @@ impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
     }
 }
 
-impl TryFrom<protobuf::TableReference> for TableReference {
+impl TryFromProto<protobuf::TableReference> for TableReference {
     type Error = Error;
 
-    fn try_from(value: protobuf::TableReference) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: protobuf::TableReference) -> Result<Self, Self::Error> {
         use protobuf::table_reference::TableReferenceEnum;
         let table_reference_enum = value
             .table_reference_enum
@@ -106,8 +111,8 @@ impl TryFrom<protobuf::TableReference> for TableReference {
     }
 }
 
-impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
-    fn from(stringified_plan: &protobuf::StringifiedPlan) -> Self {
+impl FromProto<&protobuf::StringifiedPlan> for StringifiedPlan {
+    fn from_proto(stringified_plan: &protobuf::StringifiedPlan) -> Self {
         Self {
             plan_type: match stringified_plan
                 .plan_type
@@ -149,19 +154,25 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
     }
 }
 
-impl TryFrom<protobuf::WindowFrame> for WindowFrame {
+impl TryFromProto<protobuf::WindowFrame> for WindowFrame {
     type Error = Error;
 
-    fn try_from(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
-        let units = protobuf::WindowFrameUnits::try_from(window.window_frame_units)
-            .map_err(|_| Error::unknown("WindowFrameUnits", window.window_frame_units))?
-            .into();
-        let start_bound = window.start_bound.required("start_bound")?;
+    fn try_from_proto(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
+        let units = WindowFrameUnits::from_proto(
+            protobuf::WindowFrameUnits::try_from(window.window_frame_units).map_err(
+                |_| Error::unknown("WindowFrameUnits", window.window_frame_units),
+            )?,
+        );
+        let start_bound = WindowFrameBound::try_from_proto(
+            window
+                .start_bound
+                .ok_or_else(|| Error::required("start_bound"))?,
+        )?;
         let end_bound = window
             .end_bound
             .map(|end_bound| match end_bound {
                 protobuf::window_frame::EndBound::Bound(end_bound) => {
-                    end_bound.try_into()
+                    WindowFrameBound::try_from_proto(end_bound)
                 }
             })
             .transpose()?
@@ -170,10 +181,10 @@ impl TryFrom<protobuf::WindowFrame> for WindowFrame {
     }
 }
 
-impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
+impl TryFromProto<protobuf::WindowFrameBound> for WindowFrameBound {
     type Error = Error;
 
-    fn try_from(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
+    fn try_from_proto(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
         let bound_type =
             protobuf::WindowFrameBoundType::try_from(bound.window_frame_bound_type)
                 .map_err(|_| {
@@ -193,8 +204,8 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
     }
 }
 
-impl From<protobuf::JoinType> for JoinType {
-    fn from(t: protobuf::JoinType) -> Self {
+impl FromProto<protobuf::JoinType> for JoinType {
+    fn from_proto(t: protobuf::JoinType) -> Self {
         match t {
             protobuf::JoinType::Inner => JoinType::Inner,
             protobuf::JoinType::Left => JoinType::Left,
@@ -210,8 +221,8 @@ impl From<protobuf::JoinType> for JoinType {
     }
 }
 
-impl From<protobuf::JoinConstraint> for JoinConstraint {
-    fn from(t: protobuf::JoinConstraint) -> Self {
+impl FromProto<protobuf::JoinConstraint> for JoinConstraint {
+    fn from_proto(t: protobuf::JoinConstraint) -> Self {
         match t {
             protobuf::JoinConstraint::On => JoinConstraint::On,
             protobuf::JoinConstraint::Using => JoinConstraint::Using,
@@ -219,8 +230,8 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
     }
 }
 
-impl From<protobuf::NullEquality> for NullEquality {
-    fn from(t: protobuf::NullEquality) -> Self {
+impl FromProto<protobuf::NullEquality> for NullEquality {
+    fn from_proto(t: protobuf::NullEquality) -> Self {
         match t {
             protobuf::NullEquality::NullEqualsNothing => NullEquality::NullEqualsNothing,
             protobuf::NullEquality::NullEqualsNull => NullEquality::NullEqualsNull,
@@ -228,8 +239,8 @@ impl From<protobuf::NullEquality> for NullEquality {
     }
 }
 
-impl From<protobuf::dml_node::Type> for WriteOp {
-    fn from(t: protobuf::dml_node::Type) -> Self {
+impl FromProto<protobuf::dml_node::Type> for WriteOp {
+    fn from_proto(t: protobuf::dml_node::Type) -> Self {
         match t {
             protobuf::dml_node::Type::Update => WriteOp::Update,
             protobuf::dml_node::Type::Delete => WriteOp::Delete,
@@ -239,12 +250,13 @@ impl From<protobuf::dml_node::Type> for WriteOp {
             }
             protobuf::dml_node::Type::InsertReplace => WriteOp::Insert(InsertOp::Replace),
             protobuf::dml_node::Type::Ctas => WriteOp::Ctas,
+            protobuf::dml_node::Type::Truncate => WriteOp::Truncate,
         }
     }
 }
 
-impl From<protobuf::NullTreatment> for NullTreatment {
-    fn from(t: protobuf::NullTreatment) -> Self {
+impl FromProto<protobuf::NullTreatment> for NullTreatment {
+    fn from_proto(t: protobuf::NullTreatment) -> Self {
         match t {
             protobuf::NullTreatment::RespectNulls => NullTreatment::RespectNulls,
             protobuf::NullTreatment::IgnoreNulls => NullTreatment::IgnoreNulls,
@@ -254,7 +266,7 @@ impl From<protobuf::NullTreatment> for NullTreatment {
 
 pub fn parse_expr(
     proto: &protobuf::LogicalExprNode,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Expr, Error> {
     use protobuf::{logical_expr_node::ExprType, window_expr_node};
@@ -267,7 +279,7 @@ pub fn parse_expr(
     match expr_type {
         ExprType::BinaryExpr(binary_expr) => {
             let op = from_proto_binary_op(&binary_expr.op)?;
-            let operands = parse_exprs(&binary_expr.operands, registry, codec)?;
+            let operands = parse_exprs(&binary_expr.operands, ctx, codec)?;
 
             if operands.len() < 2 {
                 return Err(proto_error(
@@ -294,13 +306,13 @@ pub fn parse_expr(
                 .window_function
                 .as_ref()
                 .ok_or_else(|| Error::required("window_function"))?;
-            let partition_by = parse_exprs(&expr.partition_by, registry, codec)?;
-            let mut order_by = parse_sorts(&expr.order_by, registry, codec)?;
+            let partition_by = parse_exprs(&expr.partition_by, ctx, codec)?;
+            let mut order_by = parse_sorts(&expr.order_by, ctx, codec)?;
             let window_frame = expr
                 .window_frame
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
-                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                    let window_frame = WindowFrame::try_from_proto(window_frame.clone())?;
                     window_frame
                         .regularize_order_bys(&mut order_by)
                         .map(|_| window_frame)
@@ -318,7 +330,7 @@ pub fn parse_expr(
                             "Received a WindowExprNode message with unknown NullTreatment {null_treatment}",
                         ))
                     })?;
-                    Some(NullTreatment::from(null_treatment))
+                    Some(NullTreatment::from_proto(null_treatment))
                 }
                 None => None,
             };
@@ -327,7 +339,7 @@ pub fn parse_expr(
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
-                        None => registry
+                        None => ctx
                             .udaf(udaf_name)
                             .or_else(|_| codec.try_decode_udaf(udaf_name, &[]))?,
                     };
@@ -336,7 +348,7 @@ pub fn parse_expr(
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
                     let udwf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
-                        None => registry
+                        None => ctx
                             .udwf(udwf_name)
                             .or_else(|_| codec.try_decode_udwf(udwf_name, &[]))?,
                     };
@@ -344,7 +356,7 @@ pub fn parse_expr(
                 }
             };
 
-            let args = parse_exprs(&expr.exprs, registry, codec)?;
+            let args = parse_exprs(&expr.exprs, ctx, codec)?;
             let mut builder = Expr::from(WindowFunction::new(agg_fn, args))
                 .partition_by(partition_by)
                 .order_by(order_by)
@@ -355,8 +367,7 @@ pub fn parse_expr(
                 builder = builder.distinct();
             };
 
-            if let Some(filter) =
-                parse_optional_expr(expr.filter.as_deref(), registry, codec)?
+            if let Some(filter) = parse_optional_expr(expr.filter.as_deref(), ctx, codec)?
             {
                 builder = builder.filter(filter);
             }
@@ -364,79 +375,79 @@ pub fn parse_expr(
             builder.build().map_err(Error::DataFusionError)
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
-            parse_required_expr(alias.expr.as_deref(), registry, "expr", codec)?,
+            parse_required_expr(alias.expr.as_deref(), ctx, "expr", codec)?,
             alias
                 .relation
                 .first()
-                .map(|r| TableReference::try_from(r.clone()))
+                .map(|r| TableReference::try_from_proto(r.clone()))
                 .transpose()?,
             alias.alias.clone(),
         ))),
         ExprType::IsNullExpr(is_null) => Ok(Expr::IsNull(Box::new(parse_required_expr(
             is_null.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsNotNullExpr(is_not_null) => Ok(Expr::IsNotNull(Box::new(
-            parse_required_expr(is_not_null.expr.as_deref(), registry, "expr", codec)?,
+            parse_required_expr(is_not_null.expr.as_deref(), ctx, "expr", codec)?,
         ))),
         ExprType::NotExpr(not) => Ok(Expr::Not(Box::new(parse_required_expr(
             not.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsTrue(msg) => Ok(Expr::IsTrue(Box::new(parse_required_expr(
             msg.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsFalse(msg) => Ok(Expr::IsFalse(Box::new(parse_required_expr(
             msg.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsUnknown(msg) => Ok(Expr::IsUnknown(Box::new(parse_required_expr(
             msg.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsNotTrue(msg) => Ok(Expr::IsNotTrue(Box::new(parse_required_expr(
             msg.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsNotFalse(msg) => Ok(Expr::IsNotFalse(Box::new(parse_required_expr(
             msg.expr.as_deref(),
-            registry,
+            ctx,
             "expr",
             codec,
         )?))),
         ExprType::IsNotUnknown(msg) => Ok(Expr::IsNotUnknown(Box::new(
-            parse_required_expr(msg.expr.as_deref(), registry, "expr", codec)?,
+            parse_required_expr(msg.expr.as_deref(), ctx, "expr", codec)?,
         ))),
         ExprType::Between(between) => Ok(Expr::Between(Between::new(
             Box::new(parse_required_expr(
                 between.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
             between.negated,
             Box::new(parse_required_expr(
                 between.low.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
             Box::new(parse_required_expr(
                 between.high.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
@@ -445,13 +456,13 @@ pub fn parse_expr(
             like.negated,
             Box::new(parse_required_expr(
                 like.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
             Box::new(parse_required_expr(
                 like.pattern.as_deref(),
-                registry,
+                ctx,
                 "pattern",
                 codec,
             )?),
@@ -462,13 +473,13 @@ pub fn parse_expr(
             like.negated,
             Box::new(parse_required_expr(
                 like.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
             Box::new(parse_required_expr(
                 like.pattern.as_deref(),
-                registry,
+                ctx,
                 "pattern",
                 codec,
             )?),
@@ -479,13 +490,13 @@ pub fn parse_expr(
             like.negated,
             Box::new(parse_required_expr(
                 like.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
             Box::new(parse_required_expr(
                 like.pattern.as_deref(),
-                registry,
+                ctx,
                 "pattern",
                 codec,
             )?),
@@ -499,13 +510,13 @@ pub fn parse_expr(
                 .map(|e| {
                     let when_expr = parse_required_expr(
                         e.when_expr.as_ref(),
-                        registry,
+                        ctx,
                         "when_expr",
                         codec,
                     )?;
                     let then_expr = parse_required_expr(
                         e.then_expr.as_ref(),
-                        registry,
+                        ctx,
                         "then_expr",
                         codec,
                     )?;
@@ -513,37 +524,45 @@ pub fn parse_expr(
                 })
                 .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
             Ok(Expr::Case(Case::new(
-                parse_optional_expr(case.expr.as_deref(), registry, codec)?.map(Box::new),
+                parse_optional_expr(case.expr.as_deref(), ctx, codec)?.map(Box::new),
                 when_then_expr,
-                parse_optional_expr(case.else_expr.as_deref(), registry, codec)?
-                    .map(Box::new),
+                parse_optional_expr(case.else_expr.as_deref(), ctx, codec)?.map(Box::new),
             )))
         }
         ExprType::Cast(cast) => {
             let expr = Box::new(parse_required_expr(
                 cast.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?);
-            let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::Cast(Cast::new(expr, data_type)))
+            let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
+            let field = data_type
+                .into_nullable_field()
+                .with_nullable(cast.nullable.unwrap_or(true));
+            Ok(Expr::Cast(Cast::new_from_field(expr, Arc::new(field))))
         }
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(
                 cast.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?);
-            let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::TryCast(TryCast::new(expr, data_type)))
+            let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
+            let field = data_type
+                .into_nullable_field()
+                .with_nullable(cast.nullable.unwrap_or(true));
+            Ok(Expr::TryCast(TryCast::new_from_field(
+                expr,
+                Arc::new(field),
+            )))
         }
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
-            parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
+            parse_required_expr(negative.expr.as_deref(), ctx, "expr", codec)?,
         ))),
         ExprType::Unnest(unnest) => {
-            let mut exprs = parse_exprs(&unnest.exprs, registry, codec)?;
+            let mut exprs = parse_exprs(&unnest.exprs, ctx, codec)?;
             if exprs.len() != 1 {
                 return Err(proto_error("Unnest must have exactly one expression"));
             }
@@ -552,15 +571,18 @@ pub fn parse_expr(
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
                 in_list.expr.as_deref(),
-                registry,
+                ctx,
                 "expr",
                 codec,
             )?),
-            parse_exprs(&in_list.list, registry, codec)?,
+            parse_exprs(&in_list.list, ctx, codec)?,
             in_list.negated,
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
-            let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
+            let qualifier = qualifier
+                .to_owned()
+                .map(TableReference::try_from_proto)
+                .transpose()?;
             #[expect(deprecated)]
             Ok(Expr::Wildcard {
                 qualifier,
@@ -574,19 +596,19 @@ pub fn parse_expr(
         }) => {
             let scalar_fn = match fun_definition {
                 Some(buf) => codec.try_decode_udf(fun_name, buf)?,
-                None => registry
+                None => ctx
                     .udf(fun_name.as_str())
                     .or_else(|_| codec.try_decode_udf(fun_name, &[]))?,
             };
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
-                parse_exprs(args, registry, codec)?,
+                parse_exprs(args, ctx, codec)?,
             )))
         }
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = match &pb.fun_definition {
                 Some(buf) => codec.try_decode_udaf(&pb.fun_name, buf)?,
-                None => registry
+                None => ctx
                     .udaf(&pb.fun_name)
                     .or_else(|_| codec.try_decode_udaf(&pb.fun_name, &[]))?,
             };
@@ -598,17 +620,17 @@ pub fn parse_expr(
                             "Received an AggregateUdfExprNode message with unknown NullTreatment {null_treatment}",
                         ))
                     })?;
-                    Some(NullTreatment::from(null_treatment))
+                    Some(NullTreatment::from_proto(null_treatment))
                 }
                 None => None,
             };
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,
-                parse_exprs(&pb.args, registry, codec)?,
+                parse_exprs(&pb.args, ctx, codec)?,
                 pb.distinct,
-                parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
-                parse_sorts(&pb.order_by, registry, codec)?,
+                parse_optional_expr(pb.filter.as_deref(), ctx, codec)?.map(Box::new),
+                parse_sorts(&pb.order_by, ctx, codec)?,
                 null_treatment,
             )))
         }
@@ -616,15 +638,15 @@ pub fn parse_expr(
         ExprType::GroupingSet(GroupingSetNode { expr }) => {
             Ok(Expr::GroupingSet(GroupingSets(
                 expr.iter()
-                    .map(|expr_list| parse_exprs(&expr_list.expr, registry, codec))
+                    .map(|expr_list| parse_exprs(&expr_list.expr, ctx, codec))
                     .collect::<Result<Vec<_>, Error>>()?,
             )))
         }
         ExprType::Cube(CubeNode { expr }) => Ok(Expr::GroupingSet(GroupingSet::Cube(
-            parse_exprs(expr, registry, codec)?,
+            parse_exprs(expr, ctx, codec)?,
         ))),
         ExprType::Rollup(RollupNode { expr }) => Ok(Expr::GroupingSet(
-            GroupingSet::Rollup(parse_exprs(expr, registry, codec)?),
+            GroupingSet::Rollup(parse_exprs(expr, ctx, codec)?),
         )),
         ExprType::Placeholder(PlaceholderNode {
             id,
@@ -646,13 +668,41 @@ pub fn parse_expr(
                 )))
             }
         },
+        ExprType::ScalarSubqueryExpr(sq) => {
+            let subquery = parse_subquery(
+                sq.subquery
+                    .as_deref()
+                    .ok_or_else(|| Error::required("ScalarSubqueryExprNode.subquery"))?,
+                ctx,
+                codec,
+            )?;
+            Ok(Expr::ScalarSubquery(subquery))
+        }
     }
+}
+
+fn parse_subquery(
+    proto: &protobuf::SubqueryNode,
+    ctx: &TaskContext,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<Subquery, Error> {
+    let plan_node = proto
+        .subquery
+        .as_ref()
+        .ok_or_else(|| Error::required("SubqueryNode.subquery"))?;
+    let plan = plan_node.try_into_logical_plan(ctx, codec)?;
+    let outer_ref_columns = parse_exprs(&proto.outer_ref_columns, ctx, codec)?;
+    Ok(Subquery {
+        subquery: Arc::new(plan),
+        outer_ref_columns,
+        spans: Default::default(),
+    })
 }
 
 /// Parse a vector of `protobuf::LogicalExprNode`s.
 pub fn parse_exprs<'a, I>(
     protos: I,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Vec<Expr>, Error>
 where
@@ -661,7 +711,7 @@ where
     let res = protos
         .into_iter()
         .map(|elem| {
-            parse_expr(elem, registry, codec).map_err(|e| plan_datafusion_err!("{}", e))
+            parse_expr(elem, ctx, codec).map_err(|e| plan_datafusion_err!("{}", e))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(res)
@@ -669,7 +719,7 @@ where
 
 pub fn parse_sorts<'a, I>(
     protos: I,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Vec<Sort>, Error>
 where
@@ -677,17 +727,17 @@ where
 {
     protos
         .into_iter()
-        .map(|sort| parse_sort(sort, registry, codec))
+        .map(|sort| parse_sort(sort, ctx, codec))
         .collect::<Result<Vec<Sort>, Error>>()
 }
 
 pub fn parse_sort(
     sort: &protobuf::SortExprNode,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Sort, Error> {
     Ok(Sort::new(
-        parse_required_expr(sort.expr.as_ref(), registry, "expr", codec)?,
+        parse_required_expr(sort.expr.as_ref(), ctx, "expr", codec)?,
         sort.asc,
         sort.nulls_first,
     ))
@@ -703,63 +753,32 @@ fn parse_escape_char(s: &str) -> Result<Option<char>> {
 }
 
 pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
-    match op {
-        "And" => Ok(Operator::And),
-        "Or" => Ok(Operator::Or),
-        "Eq" => Ok(Operator::Eq),
-        "NotEq" => Ok(Operator::NotEq),
-        "LtEq" => Ok(Operator::LtEq),
-        "Lt" => Ok(Operator::Lt),
-        "Gt" => Ok(Operator::Gt),
-        "GtEq" => Ok(Operator::GtEq),
-        "Plus" => Ok(Operator::Plus),
-        "Minus" => Ok(Operator::Minus),
-        "Multiply" => Ok(Operator::Multiply),
-        "Divide" => Ok(Operator::Divide),
-        "Modulo" => Ok(Operator::Modulo),
-        "IsDistinctFrom" => Ok(Operator::IsDistinctFrom),
-        "IsNotDistinctFrom" => Ok(Operator::IsNotDistinctFrom),
-        "BitwiseAnd" => Ok(Operator::BitwiseAnd),
-        "BitwiseOr" => Ok(Operator::BitwiseOr),
-        "BitwiseXor" => Ok(Operator::BitwiseXor),
-        "BitwiseShiftLeft" => Ok(Operator::BitwiseShiftLeft),
-        "BitwiseShiftRight" => Ok(Operator::BitwiseShiftRight),
-        "RegexIMatch" => Ok(Operator::RegexIMatch),
-        "RegexMatch" => Ok(Operator::RegexMatch),
-        "RegexNotIMatch" => Ok(Operator::RegexNotIMatch),
-        "RegexNotMatch" => Ok(Operator::RegexNotMatch),
-        "LikeMatch" => Ok(Operator::LikeMatch),
-        "ILikeMatch" => Ok(Operator::ILikeMatch),
-        "NotLikeMatch" => Ok(Operator::NotLikeMatch),
-        "NotILikeMatch" => Ok(Operator::NotILikeMatch),
-        "StringConcat" => Ok(Operator::StringConcat),
-        "AtArrow" => Ok(Operator::AtArrow),
-        "ArrowAt" => Ok(Operator::ArrowAt),
-        other => Err(proto_error(format!(
-            "Unsupported binary operator '{other:?}'"
-        ))),
-    }
+    // The proto-string <-> `Operator` mapping is canonically owned by
+    // `datafusion-expr-common` so `datafusion-proto` (logical plans) and
+    // `PhysicalExpr` decoders (e.g. `BinaryExpr`) share one source of truth.
+    Operator::from_proto_name(op)
+        .ok_or_else(|| proto_error(format!("Unsupported binary operator '{op:?}'")))
 }
 
 fn parse_optional_expr(
     p: Option<&protobuf::LogicalExprNode>,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Option<Expr>, Error> {
     match p {
-        Some(expr) => parse_expr(expr, registry, codec).map(Some),
+        Some(expr) => parse_expr(expr, ctx, codec).map(Some),
         None => Ok(None),
     }
 }
 
 fn parse_required_expr(
     p: Option<&protobuf::LogicalExprNode>,
-    registry: &dyn FunctionRegistry,
+    ctx: &TaskContext,
     field: impl Into<String>,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Expr, Error> {
     match p {
-        Some(expr) => parse_expr(expr, registry, codec),
+        Some(expr) => parse_expr(expr, ctx, codec),
         None => Err(Error::required(field)),
     }
 }

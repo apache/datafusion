@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use datafusion_common::Result;
-use datafusion_physical_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr::{Distribution, LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -58,6 +58,56 @@ pub fn add_sort_above<T: Clone + Default>(
     PlanContext::new(Arc::new(new_sort), T::default(), vec![node])
 }
 
+/// Like [`add_sort_above`], but also inserts a [`SortPreservingMergeExec`] when
+/// the parent distribution requires a single partition and the input has
+/// multiple partitions. This prevents `SortExec(preserve_partitioning=true)`
+/// from violating `SinglePartition` requirements.
+pub fn add_sort_above_with_distribution<T: Clone + Default>(
+    node: PlanContext<T>,
+    sort_requirements: LexRequirement,
+    fetch: Option<usize>,
+    required_distribution: &Distribution,
+) -> PlanContext<T> {
+    let mut sort_reqs: Vec<_> = sort_requirements.into();
+    sort_reqs.retain(|sort_expr| {
+        node.plan
+            .equivalence_properties()
+            .is_expr_constant(&sort_expr.expr)
+            .is_none()
+    });
+    let sort_exprs = sort_reqs.into_iter().map(Into::into).collect::<Vec<_>>();
+    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+        return node;
+    };
+    let input_has_multiple_partitions =
+        node.plan.output_partitioning().partition_count() > 1;
+
+    let mut new_sort =
+        SortExec::new(ordering.clone(), Arc::clone(&node.plan)).with_fetch(fetch);
+    if input_has_multiple_partitions {
+        new_sort = new_sort.with_preserve_partitioning(true);
+    }
+
+    let sort_node = PlanContext::new(Arc::new(new_sort), T::default(), vec![node]);
+
+    // If the parent requires SinglePartition and the input has multiple partitions,
+    // wrap the partition-preserving sort in SortPreservingMergeExec.
+    if matches!(required_distribution, Distribution::SinglePartition)
+        && input_has_multiple_partitions
+    {
+        PlanContext::new(
+            Arc::new(
+                SortPreservingMergeExec::new(ordering, Arc::clone(&sort_node.plan))
+                    .with_fetch(fetch),
+            ),
+            T::default(),
+            vec![sort_node],
+        )
+    } else {
+        sort_node
+    }
+}
+
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning. If
 /// requirement is already satisfied no `SortExec` is added.
@@ -79,37 +129,37 @@ pub fn add_sort_above_with_check<T: Clone + Default>(
 
 /// Checks whether the given operator is a [`SortExec`].
 pub fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<SortExec>()
+    plan.is::<SortExec>()
 }
 
 /// Checks whether the given operator is a window;
 /// i.e. either a [`WindowAggExec`] or a [`BoundedWindowAggExec`].
 pub fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<WindowAggExec>() || plan.as_any().is::<BoundedWindowAggExec>()
+    plan.is::<WindowAggExec>() || plan.is::<BoundedWindowAggExec>()
 }
 
 /// Checks whether the given operator is a [`UnionExec`].
 pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<UnionExec>()
+    plan.is::<UnionExec>()
 }
 
 /// Checks whether the given operator is a [`SortPreservingMergeExec`].
 pub fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<SortPreservingMergeExec>()
+    plan.is::<SortPreservingMergeExec>()
 }
 
 /// Checks whether the given operator is a [`CoalescePartitionsExec`].
 pub fn is_coalesce_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<CoalescePartitionsExec>()
+    plan.is::<CoalescePartitionsExec>()
 }
 
 /// Checks whether the given operator is a [`RepartitionExec`].
 pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<RepartitionExec>()
+    plan.is::<RepartitionExec>()
 }
 
 /// Checks whether the given operator is a limit;
 /// i.e. either a [`LocalLimitExec`] or a [`GlobalLimitExec`].
 pub fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
+    plan.is::<GlobalLimitExec>() || plan.is::<LocalLimitExec>()
 }

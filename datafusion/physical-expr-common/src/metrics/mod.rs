@@ -20,15 +20,19 @@
 mod baseline;
 mod builder;
 mod custom;
+mod elapsed_compute;
 mod expression;
 mod value;
 
 use datafusion_common::HashMap;
+pub use datafusion_common::format::{MetricCategory, MetricType};
 use parking_lot::Mutex;
 use std::{
     borrow::Cow,
-    fmt::{Debug, Display},
+    fmt::{self, Debug, Display},
+    hash::{Hash, Hasher},
     sync::Arc,
+    vec::IntoIter,
 };
 
 // public exports
@@ -36,6 +40,7 @@ use std::{
 pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics, SplitMetrics};
 pub use builder::MetricBuilder;
 pub use custom::CustomMetricValue;
+pub use elapsed_compute::{ElapsedComputeFuture, ElapsedComputeFutureExt};
 pub use expression::ExpressionEvaluatorMetrics;
 pub use value::{
     Count, Gauge, MetricValue, PruningMetrics, RatioMergeStrategy, RatioMetrics,
@@ -81,31 +86,17 @@ pub struct Metric {
     partition: Option<usize>,
 
     metric_type: MetricType,
-}
 
-/// Categorizes metrics so the display layer can choose the desired verbosity.
-///
-/// # How is it used:
-/// The `datafusion.explain.analyze_level` configuration controls which category is shown.
-/// - When set to `dev`, all metrics with type `MetricType::Summary` or `MetricType::DEV`
-///   will be shown.
-/// - When set to `summary`, only metrics with type `MetricType::Summary` are shown.
-///
-/// # Difference from `EXPLAIN ANALYZE VERBOSE`:  
-/// The `VERBOSE` keyword controls whether per-partition metrics are shown (when specified),  
-/// or aggregated metrics are displayed (when omitted).  
-/// In contrast, the `analyze_level` configuration determines which categories or
-/// levels of metrics are displayed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MetricType {
-    /// Common metrics for high-level insights (answering which operator is slow)
-    SUMMARY,
-    /// For deep operator-level introspection for developers
-    DEV,
+    /// Optional semantic category (rows / bytes / timing).
+    ///
+    /// When `None` (the default for custom metrics), the metric is
+    /// **always included** unless the user sets
+    /// `analyze_categories = 'none'`.
+    metric_category: Option<MetricCategory>,
 }
 
 impl Display for Metric {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.value.name())?;
 
         let mut iter = self
@@ -146,7 +137,8 @@ impl Metric {
             value,
             labels: vec![],
             partition,
-            metric_type: MetricType::DEV,
+            metric_type: MetricType::Dev,
+            metric_category: None,
         }
     }
 
@@ -161,13 +153,23 @@ impl Metric {
             value,
             labels,
             partition,
-            metric_type: MetricType::DEV,
+            metric_type: MetricType::Dev,
+            metric_category: None,
         }
     }
 
-    /// Set the type for this metric. Defaults to [`MetricType::DEV`]
+    /// Set the type for this metric. Defaults to [`MetricType::Dev`]
     pub fn with_type(mut self, metric_type: MetricType) -> Self {
         self.metric_type = metric_type;
+        self
+    }
+
+    /// Set the semantic category for this metric.
+    ///
+    /// See [`MetricCategory`] for details on the determinism properties
+    /// of each category.
+    pub fn with_category(mut self, category: MetricCategory) -> Self {
+        self.metric_category = Some(category);
         self
     }
 
@@ -200,6 +202,13 @@ impl Metric {
     /// Return the metric type (verbosity level) associated with this metric
     pub fn metric_type(&self) -> MetricType {
         self.metric_type
+    }
+
+    /// Return the metric category, if one was declared.
+    ///
+    /// `None` means the metric is always included (except in `none` mode).
+    pub fn metric_category(&self) -> Option<MetricCategory> {
+        self.metric_category
     }
 }
 
@@ -327,6 +336,9 @@ impl MetricsSet {
                     let partition = None;
                     let mut accum = Metric::new(metric.value().new_empty(), partition)
                         .with_type(metric.metric_type());
+                    if let Some(cat) = metric.metric_category() {
+                        accum = accum.with_category(cat);
+                    }
                     accum.value_mut().aggregate(metric.value());
                     accum
                 });
@@ -379,11 +391,37 @@ impl MetricsSet {
             .collect::<Vec<_>>();
         Self { metrics }
     }
+
+    /// Returns a new `MetricsSet` filtered by [`MetricCategory`].
+    ///
+    /// - Metrics that declared a category are kept only when that
+    ///   category appears in `allowed`.
+    /// - Metrics with **no** declared category are treated as
+    ///   [`Uncategorized`](MetricCategory::Uncategorized) for filtering.
+    /// - An **empty** `allowed` slice means "plan only": all metrics are
+    ///   removed.
+    pub fn filter_by_categories(self, allowed: &[MetricCategory]) -> Self {
+        if allowed.is_empty() {
+            return Self { metrics: vec![] };
+        }
+
+        let metrics = self
+            .metrics
+            .into_iter()
+            .filter(|metric| {
+                let cat = metric
+                    .metric_category()
+                    .unwrap_or(MetricCategory::Uncategorized);
+                allowed.contains(&cat)
+            })
+            .collect::<Vec<_>>();
+        Self { metrics }
+    }
 }
 
 impl Display for MetricsSet {
     /// Format the [`MetricsSet`] as a single string
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut is_first = true;
         for i in self.metrics.iter() {
             if !is_first {
@@ -395,6 +433,38 @@ impl Display for MetricsSet {
             write!(f, "{i}")?;
         }
         Ok(())
+    }
+}
+
+impl IntoIterator for MetricsSet {
+    type Item = Arc<Metric>;
+    type IntoIter = IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.metrics.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a MetricsSet {
+    type Item = &'a Arc<Metric>;
+    type IntoIter = std::slice::Iter<'a, Arc<Metric>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.metrics.iter()
+    }
+}
+
+impl Extend<Arc<Metric>> for MetricsSet {
+    fn extend<I: IntoIterator<Item = Arc<Metric>>>(&mut self, iter: I) {
+        self.metrics.extend(iter);
+    }
+}
+
+impl FromIterator<Arc<Metric>> for MetricsSet {
+    fn from_iter<T: IntoIterator<Item = Arc<Metric>>>(iter: T) -> Self {
+        Self {
+            metrics: iter.into_iter().collect(),
+        }
     }
 }
 
@@ -431,6 +501,14 @@ impl ExecutionPlanMetricsSet {
     }
 }
 
+impl From<MetricsSet> for ExecutionPlanMetricsSet {
+    fn from(metrics: MetricsSet) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(metrics)),
+        }
+    }
+}
+
 /// `name=value` pairs identifying a metric. This concept is called various things
 /// in various different systems:
 ///
@@ -442,20 +520,19 @@ impl ExecutionPlanMetricsSet {
 /// telemetry]<https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/data-model.md>,
 /// etc.
 ///
-/// As the name and value are expected to mostly be constant strings,
-/// use a [`Cow`] to avoid copying / allocations in this common case.
+/// As the name and value are expected to often be constant strings, borrowed
+/// static strings avoid allocations in that common case. Dynamic strings are
+/// stored behind [`Arc<str>`] so cloning labels does not copy the underlying
+/// string data.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Label {
-    name: Cow<'static, str>,
-    value: Cow<'static, str>,
+    name: LabelValue,
+    value: LabelValue,
 }
 
 impl Label {
     /// Create a new [`Label`]
-    pub fn new(
-        name: impl Into<Cow<'static, str>>,
-        value: impl Into<Cow<'static, str>>,
-    ) -> Self {
+    pub fn new(name: impl Into<LabelValue>, value: impl Into<LabelValue>) -> Self {
         let name = name.into();
         let value = value.into();
         Self { name, value }
@@ -463,18 +540,101 @@ impl Label {
 
     /// Returns the name of this label
     pub fn name(&self) -> &str {
-        self.name.as_ref()
+        self.name.as_str()
     }
 
     /// Returns the value of this label
     pub fn value(&self) -> &str {
-        self.value.as_ref()
+        self.value.as_str()
     }
 }
 
 impl Display for Label {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}={}", self.name, self.value)
+    }
+}
+
+/// A label name or value.
+///
+/// String literals preserve the existing allocation-free path. Dynamic strings
+/// can be stored behind [`Arc<str>`], so cloning a [`Label`] only increments an
+/// atomic reference count and does not allocate or copy the underlying string
+/// data.
+#[derive(Clone)]
+pub struct LabelValue(LabelValueInner);
+
+/// Internal representation for label names and values.
+///
+/// `LabelValue` is public because `Label::new` accepts it, but these storage
+/// variants are implementation details. Keeping them private prevents external
+/// code from constructing or matching on `Static` and `Shared` directly.
+#[derive(Clone)]
+enum LabelValueInner {
+    Static(&'static str),
+    Shared(Arc<str>),
+}
+
+impl LabelValue {
+    /// Return this label value as a string slice.
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            LabelValueInner::Static(value) => value,
+            LabelValueInner::Shared(value) => value.as_ref(),
+        }
+    }
+}
+
+impl From<&'static str> for LabelValue {
+    fn from(value: &'static str) -> Self {
+        Self(LabelValueInner::Static(value))
+    }
+}
+
+impl From<String> for LabelValue {
+    fn from(value: String) -> Self {
+        Self(LabelValueInner::Shared(Arc::from(value)))
+    }
+}
+
+impl From<Arc<str>> for LabelValue {
+    fn from(value: Arc<str>) -> Self {
+        Self(LabelValueInner::Shared(value))
+    }
+}
+
+impl From<Cow<'static, str>> for LabelValue {
+    fn from(value: Cow<'static, str>) -> Self {
+        match value {
+            Cow::Borrowed(value) => value.into(),
+            Cow::Owned(value) => value.into(),
+        }
+    }
+}
+
+impl PartialEq for LabelValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for LabelValue {}
+
+impl Hash for LabelValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl Debug for LabelValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl Display for LabelValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Display::fmt(self.as_str(), f)
     }
 }
 
@@ -530,6 +690,18 @@ mod tests {
         let metric = Metric::new_with_labels(value, partition, vec![label]);
 
         assert_eq!("output_rows{partition=2, foo=bar}=66", metric.to_string())
+    }
+
+    #[test]
+    fn test_label_owned_and_borrowed_values_are_equal() {
+        let borrowed = Label::new("foo", "bar");
+        let owned = Label::new("foo".to_string(), "bar".to_string());
+        let shared = Label::new("foo", Arc::<str>::from("bar"));
+
+        assert_eq!(borrowed, owned);
+        assert_eq!(borrowed, shared);
+        assert_eq!(borrowed.to_string(), owned.to_string());
+        assert_eq!(borrowed.to_string(), shared.to_string());
     }
 
     #[test]
@@ -716,6 +888,52 @@ mod tests {
                 panic!("Not a timestamp");
             }
         };
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut metrics = MetricsSet::new();
+        let m1 = Arc::new(Metric::new(MetricValue::OutputRows(Count::new()), None));
+        let m2 = Arc::new(Metric::new(MetricValue::SpillCount(Count::new()), None));
+
+        metrics.extend([Arc::clone(&m1), Arc::clone(&m2)]);
+        assert_eq!(metrics.iter().count(), 2);
+
+        let m3 = Arc::new(Metric::new(MetricValue::SpilledBytes(Count::new()), None));
+        metrics.extend(std::iter::once(Arc::clone(&m3)));
+        assert_eq!(metrics.iter().count(), 3);
+    }
+
+    #[test]
+    fn test_collect() {
+        let m1 = Arc::new(Metric::new(MetricValue::OutputRows(Count::new()), None));
+        let m2 = Arc::new(Metric::new(MetricValue::SpillCount(Count::new()), None));
+
+        let metrics: MetricsSet =
+            vec![Arc::clone(&m1), Arc::clone(&m2)].into_iter().collect();
+        assert_eq!(metrics.iter().count(), 2);
+
+        let empty: MetricsSet = std::iter::empty().collect();
+        assert_eq!(empty.iter().count(), 0);
+    }
+
+    #[test]
+    fn test_into_iterator_by_ref() {
+        let mut metrics = MetricsSet::new();
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::OutputRows(Count::new()),
+            None,
+        )));
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::SpillCount(Count::new()),
+            None,
+        )));
+
+        let mut count = 0;
+        for _m in &metrics {
+            count += 1;
+        }
+        assert_eq!(count, 2);
     }
 
     #[test]

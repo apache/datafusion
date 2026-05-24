@@ -21,18 +21,19 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use super::AggregateExec;
 use super::order::GroupOrdering;
+use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    AggregateMode, PhysicalGroupBy, create_schema, evaluate_group_by, evaluate_many,
-    evaluate_optional,
+    AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_id_array,
+    max_duplicate_ordinal,
 };
-use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
-use crate::sorts::sort::sort_batch;
+use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::spill_manager::SpillManager;
+use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
@@ -40,7 +41,7 @@ use arrow::array::*;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err,
+    internal_err, resources_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -51,7 +52,9 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use crate::sorts::IncrementalSortIterator;
 use datafusion_common::instant::Instant;
+use datafusion_common::utils::memory::get_record_batch_memory_size;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -259,7 +262,7 @@ enum OutOfMemoryMode {
 ///
 ///         group_values                             accumulators
 ///
-///  ```
+/// ```
 ///
 /// For example, given a query like `COUNT(x), SUM(y) ... GROUP BY z`,
 /// [`group_values`] will store the distinct values of `z`. There will
@@ -359,6 +362,7 @@ pub(crate) struct GroupedHashAggregateStream {
     // the execution.
     // ========================================================================
     schema: SchemaRef,
+    input_schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
 
@@ -377,10 +381,10 @@ pub(crate) struct GroupedHashAggregateStream {
     ///
     /// For example, for an aggregate like `SUM(x) FILTER (WHERE x >= 100)`,
     /// the filter expression is  `x > 100`.
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
 
     /// GROUP BY expressions
-    group_by: PhysicalGroupBy,
+    group_by: Arc<PhysicalGroupBy>,
 
     /// max rows in output RecordBatches
     batch_size: usize,
@@ -465,8 +469,8 @@ impl GroupedHashAggregateStream {
     ) -> Result<Self> {
         debug!("Creating GroupedHashAggregateStream");
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_group_by = agg.group_by.clone();
-        let agg_filter_expr = agg.filter_expr.clone();
+        let agg_group_by = Arc::clone(&agg.group_by);
+        let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -475,7 +479,7 @@ impl GroupedHashAggregateStream {
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let aggregate_exprs = agg.aggr_expr.clone();
+        let aggregate_exprs = Arc::clone(&agg.aggr_expr);
 
         // arguments for each aggregate, one vec of expressions per
         // aggregate
@@ -491,13 +495,9 @@ impl GroupedHashAggregateStream {
             agg_group_by.num_group_exprs(),
         )?;
 
-        let filter_expressions = match agg.mode {
-            AggregateMode::Partial
-            | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => agg_filter_expr,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; agg.aggr_expr.len()]
-            }
+        let filter_expressions = match agg.mode.input_mode() {
+            AggregateInputMode::Raw => agg_filter_expr,
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
         };
 
         // Instantiate the accumulators
@@ -564,7 +564,11 @@ impl GroupedHashAggregateStream {
 
         let agg_fn_names = aggregate_exprs
             .iter()
-            .map(|expr| expr.human_display())
+            .map(|expr| {
+                format_human_display(expr.human_display(), expr.human_display_alias())
+                    .map(|display| display.into_owned())
+                    .unwrap_or_else(|| expr.name().to_string())
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
@@ -616,6 +620,7 @@ impl GroupedHashAggregateStream {
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
+                .with_category(MetricCategory::Bytes)
                 .gauge("peak_mem_used", partition),
             spill_manager,
         };
@@ -640,6 +645,7 @@ impl GroupedHashAggregateStream {
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
             let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
+                .with_category(MetricCategory::Rows)
                 .counter("skipped_aggregation_rows", partition);
             Some(SkipAggregationProbe::new(
                 probe_rows_threshold,
@@ -653,7 +659,7 @@ impl GroupedHashAggregateStream {
         let reduction_factor = if agg.mode == AggregateMode::Partial {
             Some(
                 MetricBuilder::new(&agg.metrics)
-                    .with_type(metrics::MetricType::SUMMARY)
+                    .with_type(metrics::MetricType::Summary)
                     .ratio_metrics("reduction_factor", partition),
             )
         } else {
@@ -662,6 +668,7 @@ impl GroupedHashAggregateStream {
 
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
+            input_schema: agg.input().schema(),
             input,
             mode: agg.mode,
             accumulators,
@@ -679,7 +686,7 @@ impl GroupedHashAggregateStream {
             group_ordering,
             input_done: false,
             spill_state,
-            group_values_soft_limit: agg.limit,
+            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
             reduction_factor,
         })
@@ -835,6 +842,10 @@ impl Stream for GroupedHashAggregateStream {
                                     self.group_values.len()
                                 )));
                             }
+                            // Release the input pipeline's resources.
+                            let input_schema = self.input.schema();
+                            self.input =
+                                Box::pin(EmptyRecordBatchStream::new(input_schema));
                             self.exec_state = ExecutionState::Done;
                         }
                     }
@@ -982,29 +993,24 @@ impl GroupedHashAggregateStream {
 
                 // Call the appropriate method on each aggregator with
                 // the entire input row and the relevant group indexes
-                match self.mode {
-                    AggregateMode::Partial
-                    | AggregateMode::Single
-                    | AggregateMode::SinglePartitioned
-                        if !self.spill_state.is_stream_merging =>
-                    {
-                        acc.update_batch(
-                            values,
-                            group_indices,
-                            opt_filter,
-                            total_num_groups,
-                        )?;
-                    }
-                    _ => {
-                        assert_or_internal_err!(
-                            opt_filter.is_none(),
-                            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
-                        );
+                if self.mode.input_mode() == AggregateInputMode::Raw
+                    && !self.spill_state.is_stream_merging
+                {
+                    acc.update_batch(
+                        values,
+                        group_indices,
+                        opt_filter,
+                        total_num_groups,
+                    )?;
+                } else {
+                    assert_or_internal_err!(
+                        opt_filter.is_none(),
+                        "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+                    );
 
-                        // if aggregation is over intermediate states,
-                        // use merge
-                        acc.merge_batch(values, group_indices, None, total_num_groups)?;
-                    }
+                    // if aggregation is over intermediate states,
+                    // use merge
+                    acc.merge_batch(values, group_indices, None, total_num_groups)?;
                 }
                 self.group_by_metrics
                     .aggregation_time
@@ -1045,22 +1051,42 @@ impl GroupedHashAggregateStream {
                     self.group_values.len()
                 };
 
-                if let Some(batch) = self.emit(EmitTo::First(n), false)? {
-                    Ok(Some(ExecutionState::ProducingOutput(batch)))
-                } else {
-                    Err(oom)
+                if let Some(emit_to) = self.group_ordering.oom_emit_to(n)
+                    && let Some(batch) = self.emit(emit_to, false)?
+                {
+                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
                 }
+                Err(oom)
             }
-            _ => Err(oom),
+            OutOfMemoryMode::EmitEarly
+            | OutOfMemoryMode::Spill
+            | OutOfMemoryMode::ReportError => Err(oom),
         }
     }
 
     fn update_memory_reservation(&mut self) -> Result<()> {
         let acc = self.accumulators.iter().map(|x| x.size()).sum::<usize>();
-        let new_size = acc
+        let groups_and_acc_size = acc
             + self.group_values.size()
             + self.group_ordering.size()
             + self.current_group_indices.allocated_size();
+
+        // Reserve extra headroom for sorting during potential spill.
+        // When OOM triggers, group_aggregate_batch has already processed the
+        // latest input batch, so the internal state may have grown well beyond
+        // the last successful reservation. The emit batch reflects this larger
+        // actual state, and the sort needs memory proportional to it.
+        // By reserving headroom equal to the data size, we trigger OOM earlier
+        // (before too much data accumulates), ensuring the freed reservation
+        // after clear_shrink is sufficient to cover the sort memory.
+        let sort_headroom =
+            if self.oom_mode == OutOfMemoryMode::Spill && !self.group_values.is_empty() {
+                acc + self.group_values.size()
+            } else {
+                0
+            };
+
+        let new_size = groups_and_acc_size + sort_headroom;
         let reservation_result = self.reservation.try_resize(new_size);
 
         if reservation_result.is_ok() {
@@ -1092,17 +1118,12 @@ impl GroupedHashAggregateStream {
 
         // Next output each aggregate value
         for acc in self.accumulators.iter_mut() {
-            match self.mode {
-                AggregateMode::Partial => output.extend(acc.state(emit_to)?),
-                _ if spilling => {
-                    // If spilling, output partial state because the spilled data will be
-                    // merged and re-evaluated later.
-                    output.extend(acc.state(emit_to)?)
-                }
-                AggregateMode::Final
-                | AggregateMode::FinalPartitioned
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
+            if self.mode.output_mode() == AggregateOutputMode::Final && !spilling {
+                output.push(acc.evaluate(emit_to)?)
+            } else {
+                // Output partial state: either because we're in a non-final mode,
+                // or because we're spilling and will merge/re-evaluate later.
+                output.extend(acc.state(emit_to)?)
             }
         }
         drop(timer);
@@ -1116,6 +1137,104 @@ impl GroupedHashAggregateStream {
         Ok(Some(batch))
     }
 
+    /// Registers groups for empty grouping sets when no input rows were seen.
+    ///
+    /// `GROUP BY GROUPING SETS (())` must always produce one row even when there
+    /// are no input rows (standard SQL semantics for a "grand total" group).
+    /// Mixed grouping sets like `GROUPING SETS (a, ())` also produce one row for
+    /// the empty set `()` on empty input.
+    ///
+    /// This method interns the group keys and primes the accumulators so they
+    /// produce their zero-row aggregate values (e.g. `NULL` for `SUM`,
+    /// `0` for `COUNT`).
+    fn init_empty_grouping_sets(&mut self) -> Result<()> {
+        if !self.group_by.has_grouping_set() || !self.group_values.is_empty() {
+            return Ok(());
+        }
+
+        let max_ordinal = max_duplicate_ordinal(self.group_by.groups());
+        let mut ordinals: std::collections::HashMap<&[bool], usize> =
+            std::collections::HashMap::new();
+        let group_schema = self.group_by.group_schema(&self.input_schema)?;
+        let n_expr = self.group_by.expr().len();
+        let mut any_interned = false;
+
+        for group in self.group_by.groups() {
+            let ordinal = {
+                let entry = ordinals.entry(group.as_slice()).or_insert(0);
+                let o = *entry;
+                *entry += 1;
+                o
+            };
+
+            if !group.iter().all(|&is_null| is_null) {
+                continue;
+            }
+
+            // Build the group key: one NULL per group-by expression, then the grouping_id.
+            let mut cols: Vec<ArrayRef> = group_schema
+                .fields()
+                .iter()
+                .take(n_expr)
+                .map(|f| new_null_array(f.data_type(), 1))
+                .collect();
+            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
+
+            let starting_groups = self.group_values.len();
+            self.group_values
+                .intern(&cols, &mut self.current_group_indices)?;
+            let total_groups = self.group_values.len();
+            if total_groups > starting_groups {
+                self.group_ordering.new_groups(
+                    &cols,
+                    &self.current_group_indices,
+                    total_groups,
+                )?;
+            }
+            any_interned = true;
+        }
+
+        if any_interned {
+            // Prime each accumulator for the registered group count with no data.
+            //
+            // We build 1-row null arrays for each aggregate argument and pass them
+            // with an all-false filter.  The filter ensures no row is accumulated
+            // into any group, which keeps every group in its "zero" initial state
+            // (NULL for SUM/AVG/MIN/MAX, 0 for COUNT).
+            //
+            // Using a 1-row batch rather than 0 rows is required to avoid a fast
+            // path in `NullState::accumulate` that treats "0 nulls in a 0-row
+            // array" as "all groups have been seen", which would cause SUM to
+            // return 0 instead of NULL.
+            //
+            // Argument types are inferred directly from the expression metadata so
+            // we never need to construct a full `RecordBatch`.
+            let total_groups = self.group_values.len();
+            let null_args: Vec<Vec<ArrayRef>> = self
+                .aggregate_arguments
+                .iter()
+                .map(|args| {
+                    args.iter()
+                        .map(|expr| {
+                            let dt = expr.data_type(&self.input_schema)?;
+                            Ok(new_null_array(&dt, 1))
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let false_filter = BooleanArray::from(vec![false]);
+            for (acc, args) in self.accumulators.iter_mut().zip(null_args.iter()) {
+                if self.mode.input_mode() == AggregateInputMode::Raw {
+                    acc.update_batch(args, &[0], Some(&false_filter), total_groups)?;
+                } else {
+                    acc.merge_batch(args, &[0], Some(&false_filter), total_groups)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Emit all intermediate aggregation states, sort them, and store them on disk.
     /// This process helps in reducing memory pressure by allowing the data to be
     /// read back with streaming merge.
@@ -1124,17 +1243,47 @@ impl GroupedHashAggregateStream {
         let Some(emit) = self.emit(EmitTo::All, true)? else {
             return Ok(());
         };
-        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
 
-        // Spill sorted state to disk
+        // Free accumulated state now that data has been emitted into `emit`.
+        // This must happen before reserving sort memory so the pool has room.
+        // Use 0 to minimize allocated capacity and maximize memory available for sorting.
+        self.clear_shrink(0);
+        self.update_memory_reservation()?;
+
+        let batch_size_ratio = self.batch_size as f32 / emit.num_rows() as f32;
+        let batch_memory = get_record_batch_memory_size(&emit);
+        // The maximum worst case for a sort is 2X the original underlying buffers(regardless of slicing)
+        // First we get the underlying buffers' size, then we get the sliced("actual") size of the batch,
+        // and multiply it by the ratio of batch_size to actual size to get the estimated memory needed for sorting the batch.
+        // If something goes wrong in get_sliced_size()(double counting or something),
+        // we fall back to the worst case.
+        let sort_memory = (batch_memory
+            + (emit.get_sliced_size()? as f32 * batch_size_ratio) as usize)
+            .min(batch_memory * 2);
+
+        // If we can't grow even that, we have no choice but to return an error since we can't spill to disk without sorting the data first.
+        self.reservation.try_grow(sort_memory).map_err(|err| {
+            resources_datafusion_err!(
+                "Failed to reserve memory for sort during spill: {err}"
+            )
+        })?;
+
+        let sorted_iter = IncrementalSortIterator::new(
+            emit,
+            self.spill_state.spill_expr.clone(),
+            self.batch_size,
+        );
         let spillfile = self
             .spill_state
             .spill_manager
-            .spill_record_batch_by_size_and_return_max_batch_memory(
-                &sorted,
+            .spill_record_batch_iter_and_return_max_batch_memory(
+                sorted_iter,
                 "HashAggSpill",
-                self.batch_size,
             )?;
+
+        // Shrink the memory we allocated for sorting as the sorting is fully done at this point.
+        self.reservation.shrink(sort_memory);
+
         match spillfile {
             Some((spillfile, max_record_batch_memory)) => {
                 self.spill_state.spills.push(SortedSpillFile {
@@ -1152,14 +1301,14 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    /// Clear memory and shirk capacities to the size of the batch.
+    /// Clear memory and shrink capacities to the given number of rows.
     fn clear_shrink(&mut self, num_rows: usize) {
         self.group_values.clear_shrink(num_rows);
         self.current_group_indices.clear();
         self.current_group_indices.shrink_to(num_rows);
     }
 
-    /// Clear memory and shirk capacities to zero.
+    /// Clear memory and shrink capacities to zero.
     fn clear_all(&mut self) {
         self.clear_shrink(0);
     }
@@ -1180,10 +1329,16 @@ impl GroupedHashAggregateStream {
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
         self.input_done = true;
         self.group_ordering.input_done();
+        // Release the original input pipeline's resources now that we're done
+        // reading from it. In the spill branch below, `self.input` is replaced
+        // again with a stream that merges spill files.
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
             // Input has been entirely processed without spilling to disk.
+            self.init_empty_grouping_sets()?;
 
             // Flush any remaining group values.
             let batch = self.emit(EmitTo::All, false)?;
@@ -1198,7 +1353,7 @@ impl GroupedHashAggregateStream {
             // instead.
             // Spilling to disk and reading back also ensures batch size is consistent
             // rather than potentially having one significantly larger last batch.
-            self.spill()?; // TODO: use sort_batch_chunked instead?
+            self.spill()?;
 
             // Mark that we're switching to stream merging mode.
             self.spill_state.is_stream_merging = true;
@@ -1220,6 +1375,18 @@ impl GroupedHashAggregateStream {
             // We can now use `GroupOrdering::Full` since the spill files are sorted
             // on the grouping columns.
             self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
+
+            // Recreate `group_values` for streaming merge so group ids are assigned
+            // in first-seen order, as required by `GroupOrderingFull`.
+            // The pre-spill multi-column collector may use `vectorized_intern`, which
+            // can assign new group ids out of input order under hash collisions.
+            let group_schema = self
+                .spill_state
+                .merging_group_by
+                .group_schema(&self.spill_state.spill_schema)?;
+            if group_schema.fields().len() > 1 {
+                self.group_values = new_group_values(group_schema, &self.group_ordering)?;
+            }
 
             // Use `OutOfMemoryMode::ReportError` from this point on
             // to ensure we don't spill the spilled data to disk again.
@@ -1305,16 +1472,15 @@ impl GroupedHashAggregateStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::InputOrderMode;
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {
@@ -1564,6 +1730,90 @@ mod tests {
             skipped_rows, batch3_rows,
             "Expected batch 3's rows ({batch3_rows}) to be skipped",
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_emit_early_with_partially_sorted() -> Result<()> {
+        // Reproducer for #20445: EmitEarly with PartiallySorted panics in
+        // remove_groups because it emits more groups than the sort boundary.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sort_col", DataType::Int32, false),
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+
+        // All rows share sort_col=1 (no sort boundary), with unique group_col
+        // values to create many groups and trigger memory pressure.
+        let n = 256;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1; n])),
+                Arc::new(Int32Array::from((0..n as i32).collect::<Vec<_>>())),
+                Arc::new(Int64Array::from(vec![1; n])),
+            ],
+        )?;
+
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(4096, 1.0)
+            .build_arc()?;
+        let mut task_ctx = TaskContext::default().with_runtime(runtime);
+        let mut cfg = task_ctx.session_config().clone();
+        cfg = cfg.set(
+            "datafusion.execution.batch_size",
+            &datafusion_common::ScalarValue::UInt64(Some(128)),
+        );
+        cfg = cfg.set(
+            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+            &datafusion_common::ScalarValue::UInt64(Some(u64::MAX)),
+        );
+        task_ctx = task_ctx.with_session_config(cfg);
+        let task_ctx = Arc::new(task_ctx);
+
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+            Column::new("sort_col", 0),
+        )
+            as _)])
+        .unwrap();
+        let exec = TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+
+        // GROUP BY sort_col, group_col with input sorted on sort_col
+        // gives PartiallySorted([0])
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![
+                (col("sort_col", &schema)?, "sort_col".to_string()),
+                (col("group_col", &schema)?, "group_col".to_string()),
+            ]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("count_value")
+                    .build()?,
+            )],
+            vec![None],
+            exec,
+            Arc::clone(&schema),
+        )?;
+        assert!(matches!(
+            aggregate_exec.input_order_mode(),
+            InputOrderMode::PartiallySorted(_)
+        ));
+
+        // Must not panic with "assertion failed: *current_sort >= n"
+        let mut stream = GroupedHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?;
+        while let Some(result) = stream.next().await {
+            if let Err(e) = result {
+                if e.to_string().contains("Resources exhausted") {
+                    break;
+                }
+                return Err(e);
+            }
+        }
 
         Ok(())
     }

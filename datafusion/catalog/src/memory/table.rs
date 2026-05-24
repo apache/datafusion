@@ -17,7 +17,6 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -40,7 +39,7 @@ use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::{
-    LexOrdering, create_physical_expr, create_physical_sort_exprs,
+    LexOrdering, PhysicalExpr, create_physical_expr, create_physical_sort_exprs,
 };
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -213,10 +212,6 @@ impl MemTable {
 
 #[async_trait]
 impl TableProvider for MemTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -400,10 +395,7 @@ impl TableProvider for MemTable {
         let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
 
         // Create physical expressions for assignments upfront (outside batch loop)
-        let physical_assignments: HashMap<
-            String,
-            Arc<dyn datafusion_physical_plan::PhysicalExpr>,
-        > = assignments
+        let physical_assignments: HashMap<String, Arc<dyn PhysicalExpr>> = assignments
             .iter()
             .map(|(name, expr)| {
                 let physical_expr =
@@ -549,7 +541,7 @@ fn evaluate_filters_to_mask(
 struct DmlResultExec {
     rows_affected: u64,
     schema: SchemaRef,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl DmlResultExec {
@@ -570,7 +562,7 @@ impl DmlResultExec {
         Self {
             rows_affected,
             schema,
-            properties,
+            properties: Arc::new(properties),
         }
     }
 }
@@ -596,15 +588,11 @@ impl ExecutionPlan for DmlResultExec {
         "DmlResultExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
