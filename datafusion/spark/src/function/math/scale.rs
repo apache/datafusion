@@ -17,7 +17,7 @@
 
 //! Shared helpers for scale-taking math functions (`round`, `ceil`, ...).
 
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::ColumnarValue;
 
 /// Extract the `scale` (decimal places) argument from `args[1]`.
@@ -60,6 +60,5 @@ fn out_of_range_err<T: std::fmt::Display>(
     fn_name: &str,
     v: T,
 ) -> datafusion_common::DataFusionError {
-    (exec_err!("{fn_name} scale {v} is out of supported i32 range") as Result<(), _>)
-        .unwrap_err()
+    exec_datafusion_err!("{fn_name} scale {v} is out of supported i32 range")
 }
