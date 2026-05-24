@@ -27,7 +27,7 @@ use crate::{
     file_stream::work_source::SharedWorkSource, source::DataSource,
     statistics::MinMaxStatistics,
 };
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::Fields;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
@@ -1095,7 +1095,7 @@ impl FileScanConfig {
     }
 
     /// Get the table partition columns
-    pub fn table_partition_cols(&self) -> &Vec<FieldRef> {
+    pub fn table_partition_cols(&self) -> &Fields {
         self.file_source.table_schema().table_partition_cols()
     }
 
@@ -2092,7 +2092,10 @@ mod tests {
             Some(vec![0, 2])
         );
         assert_eq!(new_config.limit, Some(10));
-        assert_eq!(*new_config.table_partition_cols(), partition_cols);
+        assert_eq!(
+            *new_config.table_partition_cols(),
+            Fields::from(partition_cols)
+        );
         assert_eq!(new_config.file_groups.len(), 1);
         assert_eq!(new_config.file_groups[0].len(), 1);
         assert_eq!(
