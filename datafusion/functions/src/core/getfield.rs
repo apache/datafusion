@@ -1014,13 +1014,10 @@ mod tests {
     #[test]
     fn simplify_get_field_named_struct_returns_matching_value() {
         // get_field(named_struct('min', a, 'max', b), 'max') => b
-        let expr = get_field(vec![
+        let args = vec![
             named_struct(vec![("min", col("a")), ("max", col("b"))]),
             lit_str("max"),
-        ]);
-        let Expr::ScalarFunction(ScalarFunction { args, .. }) = expr else {
-            unreachable!()
-        };
+        ];
         assert_eq!(simplified(args), col("b"));
     }
 
