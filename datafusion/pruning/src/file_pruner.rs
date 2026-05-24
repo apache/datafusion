@@ -76,18 +76,35 @@ impl FilePruner {
         })
     }
 
-    /// Create a new file pruner if statistics are available.
-    /// Returns None if this file does not have statistics.
+    /// Create a file pruner for this file, or `None` when pruning it cannot
+    /// help.
+    ///
+    /// Returns `None` when the file has no statistics struct to evaluate a
+    /// pruning predicate against, or when the predicate is purely static and the
+    /// file has no usable column statistics — in that case planning already did
+    /// everything such a pruner could. A predicate carrying a dynamic filter is
+    /// always accepted (given a statistics struct), since it may prune via
+    /// partition-value folding even without column statistics.
     pub fn try_new(
         predicate: Arc<dyn PhysicalExpr>,
         file_schema: &SchemaRef,
         partitioned_file: &PartitionedFile,
         predicate_creation_errors: Count,
     ) -> Option<Self> {
+        // A pruning predicate is evaluated against a statistics struct, so one
+        // must exist (its columns may all be `Absent`).
         let file_stats = partitioned_file.statistics.as_ref()?;
+        let tracking = DynamicFilterTracking::classify(&predicate);
+        // Only build a pruner when it could prune something planning didn't
+        // already: the file has real column statistics, or the predicate carries
+        // a dynamic filter (whose value, or folded partition columns, can prune
+        // even without column statistics). For a purely static predicate with no
+        // usable stats there is nothing to gain.
+        if !partitioned_file.has_statistics() && !tracking.contains_dynamic_filter() {
+            return None;
+        }
         let file_stats_pruning =
             PrunableStatistics::new(vec![file_stats.clone()], Arc::clone(file_schema));
-        let tracking = DynamicFilterTracking::classify(&predicate);
         Some(Self {
             predicate,
             tracking,
