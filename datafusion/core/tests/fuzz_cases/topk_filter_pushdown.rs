@@ -317,10 +317,23 @@ async fn test_fuzz_topk_filter_pushdown() {
                     .map(|col| orders.get(**col).unwrap())
                     .multi_cartesian_product()
                 {
+                    // Add remaining columns as tiebreakers (ASC NULLS LAST)
+                    // to ensure deterministic results when RG reorder changes
+                    // the read order of rows with equal sort key values.
+                    let tiebreakers: Vec<String> = ["id", "name", "department"]
+                        .iter()
+                        .filter(|c| {
+                            !order_columns
+                                .iter()
+                                .take(num_order_by_columns)
+                                .any(|oc| **oc == **c)
+                        })
+                        .map(|c| format!("{c} ASC NULLS LAST"))
+                        .collect();
+                    let all_orderings =
+                        orderings.into_iter().chain(tiebreakers.iter()).join(", ");
                     let query = format!(
-                        "SELECT * FROM test_table ORDER BY {} LIMIT {}",
-                        orderings.into_iter().join(", "),
-                        limit
+                        "SELECT * FROM test_table ORDER BY {all_orderings} LIMIT {limit}",
                     );
                     queries.push(query);
                 }

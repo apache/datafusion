@@ -870,6 +870,32 @@ impl LogicalPlan {
         })
     }
 
+    /// Returns true if any expression in this node contains a subquery
+    /// (Exists, InSubquery, SetComparison, or ScalarSubquery).
+    fn has_subquery_expressions(&self) -> bool {
+        let mut found = false;
+        let _ = self.apply_expressions(|expr| {
+            if found {
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            expr.apply(|e| {
+                if matches!(
+                    e,
+                    Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                        | Expr::ScalarSubquery(_)
+                ) {
+                    found = true;
+                    Ok(TreeNodeRecursion::Stop)
+                } else {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+            })
+        });
+        found
+    }
+
     /// Similarly to [`Self::map_children`], rewrites all subqueries that may
     /// appear in expressions such as `IN (SELECT ...)` using `f`.
     ///
@@ -878,6 +904,14 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        // Fast path: skip the expensive ownership-based expression traversal
+        // when this node has no subquery expressions. This avoids
+        // map_expressions → transform_down walking every expression node
+        // via consume+recreate just to find no subqueries.
+        if !self.has_subquery_expressions() {
+            return Ok(Transformed::no(self));
+        }
+
         self.map_expressions(|expr| {
             expr.transform_down(|expr| match expr {
                 Expr::Exists(Exists { subquery, negated }) => {

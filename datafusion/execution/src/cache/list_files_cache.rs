@@ -15,6 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::cache::{
+    CacheAccessor,
+    cache_manager::{CachedFileList, ListFilesCache},
+    lru_queue::LruQueue,
+};
+
+use std::fmt::{Debug, Display, Formatter};
 use std::mem::size_of;
 use std::{
     collections::HashMap,
@@ -23,14 +30,9 @@ use std::{
 };
 
 use datafusion_common::TableReference;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;
 use object_store::{ObjectMeta, path::Path};
-
-use crate::cache::{
-    CacheAccessor,
-    cache_manager::{CachedFileList, ListFilesCache},
-    lru_queue::LruQueue,
-};
 
 pub trait TimeProvider: Send + Sync + 'static {
     fn now(&self) -> Instant;
@@ -165,6 +167,22 @@ impl Default for DefaultListFilesCacheState {
             memory_limit: DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
             memory_used: 0,
             ttl: DEFAULT_LIST_FILES_CACHE_TTL,
+        }
+    }
+}
+
+impl DFHeapSize for TableScopedPath {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.path.as_ref().heap_size(ctx) + self.table.heap_size(ctx)
+    }
+}
+
+impl Display for TableScopedPath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(table) = &self.table {
+            write!(f, "{}, {}", self.path, table)
+        } else {
+            write!(f, "{}", self.path)
         }
     }
 }

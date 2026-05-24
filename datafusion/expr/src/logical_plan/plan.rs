@@ -2550,6 +2550,19 @@ pub struct Filter {
 impl Filter {
     /// Create a new filter operator.
     ///
+    /// Skips the type-checking and dealiasing done in [Self::try_new].
+    /// For internal use in DataFusion only.
+    ///
+    /// **Preconditions:**
+    /// - the `predicate` expression returns a boolean value
+    /// - the `predicate` expression is not aliased
+    #[doc(hidden)]
+    pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
+        Self { predicate, input }
+    }
+
+    /// Create a new filter operator.
+    ///
     /// Notes: as Aliases have no effect on the output of a filter operator,
     /// they are removed from the predicate expression.
     pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
