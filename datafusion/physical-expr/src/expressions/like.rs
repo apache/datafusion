@@ -347,12 +347,7 @@ mod test {
     }
 }
 
-/// Tests for the `try_to_proto` / `try_from_proto` hooks (issue #22418).
-///
-/// These drive the encode/decode hooks directly with small stub
-/// encoder/decoders so every branch can be covered without depending on
-/// `datafusion-proto`: the happy path, the wrong-node and missing-child
-/// rejections, and child encode/decode error propagation.
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
 #[cfg(all(test, feature = "proto"))]
 mod proto_tests {
     use super::*;

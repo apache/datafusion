@@ -15,15 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Shared test helpers for exercising the `try_to_proto` / `try_from_proto`
-//! hooks (issue #22418) without depending on `datafusion-proto`.
-//!
-//! As built-in expressions are ported off the central proto downcast chain,
-//! each one's unit tests need to drive the new encode/decode hooks in
-//! isolation. The generic scaffolding — stub encoder/decoders and a
-//! placeholder child-node builder — lives here so it is written once and
-//! reused across expressions. Expression-specific node builders and fixtures
-//! stay in each expression's own test module.
+//! Shared test helpers for proto serialization / deserialization in expression unit tests
+//! without depending on `datafusion-proto` (which would create circular deps).
 
 use std::cell::Cell;
 use std::sync::Arc;
