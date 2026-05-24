@@ -4876,7 +4876,7 @@ mod tests {
         let got = neq.evaluate_statistics(&[left_stat, right_stat])?;
         let expected = Distribution::new_bernoulli(ScalarValue::from(15.0 / 16.0))?;
         match (got, expected) {
-                    (Bernoulli(g), Bernoulli(e)) => {
+            (Bernoulli(g), Bernoulli(e)) => {
                 let gp = match g.p_value() {
                     ScalarValue::Float64(Some(v)) => v,
                     _ => panic!("got unexpected p type"),
