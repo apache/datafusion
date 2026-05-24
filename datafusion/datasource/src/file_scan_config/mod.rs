@@ -937,14 +937,19 @@ impl DataSource for FileScanConfig {
     ///   │     → SortExec removed, fetch (LIMIT) pushed to DataSourceExec
     ///   │
     ///   ├─► FileSource returns Inexact
-    ///   │     (reverse_row_groups=true)
-    ///   │     → SortExec kept, scan optimized
+    ///   │     (e.g. column_in_file_schema: opener will reorder RGs at runtime)
+    ///   │     → rebuild_with_source: sort files by stats; if the post-sort
+    ///   │       file groups are non-overlapping AND the request now validates
+    ///   │       AND no NULLs sit in the sort columns of non-last files,
+    ///   │       upgrade back to Exact (SortExec removed). Otherwise stays
+    ///   │       Inexact and SortExec is kept while the scan is still
+    ///   │       optimised via `sort_order_for_reorder` / `reverse_row_groups`.
     ///   │
     ///   └─► FileSource returns Unsupported
-    ///         (ordering stripped because files in wrong order)
+    ///         (e.g. expression sort key or partition column)
     ///         → try_sort_file_groups_by_statistics():
     ///           1. Sort files within each group by min/max statistics
-    ///           2. Re-check: non-overlapping + ordering valid?
+    ///           2. Re-check: non-overlapping + ordering valid + no NULLs?
     ///              YES → Exact → SortExec removed
     ///              NO  → Inexact (files reordered, Sort stays)
     /// ```
