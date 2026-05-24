@@ -196,4 +196,26 @@ mod tests {
         assert!(err.contains("expr_id=Some(7)"));
         assert!(err.contains("PhysicalColumn"));
     }
+
+    #[cfg(feature = "proto")]
+    #[test]
+    fn unknown_column_proto_roundtrip() {
+        use datafusion_proto_models::protobuf;
+
+        let name = "col_b".to_string();
+        let node = protobuf::PhysicalExprNode {
+            expr_id: Some(42),
+            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
+                protobuf::UnknownColumn { name: name.clone() },
+            )),
+        };
+
+        let schema = Schema::empty();
+        let decoder = DummyDecode;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = UnKnownColumn::try_from_proto(&node, &ctx).unwrap();
+        let col = decoded.as_ref().downcast_ref::<UnKnownColumn>().unwrap();
+        assert_eq!(col.name(), name.as_str());
+    }
 }
