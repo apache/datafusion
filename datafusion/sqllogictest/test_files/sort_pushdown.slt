@@ -1236,6 +1236,87 @@ SELECT * FROM no_decl_parquet ORDER BY id ASC;
 8 800
 9 900
 
+# Cleanup Test 5b
+statement ok
+DROP TABLE no_decl_low;
+
+statement ok
+DROP TABLE no_decl_mid;
+
+statement ok
+DROP TABLE no_decl_high;
+
+statement ok
+DROP TABLE no_decl_parquet;
+
+# Test 5c: NULL safety — files in **wrong** filesystem order so the
+# Inexact branch fires; the previously-non-last file contains NULLs in
+# the sort column. With NULLS LAST, NULLs inside a file sit after all
+# non-null rows. If the next file's non-null values are smaller than
+# the previous file's max, those values would land AFTER the NULLs in
+# the concatenated stream — breaking the ordering. The fix must NOT
+# upgrade to Exact here even though stats are non-overlapping.
+
+statement ok
+CREATE TABLE null_safety_high(id INT, value INT) AS VALUES (4, 400), (5, 500), (6, 600);
+
+statement ok
+CREATE TABLE null_safety_low_with_nulls(id INT, value INT) AS VALUES (1, 100), (2, 200), (3, 300), (NULL, 999);
+
+# Name files so alphabetical order is REVERSED relative to id order
+# (a_high before b_low) — triggers the Inexact / re-validate path.
+query I
+COPY (SELECT * FROM null_safety_high ORDER BY id ASC NULLS LAST)
+TO 'test_files/scratch/sort_pushdown/null_safety/a_high.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM null_safety_low_with_nulls ORDER BY id ASC NULLS LAST)
+TO 'test_files/scratch/sort_pushdown/null_safety/b_low_nulls.parquet';
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE null_safety_parquet(id INT, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/null_safety/'
+WITH ORDER (id ASC NULLS LAST);
+
+# After Phase 2 reorder file_groups would be [b_low_nulls, a_high] and
+# min/max would be non-overlapping — but b_low_nulls has NULLs in the
+# sort column, so we must NOT upgrade to Exact. SortExec stays.
+query TT
+EXPLAIN SELECT * FROM null_safety_parquet ORDER BY id ASC NULLS LAST;
+----
+logical_plan
+01)Sort: null_safety_parquet.id ASC NULLS LAST
+02)--TableScan: null_safety_parquet projection=[id, value]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/null_safety/b_low_nulls.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/null_safety/a_high.parquet]]}, projection=[id, value], file_type=parquet, sort_order_for_reorder=[id@0 ASC NULLS LAST]
+
+# Results must still be correct (SortExec does the final sort)
+query II
+SELECT * FROM null_safety_parquet ORDER BY id ASC NULLS LAST;
+----
+1 100
+2 200
+3 300
+4 400
+5 500
+6 600
+NULL 999
+
+statement ok
+DROP TABLE null_safety_high;
+
+statement ok
+DROP TABLE null_safety_low_with_nulls;
+
+statement ok
+DROP TABLE null_safety_parquet;
+
 # Test 6: WITH ORDER + reversed filesystem order
 # Same file setup as Test 4 but explicitly declaring ordering via WITH ORDER.
 # PushdownSort reorders files by min/max stats; after reorder the inter-file

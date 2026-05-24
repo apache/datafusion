@@ -175,8 +175,31 @@ impl FileScanConfig {
             } else {
                 // Re-validate: now that files are sorted, can the
                 // request be satisfied?
-                let new_eq_props = new_config.eq_properties();
-                new_eq_props.ordering_satisfy(order.iter().cloned())?
+                //
+                // Same NULL guard as `try_sort_file_groups_by_statistics`:
+                // we cannot claim Exact if any non-last file contains
+                // NULLs in the sort columns. With NULLS LAST those
+                // NULLs sit after all non-null rows in the file, so
+                // when the next file's non-nulls are smaller than the
+                // previous file's max, they'd appear *after* the NULLs
+                // in the concatenated stream — breaking the ordering.
+                let projected_schema = new_config.projected_schema()?;
+                let projection_indices = new_config
+                    .file_source
+                    .projection()
+                    .as_ref()
+                    .and_then(|p| ordered_column_indices_from_projection(p));
+                if any_file_has_nulls_in_sort_columns(
+                    &new_config.file_groups,
+                    order,
+                    &projected_schema,
+                    projection_indices.as_deref(),
+                ) {
+                    false
+                } else {
+                    let new_eq_props = new_config.eq_properties();
+                    new_eq_props.ordering_satisfy(order.iter().cloned())?
+                }
             }
         } else {
             false
