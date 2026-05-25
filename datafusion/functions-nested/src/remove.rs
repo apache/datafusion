@@ -19,10 +19,11 @@
 
 use crate::utils;
 use arrow::array::{
-    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetBufferBuilder,
-    OffsetSizeTrait, Scalar, cast::AsArray, make_array,
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullBufferBuilder,
+    OffsetBufferBuilder, OffsetSizeTrait, Scalar, cast::AsArray, make_array,
+    new_null_array,
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
@@ -110,7 +111,9 @@ impl ScalarUDFImpl for ArrayRemove {
         &self,
         args: datafusion_expr::ReturnFieldArgs,
     ) -> Result<FieldRef> {
-        Ok(Arc::clone(&args.arg_fields[0]))
+        let array_field = args.arg_fields[0].as_ref().clone();
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(array_field.with_nullable(nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -128,7 +131,8 @@ impl ScalarUDFImpl for ArrayRemove {
             }
             element_arg => {
                 let element_array = element_arg.to_array(num_rows)?;
-                let result = array_remove_internal(&list_array, &element_array, &[1])?;
+                let result =
+                    array_remove_internal(&list_array, &element_array, &[Some(1)])?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -228,7 +232,9 @@ impl ScalarUDFImpl for ArrayRemoveN {
         &self,
         args: datafusion_expr::ReturnFieldArgs,
     ) -> Result<FieldRef> {
-        Ok(Arc::clone(&args.arg_fields[0]))
+        let array_field = args.arg_fields[0].as_ref().clone();
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(array_field.with_nullable(nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -242,8 +248,10 @@ impl ScalarUDFImpl for ArrayRemoveN {
                 ColumnarValue::Scalar(scalar_max),
             ) if !scalar_element.is_null() && !scalar_element.data_type().is_nested() => {
                 let ScalarValue::Int64(Some(n)) = scalar_max else {
-                    // null max means no remove
-                    return Ok(ColumnarValue::Array(list_array));
+                    return Ok(ColumnarValue::Array(new_null_array(
+                        list_array.data_type(),
+                        num_rows,
+                    )));
                 };
                 let result =
                     array_remove_with_scalar_args(&list_array, scalar_element, *n)?;
@@ -252,16 +260,7 @@ impl ScalarUDFImpl for ArrayRemoveN {
             (element_arg, max_arg) => {
                 let element_array = element_arg.to_array(num_rows)?;
                 let max_array = max_arg.to_array(num_rows)?;
-                let max_array = as_int64_array(&max_array)?;
-                let arr_n = (0..max_array.len())
-                    .map(|i| {
-                        if max_array.is_null(i) {
-                            0
-                        } else {
-                            max_array.value(i)
-                        }
-                    })
-                    .collect::<Vec<_>>();
+                let arr_n = as_int64_array(&max_array)?.iter().collect::<Vec<_>>();
                 let result = array_remove_internal(&list_array, &element_array, &arr_n)?;
                 Ok(ColumnarValue::Array(result))
             }
@@ -351,7 +350,9 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         &self,
         args: datafusion_expr::ReturnFieldArgs,
     ) -> Result<FieldRef> {
-        Ok(Arc::clone(&args.arg_fields[0]))
+        let array_field = args.arg_fields[0].as_ref().clone();
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(array_field.with_nullable(nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -370,7 +371,7 @@ impl ScalarUDFImpl for ArrayRemoveAll {
             element_arg => {
                 let element_array = element_arg.to_array(num_rows)?;
                 let result =
-                    array_remove_internal(&list_array, &element_array, &[i64::MAX])?;
+                    array_remove_internal(&list_array, &element_array, &[Some(i64::MAX)])?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -388,7 +389,7 @@ impl ScalarUDFImpl for ArrayRemoveAll {
 fn array_remove_internal(
     array: &ArrayRef,
     element_array: &ArrayRef,
-    arr_n: &[i64],
+    arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
@@ -447,7 +448,7 @@ fn array_remove_with_scalar_args(
 fn general_remove<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
-    arr_n: &[i64],
+    arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
     let list_field = match list_array.data_type() {
         DataType::List(field) | DataType::LargeList(field) => field,
@@ -468,24 +469,28 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
         false,
         Capacities::Array(original_data.len()),
     );
-
-    // Pre-compute combined null bitmap
-    let nulls = NullBuffer::union(list_array.nulls(), element_array.nulls());
+    let mut valid = NullBufferBuilder::new(list_array.len());
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
-        if nulls.as_ref().is_some_and(|nulls| nulls.is_null(row_index)) {
+        if list_array.is_null(row_index) || element_array.is_null(row_index) {
             offsets.push(offsets[row_index]);
+            valid.append_null();
             continue;
         }
 
-        let start = offset_window[0].to_usize().unwrap();
-        let end = offset_window[1].to_usize().unwrap();
-        // n is the number of elements to remove in this row
         let n = if arr_n.len() == 1 {
             arr_n[0]
         } else {
             arr_n[row_index]
         };
+        let Some(n) = n else {
+            offsets.push(offsets[row_index]);
+            valid.append_null();
+            continue;
+        };
+
+        let start = offset_window[0].to_usize().unwrap();
+        let end = offset_window[1].to_usize().unwrap();
 
         // compare each element in the list, `false` means the element matches and should be removed
         let eq_array = utils::compare_element_to_list(
@@ -501,6 +506,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
         if num_to_remove == 0 {
             mutable.extend(0, start, end);
             offsets.push(offsets[row_index] + OffsetSize::usize_as(end - start));
+            valid.append_non_null();
             continue;
         }
 
@@ -531,6 +537,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
         }
 
         offsets.push(offsets[row_index] + OffsetSize::usize_as(copied));
+        valid.append_non_null();
     }
 
     let new_values = make_array(mutable.freeze());
@@ -538,7 +545,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
         Arc::clone(list_field),
         OffsetBuffer::new(offsets.into()),
         new_values,
-        nulls,
+        valid.finish(),
     )?))
 }
 
@@ -645,8 +652,10 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
 mod tests {
     use crate::remove::{ArrayRemove, ArrayRemoveAll, ArrayRemoveN};
     use arrow::array::{
-        Array, ArrayRef, AsArray, GenericListArray, ListArray, OffsetSizeTrait,
+        Array, ArrayRef, AsArray, GenericListArray, Int32Array, Int64Array, ListArray,
+        OffsetSizeTrait,
     };
+    use arrow::buffer::{NullBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
@@ -658,25 +667,34 @@ mod tests {
     fn test_array_remove_nullability() {
         for nullability in [true, false] {
             for item_nullability in [true, false] {
-                let input_field = Arc::new(Field::new(
-                    "num",
-                    DataType::new_list(DataType::Int32, item_nullability),
-                    nullability,
-                ));
-                let args_fields = vec![
-                    Arc::clone(&input_field),
-                    Arc::new(Field::new("a", DataType::Int32, false)),
-                ];
-                let scalar_args = vec![None, Some(&ScalarValue::Int32(Some(1)))];
+                for element_nullability in [true, false] {
+                    let input_field = Arc::new(Field::new(
+                        "num",
+                        DataType::new_list(DataType::Int32, item_nullability),
+                        nullability,
+                    ));
+                    let args_fields = vec![
+                        Arc::clone(&input_field),
+                        Arc::new(Field::new("a", DataType::Int32, element_nullability)),
+                    ];
+                    let scalar_args = vec![None, Some(&ScalarValue::Int32(Some(1)))];
 
-                let result = ArrayRemove::new()
-                    .return_field_from_args(ReturnFieldArgs {
-                        arg_fields: &args_fields,
-                        scalar_arguments: &scalar_args,
-                    })
-                    .unwrap();
+                    let result = ArrayRemove::new()
+                        .return_field_from_args(ReturnFieldArgs {
+                            arg_fields: &args_fields,
+                            scalar_arguments: &scalar_args,
+                        })
+                        .unwrap();
 
-                assert_eq!(result, input_field);
+                    let expected = Arc::new(
+                        input_field
+                            .as_ref()
+                            .clone()
+                            .with_nullable(nullability || element_nullability),
+                    );
+
+                    assert_eq!(result, expected);
+                }
             }
         }
     }
@@ -685,30 +703,52 @@ mod tests {
     fn test_array_remove_n_nullability() {
         for nullability in [true, false] {
             for item_nullability in [true, false] {
-                let input_field = Arc::new(Field::new(
-                    "num",
-                    DataType::new_list(DataType::Int32, item_nullability),
-                    nullability,
-                ));
-                let args_fields = vec![
-                    Arc::clone(&input_field),
-                    Arc::new(Field::new("a", DataType::Int32, false)),
-                    Arc::new(Field::new("b", DataType::Int64, false)),
-                ];
-                let scalar_args = vec![
-                    None,
-                    Some(&ScalarValue::Int32(Some(1))),
-                    Some(&ScalarValue::Int64(Some(1))),
-                ];
+                for element_nullability in [true, false] {
+                    for count_nullability in [true, false] {
+                        let input_field = Arc::new(Field::new(
+                            "num",
+                            DataType::new_list(DataType::Int32, item_nullability),
+                            nullability,
+                        ));
+                        let args_fields = vec![
+                            Arc::clone(&input_field),
+                            Arc::new(Field::new(
+                                "a",
+                                DataType::Int32,
+                                element_nullability,
+                            )),
+                            Arc::new(Field::new(
+                                "b",
+                                DataType::Int64,
+                                count_nullability,
+                            )),
+                        ];
+                        let scalar_args = vec![
+                            None,
+                            Some(&ScalarValue::Int32(Some(1))),
+                            Some(&ScalarValue::Int64(Some(1))),
+                        ];
 
-                let result = ArrayRemoveN::new()
-                    .return_field_from_args(ReturnFieldArgs {
-                        arg_fields: &args_fields,
-                        scalar_arguments: &scalar_args,
-                    })
-                    .unwrap();
+                        let result = ArrayRemoveN::new()
+                            .return_field_from_args(ReturnFieldArgs {
+                                arg_fields: &args_fields,
+                                scalar_arguments: &scalar_args,
+                            })
+                            .unwrap();
 
-                assert_eq!(result, input_field);
+                        let expected_nullable = nullability
+                            || element_nullability
+                            || count_nullability;
+                        let expected = Arc::new(
+                            input_field
+                                .as_ref()
+                                .clone()
+                                .with_nullable(expected_nullable),
+                        );
+
+                        assert_eq!(result, expected);
+                    }
+                }
             }
         }
     }
@@ -717,19 +757,33 @@ mod tests {
     fn test_array_remove_all_nullability() {
         for nullability in [true, false] {
             for item_nullability in [true, false] {
-                let input_field = Arc::new(Field::new(
-                    "num",
-                    DataType::new_list(DataType::Int32, item_nullability),
-                    nullability,
-                ));
-                let result = ArrayRemoveAll::new()
-                    .return_field_from_args(ReturnFieldArgs {
-                        arg_fields: &[Arc::clone(&input_field)],
-                        scalar_arguments: &[None],
-                    })
-                    .unwrap();
+                for element_nullability in [true, false] {
+                    let input_field = Arc::new(Field::new(
+                        "num",
+                        DataType::new_list(DataType::Int32, item_nullability),
+                        nullability,
+                    ));
+                    let args_fields = vec![
+                        Arc::clone(&input_field),
+                        Arc::new(Field::new("a", DataType::Int32, element_nullability)),
+                    ];
+                    let scalar_args = vec![None, Some(&ScalarValue::Int32(Some(1)))];
+                    let result = ArrayRemoveAll::new()
+                        .return_field_from_args(ReturnFieldArgs {
+                            arg_fields: &args_fields,
+                            scalar_arguments: &scalar_args,
+                        })
+                        .unwrap();
 
-                assert_eq!(result, input_field);
+                    let expected = Arc::new(
+                        input_field
+                            .as_ref()
+                            .clone()
+                            .with_nullable(nullability || element_nullability),
+                    );
+
+                    assert_eq!(result, expected);
+                }
             }
         }
     }
@@ -905,6 +959,28 @@ mod tests {
         let element_to_remove = ScalarValue::Int32(Some(2));
 
         assert_array_remove_n(input_list, expected_list, element_to_remove, 2);
+    }
+
+    #[test]
+    fn test_array_remove_n_null_count_returns_null() {
+        let array: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(2)]),
+                Some(vec![Some(4), Some(2)]),
+            ]));
+        let element: ArrayRef = Arc::new(Int32Array::from(vec![2, 2]));
+        let max: ArrayRef = Arc::new(Int64Array::new(
+            ScalarBuffer::from(vec![1, 1]),
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+
+        let result = super::array_remove_n_inner(&[array, element, max]).unwrap();
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+        ]);
+
+        assert_eq!(result.as_list::<i32>(), &expected);
     }
 
     fn assert_array_remove_n(

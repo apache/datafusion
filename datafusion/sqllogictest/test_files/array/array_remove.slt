@@ -280,6 +280,20 @@ select array_remove_n(arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'),
 ----
 NULL [1, 1, 1]
 
+# array_remove_n with null max scalar
+query ??
+select array_remove_n(make_array(1, 2, 2, 1, 1), 2, NULL),
+       array_remove_n(make_array(1, 2, 2, 1, 1), 2, 2);
+----
+NULL [1, 1, 1]
+
+# array_remove_n with null max scalar (LargeList)
+query ??
+select array_remove_n(arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), 2, NULL),
+       array_remove_n(arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), 2, 2);
+----
+NULL [1, 1, 1]
+
 # array_remove_n with null element from column
 query ?
 select array_remove_n(column1, column2, column3) from (values

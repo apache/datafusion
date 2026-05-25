@@ -140,7 +140,7 @@ impl ScalarUDFImpl for ArrayReplace {
                 let from_array = from_arg.to_array(num_rows)?;
                 let to_array = to_arg.to_array(num_rows)?;
                 let result =
-                    array_replace_internal(&list_array, &from_array, &to_array, &[1])?;
+                    array_replace_internal(&list_array, &from_array, &to_array, &[Some(1)])?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -229,8 +229,10 @@ impl ScalarUDFImpl for ArrayReplaceN {
                 ColumnarValue::Scalar(scalar_max),
             ) => {
                 let ScalarValue::Int64(Some(n)) = scalar_max else {
-                    // null max means no replacements
-                    return Ok(ColumnarValue::Array(list_array));
+                    return Ok(ColumnarValue::Array(new_null_array(
+                        list_array.data_type(),
+                        num_rows,
+                    )));
                 };
                 let result = array_replace_with_scalar_args(
                     &list_array,
@@ -244,18 +246,8 @@ impl ScalarUDFImpl for ArrayReplaceN {
                 let from_array = from_arg.to_array(num_rows)?;
                 let to_array = to_arg.to_array(num_rows)?;
                 let max_array = max_arg.to_array(num_rows)?;
-                let max_array = as_int64_array(&max_array)?;
-                let arr_n = (0..max_array.len())
-                    .map(|i| {
-                        if max_array.is_null(i) {
-                            0
-                        } else {
-                            max_array.value(i)
-                        }
-                    })
-                    .collect::<Vec<_>>();
                 let result =
-                    array_replace_internal(&list_array, &from_array, &to_array, &arr_n)?;
+                    array_replace_n_inner(&list_array, &from_array, &to_array, &max_array)?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -351,7 +343,7 @@ impl ScalarUDFImpl for ArrayReplaceAll {
                     &list_array,
                     &from_array,
                     &to_array,
-                    &[i64::MAX],
+                    &[Some(i64::MAX)],
                 )?;
                 Ok(ColumnarValue::Array(result))
             }
@@ -388,7 +380,7 @@ fn general_replace<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     from_array: &ArrayRef,
     to_array: &ArrayRef,
-    arr_n: &[i64],
+    arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
     // Build up the offsets for the final output array
     let mut offsets: Vec<O> = vec![O::usize_as(0)];
@@ -413,6 +405,17 @@ fn general_replace<O: OffsetSizeTrait>(
             continue;
         }
 
+        let n = if arr_n.len() == 1 {
+            arr_n[0]
+        } else {
+            arr_n[row_index]
+        };
+        let Some(n) = n else {
+            offsets.push(offsets[row_index]);
+            valid.append_null();
+            continue;
+        };
+
         let start = offset_window[0];
         let end = offset_window[1];
 
@@ -425,11 +428,6 @@ fn general_replace<O: OffsetSizeTrait>(
 
         let original_idx = O::usize_as(0);
         let replace_idx = O::usize_as(1);
-        let n = if arr_n.len() == 1 {
-            arr_n[0]
-        } else {
-            arr_n[row_index]
-        };
         let mut counter = 0;
 
         // All elements are false, no need to replace, just copy original data
@@ -611,7 +609,7 @@ fn array_replace_with_scalar_args(
             list_array,
             &from_array,
             &to_array,
-            &vec![max_replacements; num_rows],
+            &vec![Some(max_replacements); num_rows],
         );
     }
 
@@ -634,7 +632,7 @@ fn array_replace_internal(
     array: &ArrayRef,
     from: &ArrayRef,
     to: &ArrayRef,
-    arr_n: &[i64],
+    arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
@@ -647,5 +645,89 @@ fn array_replace_internal(
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => exec_err!("array_replace does not support type '{array_type}'."),
+    }
+}
+
+fn array_replace_n_inner(
+    array: &ArrayRef,
+    from: &ArrayRef,
+    to: &ArrayRef,
+    max: &ArrayRef,
+) -> Result<ArrayRef> {
+    let arr_n = as_int64_array(max)?.iter().collect::<Vec<_>>();
+    array_replace_internal(array, from, to, &arr_n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ArrayReplaceN, array_replace_n_inner};
+    use arrow::array::{ArrayRef, AsArray, Int32Array, Int64Array, ListArray};
+    use arrow::buffer::{NullBuffer, ScalarBuffer};
+    use arrow::datatypes::{DataType, Field, Int32Type};
+    use datafusion_common::{Result, ScalarValue, config::ConfigOptions};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_array_replace_n_null_max_returns_null() -> Result<()> {
+        let array: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![Some(4), Some(2)]),
+            ]));
+        let from: ArrayRef = Arc::new(Int32Array::from(vec![2, 2]));
+        let to: ArrayRef = Arc::new(Int32Array::from(vec![9, 9]));
+        let max: ArrayRef = Arc::new(Int64Array::new(
+            ScalarBuffer::from(vec![1, 1]),
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+
+        let result = array_replace_n_inner(&array, &from, &to, &max)?;
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(9), Some(3)]),
+            None,
+        ]);
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_replace_n_scalar_null_max_returns_null() -> Result<()> {
+        let array: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![Some(4), Some(2)]),
+            ]));
+        let array_field = Arc::new(Field::new("array", array.data_type().clone(), true));
+
+        let result = ArrayReplaceN::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::clone(&array)),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(9))),
+                ColumnarValue::Scalar(ScalarValue::Int64(None)),
+            ],
+            arg_fields: vec![
+                Arc::clone(&array_field),
+                Arc::new(Field::new("from", DataType::Int32, false)),
+                Arc::new(Field::new("to", DataType::Int32, false)),
+                Arc::new(Field::new("max", DataType::Int64, true)),
+            ],
+            number_rows: array.len(),
+            return_field: Arc::clone(&array_field),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let result = result.into_array(array.len())?;
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Option::<Vec<Option<i32>>>::None,
+            Option::<Vec<Option<i32>>>::None,
+        ]);
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
     }
 }

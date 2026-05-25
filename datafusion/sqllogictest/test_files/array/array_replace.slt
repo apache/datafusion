@@ -356,12 +356,12 @@ select
 query ?
 select array_replace_n(make_array(1, 2, 3, 4, 5), NULL, NULL, NULL);
 ----
-[1, 2, 3, 4, 5]
+NULL
 
 query ?
 select array_replace_n(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL, NULL, NULL);
 ----
-[1, 2, 3, 4, 5]
+NULL
 
 query ??
 select
