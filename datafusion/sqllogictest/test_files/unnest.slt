@@ -1464,5 +1464,17 @@ ORDER BY id;
 ----
 1
 
+# Recursive UNNEST can also remove rows at a deeper level even when the outer
+# list is non-empty, so it is not safe to prune using only the first level.
+query I
+SELECT id
+FROM (
+    SELECT id, UNNEST(UNNEST(make_array(arrow_cast(make_array(), 'List(Int64)')))) AS elem
+    FROM unused_unnest_pruning
+)
+GROUP BY id
+ORDER BY id;
+----
+
 statement ok
 DROP TABLE unused_unnest_pruning;

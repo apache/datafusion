@@ -571,10 +571,11 @@ fn is_unnested_input_index(unnest: &Unnest, input_index: usize) -> bool {
 }
 
 fn unnest_preserves_at_least_one_row_per_input(unnest: &Unnest) -> bool {
-    unnest.list_type_columns.iter().all(|(input_index, _)| {
-        unnest_input_expr(unnest, *input_index)
-            .and_then(literal_non_empty_list)
-            .unwrap_or(false)
+    unnest.list_type_columns.iter().all(|(input_index, list)| {
+        list.depth == 1
+            && unnest_input_expr(unnest, *input_index)
+                .and_then(literal_non_empty_list)
+                .unwrap_or(false)
     })
 }
 
@@ -1073,10 +1074,12 @@ mod tests {
         test_table_scan_with_name,
     };
     use crate::{OptimizerContext, OptimizerRule};
-    use arrow::array::ListArray;
+    use arrow::array::{ArrayRef, ListArray};
+    use arrow::buffer::OffsetBuffer;
     use arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use datafusion_common::{
-        Column, DFSchema, DFSchemaRef, JoinType, Result, ScalarValue, TableReference,
+        Column, DFSchema, DFSchemaRef, JoinType, RecursionUnnestOption, Result,
+        ScalarValue, TableReference, UnnestOptions,
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
@@ -1127,6 +1130,35 @@ mod tests {
         table_scan(Some("test"), &schema, None)?
             .project(vec![col("id"), list_literal_expr(values).alias("elem")])?
             .unnest_column(Column::from_name("elem"))
+    }
+
+    fn nested_list_literal_expr(values: Vec<Vec<Option<i64>>>) -> Expr {
+        let inner = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+            values.into_iter().map(Some),
+        )) as ArrayRef;
+        let outer = ListArray::new(
+            Arc::new(Field::new_list_field(inner.data_type().clone(), true)),
+            OffsetBuffer::from_lengths([inner.len()]),
+            inner,
+            None,
+        );
+        Expr::Literal(ScalarValue::List(Arc::new(outer)), None)
+    }
+
+    fn id_elem_recursive_unnest_plan(
+        values: Vec<Vec<Option<i64>>>,
+    ) -> Result<LogicalPlanBuilder> {
+        let schema = id_schema();
+        table_scan(Some("test"), &schema, None)?
+            .project(vec![col("id"), nested_list_literal_expr(values).alias("elem")])?
+            .unnest_column_with_options(
+                Column::from_name("elem"),
+                UnnestOptions::default().with_recursions(RecursionUnnestOption {
+                    input_column: Column::from_name("elem"),
+                    output_column: Column::from_name("elem"),
+                    depth: 2,
+                }),
+            )
     }
 
     #[derive(Debug, Hash, PartialEq, Eq)]
@@ -1517,6 +1549,24 @@ mod tests {
           Projection: test.id
             Unnest: lists[elem|depth=1] structs[]
               Projection: test.id, List([]) AS elem
+                TableScan: test projection=[id]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_unused_recursive_unnest_under_group_by() -> Result<()> {
+        let plan = id_elem_recursive_unnest_plan(vec![vec![]])?
+            .aggregate(vec![col("id")], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.id]], aggr=[[]]
+          Projection: test.id
+            Unnest: lists[elem|depth=2] structs[]
+              Projection: test.id, List([[]]) AS elem
                 TableScan: test projection=[id]
         "
         )
