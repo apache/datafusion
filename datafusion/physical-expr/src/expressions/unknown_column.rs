@@ -140,82 +140,104 @@ impl PartialEq for UnKnownColumn {
     }
 }
 
-#[cfg(test)]
-mod tests {
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
     use super::*;
-
-    #[cfg(feature = "proto")]
-    use std::sync::Arc;
-
-    #[cfg(feature = "proto")]
+    use crate::proto_test_util::{StubEncoder, UnreachableDecoder, column_node};
     use arrow::datatypes::Schema;
-
-    #[cfg(feature = "proto")]
-    use datafusion_common::{Result, internal_err};
-
-    #[cfg(feature = "proto")]
+    use datafusion_common::DataFusionError;
     use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{self, physical_expr_node};
 
-    #[cfg(feature = "proto")]
-    struct DummyDecode;
+    // ── try_to_proto ─────────────────────────────────────────────────────────
 
-    #[cfg(feature = "proto")]
-    impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode
-        for DummyDecode
-    {
-        fn decode(
-            &self,
-            _node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-            _schema: &Schema,
-        ) -> Result<Arc<dyn PhysicalExpr>> {
-            internal_err!("decode should not be called")
-        }
+    #[test]
+    fn try_to_proto_encodes_unknown_column() {
+        let expr = UnKnownColumn::new("my_col");
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = expr
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("UnKnownColumn should encode to Some(node)");
+
+        // Built-in exprs never set expr_id; only dynamic filters do.
+        assert!(node.expr_id.is_none());
+
+        // Verify the encoded name matches the original.
+        let protobuf::UnknownColumn { name } = match node.expr_type {
+            Some(physical_expr_node::ExprType::UnknownColumn(c)) => c,
+            other => panic!("expected UnknownColumn proto node, got {other:?}"),
+        };
+        assert_eq!(name, "my_col");
     }
 
-    #[cfg(feature = "proto")]
-    #[test]
-    fn try_from_proto_reports_found_variant() {
-        use datafusion_proto_models::protobuf;
+    // ── try_from_proto ───────────────────────────────────────────────────────
 
+    #[test]
+    fn try_from_proto_decodes_name() {
         let node = protobuf::PhysicalExprNode {
-            expr_id: Some(7),
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
-                protobuf::PhysicalColumn {
-                    name: "col_a".to_string(),
-                    index: 0,
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::UnknownColumn(
+                protobuf::UnknownColumn {
+                    name: "my_col".to_string(),
                 },
             )),
         };
         let schema = Schema::empty();
-        let decoder = DummyDecode;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
-
-        let err = UnKnownColumn::try_from_proto(&node, &ctx).unwrap_err();
-        let err = err.to_string();
-
-        assert!(err.contains("expr_id=Some(7)"));
-        assert!(err.contains("PhysicalColumn"));
-    }
-
-    #[cfg(feature = "proto")]
-    #[test]
-    fn unknown_column_proto_roundtrip() {
-        use datafusion_proto_models::protobuf;
-
-        let name = "col_b".to_string();
-        let node = protobuf::PhysicalExprNode {
-            expr_id: Some(42),
-            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
-                protobuf::UnknownColumn { name: name.clone() },
-            )),
-        };
-
-        let schema = Schema::empty();
-        let decoder = DummyDecode;
+        // UnKnownColumn has no child exprs so the decoder is never called.
+        let decoder = UnreachableDecoder;
         let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
 
         let decoded = UnKnownColumn::try_from_proto(&node, &ctx).unwrap();
-        let col = decoded.as_ref().downcast_ref::<UnKnownColumn>().unwrap();
-        assert_eq!(col.name(), name.as_str());
+        let col = decoded
+            .downcast_ref::<UnKnownColumn>()
+            .expect("decoded expr should be an UnKnownColumn");
+        assert_eq!(col.name(), "my_col");
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_unknown_column_node() {
+        // column_node produces an ExprType::Column node, not UnknownColumn.
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = UnKnownColumn::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(ref msg)
+                if msg.contains("PhysicalExprNode is not an UnKnownColumn")
+                // The error includes the actual expr_type for easier diagnosis.
+                && msg.contains("PhysicalColumn")
+        ));
+    }
+
+    // ── roundtrip ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn unknown_column_proto_roundtrip() {
+        let expr = UnKnownColumn::new("col_b");
+        let encoder = StubEncoder::ok();
+        let enc_ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = expr
+            .try_to_proto(&enc_ctx)
+            .unwrap()
+            .expect("UnKnownColumn should encode to Some(node)");
+
+        let schema = Schema::empty();
+        // UnKnownColumn has no child exprs so the decoder is never called.
+        let decoder = UnreachableDecoder;
+        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = UnKnownColumn::try_from_proto(&node, &dec_ctx).unwrap();
+        let col = decoded
+            .downcast_ref::<UnKnownColumn>()
+            .expect("decoded expr should be an UnKnownColumn");
+        assert_eq!(col.name(), "col_b");
     }
 }
