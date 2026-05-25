@@ -344,12 +344,19 @@ impl PhysicalExpr for HashTableLookupExpr {
         use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 
         // HashTableLookupExpr holds a runtime Arc<Map> (the build-side hash
-        // table) that cannot be serialized. We replace it with lit(true).
+        // table) that cannot be serialized, so it is replaced with lit(true).
         //
-        // This is safe because dynamic filtering is a performance optimisation
-        // only — lit(true) passes all rows so correctness is preserved.
-        // When a serialized plan is re-executed, HashJoinExec reconstructs
-        // fresh dynamic filters at runtime anyway.
+        // Dynamic filtering is a performance optimisation only — replacing the
+        // lookup with lit(true) preserves correctness by allowing all rows
+        // through.
+        //
+        // If a plan is serialized before execution, HashTableLookupExpr is not
+        // yet present in the dynamic filter expression.
+        //
+        // If a plan is serialized after execution, any runtime-created
+        // HashTableLookupExpr is replaced during serialization. Re-executing
+        // the plan requires reset_state(), after which HashJoinExec rebuilds
+        // fresh dynamic filters at runtime.
         let value = datafusion_proto_common::ScalarValue {
             value: Some(datafusion_proto_common::scalar_value::Value::BoolValue(
                 true,
