@@ -225,7 +225,7 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// more general purpose [`GroupValuesRows`]. See the ticket for details:
     /// <https://github.com/apache/datafusion/pull/12269>
     ///
-    /// [`GroupValuesRows`]: crate::aggregates::group_values::row::GroupValuesRows
+    /// [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
     /// reused buffer to store hashes
