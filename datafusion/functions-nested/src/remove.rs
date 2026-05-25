@@ -406,7 +406,7 @@ fn array_remove_internal(
 }
 
 /// Fast path for `array_remove` when the needle is a non-null, non-nested scalar.
-/// Dispatches to the bulk `distinct` comparison kernel.
+/// Dispatches to the bulk `not_distinct` comparison kernel.
 fn array_remove_with_scalar_args(
     array: &ArrayRef,
     scalar_needle: &ScalarValue,
@@ -581,8 +581,8 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
     );
     let nulls = list_array.nulls().cloned();
     let needle = scalar_needle.to_array_of_size(1)?;
-    let keep_mask = arrow_ord::cmp::distinct(&values_slice, &Scalar::new(needle))?;
-    let remove_bits = !keep_mask.values();
+    let remove_mask = arrow_ord::cmp::not_distinct(&values_slice, &Scalar::new(needle))?;
+    let remove_bits = remove_mask.values();
 
     for (row_index, offset_window) in list_offsets.windows(2).enumerate() {
         if nulls.as_ref().is_some_and(|nulls| nulls.is_null(row_index)) {
