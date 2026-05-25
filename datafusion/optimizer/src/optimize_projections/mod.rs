@@ -1074,12 +1074,11 @@ mod tests {
         test_table_scan_with_name,
     };
     use crate::{OptimizerContext, OptimizerRule};
-    use arrow::array::{ArrayRef, ListArray};
-    use arrow::buffer::OffsetBuffer;
+    use arrow::array::ListArray;
     use arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use datafusion_common::{
-        Column, DFSchema, DFSchemaRef, JoinType, RecursionUnnestOption, Result,
-        ScalarValue, TableReference, UnnestOptions,
+        Column, DFSchema, DFSchemaRef, JoinType, Result, ScalarValue, TableReference,
+        UnnestOptions,
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
@@ -1125,6 +1124,20 @@ mod tests {
         Expr::Literal(ScalarValue::List(Arc::new(list)), None)
     }
 
+    fn null_list_literal_expr() -> Expr {
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(
+            vec![None::<Vec<Option<i64>>>],
+        );
+        Expr::Literal(ScalarValue::List(Arc::new(list)), None)
+    }
+
+    fn id_list_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new_list("arr", Field::new_list_field(DataType::Int64, true), true),
+        ])
+    }
+
     fn id_elem_unnest_plan(values: Vec<Option<i64>>) -> Result<LogicalPlanBuilder> {
         let schema = id_schema();
         table_scan(Some("test"), &schema, None)?
@@ -1132,54 +1145,21 @@ mod tests {
             .unnest_column(Column::from_name("elem"))
     }
 
-    fn nested_list_literal_expr(values: Vec<Vec<Option<i64>>>) -> Expr {
-        let inner = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
-            values.into_iter().map(Some),
-        )) as ArrayRef;
-        let outer = ListArray::new(
-            Arc::new(Field::new_list_field(inner.data_type().clone(), true)),
-            OffsetBuffer::from_lengths([inner.len()]),
-            inner,
-            None,
-        );
-        Expr::Literal(ScalarValue::List(Arc::new(outer)), None)
-    }
-
-    fn id_elem_recursive_unnest_plan(
-        values: Vec<Vec<Option<i64>>>,
-    ) -> Result<LogicalPlanBuilder> {
+    fn id_null_elem_unnest_plan(preserve_nulls: bool) -> Result<LogicalPlanBuilder> {
         let schema = id_schema();
         table_scan(Some("test"), &schema, None)?
-            .project(vec![col("id"), nested_list_literal_expr(values).alias("elem")])?
+            .project(vec![col("id"), null_list_literal_expr().alias("elem")])?
             .unnest_column_with_options(
                 Column::from_name("elem"),
-                UnnestOptions::default().with_recursions(RecursionUnnestOption {
-                    input_column: Column::from_name("elem"),
-                    output_column: Column::from_name("elem"),
-                    depth: 2,
-                }),
+                UnnestOptions::default().with_preserve_nulls(preserve_nulls),
             )
     }
 
-    fn id_mixed_depth_unnest_plan() -> Result<LogicalPlanBuilder> {
-        let schema = id_schema();
+    fn id_arr_unnest_plan() -> Result<LogicalPlanBuilder> {
+        let schema = id_list_schema();
         table_scan(Some("test"), &schema, None)?
-            .project(vec![
-                col("id"),
-                list_literal_expr(vec![Some(1)]).alias("elem_depth_1"),
-                nested_list_literal_expr(vec![vec![]]).alias("elem_depth_2"),
-            ])?
-            .unnest_columns_with_options(
-                vec![
-                    Column::from_name("elem_depth_1"),
-                    Column::from_name("elem_depth_2"),
-                ],
-                UnnestOptions::default().with_recursions(RecursionUnnestOption {
-                    input_column: Column::from_name("elem_depth_2"),
-                    output_column: Column::from_name("elem_depth_2"),
-                    depth: 2,
-                }),
-            )
+            .project(vec![col("id"), col("arr")])?
+            .unnest_column(Column::from_name("arr"))
     }
 
     #[derive(Debug, Hash, PartialEq, Eq)]
@@ -1576,8 +1556,9 @@ mod tests {
     }
 
     #[test]
-    fn keep_unused_recursive_unnest_under_group_by() -> Result<()> {
-        let plan = id_elem_recursive_unnest_plan(vec![vec![]])?
+    fn keep_unused_null_literal_unnest_under_group_by_with_preserve_nulls_false(
+    ) -> Result<()> {
+        let plan = id_null_elem_unnest_plan(false)?
             .aggregate(vec![col("id")], Vec::<Expr>::new())?
             .build()?;
 
@@ -1586,16 +1567,16 @@ mod tests {
             @r"
         Aggregate: groupBy=[[test.id]], aggr=[[]]
           Projection: test.id
-            Unnest: lists[elem|depth=2] structs[]
-              Projection: test.id, List([[]]) AS elem
+            Unnest: lists[elem|depth=1] structs[]
+              Projection: test.id, List() AS elem
                 TableScan: test projection=[id]
         "
         )
     }
 
     #[test]
-    fn keep_mixed_depth_unused_unnest_under_group_by() -> Result<()> {
-        let plan = id_mixed_depth_unnest_plan()?
+    fn keep_unused_non_literal_unnest_under_group_by() -> Result<()> {
+        let plan = id_arr_unnest_plan()?
             .aggregate(vec![col("id")], Vec::<Expr>::new())?
             .build()?;
 
@@ -1604,9 +1585,8 @@ mod tests {
             @r"
         Aggregate: groupBy=[[test.id]], aggr=[[]]
           Projection: test.id
-            Unnest: lists[elem_depth_1|depth=1, elem_depth_2|depth=2] structs[]
-              Projection: test.id, List([1]) AS elem_depth_1, List([[]]) AS elem_depth_2
-                TableScan: test projection=[id]
+            Unnest: lists[test.arr|depth=1] structs[]
+              TableScan: test projection=[id, arr]
         "
         )
     }
