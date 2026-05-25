@@ -943,7 +943,7 @@ mod tests {
 
     #[test]
     fn concat_ws_binary_arrays() -> Result<()> {
-        for c1_large_binary in vec![false, true] {
+        for c1_large_binary in [false, true] {
             let c0 = ColumnarValue::Scalar(ScalarValue::Binary(Some(b",".to_vec())));
             let c1 = if c1_large_binary {
                 ColumnarValue::Array(Arc::new(LargeBinaryArray::from_vec(vec![
