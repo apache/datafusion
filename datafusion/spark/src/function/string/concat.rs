@@ -74,8 +74,7 @@ impl ScalarUDFImpl for SparkConcat {
         if arg_types.is_empty() {
             // Spark semantics: allow concat with zero arguments
             Ok(vec![])
-        }
-        else {
+        } else {
             // Use concat coercion rules
             ConcatFunc::new().coerce_types(arg_types)
         }
