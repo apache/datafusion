@@ -536,6 +536,30 @@ fn optimize_subqueries(
 /// - `Ok(None)`: Signals that merge is not beneficial (and has not taken place).
 /// - `Err(error)`: An error occurred during the function call.
 fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Projection>> {
+    // Collapse the whole chain in one pass; otherwise an N-deep chain needs
+    // N outer optimizer passes to fully fold.
+    let mut current = proj;
+    let mut transformed_any = false;
+    loop {
+        let Transformed {
+            data, transformed, ..
+        } = merge_consecutive_projections_one_level(current)?;
+        current = data;
+        if !transformed {
+            break;
+        }
+        transformed_any = true;
+    }
+    Ok(if transformed_any {
+        Transformed::yes(current)
+    } else {
+        Transformed::no(current)
+    })
+}
+
+fn merge_consecutive_projections_one_level(
+    proj: Projection,
+) -> Result<Transformed<Projection>> {
     let Projection {
         expr,
         input,

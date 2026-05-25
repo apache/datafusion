@@ -24,19 +24,19 @@ use self::early_stop::EarlyStoppingStream;
 #[cfg(feature = "parquet_encryption")]
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
+use crate::decoder_projection::DecoderProjection;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{DecoderBuilderConfig, PushDecoderStreamState};
-use crate::row_filter::{RowFilterGenerator, build_projection_read_plan};
+use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
-    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
-    apply_file_schema_type_coercions, coerce_int96_to_resolution,
+    Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
+    apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -52,9 +52,7 @@ use datafusion_common::{ColumnStatistics, Result, ScalarValue, Statistics, exec_
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
-use datafusion_physical_expr_common::physical_expr::{
-    PhysicalExpr, is_dynamic_physical_expr,
-};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
@@ -121,6 +119,10 @@ pub(super) struct ParquetMorselizer {
     pub enable_row_group_stats_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
+    /// Optional timezone applied to INT96-coerced timestamps. When `Some`, the
+    /// coerced column type becomes `Timestamp(<coerce_int96>, Some(<tz>))`.
+    /// No effect when `coerce_int96` is `None`.
+    pub coerce_int96_tz: Option<Arc<str>>,
     /// Optional parquet FileDecryptionProperties
     #[cfg(feature = "parquet_encryption")]
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -283,6 +285,7 @@ struct PreparedParquetOpen {
     enable_row_group_stats_pruning: bool,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
+    coerce_int96_tz: Option<Arc<str>>,
     expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
@@ -613,18 +616,19 @@ impl ParquetMorselizer {
             .with_category(MetricCategory::Rows)
             .global_counter("num_predicate_creation_errors");
 
-        // Apply literal replacements to projection and predicate
-        let file_pruner = predicate
-            .as_ref()
-            .filter(|p| is_dynamic_physical_expr(p) || partitioned_file.has_statistics())
-            .and_then(|p| {
-                FilePruner::try_new(
-                    Arc::clone(p),
-                    &logical_file_schema,
-                    &partitioned_file,
-                    predicate_creation_errors.clone(),
-                )
-            });
+        // `FilePruner::try_new` decides whether a pruner is worthwhile (it needs
+        // a statistics struct, and either real column statistics or a dynamic
+        // filter that can prune via partition-value folding) and returns `None`
+        // otherwise. For a static predicate the pruner's tracker reports no
+        // changes, so it runs once and adds no ongoing cost.
+        let file_pruner = predicate.as_ref().and_then(|p| {
+            FilePruner::try_new(
+                Arc::clone(p),
+                &logical_file_schema,
+                &partitioned_file,
+                predicate_creation_errors.clone(),
+            )
+        });
 
         Ok(PreparedParquetOpen {
             partition_index: self.partition_index,
@@ -653,6 +657,7 @@ impl ParquetMorselizer {
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
+            coerce_int96_tz: self.coerce_int96_tz.clone(),
             expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
@@ -671,30 +676,21 @@ impl PreparedParquetOpen {
     /// Returns `None` if the file can be skipped completely.
     fn prune_file(mut self) -> Result<Option<Self>> {
         // Prune this file using the file level statistics and partition values.
-        // Since dynamic filters may have been updated since planning it is possible that we are able
-        // to prune files now that we couldn't prune at planning time.
-        // It is assumed that there is no point in doing pruning here if the predicate is not dynamic,
-        // as it would have been done at planning time.
-        // We'll also check this after every record batch we read,
-        // and if at some point we are able to prove we can prune the file using just the file level statistics
-        // we can end the stream early.
+        // Since dynamic filters may have been updated since planning it is
+        // possible that we are able to prune files now that we couldn't prune at
+        // planning time. The `FilePruner` (built when the predicate is dynamic or
+        // the file carries statistics) also watches any still-active dynamic
+        // filter, so the
+        // `EarlyStoppingStream` wrapping the scan can re-check after each batch
+        // and end the stream early once a tightened filter proves the file can
+        // be skipped.
         //
-        // Make a FilePruner only if there is either
-        // 1. a dynamic expr in the predicate
-        // 2. the file has file-level statistics.
-        //
-        // File-level statistics may prune the file without loading
-        // any row groups or metadata.
-        //
-        // Dynamic filters may prune the file after initial
-        // planning, as the dynamic filter is updated during
-        // execution.
-        //
-        // The case where there is a dynamic filter but no
-        // statistics corresponds to a dynamic filter that
-        // references partition columns. While rare, this is possible
-        // e.g. `select * from table order by partition_col limit
-        // 10` could hit this condition.
+        // File-level statistics may prune the file without loading any row
+        // groups or metadata. Partition column predicates are already folded to
+        // literals (see `replace_columns_with_literals` above), so a dynamic
+        // filter that references only partition columns can prune here too even
+        // when the file has no column statistics, e.g.
+        // `select * from t order by partition_col limit 10`.
         if let Some(file_pruner) = &mut self.file_pruner
             && file_pruner.should_prune()?
         {
@@ -780,11 +776,13 @@ impl MetadataLoadedParquetOpen {
         }
 
         if let Some(ref coerce) = prepared.coerce_int96
-            && let Some(merged) = coerce_int96_to_resolution(
+            && let Some(merged) = Int96Coercer::new(
                 reader_metadata.parquet_schema(),
                 &physical_file_schema,
                 coerce,
             )
+            .with_timezone(prepared.coerce_int96_tz.clone())
+            .coerce()
         {
             physical_file_schema = Arc::new(merged);
             options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -1148,11 +1146,17 @@ impl RowGroupsPrunedParquetOpen {
             };
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
-        let read_plan = build_projection_read_plan(
-            prepared.projection.expr_iter(),
+
+        // Build the decoder projection (mask + per-batch transform) in a
+        // single call. Encapsulating it behind `DecoderProjection` keeps the
+        // opener's orchestration body focused on filter / decoder / stream
+        // wiring.
+        let decoder_projection = DecoderProjection::try_new(
+            &prepared.projection,
             &prepared.physical_file_schema,
             reader_metadata.parquet_schema(),
-        );
+            &prepared.output_schema,
+        )?;
 
         let (decoder, pending_decoders, remaining_limit) = {
             let pushdown_predicate = prepared
@@ -1180,7 +1184,7 @@ impl RowGroupsPrunedParquetOpen {
             let remaining_limit = prepared.limit.filter(|_| run_count > 1);
 
             let decoder_config = DecoderBuilderConfig {
-                read_plan: &read_plan,
+                projection_mask: decoder_projection.projection_mask(),
                 batch_size: prepared.batch_size,
                 arrow_reader_metrics: &arrow_reader_metrics,
                 force_filter_selections: prepared.force_filter_selections,
@@ -1218,19 +1222,6 @@ impl RowGroupsPrunedParquetOpen {
         let predicate_cache_records =
             prepared.file_metrics.predicate_cache_records.clone();
 
-        // Check if we need to replace the schema to handle things like differing nullability or metadata.
-        // See note below about file vs. output schema.
-        let stream_schema = read_plan.projected_schema;
-        let replace_schema = stream_schema != prepared.output_schema;
-
-        // Rebase column indices to match the narrowed stream schema.
-        // The projection expressions have indices based on physical_file_schema,
-        // but the stream only contains the columns selected by the ProjectionMask.
-        let projection = prepared
-            .projection
-            .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
-        let projector = projection.make_projector(&stream_schema)?;
-        let output_schema = Arc::clone(&prepared.output_schema);
         let files_ranges_pruned_statistics =
             prepared.file_metrics.files_ranges_pruned_statistics.clone();
         let stream = PushDecoderStreamState {
@@ -1238,9 +1229,7 @@ impl RowGroupsPrunedParquetOpen {
             pending_decoders,
             remaining_limit,
             reader: prepared.async_file_reader,
-            projector,
-            output_schema,
-            replace_schema,
+            decoder_projection,
             arrow_reader_metrics,
             predicate_cache_inner_records,
             predicate_cache_records,
@@ -1248,16 +1237,21 @@ impl RowGroupsPrunedParquetOpen {
         }
         .into_stream();
 
-        // Wrap the stream so a dynamic filter can stop the file scan early.
-        if let Some(file_pruner) = prepared.file_pruner {
-            Ok(EarlyStoppingStream::new(
-                stream,
-                file_pruner,
-                files_ranges_pruned_statistics,
-            )
-            .boxed())
-        } else {
-            Ok(stream)
+        // Wrap the stream so a dynamic filter can stop the file scan early, but
+        // only when the pruner is still watching a filter that can change
+        // mid-scan. For a static (or already-complete) predicate the up-front
+        // `prune_file` check already captured everything that can be pruned, so
+        // per-batch re-checking would only add overhead.
+        match prepared.file_pruner {
+            Some(file_pruner) if file_pruner.is_watching() => {
+                Ok(EarlyStoppingStream::new(
+                    stream,
+                    file_pruner,
+                    files_ranges_pruned_statistics,
+                )
+                .boxed())
+            }
+            _ => Ok(stream),
         }
     }
 }
@@ -1603,6 +1597,10 @@ mod test {
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
                 coerce_int96: self.coerce_int96,
+                // End-to-end coercion behavior (including timezone) is
+                // covered by parquet.slt. No opener-level test currently
+                // needs a non-default value here.
+                coerce_int96_tz: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
                 expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),

@@ -246,6 +246,42 @@ impl InListExpr {
 
         Ok(Self::new(expr, list, negated, static_filter))
     }
+
+    #[cfg(feature = "proto")]
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_proto_models::protobuf;
+
+        let node = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::InList(n)) => n,
+            _ => {
+                return datafusion_common::internal_err!(
+                    "PhysicalExprNode is not an InList"
+                );
+            }
+        };
+
+        let expr = ctx.decode(node.expr.as_deref().ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(
+                "InList is missing required field 'expr'".to_string(),
+            )
+        })?)?;
+
+        let list = node
+            .list
+            .iter()
+            .map(|e| ctx.decode(e))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Arc::new(InListExpr::try_new(
+            expr,
+            list,
+            node.negated,
+            ctx.schema(),
+        )?))
+    }
 }
 impl std::fmt::Display for InListExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -441,6 +477,29 @@ impl PhysicalExpr for InListExpr {
             expr.fmt_sql(f)?;
         }
         write!(f, ")")
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
+                protobuf::PhysicalInListNode {
+                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
+                    list: self
+                        .list
+                        .iter()
+                        .map(|e| ctx.encode_child(e))
+                        .collect::<Result<Vec<_>>>()?,
+                    negated: self.negated,
+                },
+            ))),
+        }))
     }
 }
 
@@ -3819,5 +3878,165 @@ mod tests {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::{Column, col, lit};
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalInListNode, physical_expr_node,
+    };
+
+    /// Build an `InListExpr` proto node with the given children.
+    fn in_list_node(
+        expr: Option<Box<PhysicalExprNode>>,
+        list: Vec<PhysicalExprNode>,
+        negated: bool,
+    ) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::InList(Box::new(
+                PhysicalInListNode {
+                    expr,
+                    list,
+                    negated,
+                },
+            ))),
+        }
+    }
+
+    /// An `InListExpr` over a column with one literal value.
+    fn in_list_fixture() -> InListExpr {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        InListExpr::try_new(col("a", &schema).unwrap(), vec![lit(1)], false, &schema)
+            .unwrap()
+    }
+
+    #[test]
+    fn try_to_proto_encodes_in_list() {
+        let in_list = in_list_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = in_list
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("InListExpr should encode to Some(node)");
+
+        // Built-in exprs never set expr_id; only dynamic filters do.
+        assert!(node.expr_id.is_none());
+        let in_list_node = match node.expr_type {
+            Some(physical_expr_node::ExprType::InList(boxed)) => *boxed,
+            other => panic!("expected an InList node, got {other:?}"),
+        };
+        assert!(!in_list_node.negated);
+        assert!(in_list_node.expr.is_some());
+        assert_eq!(in_list_node.list.len(), 1);
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let in_list = in_list_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = in_list.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_to_proto_propagates_list_encode_error() {
+        let in_list = in_list_fixture();
+        // Call 1 is for `expr`, Call 2 is for the first element of `list`
+        let encoder = StubEncoder::failing_on(2);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = in_list.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_in_list() {
+        let node = in_list_node(
+            Some(Box::new(column_node("a"))),
+            vec![column_node("b")],
+            true,
+        );
+        let schema = Schema::new(vec![Field::new("decoded", DataType::Int32, true)]);
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = InListExpr::try_from_proto(&node, &ctx).unwrap();
+        let in_list = decoded
+            .downcast_ref::<InListExpr>()
+            .expect("decoded expr should be an InListExpr");
+
+        assert!(in_list.negated());
+        assert!(in_list.expr().downcast_ref::<Column>().is_some());
+        assert_eq!(in_list.list().len(), 1);
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_in_list_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not an InList")
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_expr() {
+        let node = in_list_node(None, vec![column_node("b")], false);
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg.contains("InList is missing required field 'expr'")
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_propagates_expr_decode_error() {
+        let node = in_list_node(
+            Some(Box::new(column_node("a"))),
+            vec![column_node("b")],
+            false,
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_from_proto_propagates_list_decode_error() {
+        let node = in_list_node(
+            Some(Box::new(column_node("a"))),
+            vec![column_node("b")],
+            false,
+        );
+        let schema = Schema::empty();
+        // Call 1 is `expr`, Call 2 is the first element of `list`
+        let decoder = StubDecoder::failing_on(2);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));
     }
 }

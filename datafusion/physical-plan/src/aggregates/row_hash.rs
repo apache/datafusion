@@ -262,7 +262,7 @@ enum OutOfMemoryMode {
 ///
 ///         group_values                             accumulators
 ///
-///  ```
+/// ```
 ///
 /// For example, given a query like `COUNT(x), SUM(y) ... GROUP BY z`,
 /// [`group_values`] will store the distinct values of `z`. There will
