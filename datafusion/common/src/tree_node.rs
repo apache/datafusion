@@ -691,6 +691,11 @@ impl<T> Transformed<T> {
         Self::new(data, false, TreeNodeRecursion::Continue)
     }
 
+    pub fn update_tnr(mut self, tnr: TreeNodeRecursion) -> Self {
+        self.tnr = tnr;
+        self
+    }
+
     /// Applies an infallible `f` to the data of this [`Transformed`] object,
     /// without modifying the `transformed` flag.
     pub fn update_data<U, F: FnOnce(T) -> U>(self, f: F) -> Transformed<U> {

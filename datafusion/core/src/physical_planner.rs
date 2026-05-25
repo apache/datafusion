@@ -1860,6 +1860,9 @@ impl DefaultPhysicalPlanner {
                     "Unsupported logical plan: Analyze must be root of the plan"
                 );
             }
+            LogicalPlan::DependentJoin(_) => {
+                return not_impl_err!("Physical plan does not support DependentJoin");
+            }
         };
         Ok(exec_node)
     }
@@ -2245,6 +2248,7 @@ fn extract_dml_filters(
             | LogicalPlan::Sort(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Join(_)
+            | LogicalPlan::DependentJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Window(_)

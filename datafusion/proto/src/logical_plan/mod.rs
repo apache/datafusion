@@ -2020,6 +2020,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
+            LogicalPlan::DependentJoin(_) => {
+                todo!()
+            }
         }
     }
 }

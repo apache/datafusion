@@ -38,11 +38,11 @@
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
 use crate::{
-    Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
-    DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
-    LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
-    Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
-    Values, Window, dml::CopyTo,
+    Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, DependentJoin,
+    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
+    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
+    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
+    UserDefinedLogicalNode, Values, Window, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -339,6 +339,29 @@ impl TreeNode for LogicalPlan {
                     })
                 },
             ),
+            LogicalPlan::DependentJoin(DependentJoin {
+                schema,
+                correlated_columns,
+                subquery_expr,
+                subquery_depth,
+                subquery_name,
+                lateral_join_condition,
+                left,
+                right,
+                any_join,
+            }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
+                LogicalPlan::DependentJoin(DependentJoin {
+                    schema,
+                    correlated_columns,
+                    subquery_expr,
+                    subquery_depth,
+                    subquery_name,
+                    lateral_join_condition,
+                    left,
+                    right,
+                    any_join,
+                })
+            }),
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Prepare(p) => p
                     .input
@@ -456,6 +479,22 @@ impl LogicalPlan {
             })) => (on_expr, select_expr, sort_expr).apply_ref_elements(f),
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
                 (skip, fetch).apply_ref_elements(f)
+            }
+            LogicalPlan::DependentJoin(DependentJoin {
+                correlated_columns,
+                lateral_join_condition,
+                ..
+            }) => {
+                let correlated_column_exprs = correlated_columns
+                    .iter()
+                    .map(|info| Expr::Column(info.col.clone()))
+                    .collect::<Vec<_>>();
+                let maybe_lateral_join_condition = lateral_join_condition
+                    .as_ref()
+                    .map(|(_, condition)| condition.clone());
+
+                (&correlated_column_exprs, &maybe_lateral_join_condition)
+                    .apply_ref_elements(f)
             }
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Execute(Execute { parameters, .. }) => {
@@ -646,6 +685,30 @@ impl LogicalPlan {
                 (skip, fetch).map_elements(f)?.update_data(|(skip, fetch)| {
                     LogicalPlan::Limit(Limit { skip, fetch, input })
                 })
+            }
+            LogicalPlan::DependentJoin(DependentJoin { .. }) => {
+                Transformed::no(self)
+                // let subquery_expr = subquery_expr.map_elements(&mut f)?;
+                // let join_type = match join_type {
+                //     Some((jt, filter)) => filter
+                //         .map_elements(f)?
+                //         .update_data(|filter| Some((jt, filter))),
+                //     None => Transformed::no(None),
+                // };
+                // subquery_expr.update_tnr(join_type.tnr).update_data(
+                //     |subquery_expr| {
+                //         LogicalPlan::DependentJoin(DependentJoin {
+                //             left,
+                //             right,
+                //             correlated_columns,
+                //             subquery_expr,
+                //             subquery_depth,
+                //             subquery_alias,
+                //             join_type: join_type.data,
+                //             schema,
+                //         })
+                //     },
+                // )
             }
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Execute(e) => {
