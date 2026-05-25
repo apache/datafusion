@@ -36,8 +36,8 @@ use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
-    CaseExpr, CastExpr, DynamicFilterPhysicalExpr, InListExpr, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NotExpr, TryCastExpr, UnKnownColumn,
+    CaseExpr, CastExpr, DynamicFilterPhysicalExpr, IsNotNullExpr, IsNullExpr, Literal,
+    NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -412,19 +412,6 @@ pub fn serialize_physical_expr_with_converter(
                 }),
             )),
         })
-    } else if let Some(expr) = expr.downcast_ref::<InListExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
-                protobuf::PhysicalInListNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.expr(), codec)?,
-                    )),
-                    list: serialize_physical_exprs(expr.list(), codec, proto_converter)?,
-                    negated: expr.negated(),
-                },
-            ))),
-        })
     } else if let Some(lit) = expr.downcast_ref::<Literal>() {
         Ok(protobuf::PhysicalExprNode {
             expr_id,
@@ -474,22 +461,6 @@ pub fn serialize_physical_expr_with_converter(
                         .to_string(),
                 },
             )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(Box::new(
-                protobuf::PhysicalLikeExprNode {
-                    negated: expr.negated(),
-                    case_insensitive: expr.case_insensitive(),
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.expr(), codec)?,
-                    )),
-                    pattern: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.pattern(), codec)?,
-                    )),
-                },
-            ))),
         })
     } else if let Some(expr) = expr.downcast_ref::<HashExpr>() {
         Ok(protobuf::PhysicalExprNode {

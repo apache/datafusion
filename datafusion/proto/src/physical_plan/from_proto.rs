@@ -43,8 +43,8 @@ use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
-    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
+    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
+    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
@@ -320,18 +320,7 @@ pub fn parse_physical_expr_with_converter(
             proto_converter,
         )?)),
         ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
-        ExprType::InList(e) => in_list(
-            parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?,
-            parse_physical_exprs(&e.list, ctx, input_schema, proto_converter)?,
-            &e.negated,
-            input_schema,
-        )?,
+        ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Case(e) => Arc::new(CaseExpr::try_new(
             e.expr
                 .as_ref()
@@ -418,24 +407,7 @@ pub fn parse_physical_expr_with_converter(
                 .with_nullable(e.nullable),
             )
         }
-        ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
-            like_expr.negated,
-            like_expr.case_insensitive,
-            parse_required_physical_expr(
-                like_expr.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?,
-            parse_required_physical_expr(
-                like_expr.pattern.as_deref(),
-                ctx,
-                "pattern",
-                input_schema,
-                proto_converter,
-            )?,
-        )),
+        ExprType::LikeExpr(_) => LikeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::HashExpr(hash_expr) => {
             let on_columns = parse_physical_exprs(
                 &hash_expr.on_columns,

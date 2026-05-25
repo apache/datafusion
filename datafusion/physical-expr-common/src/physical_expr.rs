@@ -870,6 +870,12 @@ pub fn snapshot_generation(expr: &Arc<dyn PhysicalExpr>) -> u64 {
 /// Check if the given `PhysicalExpr` is dynamic.
 /// Internally this calls [`snapshot_generation`] to check if the generation is non-zero,
 /// any dynamic `PhysicalExpr` should have a non-zero generation.
+#[deprecated(
+    since = "55.0.0",
+    note = "Downcast to `DynamicFilterPhysicalExpr`, or use \
+    `DynamicFilterTracking::classify(expr).contains_dynamic_filter()` from \
+    `datafusion_physical_expr`"
+)]
 pub fn is_dynamic_physical_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     // If the generation is non-zero, then this `PhysicalExpr` is dynamic.
     snapshot_generation(expr) != 0
