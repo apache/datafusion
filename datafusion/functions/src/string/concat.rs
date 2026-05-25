@@ -141,8 +141,6 @@ impl ScalarUDFImpl for ConcatFunc {
                     values.push(value);
                 } else if let ScalarValue::BinaryView(Some(value)) = scalar {
                     values.push(value);
-                } else if let ScalarValue::FixedSizeBinary(_, Some(value)) = scalar {
-                    values.push(value);
                 } else if scalar.is_null() {
                     // null binary scalar: skip (consistent with null string behaviour)
                 } else {
@@ -279,11 +277,10 @@ pub(crate) fn deduce_return_type(arg_types: &[DataType]) -> DataType {
     if arg_types.contains(&BinaryView) {
         BinaryView
     } else if arg_types.contains(&LargeBinary) {
+        // Serves LargeBinary and FixedSizeBinary inputs
         LargeBinary
     } else if arg_types.contains(&Binary) {
         Binary
-    } else if arg_types.iter().any(|dt| matches!(dt, FixedSizeBinary(_))) {
-        LargeBinary
     } else if arg_types.contains(&Utf8View) {
         Utf8View
     } else if arg_types.contains(&LargeUtf8) {
