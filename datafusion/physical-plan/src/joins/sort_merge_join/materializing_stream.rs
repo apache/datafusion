@@ -1165,6 +1165,12 @@ impl MaterializingSortMergeJoinStream {
                             {
                                 self.produce_buffered_not_matched(&mut buffered_batch)?;
                                 self.free_reservation(&buffered_batch);
+                                if matches!(
+                                    buffered_batch.batch,
+                                    BufferedBatchState::Spilled(_)
+                                ) {
+                                    self.spilled_batch_count -= 1;
+                                }
                                 head_changed = true;
                             }
                         } else {

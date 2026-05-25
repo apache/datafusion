@@ -799,7 +799,9 @@ impl BitwiseSortMergeJoinStream {
         .count_ones();
 
         // Process spilled inner batches first asynchronously.
-        if self.inner_key_spill.is_some() || self.spill_stream.is_some() {
+        if matched_count < outer_group_len
+            && (self.inner_key_spill.is_some() || self.spill_stream.is_some())
+        {
             if self.spill_stream.is_none()
                 && let Some(spill_file) = &self.inner_key_spill
             {
