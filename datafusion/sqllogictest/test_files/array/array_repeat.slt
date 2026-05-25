@@ -43,6 +43,9 @@ select
 ----
 [[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[NULL, NULL], [NULL, NULL], [NULL, NULL]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
 
+query error DataFusion error: Execution error: array_repeat: requested length exceeds maximum array size
+select array_repeat(1, 9223372036854775807);
+
 query ????
 select
   array_repeat(arrow_cast([1], 'LargeList(Int64)'), 5),

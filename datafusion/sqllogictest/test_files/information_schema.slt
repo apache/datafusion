@@ -561,8 +561,8 @@ CREATE OR REPLACE TABLE some_table AS VALUES (1,2),(3,4);
 query TTT rowsort
 DESCRIBE some_table
 ----
-column1 Int64 YES
-column2 Int64 YES
+column1 Int64 NO
+column2 Int64 NO
 
 statement ok
 DROP TABLE public.some_table;
@@ -575,8 +575,8 @@ CREATE OR REPLACE TABLE public.some_table AS VALUES (1,2),(3,4);
 query TTT rowsort
 DESCRIBE public.some_table
 ----
-column1 Int64 YES
-column2 Int64 YES
+column1 Int64 NO
+column2 Int64 NO
 
 statement ok
 DROP TABLE public.some_table;
@@ -589,8 +589,8 @@ CREATE OR REPLACE TABLE datafusion.public.some_table AS VALUES (1,2),(3,4);
 query TTT rowsort
 DESCRIBE datafusion.public.some_table
 ----
-column1 Int64 YES
-column2 Int64 YES
+column1 Int64 NO
+column2 Int64 NO
 
 statement ok
 DROP TABLE datafusion.public.some_table;

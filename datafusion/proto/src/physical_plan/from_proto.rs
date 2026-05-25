@@ -426,24 +426,7 @@ pub fn parse_physical_expr_with_converter(
                 .with_nullable(e.nullable),
             )
         }
-        ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
-            like_expr.negated,
-            like_expr.case_insensitive,
-            parse_required_physical_expr(
-                like_expr.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?,
-            parse_required_physical_expr(
-                like_expr.pattern.as_deref(),
-                ctx,
-                "pattern",
-                input_schema,
-                proto_converter,
-            )?,
-        )),
+        ExprType::LikeExpr(_) => LikeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::HashExpr(hash_expr) => {
             let on_columns = parse_physical_exprs(
                 &hash_expr.on_columns,
@@ -711,6 +694,7 @@ pub fn parse_protobuf_file_scan_config(
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_output_ordering(output_ordering)
         .with_batch_size(proto.batch_size.map(|s| s as usize))
+        .with_partitioned_by_file_group(proto.partitioned_by_file_group.unwrap_or(false))
         .build();
     Ok(config)
 }
