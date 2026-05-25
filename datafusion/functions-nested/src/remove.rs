@@ -717,11 +717,7 @@ mod tests {
                                 DataType::Int32,
                                 element_nullability,
                             )),
-                            Arc::new(Field::new(
-                                "b",
-                                DataType::Int64,
-                                count_nullability,
-                            )),
+                            Arc::new(Field::new("b", DataType::Int64, count_nullability)),
                         ];
                         let scalar_args = vec![
                             None,
@@ -736,9 +732,8 @@ mod tests {
                             })
                             .unwrap();
 
-                        let expected_nullable = nullability
-                            || element_nullability
-                            || count_nullability;
+                        let expected_nullable =
+                            nullability || element_nullability || count_nullability;
                         let expected = Arc::new(
                             input_field
                                 .as_ref()

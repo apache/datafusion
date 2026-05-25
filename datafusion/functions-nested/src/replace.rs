@@ -139,8 +139,12 @@ impl ScalarUDFImpl for ArrayReplace {
             (from_arg, to_arg) => {
                 let from_array = from_arg.to_array(num_rows)?;
                 let to_array = to_arg.to_array(num_rows)?;
-                let result =
-                    array_replace_internal(&list_array, &from_array, &to_array, &[Some(1)])?;
+                let result = array_replace_internal(
+                    &list_array,
+                    &from_array,
+                    &to_array,
+                    &[Some(1)],
+                )?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -246,8 +250,12 @@ impl ScalarUDFImpl for ArrayReplaceN {
                 let from_array = from_arg.to_array(num_rows)?;
                 let to_array = to_arg.to_array(num_rows)?;
                 let max_array = max_arg.to_array(num_rows)?;
-                let result =
-                    array_replace_n_inner(&list_array, &from_array, &to_array, &max_array)?;
+                let result = array_replace_n_inner(
+                    &list_array,
+                    &from_array,
+                    &to_array,
+                    &max_array,
+                )?;
                 Ok(ColumnarValue::Array(result))
             }
         }
