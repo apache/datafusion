@@ -75,6 +75,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_functions::core::getfield::GetFieldFunc;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
+use parquet::arrow::is_virtual_column;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::SchemaDescriptor;
 
@@ -560,6 +561,10 @@ pub(crate) fn build_parquet_read_plan(
 
     let root_indices = &required_columns.required_columns;
 
+    // Virtual-column roots are silently dropped here (they have no parquet
+    // leaf to map to); the decoder appends virtual columns to every batch
+    // regardless of the projection mask, so `projected_schema` stays aligned.
+    // See `build_projection_read_plan` for the symmetric mask-side filter.
     let mut leaf_indices =
         leaf_indices_for_roots(root_indices.iter().copied(), schema_descr);
 
@@ -605,6 +610,15 @@ pub(crate) fn build_projection_read_plan(
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
 ) -> ParquetReadPlan {
+    // Virtual columns have no parquet column to mask.
+    let parquet_roots = |roots: &[usize]| -> Vec<usize> {
+        roots
+            .iter()
+            .copied()
+            .filter(|i| !is_virtual_column(file_schema.field(*i)))
+            .collect()
+    };
+
     // fast path: if every expression is a plain Column reference, skip all
     // struct analysis and use root-level projection directly
     let exprs = exprs.into_iter().collect::<Vec<_>>();
@@ -619,7 +633,7 @@ pub(crate) fn build_projection_read_plan(
         root_indices.dedup();
 
         let projection_mask =
-            ProjectionMask::roots(schema_descr, root_indices.iter().copied());
+            ProjectionMask::roots(schema_descr, parquet_roots(&root_indices));
         let projected_schema = Arc::new(
             file_schema
                 .project(&root_indices)
@@ -649,7 +663,7 @@ pub(crate) fn build_projection_read_plan(
         root_indices.dedup();
 
         let projection_mask =
-            ProjectionMask::roots(schema_descr, root_indices.iter().copied());
+            ProjectionMask::roots(schema_descr, parquet_roots(&root_indices));
 
         let projected_schema = Arc::new(
             file_schema
@@ -682,7 +696,7 @@ pub(crate) fn build_projection_read_plan(
     // to match the performance of the simple path
     if all_struct_accesses.is_empty() {
         let projection_mask =
-            ProjectionMask::roots(schema_descr, all_root_indices.iter().copied());
+            ProjectionMask::roots(schema_descr, parquet_roots(&all_root_indices));
         let projected_schema = Arc::new(
             file_schema
                 .project(&all_root_indices)
@@ -697,7 +711,7 @@ pub(crate) fn build_projection_read_plan(
 
     let leaf_indices = {
         let mut out =
-            leaf_indices_for_roots(all_root_indices.iter().copied(), schema_descr);
+            leaf_indices_for_roots(parquet_roots(&all_root_indices), schema_descr);
         let struct_leaf_indices =
             resolve_struct_field_leaves(&all_struct_accesses, file_schema, schema_descr);
 

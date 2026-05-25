@@ -44,7 +44,7 @@ use std::future::Future;
 use std::mem;
 use std::sync::Arc;
 
-use arrow::datatypes::{SchemaRef, TimeUnit};
+use arrow::datatypes::{FieldRef, Schema, SchemaRef, TimeUnit};
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
@@ -71,6 +71,7 @@ use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::is_virtual_column;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
@@ -305,6 +306,27 @@ struct MetadataLoadedParquetOpen {
     prepared: PreparedParquetOpen,
     reader_metadata: ArrowReaderMetadata,
     options: ArrowReaderOptions,
+    virtual_columns: Vec<FieldRef>,
+}
+
+/// Split a schema into (real-fields-only schema, virtual-field list).
+fn split_virtual_fields(schema: &SchemaRef) -> (SchemaRef, Vec<FieldRef>) {
+    let mut real = Vec::with_capacity(schema.fields().len());
+    let mut virt = Vec::new();
+    for field in schema.fields() {
+        if is_virtual_column(field) {
+            virt.push(Arc::clone(field));
+        } else {
+            real.push(Arc::clone(field));
+        }
+    }
+    if virt.is_empty() {
+        return (Arc::clone(schema), virt);
+    }
+    (
+        Arc::new(Schema::new_with_metadata(real, schema.metadata.clone())),
+        virt,
+    )
 }
 
 /// State of [`ParquetOpenState`]
@@ -723,13 +745,16 @@ impl PreparedParquetOpen {
         // unnecessary I/O. We decide later if it is needed to evaluate the
         // pruning predicates. Thus default to not requesting it from the
         // underlying reader.
-        let options =
+        let mut options =
             ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
-        #[cfg(feature = "parquet_encryption")]
-        let mut options = options;
         #[cfg(feature = "parquet_encryption")]
         if let Some(fd_val) = &self.file_decryption_properties {
             options = options.with_file_decryption_properties(Arc::clone(fd_val));
+        }
+
+        let (_, virtual_columns) = split_virtual_fields(&self.logical_file_schema);
+        if !virtual_columns.is_empty() {
+            options = options.with_virtual_columns(virtual_columns.clone())?;
         }
 
         let mut metadata_timer = self.file_metrics.metadata_load_time.timer();
@@ -747,6 +772,7 @@ impl PreparedParquetOpen {
             prepared: self,
             reader_metadata,
             options,
+            virtual_columns,
         })
     }
 }
@@ -759,6 +785,7 @@ impl MetadataLoadedParquetOpen {
             mut prepared,
             mut reader_metadata,
             mut options,
+            virtual_columns,
         } = self;
 
         // Note about schemas: we are actually dealing with **3 different schemas** here:
@@ -770,6 +797,16 @@ impl MetadataLoadedParquetOpen {
         //   parquet reader will actually produce.
         let mut physical_file_schema = Arc::clone(reader_metadata.schema());
 
+        // `with_schema` expects real fields only; virtual columns are tracked
+        // separately on the options.
+        let resupply_schema = |schema: &SchemaRef| -> SchemaRef {
+            if virtual_columns.is_empty() {
+                Arc::clone(schema)
+            } else {
+                split_virtual_fields(schema).0
+            }
+        };
+
         // The schema loaded from the file may not be the same as the
         // desired schema (for example if we want to instruct the parquet
         // reader to read strings using Utf8View instead). Update if necessary
@@ -778,7 +815,7 @@ impl MetadataLoadedParquetOpen {
             &physical_file_schema,
         ) {
             physical_file_schema = Arc::new(merged);
-            options = options.with_schema(Arc::clone(&physical_file_schema));
+            options = options.with_schema(resupply_schema(&physical_file_schema));
             reader_metadata = ArrowReaderMetadata::try_new(
                 Arc::clone(reader_metadata.metadata()),
                 options.clone(),
@@ -795,7 +832,7 @@ impl MetadataLoadedParquetOpen {
             .coerce()
         {
             physical_file_schema = Arc::new(merged);
-            options = options.with_schema(Arc::clone(&physical_file_schema));
+            options = options.with_schema(resupply_schema(&physical_file_schema));
             reader_metadata = ArrowReaderMetadata::try_new(
                 Arc::clone(reader_metadata.metadata()),
                 options.clone(),
@@ -855,6 +892,7 @@ impl MetadataLoadedParquetOpen {
                 prepared,
                 reader_metadata,
                 options,
+                virtual_columns,
             },
             pruning_predicate,
             page_pruning_predicate,
@@ -1081,6 +1119,7 @@ impl RowGroupsPrunedParquetOpen {
             prepared,
             reader_metadata,
             options: _,
+            virtual_columns: _,
         } = loaded;
 
         let file_metadata = Arc::clone(reader_metadata.metadata());
@@ -1865,6 +1904,119 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_virtual_row_number_column() {
+        use arrow::array::Int64Array;
+        use parquet::arrow::RowNumber;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(10), Some(11), Some(12)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(20), Some(21), Some(22)])).unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "rownum.parquet",
+            vec![batch1, batch2],
+            Some(props),
+        )
+        .await;
+
+        let row_num_field = Arc::new(
+            Field::new("row_num", DataType::Int64, false).with_extension_type(RowNumber),
+        );
+        let file_schema = Arc::new(Schema::new(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            row_num_field,
+        ]));
+
+        let file = PartitionedFile::new(
+            "rownum.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&file_schema))
+            .with_projection_indices(&[0, 1])
+            .build();
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let mut row_nums: Vec<i64> = Vec::new();
+        let mut s = stream;
+        while let Some(Ok(batch)) = s.next().await {
+            let arr = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("row_num column is Int64");
+            row_nums.extend(arr.values().iter().copied());
+        }
+        assert_eq!(row_nums, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[tokio::test]
+    async fn test_virtual_row_number_column_with_row_group_pruning() {
+        use arrow::array::Int64Array;
+        use parquet::arrow::RowNumber;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(10), Some(11), Some(12)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(20), Some(21), Some(22)])).unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "rownum_prune.parquet",
+            vec![batch1, batch2],
+            Some(props),
+        )
+        .await;
+
+        let row_num_field = Arc::new(
+            Field::new("row_num", DataType::Int64, false).with_extension_type(RowNumber),
+        );
+        let file_schema = Arc::new(Schema::new(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            row_num_field,
+        ]));
+
+        let file = PartitionedFile::new(
+            "rownum_prune.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let predicate = logical2physical(&col("a").gt_eq(lit(20i32)), &file_schema);
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&file_schema))
+            .with_projection_indices(&[0, 1])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(true)
+            .build();
+
+        let mut s = open_file(&morselizer, file).await.unwrap();
+        let mut row_nums: Vec<i64> = Vec::new();
+        while let Some(Ok(batch)) = s.next().await {
+            let arr = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("row_num column is Int64");
+            row_nums.extend(arr.values().iter().copied());
+        }
+        assert_eq!(row_nums, vec![3, 4, 5]);
     }
 
     #[tokio::test]
