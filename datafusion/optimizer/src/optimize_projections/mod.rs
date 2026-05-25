@@ -201,7 +201,7 @@ fn optimize_projections(
 
             if new_aggr_expr.is_empty()
                 && let Some(input) =
-                    remove_unused_unnest_from_duplicate_insensitive_input(
+                    remove_row_preserving_unused_unnest_from_duplicate_insensitive_input(
                         aggregate.input.as_ref(),
                         &new_group_bys,
                     )?
@@ -510,7 +510,7 @@ fn optimize_projections(
     }
 }
 
-fn remove_unused_unnest_from_duplicate_insensitive_input(
+fn remove_row_preserving_unused_unnest_from_duplicate_insensitive_input(
     input: &LogicalPlan,
     required_exprs: &[Expr],
 ) -> Result<Option<LogicalPlan>> {
@@ -541,6 +541,8 @@ fn remove_unused_unnest_from_duplicate_insensitive_input(
 }
 
 fn can_remove_unused_unnest_for_exprs(unnest: &Unnest, exprs: &[Expr]) -> Result<bool> {
+    // This rewrite is only safe when UNNEST cannot eliminate input rows and no
+    // required expression depends on an unnested output column.
     if !unnest_preserves_at_least_one_row_per_input(unnest) {
         return Ok(false);
     }
@@ -1546,6 +1548,24 @@ mod tests {
           Unnest: lists[elem|depth=1] structs[]
             Projection: List([1, 2]) AS elem
               TableScan: test projection=[]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_unused_unnest_under_group_by_with_visible_aggregate() -> Result<()> {
+        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
+            .aggregate(vec![col("id")], vec![count(lit(1))])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.id]], aggr=[[count(Int32(1))]]
+          Projection: test.id
+            Unnest: lists[elem|depth=1] structs[]
+              Projection: test.id, List([1, 2]) AS elem
+                TableScan: test projection=[id]
         "
         )
     }

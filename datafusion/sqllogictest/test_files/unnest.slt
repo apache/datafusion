@@ -1348,8 +1348,8 @@ SELECT * FROM (
         (3, arrow_cast(NULL, 'List(Int64)'))
 ) AS t(id, arr);
 
-# The unused `elem` output only duplicates rows below this GROUP BY, so it can
-# be pruned without changing the grouped ids.
+# The unused non-empty literal UNNEST only duplicates rows below this GROUP BY,
+# so it can be pruned without changing the grouped ids.
 query I
 SELECT id
 FROM (
