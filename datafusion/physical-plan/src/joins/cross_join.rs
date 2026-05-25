@@ -1046,10 +1046,15 @@ mod tests {
 
         let err = join_collect(left, right, task_ctx).await.unwrap_err();
 
+        let err_str = err.to_string();
         assert_contains!(
-            err.to_string(),
-            "Resources exhausted: Additional allocation failed for CrossJoinExec[left] with top memory consumers (across reservations) as:\n  CrossJoinExec[left]"
+            &err_str,
+            "Resources exhausted: Additional allocation failed for CrossJoinExec[left]"
         );
+        // Both sides buffer upfront, so each appears as a memory consumer;
+        // their order in the top-consumers list is not deterministic.
+        assert_contains!(&err_str, "CrossJoinExec[left]");
+        assert_contains!(&err_str, "CrossJoinExec[right]");
 
         Ok(())
     }
