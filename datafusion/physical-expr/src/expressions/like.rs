@@ -190,22 +190,19 @@ impl LikeExpr {
             _ => return internal_err!("PhysicalExprNode is not a LikeExpr"),
         };
 
-        let expr = like_expr.expr.as_deref().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "LikeExpr is missing required field 'expr'".to_string(),
-            )
-        })?;
-        let pattern = like_expr.pattern.as_deref().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "LikeExpr is missing required field 'pattern'".to_string(),
-            )
-        })?;
-
         Ok(Arc::new(LikeExpr::new(
             like_expr.negated,
             like_expr.case_insensitive,
-            ctx.decode(expr)?,
-            ctx.decode(pattern)?,
+            ctx.decode_required_expression(
+                like_expr.expr.as_deref(),
+                "LikeExpr",
+                "expr",
+            )?,
+            ctx.decode_required_expression(
+                like_expr.pattern.as_deref(),
+                "LikeExpr",
+                "pattern",
+            )?,
         )))
     }
 }
@@ -491,7 +488,9 @@ mod proto_tests {
     fn try_from_proto_rejects_missing_pattern() {
         let node = like_node(false, false, Some(Box::new(column_node("a"))), None);
         let schema = Schema::empty();
-        let decoder = UnreachableDecoder;
+        // `expr` is present, so it is decoded before the missing-`pattern`
+        // check fires; use a decoder that succeeds for that first child.
+        let decoder = StubDecoder::ok();
         let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
         let err = LikeExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
