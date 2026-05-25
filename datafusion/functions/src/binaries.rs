@@ -78,11 +78,6 @@ impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
                     self.value_buffer.extend_from_slice(array.value(i));
                 }
             }
-            ColumnarValueRef::NullableFixedSizeBinaryArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer.extend_from_slice(array.value(i));
-                }
-            }
             ColumnarValueRef::NonNullableBinaryArray(array) => {
                 self.value_buffer.extend_from_slice(array.value(i));
             }
@@ -90,9 +85,6 @@ impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
                 self.value_buffer.extend_from_slice(array.value(i));
             }
             ColumnarValueRef::NonNullableBinaryViewArray(array) => {
-                self.value_buffer.extend_from_slice(array.value(i));
-            }
-            ColumnarValueRef::NonNullableFixedSizeBinaryArray(array) => {
                 self.value_buffer.extend_from_slice(array.value(i));
             }
             _ => {
@@ -196,14 +188,6 @@ impl ConcatBuilder for ConcatBinaryViewBuilder {
                 self.block.extend_from_slice(array.value(i));
             }
             ColumnarValueRef::NonNullableBinaryViewArray(array) => {
-                self.block.extend_from_slice(array.value(i));
-            }
-            ColumnarValueRef::NullableFixedSizeBinaryArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.block.extend_from_slice(array.value(i));
-                }
-            }
-            ColumnarValueRef::NonNullableFixedSizeBinaryArray(array) => {
                 self.block.extend_from_slice(array.value(i));
             }
             _ => {

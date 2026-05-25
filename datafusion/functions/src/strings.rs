@@ -25,16 +25,15 @@ use datafusion_common::{
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, BinaryViewArray,
-    ByteView, FixedSizeBinaryArray, GenericStringArray, LargeBinaryArray,
-    LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray,
-    as_largestring_array, make_view,
+    ByteView, GenericStringArray, LargeBinaryArray, LargeStringArray, OffsetSizeTrait,
+    StringArray, StringViewArray, as_largestring_array, make_view,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::{
-    as_binary_array, as_binary_view_array, as_fixed_size_binary_array,
-    as_large_binary_array, as_string_array, as_string_view_array,
+    as_binary_array, as_binary_view_array, as_large_binary_array, as_string_array,
+    as_string_view_array,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
@@ -1046,8 +1045,6 @@ pub(crate) enum ColumnarValueRef<'a> {
     NonNullableBinaryArray(&'a BinaryArray),
     NullableLargeBinaryArray(&'a LargeBinaryArray),
     NonNullableLargeBinaryArray(&'a LargeBinaryArray),
-    NullableFixedSizeBinaryArray(&'a FixedSizeBinaryArray),
-    NonNullableFixedSizeBinaryArray(&'a FixedSizeBinaryArray),
     NullableBinaryViewArray(&'a BinaryViewArray),
     NonNullableBinaryViewArray(&'a BinaryViewArray),
 }
@@ -1062,15 +1059,13 @@ impl ColumnarValueRef<'_> {
             | Self::NonNullableStringViewArray(_)
             | Self::NonNullableBinaryArray(_)
             | Self::NonNullableLargeBinaryArray(_)
-            | Self::NonNullableBinaryViewArray(_)
-            | Self::NonNullableFixedSizeBinaryArray(_) => true,
+            | Self::NonNullableBinaryViewArray(_) => true,
             Self::NullableArray(array) => array.is_valid(i),
             Self::NullableStringViewArray(array) => array.is_valid(i),
             Self::NullableLargeStringArray(array) => array.is_valid(i),
             Self::NullableBinaryArray(array) => array.is_valid(i),
             Self::NullableLargeBinaryArray(array) => array.is_valid(i),
             Self::NullableBinaryViewArray(array) => array.is_valid(i),
-            Self::NullableFixedSizeBinaryArray(array) => array.is_valid(i),
         }
     }
 
@@ -1083,15 +1078,13 @@ impl ColumnarValueRef<'_> {
             | Self::NonNullableLargeStringArray(_)
             | Self::NonNullableBinaryArray(_)
             | Self::NonNullableLargeBinaryArray(_)
-            | Self::NonNullableBinaryViewArray(_)
-            | Self::NonNullableFixedSizeBinaryArray(_) => None,
+            | Self::NonNullableBinaryViewArray(_) => None,
             Self::NullableArray(array) => array.nulls().cloned(),
             Self::NullableStringViewArray(array) => array.nulls().cloned(),
             Self::NullableLargeStringArray(array) => array.nulls().cloned(),
             Self::NullableBinaryArray(array) => array.nulls().cloned(),
             Self::NullableLargeBinaryArray(array) => array.nulls().cloned(),
             Self::NullableBinaryViewArray(array) => array.nulls().cloned(),
-            Self::NullableFixedSizeBinaryArray(array) => array.nulls().cloned(),
         }
     }
 
@@ -1202,16 +1195,6 @@ impl ColumnarValueRef<'_> {
                         ColumnarValueRef::NullableBinaryViewArray(binary_array)
                     } else {
                         ColumnarValueRef::NonNullableBinaryViewArray(binary_array)
-                    };
-                    Ok(Some(column))
-                }
-                DataType::FixedSizeBinary(_) => {
-                    let binary_array = as_fixed_size_binary_array(array)?;
-                    *data_size += binary_array.values().len() * size_factor;
-                    let column = if array.is_nullable() {
-                        ColumnarValueRef::NullableFixedSizeBinaryArray(binary_array)
-                    } else {
-                        ColumnarValueRef::NonNullableFixedSizeBinaryArray(binary_array)
                     };
                     Ok(Some(column))
                 }
