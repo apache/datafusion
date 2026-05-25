@@ -71,8 +71,14 @@ impl ScalarUDFImpl for SparkConcat {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        // Accept any string types, including zero arguments
-        Ok(arg_types.to_vec())
+        if arg_types.is_empty() {
+            // Spark semantics: allow concat with zero arguments
+            Ok(vec![])
+        }
+        else {
+            // Use concat coercion rules
+            ConcatFunc::new().coerce_types(arg_types)
+        }
     }
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion_common::internal_err!(
