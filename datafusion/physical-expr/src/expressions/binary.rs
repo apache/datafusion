@@ -4873,22 +4873,10 @@ mod tests {
         );
 
         // The probability of being distinct is 1 - 1 / 16 = 15 / 16.
-        let got = neq.evaluate_statistics(&[left_stat, right_stat])?;
-        let expected = Distribution::new_bernoulli(ScalarValue::from(15.0 / 16.0))?;
-        match (got, expected) {
-            (Bernoulli(g), Bernoulli(e)) => {
-                let gp = match g.p_value() {
-                    ScalarValue::Float64(Some(v)) => v,
-                    _ => panic!("got unexpected p type"),
-                };
-                let ep = match e.p_value() {
-                    ScalarValue::Float64(Some(v)) => v,
-                    _ => panic!("expected unexpected p type"),
-                };
-                assert!((gp - ep).abs() < 1e-12);
-            }
-            _ => panic!("unexpected distribution variants"),
-        }
+        assert_eq!(
+            neq.evaluate_statistics(&[left_stat, right_stat])?,
+            Distribution::new_bernoulli(ScalarValue::from(15.0 / 16.0))?
+        );
 
         Ok(())
     }
