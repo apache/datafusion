@@ -1161,6 +1161,27 @@ mod tests {
             )
     }
 
+    fn id_mixed_depth_unnest_plan() -> Result<LogicalPlanBuilder> {
+        let schema = id_schema();
+        table_scan(Some("test"), &schema, None)?
+            .project(vec![
+                col("id"),
+                list_literal_expr(vec![Some(1)]).alias("elem_depth_1"),
+                nested_list_literal_expr(vec![vec![]]).alias("elem_depth_2"),
+            ])?
+            .unnest_columns_with_options(
+                vec![
+                    Column::from_name("elem_depth_1"),
+                    Column::from_name("elem_depth_2"),
+                ],
+                UnnestOptions::default().with_recursions(RecursionUnnestOption {
+                    input_column: Column::from_name("elem_depth_2"),
+                    output_column: Column::from_name("elem_depth_2"),
+                    depth: 2,
+                }),
+            )
+    }
+
     #[derive(Debug, Hash, PartialEq, Eq)]
     struct NoOpUserDefined {
         exprs: Vec<Expr>,
@@ -1567,6 +1588,24 @@ mod tests {
           Projection: test.id
             Unnest: lists[elem|depth=2] structs[]
               Projection: test.id, List([[]]) AS elem
+                TableScan: test projection=[id]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_mixed_depth_unused_unnest_under_group_by() -> Result<()> {
+        let plan = id_mixed_depth_unnest_plan()?
+            .aggregate(vec![col("id")], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.id]], aggr=[[]]
+          Projection: test.id
+            Unnest: lists[elem_depth_1|depth=1, elem_depth_2|depth=2] structs[]
+              Projection: test.id, List([1]) AS elem_depth_1, List([[]]) AS elem_depth_2
                 TableScan: test projection=[id]
         "
         )
