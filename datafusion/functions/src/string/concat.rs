@@ -604,7 +604,7 @@ mod tests {
             args: vec![c0, c1, c2, c3, c4],
             arg_fields,
             number_rows: 3,
-            return_field: Field::new("f", Utf8, true).into(),
+            return_field: Field::new("f", Utf8View, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
 
