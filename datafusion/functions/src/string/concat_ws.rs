@@ -114,6 +114,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
     /// NULL arguments are ignored.
     /// concat_ws(',', 'abcde', 2, NULL, 22) = 'abcde,2,22'
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let return_datatype = args.return_type().clone();
         let ScalarFunctionArgs { args, .. } = args;
 
         if args.len() < 2 {
@@ -124,15 +125,8 @@ impl ScalarUDFImpl for ConcatWsFunc {
         }
 
         let arg_types: Vec<DataType> = args.iter().map(|c| c.data_type()).collect();
-        let return_datatype = deduce_return_type(&arg_types);
 
         let with_binary = arg_types.iter().any(|dt| dt.is_binary());
-        let with_string = arg_types.iter().any(|dt| dt.is_string());
-        if with_binary && with_string {
-            return plan_err!(
-                "concat_ws does not support mixed string and binary inputs"
-            );
-        }
 
         let array_len = args.iter().find_map(|x| match x {
             ColumnarValue::Array(array) => Some(array.len()),
