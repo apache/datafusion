@@ -949,82 +949,53 @@ mod tests {
 
     #[test]
     fn concat_ws_binary_arrays() -> Result<()> {
-        let c0 = ColumnarValue::Scalar(ScalarValue::Binary(Some(b",".to_vec())));
-        let c1 = ColumnarValue::Array(Arc::new(BinaryArray::from_vec(vec![
-            b"foo".as_ref(),
-            b"bar",
-            b"baz",
-        ])));
-        let c2 = ColumnarValue::Array(Arc::new(LargeBinaryArray::from_opt_vec(vec![
-            Some(b"x".as_ref()),
-            None,
-            Some(b"z"),
-        ])));
+        for c1_large_binary in vec![false, true] {
+            let c0 = ColumnarValue::Scalar(ScalarValue::Binary(Some(b",".to_vec())));
+            let c1 = if c1_large_binary {
+                ColumnarValue::Array(Arc::new(LargeBinaryArray::from_vec(vec![
+                    b"foo".as_ref(),
+                    b"bar",
+                    b"baz",
+                ])))
+            } else {
+                ColumnarValue::Array(Arc::new(BinaryArray::from_vec(vec![
+                    b"foo".as_ref(),
+                    b"bar",
+                    b"baz",
+                ])))
+            };
+            let c2 =
+                ColumnarValue::Array(Arc::new(LargeBinaryArray::from_opt_vec(vec![
+                    Some(b"x".as_ref()),
+                    None,
+                    Some(b"z"),
+                ])));
 
-        let arg_fields = vec![
-            Field::new("a", Binary, true).into(),
-            Field::new("a", Binary, true).into(),
-            Field::new("a", LargeBinary, true).into(),
-        ];
-        let args = ScalarFunctionArgs {
-            args: vec![c0, c1, c2],
-            arg_fields,
-            number_rows: 3,
-            return_field: Field::new("f", LargeBinary, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
+            let arg_fields = vec![
+                Field::new("a", Binary, true).into(),
+                Field::new("a", Binary, true).into(),
+                Field::new("a", LargeBinary, true).into(),
+            ];
+            let args = ScalarFunctionArgs {
+                args: vec![c0, c1, c2],
+                arg_fields,
+                number_rows: 3,
+                return_field: Field::new("f", LargeBinary, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            };
 
-        let result = ConcatWsFunc::new().invoke_with_args(args)?;
-        let expected = Arc::new(LargeBinaryArray::from_opt_vec(vec![
-            Some(b"foo,x".as_ref()),
-            Some(b"bar"),
-            Some(b"baz,z"),
-        ])) as ArrayRef;
-        match &result {
-            ColumnarValue::Array(array) => assert_eq!(&expected, array),
-            _ => panic!("Expected array result"),
+            let result = ConcatWsFunc::new().invoke_with_args(args)?;
+            let expected = Arc::new(LargeBinaryArray::from_opt_vec(vec![
+                Some(b"foo,x".as_ref()),
+                Some(b"bar"),
+                Some(b"baz,z"),
+            ])) as ArrayRef;
+            match &result {
+                ColumnarValue::Array(array) => assert_eq!(&expected, array),
+                _ => panic!("Expected array result"),
+            }
         }
 
         Ok(())
     }
-    //
-    // #[test]
-    // fn concat_ws_large_binary_arrays() -> Result<()> {
-    //     let c0 = ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(b",".to_vec())));
-    //     let c1 = ColumnarValue::Array(Arc::new(LargeBinaryArray::from_vec(vec![
-    //         b"foo".as_ref(),
-    //         b"bar",
-    //         b"baz",
-    //     ])));
-    //     let c2 = ColumnarValue::Array(Arc::new(LargeBinaryArray::from_opt_vec(vec![
-    //         Some(b"x".as_ref()),
-    //         None,
-    //         Some(b"z"),
-    //     ])));
-    //
-    //     let arg_fields = vec![
-    //         Field::new("a", LargeBinary, true).into(),
-    //         Field::new("a", LargeBinary, true).into(),
-    //         Field::new("a", LargeBinary, true).into(),
-    //     ];
-    //     let args = ScalarFunctionArgs {
-    //         args: vec![c0, c1, c2],
-    //         arg_fields,
-    //         number_rows: 3,
-    //         return_field: Field::new("f", LargeBinary, true).into(),
-    //         config_options: Arc::new(ConfigOptions::default()),
-    //     };
-    //
-    //     let result = ConcatWsFunc::new().invoke_with_args(args)?;
-    //     let expected = Arc::new(LargeBinaryArray::from_opt_vec(vec![
-    //         Some(b"foo,x".as_ref()),
-    //         Some(b"bar"),
-    //         Some(b"baz,z"),
-    //     ])) as ArrayRef;
-    //     match &result {
-    //         ColumnarValue::Array(array) => assert_eq!(&expected, array),
-    //         _ => panic!("expected array result"),
-    //     }
-    //     Ok(())
-    // }
 }
