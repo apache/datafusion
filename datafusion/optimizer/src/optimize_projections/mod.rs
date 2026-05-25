@@ -148,8 +148,7 @@ fn optimize_projections(
             let n_group_exprs = aggregate.group_expr_len()?;
             // Offset aggregate indices so that they point to valid indices at
             // `aggregate.aggr_expr`:
-            let (group_by_reqs, aggregate_reqs) =
-                indices.clone().split_off(n_group_exprs);
+            let (group_by_reqs, aggregate_reqs) = indices.split_off(n_group_exprs);
 
             // Get absolutely necessary GROUP BY fields.
             //
@@ -565,9 +564,8 @@ fn is_unnested_input_index(unnest: &Unnest, input_index: usize) -> bool {
     unnest
         .list_type_columns
         .iter()
-        .map(|(idx, _)| *idx)
-        .chain(unnest.struct_type_columns.iter().copied())
-        .any(|idx| idx == input_index)
+        .any(|(idx, _)| *idx == input_index)
+        || unnest.struct_type_columns.contains(&input_index)
 }
 
 fn unnest_preserves_at_least_one_row_per_input(unnest: &Unnest) -> bool {
@@ -597,26 +595,39 @@ fn literal_non_empty_list(expr: &Expr) -> Option<bool> {
 
     match value {
         ScalarValue::List(array) => {
-            Some(has_valid_first_value(array.as_ref()) && array.value_length(0) > 0)
+            Some(has_valid_non_empty_first_value(array.as_ref(), || {
+                array.value_length(0) > 0
+            }))
         }
         ScalarValue::LargeList(array) => {
-            Some(has_valid_first_value(array.as_ref()) && array.value_length(0) > 0)
+            Some(has_valid_non_empty_first_value(array.as_ref(), || {
+                array.value_length(0) > 0
+            }))
         }
         ScalarValue::FixedSizeList(array) => {
-            Some(has_valid_first_value(array.as_ref()) && array.value_length() > 0)
+            Some(has_valid_non_empty_first_value(array.as_ref(), || {
+                array.value_length() > 0
+            }))
         }
         ScalarValue::ListView(array) => {
-            Some(has_valid_first_value(array.as_ref()) && array.value_sizes()[0] > 0)
+            Some(has_valid_non_empty_first_value(array.as_ref(), || {
+                array.value_sizes()[0] > 0
+            }))
         }
         ScalarValue::LargeListView(array) => {
-            Some(has_valid_first_value(array.as_ref()) && array.value_sizes()[0] > 0)
+            Some(has_valid_non_empty_first_value(array.as_ref(), || {
+                array.value_sizes()[0] > 0
+            }))
         }
         _ => None,
     }
 }
 
-fn has_valid_first_value(array: &impl Array) -> bool {
-    !array.is_empty() && array.is_valid(0)
+fn has_valid_non_empty_first_value(
+    array: &impl Array,
+    first_value_non_empty: impl FnOnce() -> bool,
+) -> bool {
+    !array.is_empty() && array.is_valid(0) && first_value_non_empty()
 }
 
 /// Optimizes uncorrelated subquery plans embedded in expressions of the given
@@ -1125,9 +1136,9 @@ mod tests {
     }
 
     fn null_list_literal_expr() -> Expr {
-        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(
-            vec![None::<Vec<Option<i64>>>],
-        );
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            None::<Vec<Option<i64>>>,
+        ]);
         Expr::Literal(ScalarValue::List(Arc::new(list)), None)
     }
 
@@ -1160,6 +1171,12 @@ mod tests {
         table_scan(Some("test"), &schema, None)?
             .project(vec![col("id"), col("arr")])?
             .unnest_column(Column::from_name("arr"))
+    }
+
+    fn group_by_id(builder: LogicalPlanBuilder) -> Result<LogicalPlan> {
+        builder
+            .aggregate(vec![col("id")], Vec::<Expr>::new())?
+            .build()
     }
 
     #[derive(Debug, Hash, PartialEq, Eq)]
@@ -1490,9 +1507,7 @@ mod tests {
 
     #[test]
     fn remove_unused_non_empty_literal_unnest_under_group_by() -> Result<()> {
-        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
-            .aggregate(vec![col("id")], Vec::<Expr>::new())?
-            .build()?;
+        let plan = group_by_id(id_elem_unnest_plan(vec![Some(1), Some(2)])?)?;
 
         assert_optimized_plan_equal!(
             plan,
@@ -1505,10 +1520,9 @@ mod tests {
 
     #[test]
     fn remove_unused_unnest_below_projection_under_group_by() -> Result<()> {
-        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
-            .project(vec![col("id")])?
-            .aggregate(vec![col("id")], Vec::<Expr>::new())?
-            .build()?;
+        let plan = group_by_id(
+            id_elem_unnest_plan(vec![Some(1), Some(2)])?.project(vec![col("id")])?,
+        )?;
 
         assert_optimized_plan_equal!(
             plan,
@@ -1539,9 +1553,7 @@ mod tests {
     #[test]
     fn keep_unused_empty_literal_unnest_under_group_by() -> Result<()> {
         let empty_list: Vec<Option<i64>> = vec![];
-        let plan = id_elem_unnest_plan(empty_list)?
-            .aggregate(vec![col("id")], Vec::<Expr>::new())?
-            .build()?;
+        let plan = group_by_id(id_elem_unnest_plan(empty_list)?)?;
 
         assert_optimized_plan_equal!(
             plan,
@@ -1556,11 +1568,9 @@ mod tests {
     }
 
     #[test]
-    fn keep_unused_null_literal_unnest_under_group_by_with_preserve_nulls_false(
-    ) -> Result<()> {
-        let plan = id_null_elem_unnest_plan(false)?
-            .aggregate(vec![col("id")], Vec::<Expr>::new())?
-            .build()?;
+    fn keep_unused_null_literal_unnest_under_group_by_with_preserve_nulls_false()
+    -> Result<()> {
+        let plan = group_by_id(id_null_elem_unnest_plan(false)?)?;
 
         assert_optimized_plan_equal!(
             plan,
@@ -1576,9 +1586,7 @@ mod tests {
 
     #[test]
     fn keep_unused_non_literal_unnest_under_group_by() -> Result<()> {
-        let plan = id_arr_unnest_plan()?
-            .aggregate(vec![col("id")], Vec::<Expr>::new())?
-            .build()?;
+        let plan = group_by_id(id_arr_unnest_plan()?)?;
 
         assert_optimized_plan_equal!(
             plan,

@@ -168,7 +168,7 @@ impl RequiredIndices {
     /// Splits this instance into a tuple with two instances:
     /// * The first `n` indices
     /// * The remaining indices, adjusted down by n
-    pub fn split_off(self, n: usize) -> (Self, Self) {
+    pub fn split_off(&self, n: usize) -> (Self, Self) {
         let (l, r) = self.partition(|idx| idx < n);
         (l, r.map_indices(|idx| idx - n))
     }
