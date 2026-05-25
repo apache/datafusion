@@ -1,0 +1,185 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#######
+# Tests for array_agg with sliding (bounded) window frames.
+# Validates the retract_batch implementation on ArrayAggAccumulator.
+#######
+
+# Setup test data
+statement ok
+CREATE TABLE t(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (2, 'B'), (3, 'C'), (4, 'D'), (5, 'E');
+
+# Basic ROWS sliding window
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t;
+----
+[A]
+[A, B]
+[B, C]
+[C, D]
+[D, E]
+
+# Wider ROWS frame
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+FROM t;
+----
+[A]
+[A, B]
+[A, B, C]
+[B, C, D]
+[C, D, E]
+
+# ROWS with FOLLOWING
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+FROM t;
+----
+[A, B]
+[A, B, C]
+[B, C, D]
+[C, D, E]
+[D, E]
+
+# Regression: unbounded frame still works
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t;
+----
+[A]
+[A, B]
+[A, B, C]
+[A, B, C, D]
+[A, B, C, D, E]
+
+# Setup data with NULLs
+statement ok
+CREATE TABLE t_nulls(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (2, NULL), (3, 'C'), (4, NULL), (5, 'E');
+
+# Sliding window with NULLs (nulls preserved)
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_nulls;
+----
+[A]
+[A, NULL]
+[NULL, C]
+[C, NULL]
+[NULL, E]
+
+# Setup data with value gaps for RANGE frame
+statement ok
+CREATE TABLE t_range(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (2, 'B'), (3, 'C'), (4, 'D'), (100, 'E');
+
+# RANGE frame with value gap causes multi-element retract
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts RANGE BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+FROM t_range;
+----
+[A, B, C]
+[A, B, C, D]
+[A, B, C, D]
+[B, C, D]
+[E]
+
+# Single-row frame
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
+FROM t;
+----
+[A]
+[B]
+[C]
+[D]
+[E]
+
+# Integer values in sliding window
+statement ok
+CREATE TABLE t_int(ts INT, val INT) AS VALUES
+  (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_int;
+----
+[10]
+[10, 20]
+[20, 30]
+[30, 40]
+[40, 50]
+
+# Setup data with duplicate sort keys for GROUPS frame
+statement ok
+CREATE TABLE t_groups(ts INT, val TEXT) AS VALUES
+  (1, 'A'), (1, 'B'), (2, 'C'), (2, 'D'), (3, 'E');
+
+# GROUPS frame: each "group" = rows with same ORDER BY value
+# Group 0: ts=1 (A,B), Group 1: ts=2 (C,D), Group 2: ts=3 (E)
+# Frame: 1 PRECEDING group + CURRENT group
+query ?
+SELECT array_agg(val) OVER (ORDER BY ts GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_groups;
+----
+[A, B]
+[A, B]
+[A, B, C, D]
+[A, B, C, D]
+[C, D, E]
+
+# IGNORE NULLS: nulls are filtered out before storage and retract
+# t_nulls has: (1,'A'), (2,NULL), (3,'C'), (4,NULL), (5,'E')
+query ?
+SELECT array_agg(val) IGNORE NULLS OVER (ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_nulls;
+----
+[A]
+[A]
+[C]
+[C]
+[E]
+
+# IGNORE NULLS with wider frame
+query ?
+SELECT array_agg(val) IGNORE NULLS OVER (ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+FROM t_nulls;
+----
+[A]
+[A]
+[A, C]
+[C]
+[C, E]
+
+# Cleanup
+statement ok
+DROP TABLE t;
+
+statement ok
+DROP TABLE t_nulls;
+
+statement ok
+DROP TABLE t_range;
+
+statement ok
+DROP TABLE t_int;
+
+statement ok
+DROP TABLE t_groups;

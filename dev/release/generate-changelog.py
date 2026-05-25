@@ -77,7 +77,7 @@ def generate_changelog(repo, repo_name, tag1, tag2, version):
             cc_breaking = parts_tuple[2] == '!'
 
         labels = [label.name for label in pull.labels]
-        if 'api change' in labels or cc_breaking:
+        if 'api change' in labels or 'auto detected api change' in labels or cc_breaking:
             breaking.append((pull, commit))
         elif 'bug' in labels or cc_type == 'fix':
             bugs.append((pull, commit))

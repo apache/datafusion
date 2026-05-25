@@ -35,7 +35,8 @@ use datafusion_physical_expr::{PhysicalExpr, physical_exprs_equal};
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
 ///
-/// This rule should be applied after the EnforceDistribution and EnforceSorting rules
+/// This rule should be applied after the `EnsureRequirements` rule (which
+/// handles both distribution and sorting enforcement).
 #[derive(Default, Debug)]
 pub struct CombinePartialFinalAggregate {}
 

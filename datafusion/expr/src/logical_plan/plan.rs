@@ -42,7 +42,7 @@ use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
     enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
+    grouping_set_expr_count, grouping_set_to_exprlist, merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -2189,6 +2189,17 @@ impl LogicalPlan {
         }
         Wrapper(self)
     }
+
+    /// Return a `LogicalPLan` with all [`LambdaVariable`]'s resolved
+    ///
+    /// [`LambdaVariable`]: crate::expr::LambdaVariable
+    pub fn resolve_lambda_variables(self) -> Result<Transformed<LogicalPlan>> {
+        self.transform_with_subqueries(|plan| {
+            let schema = merge_schema(&plan.inputs());
+
+            plan.map_expressions(|expr| expr.resolve_lambda_variables(&schema))
+        })
+    }
 }
 
 impl Display for LogicalPlan {
@@ -2484,6 +2495,19 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// Create a new filter operator.
+    ///
+    /// Skips the type-checking and dealiasing done in [Self::try_new].
+    /// For internal use in DataFusion only.
+    ///
+    /// **Preconditions:**
+    /// - the `predicate` expression returns a boolean value
+    /// - the `predicate` expression is not aliased
+    #[doc(hidden)]
+    pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
+        Self { predicate, input }
+    }
+
     /// Create a new filter operator.
     ///
     /// Notes: as Aliases have no effect on the output of a filter operator,
@@ -3770,6 +3794,7 @@ impl PartialOrd for Aggregate {
 /// index among identical entries. For example, if the same set appears three
 /// times, the ordinals are 0, 1, 2 and this function returns 2.
 /// Returns 0 when no grouping set is duplicated.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
         let mut counts: HashMap<&[Expr], usize> = HashMap::new();

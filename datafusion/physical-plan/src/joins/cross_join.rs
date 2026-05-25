@@ -31,6 +31,7 @@ use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs,
 };
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -41,13 +42,11 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -281,14 +280,6 @@ impl ExecutionPlan for CrossJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // CrossJoin has no join conditions or expressions
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -645,7 +636,12 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         let right_data = match ready!(self.right.poll_next_unpin(cx)) {
             Some(Ok(right_data)) => right_data,
             Some(Err(e)) => return Poll::Ready(Err(e)),
-            None => return Poll::Ready(Ok(StatefulStreamResult::Ready(None))),
+            None => {
+                // Release the right (probe) input pipeline's resources.
+                let right_schema = self.right.schema();
+                self.right = Box::pin(EmptyRecordBatchStream::new(right_schema));
+                return Poll::Ready(Ok(StatefulStreamResult::Ready(None)));
+            }
         };
         self.join_metrics.input_batches.add(1);
         self.join_metrics.input_rows.add(right_data.num_rows());

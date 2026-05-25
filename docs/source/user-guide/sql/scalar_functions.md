@@ -59,6 +59,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 - [pow](#pow)
 - [power](#power)
 - [radians](#radians)
+- [rand](#rand)
 - [random](#random)
 - [round](#round)
 - [signum](#signum)
@@ -419,7 +420,7 @@ exp(numeric_expression)
 
 ### `factorial`
 
-Factorial. Returns 1 if value is less than 2.
+Factorial of a non-negative integer. Errors if the argument is negative or the result overflows.
 
 ```sql
 factorial(numeric_expression)
@@ -739,6 +740,10 @@ radians(numeric_expression)
 +----------------+
 ```
 
+### `rand`
+
+_Alias of [random](#random)._
+
 ### `random`
 
 Returns a random float value in the range [0, 1).
@@ -758,6 +763,10 @@ random()
 | 0.7389238902938  |
 +------------------+
 ```
+
+#### Aliases
+
+- rand
 
 ### `round`
 
@@ -2573,7 +2582,7 @@ date_part(part, expression)
   - dow (day of the week where Sunday is 0)
   - doy (day of the year)
   - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
-  - isodow (day of the week where Monday is 0)
+  - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
@@ -3234,6 +3243,8 @@ _Alias of [current_date](#current_date)._
 
 ## Array Functions
 
+- [any_match](#any_match)
+- [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
 - [array_cat](#array_cat)
@@ -3247,6 +3258,7 @@ _Alias of [current_date](#current_date)._
 - [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
+- [array_filter](#array_filter)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -3257,6 +3269,7 @@ _Alias of [current_date](#current_date)._
 - [array_max](#array_max)
 - [array_min](#array_min)
 - [array_ndims](#array_ndims)
+- [array_normalize](#array_normalize)
 - [array_pop_back](#array_pop_back)
 - [array_pop_front](#array_pop_front)
 - [array_position](#array_position)
@@ -3276,14 +3289,18 @@ _Alias of [current_date](#current_date)._
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
 - [array_to_string](#array_to_string)
+- [array_transform](#array_transform)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
 - [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
 - [cosine_distance](#cosine_distance)
+- [dot_product](#dot_product)
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
+- [inner_product](#inner_product)
+- [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
@@ -3297,6 +3314,7 @@ _Alias of [current_date](#current_date)._
 - [list_empty](#list_empty)
 - [list_except](#list_except)
 - [list_extract](#list_extract)
+- [list_filter](#list_filter)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
@@ -3306,6 +3324,7 @@ _Alias of [current_date](#current_date)._
 - [list_length](#list_length)
 - [list_max](#list_max)
 - [list_ndims](#list_ndims)
+- [list_normalize](#list_normalize)
 - [list_pop_back](#list_pop_back)
 - [list_pop_front](#list_pop_front)
 - [list_position](#list_position)
@@ -3325,6 +3344,7 @@ _Alias of [current_date](#current_date)._
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
 - [list_to_string](#list_to_string)
+- [list_transform](#list_transform)
 - [list_union](#list_union)
 - [list_zip](#list_zip)
 - [make_array](#make_array)
@@ -3332,6 +3352,39 @@ _Alias of [current_date](#current_date)._
 - [range](#range)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
+
+### `any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
+### `array_any_match`
+
+Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others.
+
+```sql
+any_match(array, predicate)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **predicate**: Lambda predicate that returns a boolean
+
+#### Example
+
+```sql
+> select any_match([1, 2, 3], x -> x > 2);
++----------------------------------+
+| any_match([1, 2, 3], x -> x > 2) |
++----------------------------------+
+| true                             |
++----------------------------------+
+```
+
+#### Aliases
+
+- any_match
+- list_any_match
 
 ### `array_any_value`
 
@@ -3609,6 +3662,34 @@ array_except(array1, array2)
 
 _Alias of [array_element](#array_element)._
 
+### `array_filter`
+
+filters the values of an array using a boolean lambda
+
+```sql
+array_filter(array, x -> x > 2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda that returns a boolean. Elements for which the lambda returns true are kept.
+
+#### Example
+
+```sql
+> select array_filter([1, 2, 3, 4, 5], x -> x > 2);
++--------------------------------------------+
+| array_filter([1, 2, 3, 4, 5], x -> x > 2) |
++--------------------------------------------+
+| [3, 4, 5]                                  |
++--------------------------------------------+
+```
+
+#### Aliases
+
+- list_filter
+
 ### `array_has`
 
 Returns true if the array contains the element.
@@ -3843,6 +3924,33 @@ array_ndims(array, element)
 #### Aliases
 
 - list_ndims
+
+### `array_normalize`
+
+Returns the L2-normalized vector for the input numeric array, computed as `array[i] / sqrt(sum(array[i]^2))` per element. Returns NULL if the input is NULL, contains NULL elements, or has zero magnitude (all elements are zero). Returns an empty array for an empty input array.
+
+```sql
+array_normalize(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_normalize([3.0, 4.0]);
++-----------------------------+
+| array_normalize(List([3.0,4.0])) |
++-----------------------------+
+| [0.6, 0.8]                  |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_normalize
 
 ### `array_pop_back`
 
@@ -4376,6 +4484,34 @@ array_to_string(array, delimiter[, null_string])
 - array_join
 - list_join
 
+### `array_transform`
+
+transforms the values of an array
+
+```sql
+array_transform(array, x -> x*2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda
+
+#### Example
+
+```sql
+> select array_transform([1, 2, 3, 4, 5], x -> x*2);
++-------------------------------------------+
+| array_transform([1, 2, 3, 4, 5], x -> x*2)       |
++-------------------------------------------+
+| [2, 4, 6, 8, 10]                          |
++-------------------------------------------+
+```
+
+#### Aliases
+
+- list_transform
+
 ### `array_union`
 
 Returns an array of elements that are present in both arrays (all elements from both arrays) without duplicates.
@@ -4495,6 +4631,10 @@ cosine_distance(array1, array2)
 +-----------------------------------------------+
 ```
 
+### `dot_product`
+
+_Alias of [inner_product](#inner_product)._
+
 ### `empty`
 
 Returns 1 for an empty array or 0 for a non-empty array.
@@ -4577,6 +4717,38 @@ generate_series(start, stop[, step])
 +------------------------------------+
 ```
 
+### `inner_product`
+
+Returns the inner product (dot product) of two input arrays of equal length, computed as `sum(array1[i] * array2[i])`. Returns NULL if either array is NULL or contains NULL elements. Returns 0.0 for two empty arrays.
+
+```sql
+inner_product(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select inner_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
++-------------------------------------------------------+
+| inner_product(List([1.0,2.0,3.0]),List([4.0,5.0,6.0])) |
++-------------------------------------------------------+
+| 32.0                                                  |
++-------------------------------------------------------+
+```
+
+#### Aliases
+
+- dot_product
+
+### `list_any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
 ### `list_any_value`
 
 _Alias of [array_any_value](#array_any_value)._
@@ -4629,6 +4801,10 @@ _Alias of [array_except](#array_except)._
 
 _Alias of [array_element](#array_element)._
 
+### `list_filter`
+
+_Alias of [array_filter](#array_filter)._
+
 ### `list_has`
 
 _Alias of [array_has](#array_has)._
@@ -4664,6 +4840,10 @@ _Alias of [array_max](#array_max)._
 ### `list_ndims`
 
 _Alias of [array_ndims](#array_ndims)._
+
+### `list_normalize`
+
+_Alias of [array_normalize](#array_normalize)._
 
 ### `list_pop_back`
 
@@ -4740,6 +4920,10 @@ _Alias of [array_sort](#array_sort)._
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
+
+### `list_transform`
+
+_Alias of [array_transform](#array_transform)._
 
 ### `list_union`
 

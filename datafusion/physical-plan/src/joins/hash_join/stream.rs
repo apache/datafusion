@@ -35,6 +35,7 @@ use crate::joins::hash_join::shared_bounds::{
 use crate::joins::utils::{
     OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
 };
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
     hash_utils::create_hashes,
@@ -587,6 +588,11 @@ impl HashJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         match ready!(self.right.poll_next_unpin(cx)) {
             None => {
+                // Release the probe-side input pipeline's resources. The schema
+                // is preserved so callers that still query `self.right.schema()`
+                // (e.g. for unmatched-build emission) keep working.
+                let right_schema = self.right.schema();
+                self.right = Box::pin(EmptyRecordBatchStream::new(right_schema));
                 self.state = HashJoinStreamState::ExhaustedProbeSide;
             }
             Some(Ok(batch)) => {

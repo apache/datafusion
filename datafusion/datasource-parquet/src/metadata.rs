@@ -18,7 +18,7 @@
 //! [`DFParquetMetadata`] for fetching Parquet file metadata, statistics
 //! and schema information.
 
-use crate::{apply_file_schema_type_coercions, coerce_int96_to_resolution};
+use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::and;
 use arrow::compute::kernels::cmp::eq;
@@ -72,6 +72,8 @@ pub struct DFParquetMetadata<'a> {
     file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
     /// timeunit to coerce INT96 timestamps to
     pub coerce_int96: Option<TimeUnit>,
+    /// Optional timezone applied to INT96-coerced timestamps.
+    pub coerce_int96_tz: Option<Arc<str>>,
 }
 
 impl<'a> DFParquetMetadata<'a> {
@@ -83,6 +85,7 @@ impl<'a> DFParquetMetadata<'a> {
             decryption_properties: None,
             file_metadata_cache: None,
             coerce_int96: None,
+            coerce_int96_tz: None,
         }
     }
 
@@ -113,6 +116,12 @@ impl<'a> DFParquetMetadata<'a> {
     /// Set timeunit to coerce INT96 timestamps to
     pub fn with_coerce_int96(mut self, time_unit: Option<TimeUnit>) -> Self {
         self.coerce_int96 = time_unit;
+        self
+    }
+
+    /// Set the optional timezone applied to INT96-coerced timestamps.
+    pub fn with_coerce_int96_tz(mut self, timezone: Option<Arc<str>>) -> Self {
+        self.coerce_int96_tz = timezone;
         self
     }
 
@@ -218,11 +227,9 @@ impl<'a> DFParquetMetadata<'a> {
             .coerce_int96
             .as_ref()
             .and_then(|time_unit| {
-                coerce_int96_to_resolution(
-                    file_metadata.schema_descr(),
-                    &schema,
-                    time_unit,
-                )
+                Int96Coercer::new(file_metadata.schema_descr(), &schema, time_unit)
+                    .with_timezone(self.coerce_int96_tz.clone())
+                    .coerce()
             })
             .unwrap_or(schema);
         Ok(schema)
@@ -520,12 +527,10 @@ fn summarize_column_statistics(
 
         // handle the common special case when all row groups have exact statistics
         let exactness = &is_max_value_exact_stat;
-        if !exactness.is_empty()
-            && exactness.null_count() == 0
-            && exactness.true_count() == exactness.len()
+        if !exactness.is_empty() && exactness.null_count() == 0 && !exactness.has_false()
         {
             accumulators.is_max_value_exact[logical_schema_index] = Some(true);
-        } else if exactness.true_count() == 0 {
+        } else if !exactness.has_true() {
             accumulators.is_max_value_exact[logical_schema_index] = Some(false);
         } else {
             let val = max_acc.evaluate()?;
@@ -539,12 +544,10 @@ fn summarize_column_statistics(
 
         // handle the common special case when all row groups have exact statistics
         let exactness = &is_min_value_exact_stat;
-        if !exactness.is_empty()
-            && exactness.null_count() == 0
-            && exactness.true_count() == exactness.len()
+        if !exactness.is_empty() && exactness.null_count() == 0 && !exactness.has_false()
         {
             accumulators.is_min_value_exact[logical_schema_index] = Some(true);
-        } else if exactness.true_count() == 0 {
+        } else if !exactness.has_true() {
             accumulators.is_min_value_exact[logical_schema_index] = Some(false);
         } else {
             let val = min_acc.evaluate()?;
@@ -675,7 +678,7 @@ fn has_any_exact_match(
     let scalar_array = value.to_scalar().ok()?;
     let eq_mask = eq(&scalar_array, &array).ok()?;
     let combined_mask = and(&eq_mask, exactness).ok()?;
-    Some(combined_mask.true_count() > 0)
+    Some(combined_mask.has_true())
 }
 
 /// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
