@@ -1349,6 +1349,21 @@ order by 1;
 10
 20
 
+# Keep columns that are not selected by the outer query, but still affect
+# recursive UNION distinctness.
+query I
+with recursive t(k, v) as (
+  select 1 k, 10 v
+  union
+  select 2, 10 from t where v = 10
+)
+select v
+from t
+order by 1;
+----
+10
+10
+
 statement ok
 copy (
   select i as k, i as v1, i as v2
