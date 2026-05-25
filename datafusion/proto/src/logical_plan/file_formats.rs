@@ -506,11 +506,12 @@ mod parquet {
         fn try_from_proto(
             proto: &ParquetOptionsProto,
         ) -> datafusion_common::Result<Self, Self::Error> {
-            let default_options = ParquetOptions::default();
-            let writer_version = if proto.writer_version.is_empty() {
-                default_options.writer_version
-            } else {
-                proto.writer_version.parse()?
+            let writer_version = match proto.writer_version.as_str() {
+                // Proto3 decodes an omitted string field as the empty string. The
+                // schema documents writer_version's logical default as "1.0", so
+                // preserve that default when the field is absent on the wire.
+                "" => ParquetOptions::default().writer_version,
+                version => version.parse()?,
             };
 
             Ok(ParquetOptions {
@@ -817,7 +818,7 @@ mod parquet {
                 &TaskContext::default(),
             );
 
-            let err = result.err().expect("invalid writer version should error");
+            let err = result.expect_err("invalid writer version should error");
             assert!(
                 err.to_string()
                     .contains("Invalid parquet writer version: 3.0"),
