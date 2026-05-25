@@ -61,6 +61,7 @@ pub use analysis::{AnalysisContext, ExprBoundaries, analyze};
 pub use equivalence::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, calculate_union,
 };
+pub use expressions::{DynamicFilterTracker, DynamicFilterTracking};
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
     add_offset_to_expr, add_offset_to_physical_sort_exprs, create_lex_ordering,
