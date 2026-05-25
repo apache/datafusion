@@ -25,7 +25,9 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, ScalarValue, cast::as_boolean_array, internal_err};
+use datafusion_common::{
+    Result, ScalarValue, cast::as_boolean_array, internal_datafusion_err, internal_err,
+};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::interval_arithmetic::Interval;
 #[expect(deprecated)]
@@ -214,8 +216,9 @@ impl NotExpr {
             _ => return internal_err!("PhysicalExprNode is not a NotExpr"),
         };
         let expr = expr.as_deref().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "NotExpr is missing required field 'expr'".to_string(),
+            internal_datafusion_err!(
+                "NotExpr is missing required field 'expr' (expr_id: {:?}, expr_type: NotExpr)",
+                node.expr_id
             )
         })?;
 
@@ -262,7 +265,7 @@ mod tests {
         }
 
         let node = PhysicalExprNode {
-            expr_id: None,
+            expr_id: Some(42),
             expr_type: Some(physical_expr_node::ExprType::NotExpr(Box::new(
                 PhysicalNot { expr: None },
             ))),
@@ -272,9 +275,10 @@ mod tests {
         let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
 
         let err = NotExpr::try_from_proto(&node, &ctx).unwrap_err();
-        assert!(
-            matches!(err, DataFusionError::Internal(msg) if msg == "NotExpr is missing required field 'expr'")
-        );
+        assert!(matches!(err, DataFusionError::Internal(msg)
+                if msg.contains("NotExpr is missing required field 'expr'")
+                    && msg.contains("expr_id: Some(42)")
+                    && msg.contains("expr_type: NotExpr")));
     }
 
     #[test]
