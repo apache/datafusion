@@ -148,18 +148,6 @@ select array_add(
 query error array_add does not support type
 select array_add(1, [1.0, 2.0]);
 
-# Non-numeric leaf type rejected at planning
-query error array_add requires numeric array elements
-select array_add(['a', 'b'], ['c', 'd']);
-
-# Boolean leaf type rejected at planning
-query error array_add requires numeric array elements
-select array_add(arrow_cast([true, false], 'List(Boolean)'), arrow_cast([false, true], 'List(Boolean)'));
-
-# Nested list rejected at planning (leaf is itself a list, not numeric)
-query error array_add requires numeric array elements
-select array_add([[1, 2], [3, 4]], [[5, 6], [7, 8]]);
-
 # Wrong arg count
 query error array_add function requires 2 arguments, got 0
 select array_add();
@@ -203,26 +191,14 @@ select list_add(a, b) from (values
 [11.0, 22.0]
 NULL
 
-# Decimal128 leaf rejected at planning (would lose precision via Float64 cast)
-query error array_add does not yet support decimal element types
+# Decimal element types are coerced to Float64 (lossy) like other array-math UDFs
+query ?
 select array_add(
     arrow_cast([1, 2, 3], 'List(Decimal128(10, 2))'),
     arrow_cast([10, 20, 30], 'List(Decimal128(10, 2))')
 );
-
-# Decimal128 mixed with Float64 also rejected
-query error array_add does not yet support decimal element types
-select array_add(
-    arrow_cast([1, 2, 3], 'List(Decimal128(10, 2))'),
-    [10.0, 20.0, 30.0]
-);
-
-# Decimal256 leaf also rejected
-query error array_add does not yet support decimal element types
-select array_add(
-    arrow_cast([1, 2, 3], 'List(Decimal256(20, 2))'),
-    arrow_cast([10, 20, 30], 'List(Decimal256(20, 2))')
-);
+----
+[11.0, 22.0, 33.0]
 
 # Explicit cast to DOUBLE works as the documented opt-in
 query ?

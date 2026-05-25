@@ -17,7 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array_add function.
 
-use crate::utils::make_scalar_function;
+use crate::utils::{coerce_array_math_arg_types, make_scalar_function};
 use arrow::array::{
     Array, ArrayRef, Float64Array, GenericListArray, NullBufferBuilder,
     OffsetBufferBuilder, OffsetSizeTrait,
@@ -25,14 +25,11 @@ use arrow::array::{
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
     DataType,
-    DataType::{FixedSizeList, LargeList, List, Null},
+    DataType::{LargeList, List},
     Field,
 };
 use datafusion_common::cast::{as_float64_array, as_generic_list_array};
-use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
-use datafusion_common::{
-    Result, exec_err, not_impl_err, plan_err, utils::take_function_args,
-};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -106,67 +103,7 @@ impl ScalarUDFImpl for ArrayAdd {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [_, _] = take_function_args(self.name(), arg_types)?;
-        let coercion = Some(&ListCoercion::FixedSizedListToList);
-
-        for arg_type in arg_types {
-            if !matches!(arg_type, Null | List(_) | LargeList(_) | FixedSizeList(..)) {
-                return plan_err!("{} does not support type {arg_type}", self.name());
-            }
-            // Only flat lists of numeric leaves are supported. Peel exactly
-            // one layer so that `List<List<_>>` is rejected as non-numeric
-            // rather than passing through and failing opaquely in the kernel.
-            let element_type = match arg_type {
-                List(field) | LargeList(field) | FixedSizeList(field, _) => {
-                    field.data_type()
-                }
-                other => other,
-            };
-            if matches!(
-                element_type,
-                DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
-            ) {
-                return not_impl_err!(
-                    "{} does not yet support decimal element types ({element_type}); \
-                     cast to DOUBLE explicitly to opt into lossy float arithmetic",
-                    self.name()
-                );
-            }
-            if !matches!(element_type, Null) && !element_type.is_numeric() {
-                return plan_err!(
-                    "{} requires numeric array elements, got list of {element_type}",
-                    self.name()
-                );
-            }
-        }
-
-        // If either side is `LargeList`, widen both to `LargeList` so the runtime
-        // dispatch sees a homogeneous pair.
-        let any_large_list = arg_types.iter().any(|t| matches!(t, LargeList(_)));
-
-        let coerced = arg_types
-            .iter()
-            .map(|arg_type| {
-                if matches!(arg_type, Null) {
-                    let field = Arc::new(Field::new_list_field(DataType::Float64, true));
-                    return if any_large_list {
-                        LargeList(field)
-                    } else {
-                        List(field)
-                    };
-                }
-                let coerced = coerced_type_with_base_type_only(
-                    arg_type,
-                    &DataType::Float64,
-                    coercion,
-                );
-                match coerced {
-                    List(field) if any_large_list => LargeList(field),
-                    other => other,
-                }
-            })
-            .collect();
-
-        Ok(coerced)
+        coerce_array_math_arg_types(self.name(), arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
