@@ -177,83 +177,243 @@ fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
     )
 }
 
-/// Computes the difference between two dates and returns the result as Int64 (days)
-/// This aligns with PostgreSQL, DuckDB, and MySQL behavior where date - date returns an integer
+/// Number of time units per day for each Duration variant.
+const SECONDS_PER_DAY: i64 = 86_400;
+const MILLIS_PER_DAY: i64 = 86_400_000;
+const MICROS_PER_DAY: i64 = 86_400_000_000;
+const NANOS_PER_DAY: i64 = 86_400_000_000_000;
+
+/// Evaluates `Date32 - Date32` or `Date64 - Date64`, returning the difference in
+/// whole days as `Int64`.
 ///
-/// Implementation: Uses Arrow's sub_wrapping to get Duration, then converts to Int64 days
+/// This matches the behavior of PostgreSQL, DuckDB, and MySQL, where
+/// `date - date` yields an integer day count rather than an interval.
+///
+/// Internally, Arrow's `sub_wrapping` kernel produces a `Duration` result, which
+/// is then converted to days by [`duration_to_days`] (array path) or
+/// [`duration_scalar_to_days`] (scalar path).
 fn apply_date_subtraction(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
 ) -> Result<ColumnarValue> {
     use arrow::compute::kernels::numeric::sub_wrapping;
 
-    // Use Arrow's sub_wrapping to compute the Duration result
+    match (lhs.data_type(), rhs.data_type()) {
+        (DataType::Date32, DataType::Date32) => {
+            return subtract_date32_to_days(lhs, rhs);
+        }
+        (DataType::Date64, DataType::Date64) => {
+            return subtract_date64_to_days(lhs, rhs);
+        }
+        _ => {}
+    }
+
     let duration_result = apply(lhs, rhs, sub_wrapping)?;
 
-    // Convert Duration to Int64 (days)
     match duration_result {
         ColumnarValue::Array(array) => {
             let int64_array = duration_to_days(&array)?;
             Ok(ColumnarValue::Array(int64_array))
         }
         ColumnarValue::Scalar(scalar) => {
-            // Convert scalar Duration to Int64 days
-            let array = scalar.to_array_of_size(1)?;
-            let int64_array = duration_to_days(&array)?;
-            let int64_scalar = ScalarValue::try_from_array(int64_array.as_ref(), 0)?;
-            Ok(ColumnarValue::Scalar(int64_scalar))
+            let days = duration_scalar_to_days(&scalar)?;
+            Ok(ColumnarValue::Scalar(ScalarValue::Int64(days)))
         }
     }
 }
 
-/// Converts a Duration array to Int64 days
-/// Handles different Duration time units (Second, Millisecond, Microsecond, Nanosecond)
+fn date32_scalar_value(scalar: &ScalarValue) -> Result<Option<i32>> {
+    match scalar {
+        ScalarValue::Date32(value) => Ok(*value),
+        other => internal_err!("expected Date32 scalar, got: {other:?}"),
+    }
+}
+
+fn date64_scalar_value(scalar: &ScalarValue) -> Result<Option<i64>> {
+    match scalar {
+        ScalarValue::Date64(value) => Ok(*value),
+        other => internal_err!("expected Date64 scalar, got: {other:?}"),
+    }
+}
+
+fn as_date32_array(array: &ArrayRef) -> Result<&Date32Array> {
+    array.as_any().downcast_ref::<Date32Array>().ok_or_else(|| {
+        datafusion_common::DataFusionError::Internal(format!(
+            "expected Date32Array, got {}",
+            array.data_type()
+        ))
+    })
+}
+
+fn as_date64_array(array: &ArrayRef) -> Result<&Date64Array> {
+    array.as_any().downcast_ref::<Date64Array>().ok_or_else(|| {
+        datafusion_common::DataFusionError::Internal(format!(
+            "expected Date64Array, got {}",
+            array.data_type()
+        ))
+    })
+}
+
+fn subtract_date32_to_days(
+    lhs: &ColumnarValue,
+    rhs: &ColumnarValue,
+) -> Result<ColumnarValue> {
+    match (lhs, rhs) {
+        (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
+            let left = as_date32_array(left)?;
+            let right = as_date32_array(right)?;
+            let result: Int64Array =
+                arrow::compute::binary::<_, _, _, Int64Type>(left, right, |l, r| {
+                    i64::from(l) - i64::from(r)
+                })?;
+            Ok(ColumnarValue::Array(Arc::new(result)))
+        }
+        (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => {
+            let left = as_date32_array(left)?;
+            match date32_scalar_value(right)? {
+                Some(right) => {
+                    let result: Int64Array =
+                        left.unary(|left| i64::from(left) - i64::from(right));
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+                None => Ok(ColumnarValue::Array(new_null_array(
+                    &DataType::Int64,
+                    left.len(),
+                ))),
+            }
+        }
+        (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => {
+            let right = as_date32_array(right)?;
+            match date32_scalar_value(left)? {
+                Some(left) => {
+                    let result: Int64Array =
+                        right.unary(|right| i64::from(left) - i64::from(right));
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+                None => Ok(ColumnarValue::Array(new_null_array(
+                    &DataType::Int64,
+                    right.len(),
+                ))),
+            }
+        }
+        (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
+            let left = date32_scalar_value(left)?;
+            let right = date32_scalar_value(right)?;
+            Ok(ColumnarValue::Scalar(ScalarValue::Int64(
+                left.zip(right)
+                    .map(|(left, right)| i64::from(left) - i64::from(right)),
+            )))
+        }
+    }
+}
+
+fn subtract_date64_to_days(
+    lhs: &ColumnarValue,
+    rhs: &ColumnarValue,
+) -> Result<ColumnarValue> {
+    match (lhs, rhs) {
+        (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
+            let left = as_date64_array(left)?;
+            let right = as_date64_array(right)?;
+            let result: Int64Array =
+                arrow::compute::binary::<_, _, _, Int64Type>(left, right, |l, r| {
+                    l.wrapping_sub(r) / MILLIS_PER_DAY
+                })?;
+            Ok(ColumnarValue::Array(Arc::new(result)))
+        }
+        (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => {
+            let left = as_date64_array(left)?;
+            match date64_scalar_value(right)? {
+                Some(right) => {
+                    let result: Int64Array =
+                        left.unary(|left| left.wrapping_sub(right) / MILLIS_PER_DAY);
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+                None => Ok(ColumnarValue::Array(new_null_array(
+                    &DataType::Int64,
+                    left.len(),
+                ))),
+            }
+        }
+        (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => {
+            let right = as_date64_array(right)?;
+            match date64_scalar_value(left)? {
+                Some(left) => {
+                    let result: Int64Array =
+                        right.unary(|right| left.wrapping_sub(right) / MILLIS_PER_DAY);
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+                None => Ok(ColumnarValue::Array(new_null_array(
+                    &DataType::Int64,
+                    right.len(),
+                ))),
+            }
+        }
+        (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
+            let left = date64_scalar_value(left)?;
+            let right = date64_scalar_value(right)?;
+            Ok(ColumnarValue::Scalar(ScalarValue::Int64(
+                left.zip(right)
+                    .map(|(left, right)| left.wrapping_sub(right) / MILLIS_PER_DAY),
+            )))
+        }
+    }
+}
+
+/// Converts a `Duration` scalar to a whole-day count (truncating toward zero).
+///
+/// Returns `None` if the scalar is null.
+fn duration_scalar_to_days(scalar: &ScalarValue) -> Result<Option<i64>> {
+    match scalar {
+        ScalarValue::DurationSecond(v) => Ok(v.map(|val| val / SECONDS_PER_DAY)),
+        ScalarValue::DurationMillisecond(v) => Ok(v.map(|val| val / MILLIS_PER_DAY)),
+        ScalarValue::DurationMicrosecond(v) => Ok(v.map(|val| val / MICROS_PER_DAY)),
+        ScalarValue::DurationNanosecond(v) => Ok(v.map(|val| val / NANOS_PER_DAY)),
+        other => internal_err!(
+            "duration_scalar_to_days expected a Duration scalar, got: {:?}",
+            other
+        ),
+    }
+}
+
+/// Converts a `Duration` array to an `Int64` array of whole-day counts
+/// (truncating toward zero).
+///
+/// `Duration` arrays are physically identical to `Int64` arrays (same i64
+/// buffer layout), so [`cast`] to `Int64` is zero-copy.  [`arrow::compute::unary`]
+/// then divides the entire buffer in a single vectorized pass — the compiler
+/// auto-vectorizes this loop with SIMD on supported targets — and copies the
+/// null bitmap without per-element branching.
 fn duration_to_days(array: &ArrayRef) -> Result<ArrayRef> {
-    use datafusion_common::cast::{
-        as_duration_microsecond_array, as_duration_millisecond_array,
-        as_duration_nanosecond_array, as_duration_second_array,
+    use arrow::compute::unary;
+
+    let units_per_day = match array.data_type() {
+        DataType::Duration(TimeUnit::Second) => SECONDS_PER_DAY,
+        DataType::Duration(TimeUnit::Millisecond) => MILLIS_PER_DAY,
+        DataType::Duration(TimeUnit::Microsecond) => MICROS_PER_DAY,
+        DataType::Duration(TimeUnit::Nanosecond) => NANOS_PER_DAY,
+        other => {
+            return internal_err!(
+                "duration_to_days expected a Duration array, got: {}",
+                other
+            );
+        }
     };
 
-    const SECONDS_PER_DAY: i64 = 86_400;
-    const MILLIS_PER_DAY: i64 = 86_400_000;
-    const MICROS_PER_DAY: i64 = 86_400_000_000;
-    const NANOS_PER_DAY: i64 = 86_400_000_000_000;
+    // Zero-copy cast: Duration and Int64 share the same physical i64 buffer.
+    let int64_array = cast(array.as_ref(), &DataType::Int64)?;
+    let int64_array = int64_array
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(
+                "cast to Int64 did not produce an Int64Array".to_string(),
+            )
+        })?;
 
-    match array.data_type() {
-        DataType::Duration(TimeUnit::Second) => {
-            let duration_array = as_duration_second_array(array)?;
-            let result: Int64Array = duration_array
-                .iter()
-                .map(|v| v.map(|val| val / SECONDS_PER_DAY))
-                .collect();
-            Ok(Arc::new(result))
-        }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            let duration_array = as_duration_millisecond_array(array)?;
-            let result: Int64Array = duration_array
-                .iter()
-                .map(|v| v.map(|val| val / MILLIS_PER_DAY))
-                .collect();
-            Ok(Arc::new(result))
-        }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            let duration_array = as_duration_microsecond_array(array)?;
-            let result: Int64Array = duration_array
-                .iter()
-                .map(|v| v.map(|val| val / MICROS_PER_DAY))
-                .collect();
-            Ok(Arc::new(result))
-        }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            let duration_array = as_duration_nanosecond_array(array)?;
-            let result: Int64Array = duration_array
-                .iter()
-                .map(|v| v.map(|val| val / NANOS_PER_DAY))
-                .collect();
-            Ok(Arc::new(result))
-        }
-        other => internal_err!("duration_to_days expected Duration type, got: {}", other),
-    }
+    // Single vectorized pass; null bitmap is preserved automatically by `unary`.
+    let result: Int64Array = unary(int64_array, |val| val / units_per_day);
+    Ok(Arc::new(result))
 }
 
 impl PhysicalExpr for BinaryExpr {
@@ -2023,6 +2183,64 @@ mod tests {
             vec![b, a],
             Operator::Minus,
             Int32Array::from(vec![0, 0, -1, -4, -11]),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn date32_minus_date32_returns_int64_days() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Date32, true),
+            Field::new("b", DataType::Date32, true),
+        ]));
+        let a = Arc::new(Date32Array::from(vec![
+            Some(18_901),
+            Some(18_901),
+            None,
+            Some(18_900),
+        ]));
+        let b = Arc::new(Date32Array::from(vec![
+            Some(18_898),
+            Some(18_904),
+            Some(18_900),
+            None,
+        ]));
+
+        apply_arithmetic::<Int64Type>(
+            schema,
+            vec![a, b],
+            Operator::Minus,
+            Int64Array::from(vec![Some(3), Some(-3), None, None]),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn date64_minus_date64_returns_int64_days() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Date64, true),
+            Field::new("b", DataType::Date64, true),
+        ]));
+        let a = Arc::new(Date64Array::from(vec![
+            Some(18_901 * MILLIS_PER_DAY),
+            Some(18_901 * MILLIS_PER_DAY),
+            None,
+            Some(18_900 * MILLIS_PER_DAY),
+        ]));
+        let b = Arc::new(Date64Array::from(vec![
+            Some(18_898 * MILLIS_PER_DAY),
+            Some(18_904 * MILLIS_PER_DAY),
+            Some(18_900 * MILLIS_PER_DAY),
+            None,
+        ]));
+
+        apply_arithmetic::<Int64Type>(
+            schema,
+            vec![a, b],
+            Operator::Minus,
+            Int64Array::from(vec![Some(3), Some(-3), None, None]),
         )?;
 
         Ok(())
