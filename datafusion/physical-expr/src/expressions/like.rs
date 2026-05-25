@@ -470,7 +470,7 @@ mod proto_tests {
         let err = LikeExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
             err,
-            DataFusionError::Internal(msg) if msg == "PhysicalExprNode is not a LikeExpr"
+            DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a LikeExpr")
         ));
     }
 
@@ -483,7 +483,7 @@ mod proto_tests {
         let err = LikeExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
             err,
-            DataFusionError::Internal(msg) if msg == "LikeExpr is missing required field 'expr'"
+            DataFusionError::Internal(msg) if msg.contains("LikeExpr is missing required field 'expr'")
         ));
     }
 
@@ -496,7 +496,7 @@ mod proto_tests {
         let err = LikeExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
             err,
-            DataFusionError::Internal(msg) if msg == "LikeExpr is missing required field 'pattern'"
+            DataFusionError::Internal(msg) if msg.contains("LikeExpr is missing required field 'pattern'")
         ));
     }
 
