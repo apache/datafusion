@@ -472,14 +472,15 @@ impl<'a> ScanArgs<'a> {
 
     /// Specifies the statistics the caller may use when optimizing the query.
     ///
-    /// This is intended for to allow the provider to cheaply provide statistics that may help
-    /// such as those it has in an in memory catalog or from some other metadata source. 
+    /// This is intended to allow the `TableProvider` to cheaply provide
+    /// statistics that may help, such as those it has in an in-memory catalog
+    /// or from some other metadata source.
     ///
-    /// Providers read these via [`Self::statistics_requests()`]; anything a
-    /// provider cannot answer cheaply it simply ignores. DataFusion's own
-    /// `TableProvider`s ignore this field — it exists so a request can be
+    /// `TableProvider`s read these via [`Self::statistics_requests()`]; anything
+    /// a `TableProvider` cannot answer cheaply it simply ignores. DataFusion's
+    /// own `TableProvider`s ignore this field — it exists so a request can be
     /// threaded from a custom optimizer rule (which annotates
-    /// `TableScan::statistics_requests`) through to a custom provider.
+    /// `TableScan::statistics_requests`) through to a custom `TableProvider`.
     pub fn with_statistics_requests(
         mut self,
         statistics_requests: &'a [StatisticsRequest],
