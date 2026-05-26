@@ -263,17 +263,9 @@ impl InListExpr {
             }
         };
 
-        let expr = ctx.decode(node.expr.as_deref().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "InList is missing required field 'expr'".to_string(),
-            )
-        })?)?;
-
-        let list = node
-            .list
-            .iter()
-            .map(|e| ctx.decode(e))
-            .collect::<Result<Vec<_>>>()?;
+        let expr =
+            ctx.decode_required_expression(node.expr.as_deref(), "InListExpr", "expr")?;
+        let list = ctx.decode_children_expressions(&node.list)?;
 
         Ok(Arc::new(InListExpr::try_new(
             expr,
@@ -491,11 +483,7 @@ impl PhysicalExpr for InListExpr {
             expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
                 protobuf::PhysicalInListNode {
                     expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
-                    list: self
-                        .list
-                        .iter()
-                        .map(|e| ctx.encode_child(e))
-                        .collect::<Result<Vec<_>>>()?,
+                    list: ctx.encode_children_expressions(&self.list)?,
                     negated: self.negated,
                 },
             ))),
@@ -4007,7 +3995,7 @@ mod proto_tests {
         let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
             err,
-            DataFusionError::Internal(msg) if msg.contains("InList is missing required field 'expr'")
+            DataFusionError::Internal(msg) if msg.contains("InListExpr is missing required field 'expr'")
         ));
     }
 

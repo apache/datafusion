@@ -306,27 +306,27 @@ QUALIFY r > 60000
 ----
 logical_plan
 01)Projection: users.dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS r
-02)--Filter: avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Decimal128(Some(60000000000),14,6)
+02)--Filter: avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Decimal128(60000.000000,14,6)
 03)----Projection: users.dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
 04)------WindowAggr: windowExpr=[[avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 05)--------Projection: users.dept, users.salary
-06)----------Filter: sum(users.salary) > Decimal128(Some(2000000),20,2)
+06)----------Filter: sum(users.salary) > Decimal128(20000.00,20,2)
 07)------------Aggregate: groupBy=[[users.dept, users.salary]], aggr=[[sum(users.salary)]]
-08)--------------Filter: users.salary > Decimal128(Some(500000),10,2)
+08)--------------Filter: users.salary > Decimal128(5000.00,10,2)
 09)----------------TableScan: users projection=[salary, dept]
 physical_plan
 01)ProjectionExec: expr=[dept@0 as dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as r]
-02)--FilterExec: avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 > Some(60000000000),14,6
+02)--FilterExec: avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 > 60000.000000
 03)----ProjectionExec: expr=[dept@0 as dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
 04)------WindowAggExec: wdw=[avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(14, 6), nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 05)--------SortExec: expr=[dept@0 ASC NULLS LAST], preserve_partitioning=[true]
 06)----------RepartitionExec: partitioning=Hash([dept@0], 4), input_partitions=4
-07)------------FilterExec: sum(users.salary)@2 > Some(2000000),20,2, projection=[dept@0, salary@1]
+07)------------FilterExec: sum(users.salary)@2 > 20000.00, projection=[dept@0, salary@1]
 08)--------------AggregateExec: mode=FinalPartitioned, gby=[dept@0 as dept, salary@1 as salary], aggr=[sum(users.salary)]
 09)----------------RepartitionExec: partitioning=Hash([dept@0, salary@1], 4), input_partitions=4
 10)------------------AggregateExec: mode=Partial, gby=[dept@1 as dept, salary@0 as salary], aggr=[sum(users.salary)]
 11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------------------FilterExec: salary@0 > Some(500000),10,2
+12)----------------------FilterExec: salary@0 > 5000.00
 13)------------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # plan with aggregate function

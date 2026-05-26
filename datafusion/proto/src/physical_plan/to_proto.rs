@@ -39,7 +39,7 @@ use datafusion_physical_plan::expressions::{
     CaseExpr, CastExpr, DynamicFilterPhysicalExpr, IsNotNullExpr, IsNullExpr, Literal,
     NotExpr, TryCastExpr, UnKnownColumn,
 };
-use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
+use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -300,31 +300,6 @@ pub fn serialize_physical_expr_with_converter(
     let ctx = datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx::new(&encoder);
     if let Some(node) = expr.try_to_proto(&ctx)? {
         return Ok(node);
-    }
-
-    // HashTableLookupExpr is used for dynamic filter pushdown in hash joins.
-    // It contains an Arc<dyn JoinHashMapType> (the build-side hash table) which
-    // cannot be serialized - the hash table is a runtime structure built during
-    // execution on the build side.
-    //
-    // We replace it with lit(true) which is safe because:
-    // 1. The filter is a performance optimization, not a correctness requirement
-    // 2. lit(true) passes all rows, so no valid rows are incorrectly filtered out
-    // 3. The join itself will still produce correct results, just without the
-    //    benefit of early filtering on the probe side
-    //
-    // In distributed execution, the remote worker won't have access to the hash
-    // table anyway, so the best we can do is skip this optimization.
-    if expr.downcast_ref::<HashTableLookupExpr>().is_some() {
-        let value = datafusion_proto_common::ScalarValue {
-            value: Some(datafusion_proto_common::scalar_value::Value::BoolValue(
-                true,
-            )),
-        };
-        return Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(value)),
-        });
     }
 
     if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
