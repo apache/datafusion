@@ -184,7 +184,9 @@ fn general_repeat<O: OffsetSizeTrait>(
     let mut take_indices = Vec::with_capacity(total_repeated_values);
 
     for idx in 0..count_array.len() {
-        let count = get_count_with_validity(count_array, idx);
+        let Some(count) = repeat_count(count_array, idx) else {
+            continue;
+        };
         take_indices.extend(std::iter::repeat_n(idx as u64, count));
     }
 
@@ -224,7 +226,9 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     // calculate capacities for pre-allocation
     let mut inner_total = 0usize;
     for i in 0..count_array.len() {
-        let count = get_count_with_validity(count_array, i);
+        let Some(count) = repeat_count(count_array, i) else {
+            continue;
+        };
         if count > 0 && list_array.is_valid(i) {
             let len = list_offsets[i + 1].to_usize().unwrap()
                 - list_offsets[i].to_usize().unwrap();
@@ -243,7 +247,9 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     inner_offsets.push(O::zero());
 
     for row_idx in 0..count_array.len() {
-        let count = get_count_with_validity(count_array, row_idx);
+        let Some(count) = repeat_count(count_array, row_idx) else {
+            continue;
+        };
         let list_is_valid = list_array.is_valid(row_idx);
         let start = list_offsets[row_idx].to_usize().unwrap();
         let end = list_offsets[row_idx + 1].to_usize().unwrap();
@@ -278,7 +284,6 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         Some(NullBuffer::new(inner_nulls.finish())),
     )?;
 
-    // Build outer ListArray
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(
             list_array.data_type().to_owned(),
@@ -298,7 +303,10 @@ fn build_repeat_offsets<O: OffsetSizeTrait>(
     let mut running_offset = 0usize;
 
     for idx in 0..count_array.len() {
-        let count = get_count_with_validity(count_array, idx);
+        let Some(count) = repeat_count(count_array, idx) else {
+            offsets.push(*offsets.last().unwrap());
+            continue;
+        };
         running_offset = checked_repeat_len_add(running_offset, count)?;
         ensure_array_repeat_output_len::<O>(running_offset)?;
         let offset = O::from_usize(running_offset).ok_or_else(|| {
@@ -363,23 +371,79 @@ fn max_vec_elements<T>() -> usize {
         .unwrap_or(usize::MAX)
 }
 
-/// Helper function to get count from count_array at given index
-/// Return 0 for null values or non-positive count.
+/// Helper function to get count from count_array at given index.
+/// Returns `None` for NULL values and `Some(0)` for non-positive counts.
 #[inline]
-fn get_count_with_validity(count_array: &Int64Array, idx: usize) -> usize {
+fn repeat_count(count_array: &Int64Array, idx: usize) -> Option<usize> {
     if count_array.is_null(idx) {
-        0
+        None
     } else {
         let c = count_array.value(idx);
-        if c > 0 { c as usize } else { 0 }
+        Some(if c > 0 { c as usize } else { 0 })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::array_repeat_inner;
-    use arrow::array::{ArrayRef, Int64Array};
+    use super::{array_repeat_inner, general_list_repeat, general_repeat};
+    use arrow::array::{Array, ArrayRef, AsArray, Int32Array, Int64Array, ListArray};
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::{Field, Int32Type};
+    use datafusion_common::Result;
     use std::sync::Arc;
+
+    #[test]
+    fn test_array_repeat_null_count_stays_null() -> Result<()> {
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let counts = Int64Array::new(
+            ScalarBuffer::from(vec![2, 1, 1]),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let result = general_repeat::<i32>(&array, &counts)?;
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1)]),
+            None,
+            Some(vec![Some(3)]),
+        ]);
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_repeat_nested_null_count_stays_null() -> Result<()> {
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4)]),
+            Some(vec![Some(5)]),
+        ]);
+        let counts = Int64Array::new(
+            ScalarBuffer::from(vec![2, 1, 1]),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let result = general_list_repeat::<i32>(&list_array, &counts)?;
+        let repeated_values = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(5)]),
+        ]);
+        let expected = ListArray::new(
+            Arc::new(Field::new_list_field(
+                repeated_values.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 2, 3])),
+            Arc::new(repeated_values),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
+    }
 
     #[test]
     fn scalar_count_exceeding_max_array_size_returns_error() {

@@ -171,12 +171,12 @@ impl HigherOrderUDF for ArrayAnyMatch {
         &self,
         args: HigherOrderReturnFieldArgs,
     ) -> Result<Arc<Field>> {
-        let [ValueOrLambda::Value(list), _] =
+        let [ValueOrLambda::Value(list), ValueOrLambda::Lambda(lambda)] =
             take_function_args(self.name(), args.arg_fields)?
         else {
             return plan_err!("{} expects a value as first argument", self.name());
         };
-        let nullable = list.is_nullable();
+        let nullable = list.is_nullable() || lambda.is_nullable();
         Ok(Arc::new(Field::new("", DataType::Boolean, nullable)))
     }
 
@@ -272,14 +272,14 @@ mod tests {
     };
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
-        Expr, col,
+        Expr, HigherOrderReturnFieldArgs, HigherOrderUDF, ValueOrLambda, col,
         execution_props::ExecutionProps,
         expr::{HigherOrderFunction, LambdaVariable},
         lambda, lit,
     };
     use datafusion_physical_expr::create_physical_expr;
 
-    use crate::array_any_match::array_any_match_higher_order_function;
+    use crate::array_any_match::{ArrayAnyMatch, array_any_match_higher_order_function};
 
     fn run_any_match(
         list: impl arrow::array::Array + Clone + 'static,
@@ -410,6 +410,44 @@ mod tests {
             result.as_any().downcast_ref::<BooleanArray>().unwrap(),
             &BooleanArray::from(vec![Some(true), Some(false)])
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_any_match_return_field_nullability() -> Result<()> {
+        for list_nullable in [true, false] {
+            for lambda_nullable in [true, false] {
+                let list = Arc::new(Field::new(
+                    "list",
+                    DataType::new_list(DataType::Int32, true),
+                    list_nullable,
+                ));
+                let lambda =
+                    Arc::new(Field::new("predicate", DataType::Boolean, lambda_nullable));
+                let arg_fields = [
+                    ValueOrLambda::Value(Arc::clone(&list)),
+                    ValueOrLambda::Lambda(Arc::clone(&lambda)),
+                ];
+                let scalar_arguments = [None, None];
+
+                let result = ArrayAnyMatch::new().return_field_from_args(
+                    HigherOrderReturnFieldArgs {
+                        arg_fields: &arg_fields,
+                        scalar_arguments: &scalar_arguments,
+                    },
+                )?;
+
+                assert_eq!(
+                    result,
+                    Arc::new(Field::new(
+                        "",
+                        DataType::Boolean,
+                        list_nullable || lambda_nullable,
+                    ))
+                );
+            }
+        }
+
         Ok(())
     }
 
