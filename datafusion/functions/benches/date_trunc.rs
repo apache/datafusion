@@ -60,6 +60,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &arg_fields,
                 scalar_arguments: &scalar_arguments,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
         let config_options = Arc::new(ConfigOptions::default());

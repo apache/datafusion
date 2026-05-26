@@ -248,6 +248,7 @@ fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn return_type_is_not_used() {
@@ -273,6 +274,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&date_field), Arc::clone(&day_field)],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 

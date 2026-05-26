@@ -649,6 +649,7 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use std::ops::Deref;
@@ -673,6 +674,7 @@ mod tests {
                     .return_field_from_args(ReturnFieldArgs {
                         arg_fields: &args_fields,
                         scalar_arguments: &scalar_args,
+                        config_options: &ConfigOptions::default(),
                     })
                     .unwrap();
 
@@ -705,6 +707,7 @@ mod tests {
                     .return_field_from_args(ReturnFieldArgs {
                         arg_fields: &args_fields,
                         scalar_arguments: &scalar_args,
+                        config_options: &ConfigOptions::default(),
                     })
                     .unwrap();
 
@@ -726,6 +729,7 @@ mod tests {
                     .return_field_from_args(ReturnFieldArgs {
                         arg_fields: &[Arc::clone(&input_field)],
                         scalar_arguments: &[None],
+                        config_options: &ConfigOptions::default(),
                     })
                     .unwrap();
 
@@ -829,6 +833,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &args_fields,
                 scalar_arguments: &scalar_args,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -936,6 +941,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &args_fields,
                 scalar_arguments: &scalar_args,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -1040,6 +1046,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &args_fields,
                 scalar_arguments: &scalar_args,
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 

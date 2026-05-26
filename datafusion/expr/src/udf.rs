@@ -451,6 +451,17 @@ pub struct ReturnFieldArgs<'a> {
     /// For example, if a function is called like `my_function(column_a, 5)`
     /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
     pub scalar_arguments: &'a [Option<&'a ScalarValue>],
+    /// Session configuration options at planning time.
+    ///
+    /// UDFs whose return type or nullability depends on session settings (e.g.
+    /// `spark.sql.ansi.enabled`) should read from this field rather than
+    /// storing config as a struct field and relying on [`ScalarUDFImpl::with_updated_config`].
+    ///
+    /// When called from logical planning (e.g. [`ExprSchema::to_field`]) this
+    /// may reflect a default / unset configuration rather than the actual
+    /// session config.  The physical-planning call site always provides the
+    /// real session config.
+    pub config_options: &'a ConfigOptions,
 }
 
 /// Trait for implementing user defined scalar functions.

@@ -191,6 +191,7 @@ fn json_tuple_inner(args: &[ArrayRef], return_type: &DataType) -> Result<ArrayRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_return_field_shape() {
@@ -204,6 +205,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &fields,
                 scalar_arguments: &[None, None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -226,6 +228,7 @@ mod tests {
         let result = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &fields,
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         });
         assert!(result.is_err());
         assert!(

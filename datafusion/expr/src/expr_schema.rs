@@ -31,6 +31,7 @@ use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
@@ -590,6 +591,7 @@ impl ExprSchemable for Expr {
                 let args = ReturnFieldArgs {
                     arg_fields: &new_fields,
                     scalar_arguments: &arguments,
+                    config_options: &ConfigOptions::default(),
                 };
 
                 func.return_field_from_args(args)

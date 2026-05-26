@@ -111,6 +111,7 @@ fn map_from_arrays_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_map_from_arrays_nullability_and_type() {
@@ -131,6 +132,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&keys_field), Arc::clone(&values_field)],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .expect("return_field_from_args should succeed");
 
@@ -152,6 +154,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[nullable_keys, values_field],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .expect("return_field_from_args should succeed");
 

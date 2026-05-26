@@ -20,18 +20,25 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray};
 use arrow::datatypes::DataType::Interval;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
-use arrow::datatypes::{DataType, IntervalMonthDayNano};
+use arrow::datatypes::{DataType, Field, FieldRef, IntervalMonthDayNano};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::types::{NativeType, logical_float64, logical_int32};
-use datafusion_common::{DataFusionError, Result, ScalarValue, plan_datafusion_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_err, plan_datafusion_err,
+};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMakeInterval {
     signature: Signature,
+    /// Mirrors `spark.sql.ansi.enabled` / `enable_ansi_mode`.
+    /// When true (failOnError=true in Spark) arithmetic overflow returns an error;
+    /// when false (default) it returns NULL instead.
+    ansi_mode: bool,
 }
 
 impl Default for SparkMakeInterval {
@@ -42,6 +49,10 @@ impl Default for SparkMakeInterval {
 
 impl SparkMakeInterval {
     pub fn new() -> Self {
+        Self::new_with_config(&ConfigOptions::default())
+    }
+
+    pub fn new_with_config(config: &ConfigOptions) -> Self {
         let int32 = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_int32()),
             vec![TypeSignatureClass::Integer],
@@ -100,6 +111,7 @@ impl SparkMakeInterval {
 
         Self {
             signature: Signature::one_of(variants, Volatility::Immutable),
+            ansi_mode: config.execution.enable_ansi_mode,
         }
     }
 }
@@ -114,7 +126,32 @@ impl ScalarUDFImpl for SparkMakeInterval {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // return_field_from_args is the authoritative implementation
         Ok(Interval(MonthDayNano))
+    }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        Some(ScalarUDF::from(Self::new_with_config(config)))
+    }
+
+    /// Spark nullability rule (mirrors `failOnError` in Spark source):
+    ///   - nullary call → never null (always returns zero interval)
+    ///   - ANSI mode on  → nullable only when any input field is nullable
+    ///   - ANSI mode off → always nullable (overflow silently produces NULL)
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let ansi_mode = args.config_options.execution.enable_ansi_mode;
+        let nullable = if args.arg_fields.is_empty() {
+            false
+        } else if ansi_mode {
+            args.arg_fields.iter().any(|f| f.is_nullable())
+        } else {
+            true
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            Interval(MonthDayNano),
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -123,11 +160,17 @@ impl ScalarUDFImpl for SparkMakeInterval {
                 Some(IntervalMonthDayNano::new(0, 0, 0)),
             )));
         }
-        make_scalar_function(make_interval_kernel, vec![])(&args.args)
+        let ansi_mode = self.ansi_mode;
+        make_scalar_function(move |cols| make_interval_kernel(cols, ansi_mode), vec![])(
+            &args.args,
+        )
     }
 }
 
-fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
+fn make_interval_kernel(
+    args: &[ArrayRef],
+    ansi_mode: bool,
+) -> Result<ArrayRef, DataFusionError> {
     use arrow::array::AsArray;
     use arrow::datatypes::{Float64Type, Int32Type};
 
@@ -216,6 +259,11 @@ fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> 
         match make_interval_month_day_nano(y, mo, w, d, h, mi, s) {
             Some(v) => builder.append_value(v),
             None => {
+                if ansi_mode {
+                    return exec_err!(
+                        "Arithmetic overflow in make_interval: result does not fit in IntervalMonthDayNano"
+                    );
+                }
                 builder.append_null();
                 continue;
             }
@@ -274,7 +322,7 @@ mod tests {
 
     use super::*;
     fn run_make_interval_month_day_nano(arrs: Vec<ArrayRef>) -> Result<ArrayRef> {
-        make_interval_kernel(&arrs)
+        make_interval_kernel(&arrs, false)
     }
 
     #[test]
@@ -538,6 +586,14 @@ mod tests {
         args: Vec<ColumnarValue>,
         number_rows: usize,
     ) -> Result<ColumnarValue, DataFusionError> {
+        invoke_make_interval_with_config(args, number_rows, &ConfigOptions::default())
+    }
+
+    fn invoke_make_interval_with_config(
+        args: Vec<ColumnarValue>,
+        number_rows: usize,
+        config: &ConfigOptions,
+    ) -> Result<ColumnarValue, DataFusionError> {
         let arg_fields = args
             .iter()
             .map(|arg| Field::new("a", arg.data_type(), true).into())
@@ -547,9 +603,9 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Field::new("f", Interval(MonthDayNano), true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
+            config_options: Arc::new(config.clone()),
         };
-        SparkMakeInterval::new().invoke_with_args(args)
+        SparkMakeInterval::new_with_config(config).invoke_with_args(args)
     }
 
     #[test]
@@ -600,5 +656,120 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    // --- nullability / return_field_from_args tests ---
+
+    fn make_ansi_config() -> ConfigOptions {
+        let mut cfg = ConfigOptions::default();
+        cfg.execution.enable_ansi_mode = true;
+        cfg
+    }
+
+    #[test]
+    fn return_field_nullary_is_not_nullable() {
+        let udf = SparkMakeInterval::new();
+        let field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[],
+                scalar_arguments: &[],
+                config_options: &ConfigOptions::default(),
+            })
+            .unwrap();
+        assert!(!field.is_nullable(), "nullary call must not be nullable");
+    }
+
+    #[test]
+    fn return_field_non_ansi_always_nullable() {
+        // Even with all non-null inputs, non-ANSI mode is always nullable
+        // because overflow silently returns NULL.
+        let udf = SparkMakeInterval::new(); // ansi_mode = false
+        let non_null_field: FieldRef = Arc::new(Field::new("x", DataType::Int32, false));
+        let field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[non_null_field],
+                scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
+            })
+            .unwrap();
+        assert!(field.is_nullable(), "non-ANSI must always be nullable");
+    }
+
+    #[test]
+    fn return_field_ansi_mode_not_nullable_when_inputs_not_null() {
+        // ANSI mode: no overflow → null; nullable only if inputs are nullable.
+        // config_options carries ansi mode to return_field_from_args.
+        let udf = SparkMakeInterval::new_with_config(&make_ansi_config());
+        let non_null_field: FieldRef = Arc::new(Field::new("x", DataType::Int32, false));
+        let field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[non_null_field],
+                scalar_arguments: &[None],
+                config_options: &make_ansi_config(),
+            })
+            .unwrap();
+        assert!(
+            !field.is_nullable(),
+            "ANSI mode with non-null inputs must not be nullable"
+        );
+    }
+
+    #[test]
+    fn return_field_ansi_mode_nullable_when_any_input_nullable() {
+        let udf = SparkMakeInterval::new_with_config(&make_ansi_config());
+        let nullable_field: FieldRef = Arc::new(Field::new("x", DataType::Int32, true));
+        let field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[nullable_field],
+                scalar_arguments: &[None],
+                config_options: &make_ansi_config(),
+            })
+            .unwrap();
+        assert!(
+            field.is_nullable(),
+            "ANSI mode with nullable inputs must be nullable"
+        );
+    }
+
+    // --- ANSI mode overflow error tests ---
+
+    #[test]
+    fn ansi_mode_overflow_returns_error() {
+        let ansi_cfg = make_ansi_config();
+        let year = ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(i32::MAX)])));
+        let month = ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(1)])));
+        let week = ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(0)])));
+        let day = ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(0)])));
+        let hour = ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(0)])));
+        let min = ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(0)])));
+        let sec = ColumnarValue::Array(Arc::new(Float64Array::from(vec![Some(0.0)])));
+
+        let result = invoke_make_interval_with_config(
+            vec![year, month, week, day, hour, min, sec],
+            1,
+            &ansi_cfg,
+        );
+        assert!(
+            result.is_err(),
+            "ANSI mode overflow must return an error, not NULL"
+        );
+    }
+
+    #[test]
+    fn non_ansi_overflow_returns_null() {
+        // Existing behavior must be preserved: overflow → NULL in non-ANSI mode.
+        let year = Arc::new(Int32Array::from(vec![Some(i32::MAX)])) as ArrayRef;
+        let month = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+        let week = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let day = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let hour = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let min = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let sec = Arc::new(Float64Array::from(vec![Some(0.0)])) as ArrayRef;
+
+        let out = run_make_interval_month_day_nano(vec![
+            year, month, week, day, hour, min, sec,
+        ])
+        .unwrap();
+        assert_eq!(out.null_count(), 1, "non-ANSI overflow must produce NULL");
     }
 }

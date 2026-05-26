@@ -243,6 +243,7 @@ mod tests {
     use arrow::array::{DurationMicrosecondArray, Float64Array, Int32Array};
     use arrow::datatypes::DataType::Duration;
     use arrow::datatypes::TimeUnit::Microsecond;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::internal_datafusion_err;
 
     use super::*;
@@ -322,6 +323,7 @@ mod tests {
         let out = udf.return_field_from_args(ReturnFieldArgs {
             arg_fields: &arg_fields,
             scalar_arguments: &[None, None, None, None],
+            config_options: &ConfigOptions::default(),
         })?;
         assert!(out.is_nullable());
         assert_eq!(out.data_type(), &Duration(Microsecond));
@@ -337,6 +339,7 @@ mod tests {
         let out = udf.return_field_from_args(ReturnFieldArgs {
             arg_fields: &non_nullable_arg_fields,
             scalar_arguments: &[None, None, None, None],
+            config_options: &ConfigOptions::default(),
         })?;
         assert!(!out.is_nullable());
 
@@ -347,6 +350,7 @@ mod tests {
         let out = udf.return_field_from_args(ReturnFieldArgs {
             arg_fields: &non_nullable_arg_fields,
             scalar_arguments: &scalar_refs,
+            config_options: &ConfigOptions::default(),
         })?;
         assert!(out.is_nullable());
 
@@ -354,6 +358,7 @@ mod tests {
         let out = udf.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[],
             scalar_arguments: &[],
+            config_options: &ConfigOptions::default(),
         })?;
         assert!(!out.is_nullable());
 

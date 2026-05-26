@@ -195,6 +195,7 @@ mod tests {
     use arrow::datatypes::Field;
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_list_array;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ReturnFieldArgs;
 
     #[test]
@@ -209,6 +210,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &arg_fields,
                 scalar_arguments: &[],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
         assert_eq!(

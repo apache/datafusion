@@ -109,6 +109,7 @@ impl ScalarFunctionExpr {
         let ret_args = ReturnFieldArgs {
             arg_fields: &arg_fields,
             scalar_arguments: &arguments,
+            config_options: &config_options,
         };
         let return_field = fun.return_field_from_args(ret_args)?;
         Ok(Self {

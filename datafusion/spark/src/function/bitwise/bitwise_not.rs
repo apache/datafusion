@@ -119,6 +119,7 @@ pub fn spark_bitwise_not(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
 
     #[test]
@@ -132,6 +133,7 @@ mod tests {
                 arg_fields: &[Arc::clone(&non_nullable_i32)],
                 // single-argument function -> one scalar_argument slot (None)
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -145,6 +147,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&nullable_i32)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -158,6 +161,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&non_nullable_i64)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -169,6 +173,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&nullable_i64)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 

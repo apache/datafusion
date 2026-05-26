@@ -172,6 +172,7 @@ mod tests {
         UInt16Array, UInt32Array, UInt64Array,
     };
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_bit_count_basic() {
@@ -357,6 +358,7 @@ mod tests {
         let result = bit_count.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[Arc::clone(&non_nullable_field)],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
 
         // The result should not be nullable (same as input)
@@ -369,6 +371,7 @@ mod tests {
         let result = bit_count.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[Arc::clone(&nullable_field)],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
 
         // The result should be nullable (same as input)

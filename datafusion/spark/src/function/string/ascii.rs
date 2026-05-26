@@ -89,6 +89,7 @@ impl ScalarUDFImpl for SparkAscii {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_return_field_nullable_input() {
@@ -99,6 +100,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[nullable_field],
                 scalar_arguments: &[],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -118,6 +120,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[non_nullable_field],
                 scalar_arguments: &[],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 

@@ -200,6 +200,7 @@ mod tests {
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::Int32Array;
     use arrow::datatypes::DataType::Int32;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
 
     macro_rules! test_spark_length_string {
@@ -295,6 +296,7 @@ mod tests {
         let out_nullable = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[nullable_field],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
 
         assert!(
@@ -308,6 +310,7 @@ mod tests {
         let out_non_nullable = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[non_nullable_field],
             scalar_arguments: &[None],
+            config_options: &ConfigOptions::default(),
         })?;
 
         assert!(

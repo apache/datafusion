@@ -149,6 +149,7 @@ mod tests {
     use crate::map_values::MapValuesFunc;
     use arrow::datatypes::{DataType, Field, FieldRef};
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ScalarUDFImpl;
     use std::sync::Arc;
 
@@ -196,6 +197,7 @@ mod tests {
             let args = datafusion_expr::ReturnFieldArgs {
                 arg_fields: &[field],
                 scalar_arguments: &[None::<&ScalarValue>],
+                config_options: &ConfigOptions::default(),
             };
 
             func.return_field_from_args(args).unwrap()

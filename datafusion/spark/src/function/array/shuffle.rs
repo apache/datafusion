@@ -270,6 +270,7 @@ fn fixed_size_array_shuffle(
 mod tests {
     use super::*;
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ReturnFieldArgs;
 
     #[test]
@@ -287,6 +288,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&non_nullable_field)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -305,6 +307,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&nullable_field)],
                 scalar_arguments: &[None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 

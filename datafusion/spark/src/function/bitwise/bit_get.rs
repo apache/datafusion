@@ -123,6 +123,7 @@ fn spark_bit_get(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_bit_get_nullability_non_nullable_inputs() {
@@ -134,6 +135,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[value_field, pos_field],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -151,6 +153,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[value_field, pos_field],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 

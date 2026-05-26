@@ -89,6 +89,7 @@ mod tests {
     use arrow::array::{Array, BooleanArray};
     use arrow::datatypes::DataType::Boolean;
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
 
     macro_rules! test_ilike_string_invoke {
         ($INPUT1:expr, $INPUT2:expr, $EXPECTED:expr) => {
@@ -189,6 +190,7 @@ mod tests {
                     Arc::clone(&non_nullable_field2),
                 ],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -206,6 +208,7 @@ mod tests {
                     Arc::clone(&non_nullable_field2),
                 ],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -223,6 +226,7 @@ mod tests {
                     Arc::clone(&nullable_field2),
                 ],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
@@ -235,6 +239,7 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[Arc::clone(&nullable_field1), Arc::clone(&nullable_field2)],
                 scalar_arguments: &[None, None],
+                config_options: &ConfigOptions::default(),
             })
             .unwrap();
 
