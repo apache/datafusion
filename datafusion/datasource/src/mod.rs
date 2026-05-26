@@ -164,7 +164,15 @@ pub struct PartitionedFile {
     /// The estimated size of the parquet metadata, in bytes
     pub metadata_size_hint: Option<usize>,
     pub table_reference: Option<TableReference>,
-    /// A user-provided arrow schema for the file.
+    /// A user-provided physical Arrow schema for this file.
+    ///
+    /// This schema describes only the columns stored in the file. It must not
+    /// include partition columns; those are represented separately by
+    /// [`Self::partition_values`] and the scan's table partition columns.
+    ///
+    /// When provided, this field will be used by the Parquet reader to avoid
+    /// parsing the Arrow schema from the `ARROW:schema` metadata key. Other
+    /// built-in file sources ignore it for now.
     pub arrow_schema: Option<SchemaRef>,
 }
 
@@ -227,7 +235,10 @@ impl PartitionedFile {
         .with_range(start, end)
     }
 
-    /// Provide an arrow schema for the file.
+    /// Provide a physical Arrow schema for this file.
+    ///
+    /// The schema must describe only columns stored in the file and must not
+    /// include partition columns. See [`Self::arrow_schema`] for details.
     pub fn with_arrow_schema(mut self, schema: SchemaRef) -> Self {
         self.arrow_schema = Some(schema);
         self
