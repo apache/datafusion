@@ -202,17 +202,14 @@ impl NegativeExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_proto_models::protobuf;
 
-        let protobuf::PhysicalNegativeNode { expr } = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::Negative(n)) => n.as_ref(),
+        let expr = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::Negative(n)) => {
+                ctx.decode_required_expression(n.expr.as_deref(), "NegativeExpr", "expr")?
+            }
             _ => return internal_err!("PhysicalExprNode is not a Negative"),
         };
-        let expr = expr.as_deref().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "Negative is missing required field 'expr'".to_string(),
-            )
-        })?;
 
-        Ok(Arc::new(NegativeExpr::new(ctx.decode(expr)?)))
+        Ok(Arc::new(NegativeExpr::new(expr)))
     }
 }
 
@@ -536,7 +533,7 @@ mod proto_tests {
         let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
         let err = NegativeExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(
-            matches!(err, DataFusionError::Internal(msg) if msg.contains("Negative is missing required field 'expr'"))
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("NegativeExpr is missing required field 'expr'"))
         );
     }
 
