@@ -607,9 +607,7 @@ fn date_bin_impl(
     }
 
     fn timestamp_scale_overflow_message(x: i64) -> String {
-        format!(
-            "DATE_BIN source timestamp {x} cannot be represented in nanoseconds"
-        )
+        format!("DATE_BIN source timestamp {x} cannot be represented in nanoseconds")
     }
 
     Ok(match array {
@@ -619,9 +617,9 @@ fn date_bin_impl(
                 match *v {
                     Some(val) => {
                         let scaled = val.checked_mul(scale).ok_or_else(|| {
-                            DataFusionError::Execution(
-                                timestamp_scale_overflow_message(val),
-                            )
+                            DataFusionError::Execution(timestamp_scale_overflow_message(
+                                val,
+                            ))
                         })?;
                         match stride_fn(stride, scaled, origin) {
                             Ok(result) => Some(result / scale),
@@ -639,9 +637,9 @@ fn date_bin_impl(
                 match *v {
                     Some(val) => {
                         let scaled = val.checked_mul(scale).ok_or_else(|| {
-                            DataFusionError::Execution(
-                                timestamp_scale_overflow_message(val),
-                            )
+                            DataFusionError::Execution(timestamp_scale_overflow_message(
+                                val,
+                            ))
                         })?;
                         match stride_fn(stride, scaled, origin) {
                             Ok(result) => Some(result / scale),
@@ -659,9 +657,9 @@ fn date_bin_impl(
                 match *v {
                     Some(val) => {
                         let scaled = val.checked_mul(scale).ok_or_else(|| {
-                            DataFusionError::Execution(
-                                timestamp_scale_overflow_message(val),
-                            )
+                            DataFusionError::Execution(timestamp_scale_overflow_message(
+                                val,
+                            ))
                         })?;
                         match stride_fn(stride, scaled, origin) {
                             Ok(result) => Some(result / scale),
@@ -679,9 +677,9 @@ fn date_bin_impl(
                 match *v {
                     Some(val) => {
                         let scaled = val.checked_mul(scale).ok_or_else(|| {
-                            DataFusionError::Execution(
-                                timestamp_scale_overflow_message(val),
-                            )
+                            DataFusionError::Execution(timestamp_scale_overflow_message(
+                                val,
+                            ))
                         })?;
                         match stride_fn(stride, scaled, origin) {
                             Ok(result) => Some(result / scale),
@@ -905,8 +903,7 @@ mod tests {
     use crate::datetime::date_bin::{DateBinFunc, date_bin_nanos_interval};
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{
-        Array, IntervalDayTimeArray, TimestampMillisecondArray,
-        TimestampNanosecondArray,
+        Array, IntervalDayTimeArray, TimestampMillisecondArray, TimestampNanosecondArray,
     };
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
@@ -1143,7 +1140,6 @@ mod tests {
             res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
         );
-
     }
 
     #[test]
