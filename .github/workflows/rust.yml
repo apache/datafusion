@@ -290,12 +290,16 @@ jobs:
         with:
          save-if: ${{ github.ref_name == 'main' }}
          shared-key: "amd-ci"
-      - name: Run tests (excluding doctests and datafusion-cli)
+      - name: Install nextest
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d  # v2.79.2
+        with:
+          tool: nextest
+      - name: Run tests with nextest (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
         run: |
-          cargo test \
-            --profile ci \
+          cargo nextest run \
+            --cargo-profile ci \
             --exclude datafusion-examples \
             --exclude ffi_example_table_provider \
             --exclude datafusion-cli \
@@ -334,7 +338,11 @@ jobs:
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
-      - name: Run tests (excluding doctests)
+      - name: Install nextest
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d  # v2.79.2
+        with:
+          tool: nextest
+      - name: Run tests with nextest (excluding doctests)
         env:
           RUST_BACKTRACE: 1
           AWS_ENDPOINT: http://127.0.0.1:9000
@@ -342,7 +350,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
           TEST_STORAGE_INTEGRATION: 1
           AWS_ALLOW_HTTP: true
-        run: cargo test --features backtrace --profile ci -p datafusion-cli  --lib --tests --bins
+        run: cargo nextest run --features backtrace --cargo-profile ci -p datafusion-cli --lib --tests --bins
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -457,6 +465,10 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Install nextest
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d  # v2.79.2
+        with:
+          tool: nextest
       - name: Generate benchmark data and expected query results
         run: |
           mkdir -p datafusion/sqllogictest/test_files/tpch/data
@@ -470,8 +482,8 @@ jobs:
           # increase stack size to fix stack overflow
           export RUST_MIN_STACK=20971520
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
-          cargo test plan_q --package datafusion-benchmarks --profile ci --features=ci -- --test-threads=1
-          INCLUDE_TPCH=true cargo test --features backtrace,parquet_encryption,substrait --profile ci --package datafusion-sqllogictest --test sqllogictests
+          cargo nextest run --package datafusion-benchmarks --cargo-profile ci --features=ci --test-threads=1 plan_q
+          INCLUDE_TPCH=true cargo nextest run --features backtrace,parquet_encryption,substrait --cargo-profile ci --package datafusion-sqllogictest --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -505,10 +517,14 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Install nextest
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d  # v2.79.2
+        with:
+          tool: nextest
       - name: Run sqllogictest
         run: |
           cd datafusion/sqllogictest
-          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@$POSTGRES_HOST:$POSTGRES_PORT/db_test" cargo test --features backtrace --profile ci --features=postgres --test sqllogictests
+          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@$POSTGRES_HOST:$POSTGRES_PORT/db_test" cargo nextest run --features backtrace --cargo-profile ci --features=postgres --test sqllogictests
         env:
           # use postgres for the host here because we have specified a container for the job
           POSTGRES_HOST: postgres
@@ -530,12 +546,18 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Install nextest
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d  # v2.79.2
+        with:
+          tool: nextest
       - name: Run sqllogictest
         # TODO: Right now several tests are failing in Substrait round-trip mode, so this
         #  command cannot be run for all the .slt files. Run it for just one that works (limit.slt)
         #  until most of the tickets in https://github.com/apache/datafusion/issues/16248 are addressed
         #  and this command can be run without filters.
-        run: cargo test -p datafusion-sqllogictest --test sqllogictests --features substrait -- --substrait-round-trip limit.slt
+        env:
+          SUBSTRAIT_ROUND_TRIP: true
+        run: cargo nextest run -p datafusion-sqllogictest --test sqllogictests --features substrait limit.slt
 
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner
@@ -571,9 +593,13 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
+      - name: Install nextest
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d  # v2.79.2
+        with:
+          tool: nextest
       - name: Run datafusion-ffi tests
         shell: bash
-        run: cargo test --profile ci -p datafusion-ffi --lib --tests --features integration-tests
+        run: cargo nextest run --cargo-profile ci -p datafusion-ffi --lib --tests --features integration-tests
 
   vendor:
     name: Verify Vendored Code

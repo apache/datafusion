@@ -62,6 +62,19 @@ impl FromStr for Filter {
     }
 }
 
+impl Filter {
+    /// Returns true if this filter selects a file without narrowing to a line.
+    pub fn is_file_filter(&self) -> bool {
+        self.line_number.is_none()
+    }
+
+    /// Returns true if this filter exactly matches the test file's relative path.
+    pub fn matches_exact_relative_path(&self, relative_path: &Path) -> bool {
+        self.line_number.is_none()
+            && relative_path.to_string_lossy() == self.file_substring
+    }
+}
+
 /// Given a list of [`Filter`]s, determines if the whole file in the provided
 /// path can be skipped.
 ///

@@ -84,10 +84,18 @@ fn config_change_result(
 }
 
 pub fn main() -> Result<()> {
+    // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
+    env_logger::init();
+
+    let options: Options = Parser::parse();
+    if options.list {
+        return list_tests(&options);
+    }
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(run_tests())
+        .block_on(run_tests(options))
 }
 
 fn sqlite_value_validator(
@@ -119,21 +127,8 @@ fn sqlite_value_validator(
     normalized_actual == normalized_expected
 }
 
-async fn run_tests() -> Result<()> {
-    // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
-    env_logger::init();
-
-    let options: Options = Parser::parse();
+async fn run_tests(options: Options) -> Result<()> {
     let timing_debug_slow_files = is_env_truthy(TIMING_DEBUG_SLOW_FILES_ENV);
-    if options.list {
-        // nextest parses stdout, so print messages to stderr
-        eprintln!("NOTICE: --list option unsupported, quitting");
-        // return Ok, not error so that tools like nextest which are listing all
-        // workspace tests (by running `cargo test ... --list --format terse`)
-        // do not fail when they encounter this binary. Instead, print nothing
-        // to stdout and return OK so they can continue listing other tests.
-        return Ok(());
-    }
 
     options.warn_on_ignored();
 
@@ -426,6 +421,18 @@ fn is_env_truthy(name: &str) -> bool {
                 "1" | "true" | "yes" | "on"
             )
         })
+}
+
+fn list_tests(options: &Options) -> Result<()> {
+    if options.ignored {
+        return Ok(());
+    }
+
+    for test_file in read_test_files(options)? {
+        println!("{}: test", test_file.relative_path.display());
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "substrait")]
@@ -801,7 +808,7 @@ fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
         .into_iter()
         .flatten()
         .map(|p| TestFile::new(p, prefixes))
-        .filter(|f| options.check_test_file(&f.path))
+        .filter(|f| options.check_test_file(f))
         .filter(|f| f.is_slt_file())
         .filter(|f| !f.relative_path_starts_with(TPCH_PREFIX) || options.include_tpch)
         .filter(|f| !f.relative_path_starts_with(SQLITE_PREFIX) || options.include_sqlite)
@@ -833,6 +840,7 @@ struct Options {
 
     #[clap(
         long,
+        env = "SUBSTRAIT_ROUND_TRIP",
         conflicts_with = "complete",
         conflicts_with = "postgres_runner",
         help = "Before executing each query, convert its logical plan to Substrait and from Substrait back to its logical plan"
@@ -886,6 +894,25 @@ struct Options {
         long,
         help = "IGNORED (for compatibility with built-in rust test runner)"
     )]
+    include_ignored: bool,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built-in rust test runner)"
+    )]
+    exact: bool,
+
+    #[clap(
+        long,
+        value_name = "PATTERN",
+        help = "IGNORED (for compatibility with built-in rust test runner)"
+    )]
+    skip: Vec<String>,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built-in rust test runner)"
+    )]
     nocapture: bool,
 
     #[clap(
@@ -922,10 +949,20 @@ impl Options {
     /// Will end up passing `foo` as a command line argument.
     ///
     /// To be compatible with this, treat the command line arguments as a
-    /// filter and that does a substring match on each input.  returns
-    /// true f this path should be run
-    fn check_test_file(&self, path: &Path) -> bool {
-        !should_skip_file(path, &self.filters)
+    /// filter that does a substring match on each input. Returns
+    /// true if this path should be run.
+    fn check_test_file(&self, test_file: &TestFile) -> bool {
+        if self.filters.is_empty() {
+            return true;
+        }
+
+        if self.exact && self.filters.iter().all(Filter::is_file_filter) {
+            return self.filters.iter().any(|filter| {
+                filter.matches_exact_relative_path(&test_file.relative_path)
+            });
+        }
+
+        !should_skip_file(&test_file.path, &self.filters)
     }
 
     /// Postgres runner executes only tests in files with specific names or in
