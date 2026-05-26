@@ -347,8 +347,7 @@ pub enum Dialect {
 
 impl Dialect {
     /// List of all supported dialect names, for use in error messages.
-    pub const AVAILABLE: &'static str =
-        "Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+    pub const AVAILABLE: &'static str = "Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
          MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks, Spark";
 }
 
