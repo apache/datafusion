@@ -1947,6 +1947,14 @@ mod tests {
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
             &datafusion_common::ScalarValue::Float64(Some(probe_ratio_threshold)),
         );
+        // This test exercises the legacy not-locked-until-skip behaviour
+        // (Rule 1 ratio check, no A/B sampling). Disable the default-on
+        // cost-aware path so the small probe window in this test doesn't
+        // get pulled into A/B sampling and stall the skip decision.
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_use_cost_model",
+            &datafusion_common::ScalarValue::Boolean(Some(false)),
+        );
         task_ctx = task_ctx.with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
 
