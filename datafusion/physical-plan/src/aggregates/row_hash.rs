@@ -134,6 +134,15 @@ struct SkipAggregationProbe {
     /// (from `SessionConfig`). If the ratio exceeds this value, aggregation
     /// is skipped and input rows are directly converted to output
     probe_ratio_threshold: f64,
+    /// (experimental) Cost-aware skip rule: skip when measured per-row wall
+    /// time is high even at ratios below `probe_ratio_threshold`. Disabled
+    /// by default; preserves the current bare-ratio behaviour.
+    use_cost_model: bool,
+    /// Per-row wall-time threshold (ns) for cost-aware skip rule.
+    cost_ns_per_row_threshold: u64,
+    /// Minimum ratio for cost-aware skip rule to fire. Below this ratio
+    /// partial aggregation is kept regardless of per-row cost.
+    cost_min_ratio: f64,
 
     // ========================================================================
     // STATES:
@@ -162,31 +171,64 @@ struct SkipAggregationProbe {
     /// * if greater than zero, the number of rows which were output directly
     ///   without aggregation
     skipped_aggregation_rows: metrics::Count,
+    /// Operator-wide `elapsed_compute` metric. Cloned from
+    /// `BaselineMetrics` so the probe can read the accumulated nanoseconds
+    /// at decision time and infer the wall time spent on partial
+    /// aggregation so far (used by the cost-aware rule).
+    elapsed_compute: metrics::Time,
+    /// `elapsed_compute.value()` snapshot at probe construction. Diff
+    /// against the live value gives wall time elapsed since the stream
+    /// started — a close approximation of partial aggregation cost,
+    /// since `elapsed_compute` covers exactly the timed work blocks in
+    /// the partial-mode loop.
+    elapsed_compute_at_probe_start: usize,
 }
 
 impl SkipAggregationProbe {
     fn new(
         probe_rows_threshold: usize,
         probe_ratio_threshold: f64,
+        use_cost_model: bool,
+        cost_ns_per_row_threshold: u64,
+        cost_min_ratio: f64,
         skipped_aggregation_rows: metrics::Count,
+        elapsed_compute: metrics::Time,
     ) -> Self {
+        let elapsed_compute_at_probe_start = elapsed_compute.value();
         Self {
             input_rows: 0,
             num_groups: 0,
             probe_rows_threshold,
             probe_ratio_threshold,
+            use_cost_model,
+            cost_ns_per_row_threshold,
+            cost_min_ratio,
             should_skip: false,
             is_locked: false,
             skipped_aggregation_rows,
+            elapsed_compute,
+            elapsed_compute_at_probe_start,
         }
     }
 
     /// Updates `SkipAggregationProbe` state:
     /// - increments the number of input rows
     /// - replaces the number of groups with the new value
-    /// - on `probe_rows_threshold` exceeded calculates
-    ///   aggregation ratio and sets `should_skip` flag
+    /// - on `probe_rows_threshold` exceeded applies the skip-decision rules
+    ///   (fixed ratio threshold, plus the optional cost-aware rule)
     /// - if `should_skip` is set, locks further state updates
+    ///
+    /// Two skip rules are evaluated, in order:
+    ///
+    /// 1. **Fixed ratio**: `num_groups / input_rows >= probe_ratio_threshold`
+    ///    — the original behaviour, preserved for backwards compatibility.
+    /// 2. **Cost-aware** (opt-in via `use_cost_model`): when the ratio is
+    ///    above `cost_min_ratio` *and* the measured per-row wall time of
+    ///    the operator exceeds `cost_ns_per_row_threshold`, skip even if
+    ///    the ratio is below `probe_ratio_threshold`. This catches the
+    ///    case where partial aggregation is net-negative due to high
+    ///    per-row cost (heavy variable-length keys, expensive aggregates)
+    ///    rather than poor reduction alone.
     fn update_state(&mut self, input_rows: usize, num_groups: usize) {
         if self.is_locked {
             return;
@@ -194,11 +236,33 @@ impl SkipAggregationProbe {
         self.input_rows += input_rows;
         self.num_groups = num_groups;
         if self.input_rows >= self.probe_rows_threshold {
-            self.should_skip = self.num_groups as f64 / self.input_rows as f64
-                >= self.probe_ratio_threshold;
-            // Set is_locked to true only if we have decided to skip, otherwise we can try to skip
-            // during processing the next record_batch.
-            self.is_locked = self.should_skip;
+            let ratio = self.num_groups as f64 / self.input_rows as f64;
+
+            // Rule 1: fixed-ratio skip (existing behaviour).
+            if ratio >= self.probe_ratio_threshold {
+                self.should_skip = true;
+                self.is_locked = true;
+                return;
+            }
+
+            // Rule 2 (opt-in): cost-aware skip for the medium-ratio,
+            // high-per-row-cost band.
+            if self.use_cost_model && ratio >= self.cost_min_ratio {
+                let elapsed_ns = self
+                    .elapsed_compute
+                    .value()
+                    .saturating_sub(self.elapsed_compute_at_probe_start);
+                let ns_per_row = (elapsed_ns as u64)
+                    .checked_div(self.input_rows as u64)
+                    .unwrap_or(0);
+                if ns_per_row > self.cost_ns_per_row_threshold {
+                    self.should_skip = true;
+                    self.is_locked = true;
+                }
+            }
+
+            // No rule fired — leave `is_locked` false so the next batch
+            // can re-evaluate.
         }
     }
 
@@ -644,13 +708,21 @@ impl GroupedHashAggregateStream {
                 options.skip_partial_aggregation_probe_rows_threshold;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
+            let use_cost_model = options.skip_partial_aggregation_use_cost_model;
+            let cost_ns_per_row_threshold =
+                options.skip_partial_aggregation_cost_ns_per_row;
+            let cost_min_ratio = options.skip_partial_aggregation_cost_min_ratio;
             let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
                 .with_category(MetricCategory::Rows)
                 .counter("skipped_aggregation_rows", partition);
             Some(SkipAggregationProbe::new(
                 probe_rows_threshold,
                 probe_ratio_threshold,
+                use_cost_model,
+                cost_ns_per_row_threshold,
+                cost_min_ratio,
                 skipped_aggregation_rows,
+                baseline_metrics.elapsed_compute().clone(),
             ))
         } else {
             None
@@ -1481,6 +1553,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {
@@ -1816,5 +1889,107 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    // ---------------- SkipAggregationProbe unit tests ----------------
+
+    /// Build a probe with the given configuration. Skip-count metric is
+    /// disconnected (a fresh `Count`) and `elapsed_compute` is a fresh
+    /// `Time` that the test can drive with `add_duration`.
+    fn make_probe(
+        probe_rows_threshold: usize,
+        probe_ratio_threshold: f64,
+        use_cost_model: bool,
+        cost_ns_per_row_threshold: u64,
+        cost_min_ratio: f64,
+    ) -> (SkipAggregationProbe, metrics::Time) {
+        let elapsed_compute = metrics::Time::new();
+        let probe = SkipAggregationProbe::new(
+            probe_rows_threshold,
+            probe_ratio_threshold,
+            use_cost_model,
+            cost_ns_per_row_threshold,
+            cost_min_ratio,
+            metrics::Count::new(),
+            elapsed_compute.clone(),
+        );
+        (probe, elapsed_compute)
+    }
+
+    /// With the cost model off, the behaviour is exactly the legacy bare
+    /// ratio check.
+    #[test]
+    fn skip_probe_cost_model_off_matches_legacy_ratio_check() {
+        let (mut probe, _t) = make_probe(100, 0.8, false, 1000, 0.3);
+
+        // 100 rows / 50 groups → ratio 0.5, below 0.8 → don't skip
+        probe.update_state(100, 50);
+        assert!(!probe.should_skip());
+        assert!(!probe.is_locked);
+
+        // Next window: another 100 rows, total 200 / 170 groups → ratio
+        // 0.85, above 0.8 → skip.
+        probe.update_state(100, 170);
+        assert!(probe.should_skip());
+        assert!(probe.is_locked);
+    }
+
+    /// With the cost model on, a high-cost slow query in the medium-ratio
+    /// band (0.3 ≤ ratio < 0.8) gets skipped — the ClickBench Q18 case.
+    #[test]
+    fn skip_probe_cost_model_fires_in_medium_ratio_high_cost_band() {
+        let (mut probe, elapsed) = make_probe(100, 0.8, true, 1000, 0.3);
+
+        // 200_000 ns over 100 rows → 2_000 ns/row → above the 1_000
+        // threshold. Ratio 0.5 sits in the medium band.
+        elapsed.add_duration(Duration::from_nanos(200_000));
+        probe.update_state(100, 50);
+
+        assert!(probe.should_skip());
+        assert!(probe.is_locked);
+    }
+
+    /// Cost model on, ratio below `cost_min_ratio`: the partial agg is
+    /// genuinely reducing a lot (small / cheap output), so we keep it
+    /// regardless of per-row cost.
+    #[test]
+    fn skip_probe_cost_model_does_not_fire_below_min_ratio() {
+        let (mut probe, elapsed) = make_probe(100, 0.8, true, 1000, 0.3);
+
+        // Very expensive — 5_000 ns/row — but ratio is 0.2 (huge
+        // reduction), so partial agg is still net-positive.
+        elapsed.add_duration(Duration::from_nanos(500_000));
+        probe.update_state(100, 20);
+
+        assert!(!probe.should_skip());
+        assert!(!probe.is_locked);
+    }
+
+    /// Cost model on but per-row cost is below threshold: ratio alone
+    /// doesn't justify skipping → keep aggregating.
+    #[test]
+    fn skip_probe_cost_model_does_not_fire_when_cheap_per_row() {
+        let (mut probe, elapsed) = make_probe(100, 0.8, true, 1000, 0.3);
+
+        // 50_000 ns over 100 rows → 500 ns/row → below the 1_000 ns
+        // threshold. Ratio 0.5 alone is below the fixed 0.8 cut-off.
+        elapsed.add_duration(Duration::from_nanos(50_000));
+        probe.update_state(100, 50);
+
+        assert!(!probe.should_skip());
+        assert!(!probe.is_locked);
+    }
+
+    /// Cost model on still honours the original high-ratio rule: ratio
+    /// >= `probe_ratio_threshold` skips regardless of cost.
+    #[test]
+    fn skip_probe_cost_model_still_honours_high_ratio_rule() {
+        let (mut probe, _t) = make_probe(100, 0.8, true, 1000, 0.3);
+
+        // Ratio 0.9, no measured cost → skip via the fixed rule.
+        probe.update_state(100, 90);
+
+        assert!(probe.should_skip());
+        assert!(probe.is_locked);
     }
 }

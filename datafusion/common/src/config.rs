@@ -648,6 +648,30 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
+        /// (experimental) When true, augment the fixed
+        /// `skip_partial_aggregation_probe_ratio_threshold` check with a
+        /// cost-aware rule: skip partial aggregation when the measured
+        /// per-row wall time exceeds
+        /// `skip_partial_aggregation_cost_ns_per_row` even at ratios below
+        /// the fixed threshold (provided the ratio is at least
+        /// `skip_partial_aggregation_cost_min_ratio`). Targets ClickBench
+        /// Q18-shape queries where the ratio (~0.56) is below 0.8 but
+        /// partial aggregation is net-negative due to heavy keys / aggs.
+        pub skip_partial_aggregation_use_cost_model: bool, default = false
+
+        /// Minimum measured per-row wall time (nanoseconds) of partial
+        /// aggregation for the cost-aware skip rule to fire. Only
+        /// consulted when `skip_partial_aggregation_use_cost_model` is
+        /// true.
+        pub skip_partial_aggregation_cost_ns_per_row: u64, default = 1000
+
+        /// Lower bound on aggregation ratio (num_groups / input_rows) for
+        /// the cost-aware skip rule to fire. Below this ratio partial
+        /// aggregation is considered valuable enough to keep regardless
+        /// of per-row cost. Only consulted when
+        /// `skip_partial_aggregation_use_cost_model` is true.
+        pub skip_partial_aggregation_cost_min_ratio: f64, default = 0.3
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.
