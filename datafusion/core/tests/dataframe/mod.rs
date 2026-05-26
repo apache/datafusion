@@ -3345,7 +3345,11 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
 
     // To be able to remove user specific paths from the plan, for stable assertions
     let testdata_clean = Path::new(&testdata).canonicalize()?.display().to_string();
-    let testdata_clean = testdata_clean.strip_prefix("/").unwrap_or(&testdata_clean);
+    let testdata_clean = testdata_clean.replace("\\", "/");
+    let testdata_clean = testdata_clean
+        .strip_prefix("//?/")
+        .or_else(|| testdata_clean.strip_prefix("/"))
+        .unwrap_or(&testdata_clean);
 
     // Use displayable() rather than explain().collect() to avoid table formatting issues. We need
     // to replace machine-specific paths with variable lengths, which breaks table alignment and

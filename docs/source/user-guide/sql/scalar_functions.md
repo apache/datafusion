@@ -3287,6 +3287,7 @@ _Alias of [current_date](#current_date)._
 - [array_replace_n](#array_replace_n)
 - [array_resize](#array_resize)
 - [array_reverse](#array_reverse)
+- [array_scale](#array_scale)
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
 - [array_to_string](#array_to_string)
@@ -3343,6 +3344,7 @@ _Alias of [current_date](#current_date)._
 - [list_replace_n](#list_replace_n)
 - [list_resize](#list_resize)
 - [list_reverse](#list_reverse)
+- [list_scale](#list_scale)
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
 - [list_to_string](#list_to_string)
@@ -4424,6 +4426,34 @@ array_reverse(array)
 
 - list_reverse
 
+### `array_scale`
+
+Returns a new array with each element of the input array multiplied by a scalar value, computed as `array[i] * scalar`. Returns NULL if the input row is NULL or the scalar is NULL. If a NULL element appears in the input array at position `i`, the result element at position `i` is NULL. Returns an empty array for an empty input array.
+
+```sql
+array_scale(array, scalar)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **scalar**: Numeric scalar to multiply each element by. Can be a constant or column expression.
+
+#### Example
+
+```sql
+> select array_scale([1.0, 2.0, 3.0], 2.0);
++----------------------------------+
+| array_scale(List([1.0,2.0,3.0]),Float64(2.0)) |
++----------------------------------+
+| [2.0, 4.0, 6.0]                  |
++----------------------------------+
+```
+
+#### Aliases
+
+- list_scale
+
 ### `array_slice`
 
 Returns a slice of the array based on 1-indexed start and end positions.
@@ -4942,6 +4972,10 @@ _Alias of [array_resize](#array_resize)._
 ### `list_reverse`
 
 _Alias of [array_reverse](#array_reverse)._
+
+### `list_scale`
+
+_Alias of [array_scale](#array_scale)._
 
 ### `list_slice`
 

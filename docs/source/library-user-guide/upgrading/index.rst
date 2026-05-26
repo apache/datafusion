@@ -21,6 +21,7 @@ Upgrade Guides
 .. toctree::
    :maxdepth: 1
 
+   DataFusion 55.0.0 <55.0.0>
    DataFusion 54.0.0 <54.0.0>
    DataFusion 53.0.0 <53.0.0>
    DataFusion 52.0.0 <52.0.0>

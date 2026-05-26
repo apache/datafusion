@@ -4055,6 +4055,24 @@ mod test {
     }
 
     #[test]
+    fn format_decimal_literal() {
+        let expr = lit(ScalarValue::Decimal128(Some(1), 1, 1));
+        assert_eq!("Decimal128(0.1,1,1)", format!("{expr}"));
+        assert_eq!("Decimal128(0.1,1,1)", expr.schema_name().to_string());
+        assert_eq!("0.1", expr.human_display().to_string());
+
+        let expr = lit(ScalarValue::Decimal128(Some(120), 3, 2));
+        assert_eq!("Decimal128(1.20,3,2)", format!("{expr}"));
+        assert_eq!("Decimal128(1.20,3,2)", expr.schema_name().to_string());
+        assert_eq!("1.20", expr.human_display().to_string());
+
+        let null_expr = lit(ScalarValue::Decimal128(None, 10, 2));
+        assert_eq!("Decimal128(NULL,10,2)", format!("{null_expr}"));
+        assert_eq!("Decimal128(NULL,10,2)", null_expr.schema_name().to_string());
+        assert_eq!("NULL", null_expr.human_display().to_string());
+    }
+
+    #[test]
     fn test_partial_ord() {
         // Test validates that partial ord is defined for Expr, not
         // intended to exhaustively test all possibilities
