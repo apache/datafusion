@@ -63,10 +63,12 @@ impl ScalarSubqueryToJoin {
         &self,
         predicate: &Expr,
         alias_gen: &Arc<AliasGenerator>,
+        physical_uncorrelated: bool,
     ) -> Result<(Vec<(Subquery, String)>, Expr)> {
         let mut extract = ExtractScalarSubQuery {
             sub_query_info: vec![],
             alias_gen,
+            physical_uncorrelated,
         };
         predicate
             .clone()
@@ -88,15 +90,23 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
+                let physical_uncorrelated = config
+                    .options()
+                    .optimizer
+                    .physical_uncorrelated_scalar_subquery;
                 // Optimization: skip the rest of the rule and its copies if
-                // there are no scalar subqueries
-                if !contains_correlated_scalar_subquery(&filter.predicate) {
+                // there are no scalar subqueries this rule should rewrite
+                if !contains_scalar_subquery_to_rewrite(
+                    &filter.predicate,
+                    physical_uncorrelated,
+                ) {
                     return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                 }
 
                 let (subqueries, mut rewrite_expr) = self.extract_subquery_exprs(
                     &filter.predicate,
                     config.alias_generator(),
+                    physical_uncorrelated,
                 )?;
 
                 assert_or_internal_err!(
@@ -141,13 +151,15 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 Ok(Transformed::yes(new_plan))
             }
             LogicalPlan::Projection(projection) => {
+                let physical_uncorrelated = config
+                    .options()
+                    .optimizer
+                    .physical_uncorrelated_scalar_subquery;
                 // Optimization: skip the rest of the rule and its copies if there
-                // are no correlated scalar subqueries
-                if !projection
-                    .expr
-                    .iter()
-                    .any(contains_correlated_scalar_subquery)
-                {
+                // are no scalar subqueries this rule should rewrite
+                if !projection.expr.iter().any(|expr| {
+                    contains_scalar_subquery_to_rewrite(expr, physical_uncorrelated)
+                }) {
                     return Ok(Transformed::no(LogicalPlan::Projection(projection)));
                 }
 
@@ -156,8 +168,11 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let mut rewrite_exprs: Vec<Expr> =
                     Vec::with_capacity(projection.expr.len());
                 for (idx, expr) in projection.expr.iter().enumerate() {
-                    let (subqueries, rewrite_expr) =
-                        self.extract_subquery_exprs(expr, config.alias_generator())?;
+                    let (subqueries, rewrite_expr) = self.extract_subquery_exprs(
+                        expr,
+                        config.alias_generator(),
+                        physical_uncorrelated,
+                    )?;
                     for (_, alias) in &subqueries {
                         alias_to_index.insert(alias.clone(), idx);
                     }
@@ -228,12 +243,20 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     }
 }
 
-/// Returns true if the expression contains a correlated scalar subquery, false
-/// otherwise.  Uncorrelated scalar subqueries are handled by the physical
-/// planner via `ScalarSubqueryExec` and do not need to be converted to joins.
-fn contains_correlated_scalar_subquery(expr: &Expr) -> bool {
+/// Returns true if the expression contains a scalar subquery that this rule
+/// should rewrite to a join.
+///
+/// When `physical_uncorrelated_scalar_subquery` is true (the default) only
+/// correlated scalar subqueries are rewritten — uncorrelated ones are handled
+/// by the physical planner via `ScalarSubqueryExec`. When it is false, all
+/// scalar subqueries (correlated and uncorrelated) are rewritten.
+fn contains_scalar_subquery_to_rewrite(expr: &Expr, physical_uncorrelated: bool) -> bool {
     expr.exists(|expr| {
-        Ok(matches!(expr, Expr::ScalarSubquery(sq) if !sq.outer_ref_columns.is_empty()))
+        Ok(matches!(
+            expr,
+            Expr::ScalarSubquery(sq)
+                if !physical_uncorrelated || !sq.outer_ref_columns.is_empty()
+        ))
     })
     .expect("Inner is always Ok")
 }
@@ -241,6 +264,7 @@ fn contains_correlated_scalar_subquery(expr: &Expr) -> bool {
 struct ExtractScalarSubQuery<'a> {
     sub_query_info: Vec<(Subquery, String)>,
     alias_gen: &'a Arc<AliasGenerator>,
+    physical_uncorrelated: bool,
 }
 
 impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
@@ -248,9 +272,13 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match expr {
-            // Skip uncorrelated scalar subqueries
+            // Match scalar subqueries this rule should rewrite to a join. When
+            // `physical_uncorrelated` is true, only correlated subqueries are
+            // rewritten — uncorrelated ones are handled later by the physical
+            // planner. When false, both are rewritten.
             Expr::ScalarSubquery(ref subquery)
-                if !subquery.outer_ref_columns.is_empty() =>
+                if !self.physical_uncorrelated
+                    || !subquery.outer_ref_columns.is_empty() =>
             {
                 let subquery = subquery.clone();
                 let scalar_expr = subquery
@@ -308,10 +336,9 @@ fn build_join(
     outer_input: &LogicalPlan,
     subquery_alias: &str,
 ) -> Result<Option<(LogicalPlan, HashMap<Column, Expr>)>> {
-    assert_or_internal_err!(
-        !subquery.outer_ref_columns.is_empty(),
-        "build_join should only be called for correlated subqueries"
-    );
+    // `build_join` also handles uncorrelated scalar subqueries (as a left
+    // join with `Boolean(true)`) when the
+    // `physical_uncorrelated_scalar_subquery` option is disabled.
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let decorrelated_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
@@ -1158,5 +1185,56 @@ mod tests {
             TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
         )
+    }
+
+    /// When `physical_uncorrelated_scalar_subquery` is disabled, uncorrelated
+    /// scalar subqueries are rewritten to left joins by this rule (the
+    /// pre-DataFusion 54 behavior), instead of being left in the plan for
+    /// `ScalarSubqueryExec` to execute.
+    #[test]
+    fn uncorrelated_scalar_subquery_rewritten_when_flag_off() -> Result<()> {
+        use datafusion_common::config::ConfigOptions;
+
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+                .project(vec![max(col("orders.o_custkey"))])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        let mut options = ConfigOptions::default();
+        options.optimizer.filter_null_join_keys = true;
+        options.optimizer.physical_uncorrelated_scalar_subquery = false;
+        let context = crate::OptimizerContext::new_with_config_options(Arc::new(options));
+
+        let rule: Arc<dyn OptimizerRule + Send + Sync> =
+            Arc::new(ScalarSubqueryToJoin::new());
+        let optimizer = crate::Optimizer::with_rules(vec![rule]);
+        let optimized_plan = optimizer
+            .optimize(plan, &context, |_, _| {})
+            .expect("failed to optimize plan");
+        let formatted_plan = optimized_plan.display_indent_schema();
+
+        insta::assert_snapshot!(
+            formatted_plan,
+            @r"
+        Projection: customer.c_custkey [c_custkey:Int64]
+          Projection: customer.c_custkey, customer.c_name [c_custkey:Int64, c_name:Utf8]
+            Filter: customer.c_custkey = __scalar_sq_1.max(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]
+              Left Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]
+                TableScan: customer [c_custkey:Int64, c_name:Utf8]
+                SubqueryAlias: __scalar_sq_1 [max(orders.o_custkey):Int64;N]
+                  Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]
+                    Aggregate: groupBy=[[]], aggr=[[max(orders.o_custkey)]] [max(orders.o_custkey):Int64;N]
+                      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        );
+
+        Ok(())
     }
 }
