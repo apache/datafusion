@@ -2796,7 +2796,7 @@ pub struct TableScan {
     pub fetch: Option<usize>,
     /// Statistics the planner would like the provider to answer for this
     /// scan, typically attached by a custom optimizer rule from the
-    /// surrounding plan (e.g. Min/Max for sort keys). 
+    /// surrounding plan (e.g. Min/Max for sort keys).
     ///
     /// A [`BTreeSet`], not a `Vec` to keep the resulting plan deterministic.
     pub statistics_requests: BTreeSet<StatisticsRequest>,
