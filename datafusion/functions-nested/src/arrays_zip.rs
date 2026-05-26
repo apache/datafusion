@@ -377,15 +377,16 @@ fn try_perfect_list_zip(
     // Reusing the child arrays is only valid when every list uses the exact
     // same row boundaries and exposes the same total number of child values.
     for arr in &list_arrays {
-        if arr.len() != num_rows
-            || arr.values().len() != values_len
-            || arr.offsets() != &offsets
-        {
+        if arr.values().len() != values_len || arr.offsets() != &offsets {
             return Ok(None);
         }
     }
 
     let nulls = if list_arrays.iter().any(|arr| arr.null_count() != 0) {
+        // Match the general path: arrays_zip only marks an output row null
+        // when every concrete input list is null. Mixed null and non-null
+        // empty lists still produce a non-null empty list, so this cannot use
+        // NullBuffer::union_many, which would make rows null if any input is.
         let mut null_builder = NullBufferBuilder::new(num_rows);
         for row_idx in 0..num_rows {
             let mut all_null = true;
@@ -531,6 +532,26 @@ mod tests {
 
         assert!(result.offsets().ptr_eq(left.offsets()));
         assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn perfect_zip_preserves_mixed_null_empty_rows() {
+        let left =
+            list_with_validity(vec![], vec![0, 0, 0, 0], Some(vec![false, true, false]));
+        let right =
+            list_with_validity(vec![], vec![0, 0, 0, 0], Some(vec![true, false, false]));
+
+        let result = arrays_zip_inner(&[
+            Arc::clone(&left) as ArrayRef,
+            Arc::clone(&right) as ArrayRef,
+        ])
+        .unwrap();
+        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+
+        assert!(result.offsets().ptr_eq(left.offsets()));
+        assert!(!result.is_null(0));
+        assert!(!result.is_null(1));
+        assert!(result.is_null(2));
     }
 
     #[test]
