@@ -62,7 +62,8 @@ use datafusion_proto::bytes::{
 use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
-    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
+    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalPlanNodeExt,
+    PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
 use datafusion_proto::protobuf::{
@@ -275,6 +276,7 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Try to parse as our extension payload
         if let Ok(payload) = serde_json::from_slice::<ExtensionPayload>(buf)
@@ -303,6 +305,7 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
         &self,
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         // We don't need this for the example - adapter wrapping happens in
         // `execution_plan_to_proto` instead.

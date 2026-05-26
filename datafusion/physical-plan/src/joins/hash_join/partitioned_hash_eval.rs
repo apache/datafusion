@@ -215,7 +215,6 @@ pub struct HashTableLookupExpr {
     /// Description for display
     description: String,
 }
-
 impl HashTableLookupExpr {
     /// Create a new HashTableLookupExpr
     ///
@@ -241,7 +240,6 @@ impl HashTableLookupExpr {
         }
     }
 }
-
 impl std::fmt::Debug for HashTableLookupExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cols = self
@@ -337,7 +335,38 @@ impl PhysicalExpr for HashTableLookupExpr {
             }
         }
     }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+        use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 
+        // HashTableLookupExpr holds a runtime Arc<Map> (the build-side hash
+        // table) that cannot be serialized, so it is replaced with lit(true).
+        //
+        // Dynamic filtering is a performance optimisation only — replacing the
+        // lookup with lit(true) preserves correctness by allowing all rows
+        // through.
+        //
+        // If a plan is serialized before execution, HashTableLookupExpr is not
+        // yet present in the dynamic filter expression.
+        //
+        // If a plan is serialized after execution, any runtime-created
+        // HashTableLookupExpr is replaced during serialization. Re-executing
+        // the plan requires reset_state(), after which HashJoinExec rebuilds
+        // fresh dynamic filters at runtime.
+        let value = datafusion_proto_common::ScalarValue {
+            value: Some(datafusion_proto_common::scalar_value::Value::BoolValue(
+                true,
+            )),
+        };
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(ExprType::Literal(value)),
+        }))
+    }
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
     }
