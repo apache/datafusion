@@ -5343,6 +5343,35 @@ macro_rules! format_option {
     }};
 }
 
+macro_rules! format_decimal {
+    ($F:expr, $TYPE:ty, $VALUE:expr, $PRECISION:expr, $SCALE:expr) => {{
+        match $VALUE {
+            Some(value) => write!(
+                $F,
+                "{}",
+                <$TYPE>::format_decimal(*value, *$PRECISION, *$SCALE)
+            ),
+            None => write!($F, "NULL"),
+        }
+    }};
+}
+
+macro_rules! format_decimal_debug {
+    ($F:expr, $TYPE_NAME:literal, $TYPE:ty, $VALUE:expr, $PRECISION:expr, $SCALE:expr) => {{
+        match $VALUE {
+            Some(value) => write!(
+                $F,
+                "{}({},{},{})",
+                $TYPE_NAME,
+                <$TYPE>::format_decimal(*value, *$PRECISION, *$SCALE),
+                $PRECISION,
+                $SCALE
+            ),
+            None => write!($F, "{}(NULL,{},{})", $TYPE_NAME, $PRECISION, $SCALE),
+        }
+    }};
+}
+
 // Implement Display trait for ScalarValue
 //
 // # Panics
@@ -5352,16 +5381,16 @@ impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal32(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal32Type, v, p, s)?
             }
             ScalarValue::Decimal64(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal64Type, v, p, s)?
             }
             ScalarValue::Decimal128(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal128Type, v, p, s)?
             }
             ScalarValue::Decimal256(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal256Type, v, p, s)?
             }
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float16(e) => format_option!(f, e)?,
@@ -5535,8 +5564,9 @@ fn fmt_list(arr: &dyn Array, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{value_formatter}")
 }
 
-/// writes a byte array to formatter. `[1, 2, 3]` ==> `"1,2,3"`
-fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
+/// Writes a byte array for ScalarValue Debug formatting.
+/// `[1, 2, 3]` -> `"1,2,3"`
+fn fmt_binary_debug(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
     let mut iter = data.iter();
     if let Some(b) = iter.next() {
         write!(f, "{b}")?;
@@ -5550,10 +5580,46 @@ fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
 impl fmt::Debug for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ScalarValue::Decimal32(_, _, _) => write!(f, "Decimal32({self})"),
-            ScalarValue::Decimal64(_, _, _) => write!(f, "Decimal64({self})"),
-            ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({self})"),
-            ScalarValue::Decimal256(_, _, _) => write!(f, "Decimal256({self})"),
+            ScalarValue::Decimal32(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal32",
+                    Decimal32Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
+            ScalarValue::Decimal64(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal64",
+                    Decimal64Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
+            ScalarValue::Decimal128(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal128",
+                    Decimal128Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
+            ScalarValue::Decimal256(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal256",
+                    Decimal256Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
             ScalarValue::Boolean(_) => write!(f, "Boolean({self})"),
             ScalarValue::Float16(_) => write!(f, "Float16({self})"),
             ScalarValue::Float32(_) => write!(f, "Float32({self})"),
@@ -5587,13 +5653,13 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::Binary(None) => write!(f, "Binary({self})"),
             ScalarValue::Binary(Some(b)) => {
                 write!(f, "Binary(\"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::BinaryView(None) => write!(f, "BinaryView({self})"),
             ScalarValue::BinaryView(Some(b)) => {
                 write!(f, "BinaryView(\"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::FixedSizeBinary(size, None) => {
@@ -5601,13 +5667,13 @@ impl fmt::Debug for ScalarValue {
             }
             ScalarValue::FixedSizeBinary(size, Some(b)) => {
                 write!(f, "FixedSizeBinary({size}, \"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({self})"),
             ScalarValue::LargeBinary(Some(b)) => {
                 write!(f, "LargeBinary(\"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::FixedSizeList(_) => write!(f, "FixedSizeList({self})"),
@@ -9598,6 +9664,36 @@ mod tests {
             format!("{}", ScalarValue::Date64(Some(-790179464505600000))),
             ""
         );
+    }
+
+    #[test]
+    fn test_decimal_display_and_debug() {
+        let decimal32 = ScalarValue::Decimal32(Some(123), 3, 2);
+        assert_eq!(decimal32.to_string(), "1.23");
+        assert_eq!(format!("{decimal32:?}"), "Decimal32(1.23,3,2)");
+
+        let decimal64 = ScalarValue::Decimal64(Some(-12345), 5, 3);
+        assert_eq!(decimal64.to_string(), "-12.345");
+        assert_eq!(format!("{decimal64:?}"), "Decimal64(-12.345,5,3)");
+
+        let decimal128 = ScalarValue::Decimal128(Some(1), 1, 1);
+        assert_eq!(decimal128.to_string(), "0.1");
+        assert_eq!(format!("{decimal128:?}"), "Decimal128(0.1,1,1)");
+
+        let decimal128_trailing_zero = ScalarValue::Decimal128(Some(120), 3, 2);
+        assert_eq!(decimal128_trailing_zero.to_string(), "1.20");
+        assert_eq!(
+            format!("{decimal128_trailing_zero:?}"),
+            "Decimal128(1.20,3,2)"
+        );
+
+        let decimal256 = ScalarValue::Decimal256(Some(i256::from(100123)), 28, 3);
+        assert_eq!(decimal256.to_string(), "100.123");
+        assert_eq!(format!("{decimal256:?}"), "Decimal256(100.123,28,3)");
+
+        let null_decimal = ScalarValue::Decimal128(None, 10, 2);
+        assert_eq!(null_decimal.to_string(), "NULL");
+        assert_eq!(format!("{null_decimal:?}"), "Decimal128(NULL,10,2)");
     }
 
     #[test]
