@@ -902,9 +902,7 @@ mod tests {
 
     use crate::datetime::date_bin::{DateBinFunc, date_bin_nanos_interval};
     use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::{
-        Array, IntervalDayTimeArray, TimestampNanosecondArray,
-    };
+    use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 
