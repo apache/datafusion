@@ -470,8 +470,10 @@ impl<'a> ScanArgs<'a> {
         self.limit
     }
 
-    /// Set the statistics the caller would like the provider to answer for
-    /// this scan, if it can do so cheaply.
+    /// Specifies the statistics the caller may use when optimizing the query.
+    ///
+    /// This is intended for to allow the provider to cheaply provide statistics that may help
+    /// such as those it has in an in memory catalog or from some other metadata source. 
     ///
     /// Providers read these via [`Self::statistics_requests()`]; anything a
     /// provider cannot answer cheaply it simply ignores. DataFusion's own
@@ -487,6 +489,8 @@ impl<'a> ScanArgs<'a> {
     }
 
     /// Get the statistics requests for the scan. Empty if none were set.
+    ///
+    /// See [`Self::with_statistics_requests`] for more details
     pub fn statistics_requests(&self) -> &'a [StatisticsRequest] {
         self.statistics_requests
     }
