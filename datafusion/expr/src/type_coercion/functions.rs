@@ -158,9 +158,9 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
 /// argument must be coerced to match `signature`.
 /// For lambda arguments, returns a clone of the associated data
 ///
-/// Note this does not invokes [HigherOrderUDF::coerce_values_for_lambdas]
-/// if requested by the function signature. If that's required, use
-/// [value_fields_with_higher_order_udf_and_lambdas] instead
+/// Note this does not invokes [HigherOrderUDF::coerce_values_for_lambdas].
+/// If that's required, use [value_fields_with_higher_order_udf_and_lambdas]
+/// instead
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
@@ -307,8 +307,8 @@ pub fn value_fields_with_higher_order_udf<L: Clone>(
 
 /// Performs type coercion for higher order function arguments,
 /// including those defined by [HigherOrderUDF::coerce_values_for_lambdas],
-/// if defined by the signature. Note that compared to
-/// [value_fields_with_higher_order_udf], this function requires
+/// if it returns `Some(...)` instead of the default `None`. Note that
+/// compared to [value_fields_with_higher_order_udf], this function requires
 /// the [ValueOrLambda::Lambda] variant to contain the output field of the lambda.
 ///
 /// For value arguments, returns the field to which each
@@ -323,16 +323,16 @@ pub fn value_fields_with_higher_order_udf_and_lambdas(
 ) -> Result<Vec<ValueOrLambda<FieldRef, FieldRef>>> {
     let mut new_fields = value_fields_with_higher_order_udf(current_fields, func)?;
 
-    if func.signature().coerce_values_for_lambdas {
-        let new_types = new_fields
-            .iter()
-            .map(|f| match f {
-                ValueOrLambda::Value(f) => ValueOrLambda::Value(f.data_type().clone()),
-                ValueOrLambda::Lambda(f) => ValueOrLambda::Lambda(f.data_type().clone()),
-            })
-            .collect::<Vec<_>>();
+    let new_types = new_fields
+        .iter()
+        .map(|f| match f {
+            ValueOrLambda::Value(f) => ValueOrLambda::Value(f.data_type().clone()),
+            ValueOrLambda::Lambda(f) => ValueOrLambda::Lambda(f.data_type().clone()),
+        })
+        .collect::<Vec<_>>();
 
-        let mut new_value_types = func.coerce_values_for_lambdas(&new_types)?.into_iter();
+    if let Some(new_value_types) = func.coerce_values_for_lambdas(&new_types)? {
+        let mut new_value_types = new_value_types.into_iter();
 
         let value_types_count = new_types
             .iter()
@@ -1923,7 +1923,7 @@ mod tests {
         fn coerce_values_for_lambdas(
             &self,
             fields: &[ValueOrLambda<DataType, DataType>],
-        ) -> Result<Vec<DataType>> {
+        ) -> Result<Option<Vec<DataType>>> {
             // thoerical impl of array_reduce without finish
             let [
                 ValueOrLambda::Value(list),
@@ -1934,7 +1934,7 @@ mod tests {
                 unreachable!()
             };
 
-            Ok(vec![list.clone(), merge.clone()])
+            Ok(Some(vec![list.clone(), merge.clone()]))
         }
 
         fn lambda_parameters(
@@ -1997,8 +1997,7 @@ mod tests {
     #[test]
     fn test_higher_order_function_coerce_values_for_lambdas() {
         let fun = MockHigherOrderUDF {
-            signature: HigherOrderSignature::variadic_any(Volatility::Immutable)
-                .with_coerce_values_for_lambdas(),
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
             coerced_value_types: vec![],
         };
 

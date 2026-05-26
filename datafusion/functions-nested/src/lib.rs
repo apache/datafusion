@@ -41,8 +41,13 @@ pub mod macros;
 pub mod macros_lambda;
 
 pub mod array_any_match;
+pub(crate) mod lambda_utils;
+
 pub mod array_compact;
+pub mod array_filter;
 pub mod array_has;
+pub mod array_normalize;
+pub mod array_scale;
 pub mod array_transform;
 pub mod arrays_zip;
 pub mod cardinality;
@@ -87,9 +92,12 @@ use std::sync::Arc;
 pub mod expr_fn {
     pub use super::array_any_match::array_any_match;
     pub use super::array_compact::array_compact;
+    pub use super::array_filter::array_filter;
     pub use super::array_has::array_has;
     pub use super::array_has::array_has_all;
     pub use super::array_has::array_has_any;
+    pub use super::array_normalize::array_normalize;
+    pub use super::array_scale::array_scale;
     pub use super::array_transform::array_transform;
     pub use super::arrays_zip::arrays_zip;
     pub use super::cardinality::cardinality;
@@ -164,6 +172,8 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         array_has::array_has_any_udf(),
         empty::array_empty_udf(),
         length::array_length_udf(),
+        array_normalize::array_normalize_udf(),
+        array_scale::array_scale_udf(),
         cosine_distance::cosine_distance_udf(),
         inner_product::inner_product_udf(),
         distance::array_distance_udf(),
@@ -197,6 +207,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
 pub fn all_default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
     vec![
         array_any_match::array_any_match_higher_order_function(),
+        array_filter::array_filter_higher_order_function(),
         array_transform::array_transform_higher_order_function(),
     ]
 }
