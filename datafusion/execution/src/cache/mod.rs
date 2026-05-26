@@ -16,7 +16,7 @@
 // under the License.
 
 pub mod cache_manager;
-pub mod cache_unit;
+pub mod file_statistics_cache;
 pub mod lru_queue;
 
 mod file_metadata_cache;

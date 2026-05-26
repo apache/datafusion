@@ -107,6 +107,19 @@ pub trait GroupColumn: Send + Sync {
     fn take_n(&mut self, n: usize) -> ArrayRef;
 }
 
+/// Splits `vec` at `n`, returning the first `n` elements and leaving the
+/// remainder in `vec`. Allocates for whichever portion is smaller to minimize
+/// peak memory: `drain+collect` when `n <= remaining`, `split_off+replace`
+/// when `remaining < n`.
+pub(super) fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
+    if n * 2 <= vec.len() {
+        vec.drain(0..n).collect()
+    } else {
+        let remaining = vec.split_off(n);
+        mem::replace(vec, remaining)
+    }
+}
+
 /// Determines if the nullability of the existing and new input array can be used
 /// to short-circuit the comparison of the two values.
 ///
@@ -212,7 +225,7 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// more general purpose [`GroupValuesRows`]. See the ticket for details:
     /// <https://github.com/apache/datafusion/pull/12269>
     ///
-    /// [`GroupValuesRows`]: crate::aggregates::group_values::row::GroupValuesRows
+    /// [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
     /// reused buffer to store hashes
@@ -509,7 +522,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .equal_to_group_indices
             .clear();
 
-        let mut group_values_len = self.group_values[0].len();
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self
                 .map
@@ -518,7 +530,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             let Some((_, group_index_view)) = entry else {
                 // 1. Bucket not found case
                 // Build `new inlined group index view`
-                let current_group_idx = group_values_len;
+                let current_group_idx = self.group_values[0].len()
+                    + self.vectorized_operation_buffers.append_row_indices.len();
                 let group_index_view =
                     GroupIndexView::new_inlined(current_group_idx as u64);
 
@@ -538,7 +551,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 // Set group index to row in `groups`
                 groups[row] = current_group_idx;
 
-                group_values_len += 1;
                 continue;
             };
 
@@ -1273,7 +1285,50 @@ mod tests {
         GroupValues, multi_group_by::GroupValuesColumn,
     };
 
-    use super::GroupIndexView;
+    use super::{GroupIndexView, split_vec_min_alloc};
+
+    #[test]
+    fn test_split_vec_min_alloc_drain_branch() {
+        // n * 2 <= len  →  drain+collect branch (allocates n elements)
+        let mut v = vec![1, 2, 3, 4, 5, 6];
+        let first = split_vec_min_alloc(&mut v, 2);
+        assert_eq!(first, vec![1, 2]);
+        assert_eq!(v, vec![3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_split_vec_min_alloc_split_off_branch() {
+        // remaining < n  →  split_off+replace branch (allocates remaining elements)
+        let mut v = vec![1, 2, 3, 4, 5, 6];
+        let first = split_vec_min_alloc(&mut v, 4);
+        assert_eq!(first, vec![1, 2, 3, 4]);
+        assert_eq!(v, vec![5, 6]);
+    }
+
+    #[test]
+    fn test_split_vec_min_alloc_exactly_half() {
+        // n * 2 == len  →  drain branch (boundary condition)
+        let mut v = vec![1, 2, 3, 4];
+        let first = split_vec_min_alloc(&mut v, 2);
+        assert_eq!(first, vec![1, 2]);
+        assert_eq!(v, vec![3, 4]);
+    }
+
+    #[test]
+    fn test_split_vec_min_alloc_take_all() {
+        let mut v = vec![1, 2, 3];
+        let first = split_vec_min_alloc(&mut v, 3);
+        assert_eq!(first, vec![1, 2, 3]);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn test_split_vec_min_alloc_take_none() {
+        let mut v = vec![1, 2, 3];
+        let first = split_vec_min_alloc(&mut v, 0);
+        assert!(first.is_empty());
+        assert_eq!(v, vec![1, 2, 3]);
+    }
 
     #[test]
     fn test_intern_for_vectorized_group_values() {

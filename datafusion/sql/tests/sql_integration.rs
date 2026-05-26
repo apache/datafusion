@@ -100,7 +100,7 @@ fn parse_decimals_3() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1),1,1)
+    Projection: Decimal128(0.1,1,1)
       EmptyRelation: rows=1
     "
     );
@@ -114,7 +114,7 @@ fn parse_decimals_4() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1),2,2)
+    Projection: Decimal128(0.01,2,2)
       EmptyRelation: rows=1
     "
     );
@@ -128,7 +128,7 @@ fn parse_decimals_5() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(10),2,1)
+    Projection: Decimal128(1.0,2,1)
       EmptyRelation: rows=1
     "
     );
@@ -142,7 +142,7 @@ fn parse_decimals_6() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1001),4,2)
+    Projection: Decimal128(10.01,4,2)
       EmptyRelation: rows=1
     "
     );
@@ -156,7 +156,7 @@ fn parse_decimals_7() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1000000000000000000000),22,2)
+    Projection: Decimal128(10000000000000000000.00,22,2)
       EmptyRelation: rows=1
     "
     );
@@ -184,7 +184,7 @@ fn parse_decimals_9() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(18446744073709551616),20,0)
+    Projection: Decimal128(18446744073709551616,20,0)
       EmptyRelation: rows=1
     "
     );
@@ -2058,6 +2058,16 @@ fn select_where_compound_identifiers() {
       Filter: public.aggregate_test_100.c3 > Float64(0.1)
         TableScan: public.aggregate_test_100
     "
+    );
+}
+
+#[test]
+fn select_unknown_deep_compound_identifier_returns_error() {
+    let err = logical_plan("SELECT a.b.c.d.e.f")
+        .expect_err("six-part compound identifier should be unsupported");
+    assert_contains!(
+        err.to_string(),
+        "This feature is not implemented: compound identifier: [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"]"
     );
 }
 

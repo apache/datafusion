@@ -718,7 +718,13 @@ fn general_date_trunc(
     };
 
     // convert to nanoseconds
-    let nano = date_trunc_coarse(granularity, scale * value, tz)?;
+    let nano = date_trunc_coarse(
+        granularity,
+        value
+            .checked_mul(scale)
+            .ok_or_else(|| exec_datafusion_err!("Timestamp {value} out of range"))?,
+        tz,
+    )?;
 
     let result = match tu {
         Second => match granularity {

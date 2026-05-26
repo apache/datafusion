@@ -809,11 +809,8 @@ impl StatisticsProvider for JoinStatisticsProvider {
                     _ => return left_rows.saturating_mul(right_rows),
                 }
             }
-            if ndv_divisor > 0 {
-                left_rows.saturating_mul(right_rows) / ndv_divisor
-            } else {
-                left_rows.saturating_mul(right_rows)
-            }
+            let max_rows = left_rows.saturating_mul(right_rows);
+            max_rows.checked_div(ndv_divisor).unwrap_or(max_rows)
         }
 
         let (inner_estimate, is_exact_cartesian, join_type) = if let Some(hash_join) =
@@ -1037,7 +1034,6 @@ mod tests {
     use std::fmt;
 
     use crate::execution_plan::{Boundedness, EmissionType};
-    use datafusion_common::tree_node::TreeNodeRecursion;
 
     fn make_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
@@ -1115,13 +1111,6 @@ mod tests {
 
         fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(
@@ -1223,13 +1212,6 @@ mod tests {
 
         fn properties(&self) -> &Arc<PlanProperties> {
             self.input.properties()
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(

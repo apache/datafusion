@@ -28,7 +28,6 @@ use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, ScalarValue, assert_or_internal_err, plan_err, project_schema,
 };
@@ -256,20 +255,6 @@ impl DataSource for MemorySourceConfig {
                 })
             })
             .transpose()
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in sort_information
-        let mut tnr = TreeNodeRecursion::Continue;
-        for ordering in &self.sort_information {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 }
 
@@ -790,7 +775,7 @@ impl DataSink for MemSink {
         }
 
         // write the outputs into the batches
-        for (target, mut batches) in self.batches.iter().zip(new_batches.into_iter()) {
+        for (target, mut batches) in self.batches.iter().zip(new_batches) {
             // Append all the new batches in one go to minimize locking overhead
             target.write().await.append(&mut batches);
         }
