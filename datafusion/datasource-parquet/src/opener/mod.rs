@@ -1417,8 +1417,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
-        ColumnStatistics, ScalarValue, Statistics, internal_err,
-        record_batch, stats::Precision,
+        ColumnStatistics, ScalarValue, Statistics, internal_err, record_batch,
+        stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};
