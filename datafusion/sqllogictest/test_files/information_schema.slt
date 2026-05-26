@@ -266,8 +266,11 @@ datafusion.execution.parquet.writer_version 1.0
 datafusion.execution.perfect_hash_join_min_key_density 0.15
 datafusion.execution.perfect_hash_join_small_build_threshold 1024
 datafusion.execution.planning_concurrency 13
+datafusion.execution.skip_partial_aggregation_cost_min_ratio 0.3
+datafusion.execution.skip_partial_aggregation_cost_ns_per_row 1000
 datafusion.execution.skip_partial_aggregation_probe_ratio_threshold 0.8
 datafusion.execution.skip_partial_aggregation_probe_rows_threshold 100000
+datafusion.execution.skip_partial_aggregation_use_cost_model true
 datafusion.execution.skip_physical_aggregate_schema_check false
 datafusion.execution.soft_max_rows_per_output_file 50000000
 datafusion.execution.sort_in_place_threshold_bytes 1048576
@@ -416,8 +419,11 @@ datafusion.execution.parquet.writer_version 1.0 (writing) Sets parquet writer ve
 datafusion.execution.perfect_hash_join_min_key_density 0.15 The minimum required density of join keys on the build side to consider a perfect hash join (see `HashJoinExec` for more details). Density is calculated as: `(number of rows) / (max_key - min_key + 1)`. A perfect hash join may be used if the actual key density > this value. Currently only supports cases where build_side.num_rows() < u32::MAX. Support for build_side.num_rows() >= u32::MAX will be added in the future.
 datafusion.execution.perfect_hash_join_small_build_threshold 1024 A perfect hash join (see `HashJoinExec` for more details) will be considered if the range of keys (max - min) on the build side is < this threshold. This provides a fast path for joins with very small key ranges, bypassing the density check. Currently only supports cases where build_side.num_rows() < u32::MAX. Support for build_side.num_rows() >= u32::MAX will be added in the future.
 datafusion.execution.planning_concurrency 13 Fan-out during initial physical planning. This is mostly use to plan `UNION` children in parallel. Defaults to the number of CPU cores on the system
+datafusion.execution.skip_partial_aggregation_cost_min_ratio 0.3 Lower bound on aggregation ratio (num_groups / input_rows) for the cost-aware skip rule to fire. Below this ratio partial aggregation is considered valuable enough to keep regardless of per-row cost. Only consulted when `skip_partial_aggregation_use_cost_model` is true.
+datafusion.execution.skip_partial_aggregation_cost_ns_per_row 1000 Minimum measured per-row wall time (nanoseconds) of partial aggregation for the cost-aware skip rule to fire. Only consulted when `skip_partial_aggregation_use_cost_model` is true.
 datafusion.execution.skip_partial_aggregation_probe_ratio_threshold 0.8 Aggregation ratio (number of distinct groups / number of input rows) threshold for skipping partial aggregation. If the value is greater then partial aggregation will skip aggregation for further input
 datafusion.execution.skip_partial_aggregation_probe_rows_threshold 100000 Number of input rows partial aggregation partition should process, before aggregation ratio check and trying to switch to skipping aggregation mode
+datafusion.execution.skip_partial_aggregation_use_cost_model true (experimental) When true, augment the fixed `skip_partial_aggregation_probe_ratio_threshold` check with a cost-aware rule: skip partial aggregation when the measured per-row wall time exceeds `skip_partial_aggregation_cost_ns_per_row` even at ratios below the fixed threshold (provided the ratio is at least `skip_partial_aggregation_cost_min_ratio`). Targets ClickBench Q18-shape queries where the ratio (~0.56) is below 0.8 but partial aggregation is net-negative due to heavy keys / aggs.
 datafusion.execution.skip_physical_aggregate_schema_check false When set to true, skips verifying that the schema produced by planning the input of `LogicalPlan::Aggregate` exactly matches the schema of the input plan. When set to false, if the schema does not match exactly (including nullability and metadata), a planning error will be raised. This is used to workaround bugs in the planner that are now caught by the new schema verification step.
 datafusion.execution.soft_max_rows_per_output_file 50000000 Target number of rows in output files when writing multiple. This is a soft max, so it can be exceeded slightly. There also will be one file smaller than the limit if the total number of rows written is not roughly divisible by the soft max
 datafusion.execution.sort_in_place_threshold_bytes 1048576 When sorting, below what size should data be concatenated and sorted in a single RecordBatch rather than sorted in batches and merged.
@@ -895,7 +901,7 @@ show functions
 statement ok
 reset datafusion.catalog.information_schema;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

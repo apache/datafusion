@@ -657,7 +657,7 @@ config_namespace! {
         /// `skip_partial_aggregation_cost_min_ratio`). Targets ClickBench
         /// Q18-shape queries where the ratio (~0.56) is below 0.8 but
         /// partial aggregation is net-negative due to heavy keys / aggs.
-        pub skip_partial_aggregation_use_cost_model: bool, default = false
+        pub skip_partial_aggregation_use_cost_model: bool, default = true
 
         /// Minimum measured per-row wall time (nanoseconds) of partial
         /// aggregation for the cost-aware skip rule to fire. Only
