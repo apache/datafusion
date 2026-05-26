@@ -666,16 +666,14 @@ config_namespace! {
         /// metric is reported alongside so callers can evaluate.
         pub skip_partial_aggregation_use_cost_model: bool, default = false
 
-        /// Effective ratio threshold used by the cost-aware skip rule.
-        /// Skip partial aggregation when ratio at probe close is at
-        /// least this value (provided
-        /// `skip_partial_aggregation_use_cost_model` is true).
-        ///
-        /// Default 0.5 is the empirical sweet spot from ClickBench: 0.4
-        /// would skip too aggressively (regresses low-cost queries
-        /// that benefit from partial), 0.7 fails to catch Q18-shape
-        /// queries.
-        pub skip_partial_aggregation_cost_min_ratio: f64, default = 0.5
+        /// Number of input rows used in the A/B sampling window after the
+        /// initial partial probe completes. During this window the operator
+        /// routes input through the passthrough (`transform_to_states`)
+        /// path so the probe can measure `passthrough_ns/row` and compare
+        /// it against the previously measured `partial_ns/row`. Default
+        /// 10000 — large enough to amortise per-row noise, small enough to
+        /// be cheap if the decision turns out to be "keep partial".
+        pub skip_partial_aggregation_ab_sampling_rows: usize, default = 10_000
 
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,

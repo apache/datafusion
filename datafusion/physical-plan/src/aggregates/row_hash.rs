@@ -71,6 +71,17 @@ pub(crate) enum ExecutionState {
     ///
     /// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
     SkippingAggregation,
+    /// Temporary A/B sampling phase used by [`SkipAggregationProbe`] to
+    /// measure passthrough cost on real input before deciding whether
+    /// to skip partial aggregation for the rest of the stream.
+    ///
+    /// Behaves like [`Self::SkippingAggregation`] (rows are converted
+    /// via `transform_to_states` and emitted downstream), but the hash
+    /// table built during the preceding partial-probe window is *not*
+    /// emitted yet — if the probe ultimately decides to keep partial
+    /// agg, the stream transitions back to [`Self::ReadingInput`] and
+    /// the hash table continues to accumulate.
+    AbSampling,
     /// All input has been consumed and all groups have been emitted
     Done,
 }
@@ -118,79 +129,90 @@ struct SpillState {
     // Metrics related to spilling are managed inside `spill_manager`
 }
 
-/// Tracks if the aggregate should skip partial aggregations
+/// Three phases of the cost-aware skip decision.
 ///
-/// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
+/// 1. `Partial` — accumulate input through the hash table (normal
+///    partial-agg path), measuring `partial_ns/row` and the
+///    `num_groups/input_rows` ratio over the first
+///    `probe_rows_threshold` rows.
+/// 2. `AbSampling` — route the next `ab_sampling_rows` of input through
+///    the passthrough path (`transform_to_states`) to measure
+///    `passthrough_ns/row`. The hash table built so far is kept;
+///    nothing is emitted yet.
+/// 3. `Locked { should_skip }` — final decision. Skip when
+///    `ratio > passthrough_ns/row / partial_ns/row` (the cost-aware
+///    crossover); otherwise revert to partial agg for the rest of the
+///    stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbePhase {
+    Partial,
+    AbSampling,
+    Locked { should_skip: bool },
+}
+
+/// Tracks if the aggregate should skip partial aggregations.
+///
+/// See "partial aggregation" discussion on [`GroupedHashAggregateStream`].
+///
+/// The probe runs a short A/B sampling window that measures both the
+/// partial-agg per-row cost and the passthrough per-row cost on real
+/// input, then makes a cost-based skip decision without relying on a
+/// hardcoded ratio cutoff. `use_cost_model = false` falls back to the
+/// original behaviour: a single bare ratio check at probe close.
 struct SkipAggregationProbe {
     // ========================================================================
-    // PROPERTIES:
-    // These fields are initialized at the start and remain constant throughout
-    // the execution.
+    // PROPERTIES (immutable for the stream's lifetime)
     // ========================================================================
-    /// Aggregation ratio check performed when the number of input rows exceeds
-    /// this threshold (from `SessionConfig`)
     probe_rows_threshold: usize,
-    /// Maximum ratio of `num_groups` to `input_rows` for continuing aggregation
-    /// (from `SessionConfig`). If the ratio exceeds this value, aggregation
-    /// is skipped and input rows are directly converted to output
     probe_ratio_threshold: f64,
-    /// (experimental) When true, apply a secondary skip rule using
-    /// `cost_min_ratio` as a lower effective ratio threshold. Disabled
-    /// by default to preserve the bare-ratio behaviour.
     use_cost_model: bool,
-    /// Effective ratio threshold for the cost-aware skip rule.
-    cost_min_ratio: f64,
+    ab_sampling_rows: usize,
 
     // ========================================================================
-    // STATES:
-    // Fields changes during execution. Can be buffer, or state flags that
-    // influence the execution in parent `GroupedHashAggregateStream`
+    // STATE
     // ========================================================================
-    /// Number of processed input rows (updated during probing)
+    phase: ProbePhase,
+    /// Rows processed in the `Partial` phase.
     input_rows: usize,
-    /// Number of total group values for `input_rows` (updated during probing)
+    /// Latest `group_values.len()` reported in the `Partial` phase.
     num_groups: usize,
-
-    /// Flag indicating further data aggregation may be skipped (decision made
-    /// when probing complete)
+    /// Rows processed in the `AbSampling` phase.
+    ab_rows: usize,
+    /// `elapsed_compute.value()` snapshot at probe construction.
+    elapsed_compute_at_probe_start: usize,
+    /// `elapsed_compute.value()` snapshot at the `Partial`→`AbSampling`
+    /// transition. The partial-window wall time is
+    /// `elapsed_compute_at_ab_start - elapsed_compute_at_probe_start`.
+    elapsed_compute_at_ab_start: Option<usize>,
+    /// `should_skip` and `is_locked` derived from `phase`; kept as
+    /// dedicated fields so the rest of the operator code can stay
+    /// oblivious to the phase enum.
     should_skip: bool,
-    /// Flag indicating further updates of `SkipAggregationProbe` state won't
-    /// make any effect (set either while probing or on probing completion)
     is_locked: bool,
 
     // ========================================================================
-    // METRICS:
+    // METRICS / SOURCES
     // ========================================================================
-    /// Number of rows where state was output without aggregation.
-    ///
-    /// * If 0, all input rows were aggregated (should_skip was always false)
-    ///
-    /// * if greater than zero, the number of rows which were output directly
-    ///   without aggregation
     skipped_aggregation_rows: metrics::Count,
-    /// Operator-wide `elapsed_compute` metric. Cloned from
-    /// `BaselineMetrics` so the probe can read the accumulated nanoseconds
-    /// at decision time and infer the wall time spent on partial
-    /// aggregation so far.
+    /// Operator-wide `elapsed_compute`; the probe reads `value()` at
+    /// phase transitions to derive per-row costs.
     elapsed_compute: metrics::Time,
-    /// `elapsed_compute.value()` snapshot at probe construction. Diff
-    /// against the live value gives wall time elapsed since the stream
-    /// started — a close approximation of partial aggregation cost,
-    /// since `elapsed_compute` covers exactly the timed work blocks in
-    /// the partial-mode loop.
-    elapsed_compute_at_probe_start: usize,
-    /// Diagnostic gauge: measured wall-time per input row (ns) at the
-    /// most recent probe evaluation. `set` once per `update_state` call
-    /// after `probe_rows_threshold` is met, so EXPLAIN ANALYZE reflects
-    /// the last evaluation's reading regardless of whether a skip rule
-    /// fired. Provides the empirical signal used to tune
-    /// `cost_min_ratio` / future cost-based rules.
-    probe_ns_per_row: metrics::Gauge,
-    /// Diagnostic gauge: aggregation ratio (`num_groups / input_rows`)
-    /// at the most recent probe evaluation, scaled by 1000 (so 0.565
-    /// → 565). `usize` gauges store integers, so the scale lets us
-    /// preserve three decimal digits without floating point.
+    /// Diagnostic gauge: measured partial-agg wall time per input row
+    /// (ns) at the end of the `Partial` phase. Always reported when
+    /// the partial probe completes, regardless of subsequent decision.
+    probe_partial_ns_per_row: metrics::Gauge,
+    /// Diagnostic gauge: measured passthrough wall time per input row
+    /// (ns) at the end of the `AbSampling` phase. Reported only when
+    /// A/B sampling actually runs (cost model enabled and Rule 1 didn't
+    /// already fire).
+    probe_passthrough_ns_per_row: metrics::Gauge,
+    /// Diagnostic gauge: aggregation ratio at the partial probe close,
+    /// scaled by 1000 (`usize` gauge → integer storage).
     probe_ratio_per_mille: metrics::Gauge,
+    /// Diagnostic gauge: 1 if the cost-aware decision chose to skip,
+    /// 0 otherwise. Distinguishes the cost-aware skip from the fixed
+    /// Rule 1 skip and from "decision was to keep partial".
+    probe_cost_decision_skip: metrics::Gauge,
 }
 
 impl SkipAggregationProbe {
@@ -199,83 +221,153 @@ impl SkipAggregationProbe {
         probe_rows_threshold: usize,
         probe_ratio_threshold: f64,
         use_cost_model: bool,
-        cost_min_ratio: f64,
+        ab_sampling_rows: usize,
         skipped_aggregation_rows: metrics::Count,
         elapsed_compute: metrics::Time,
-        probe_ns_per_row: metrics::Gauge,
+        probe_partial_ns_per_row: metrics::Gauge,
+        probe_passthrough_ns_per_row: metrics::Gauge,
         probe_ratio_per_mille: metrics::Gauge,
+        probe_cost_decision_skip: metrics::Gauge,
     ) -> Self {
         let elapsed_compute_at_probe_start = elapsed_compute.value();
         Self {
-            input_rows: 0,
-            num_groups: 0,
             probe_rows_threshold,
             probe_ratio_threshold,
             use_cost_model,
-            cost_min_ratio,
+            ab_sampling_rows,
+            phase: ProbePhase::Partial,
+            input_rows: 0,
+            num_groups: 0,
+            ab_rows: 0,
+            elapsed_compute_at_probe_start,
+            elapsed_compute_at_ab_start: None,
             should_skip: false,
             is_locked: false,
             skipped_aggregation_rows,
             elapsed_compute,
-            elapsed_compute_at_probe_start,
-            probe_ns_per_row,
+            probe_partial_ns_per_row,
+            probe_passthrough_ns_per_row,
             probe_ratio_per_mille,
+            probe_cost_decision_skip,
         }
     }
 
-    /// Updates `SkipAggregationProbe` state:
-    /// - increments the number of input rows
-    /// - replaces the number of groups with the new value
-    /// - on `probe_rows_threshold` exceeded applies the skip-decision rules
-    /// - records the diagnostic gauges
-    ///
-    /// Two skip rules are evaluated, in order:
-    ///
-    /// 1. **Fixed ratio**: `num_groups / input_rows >= probe_ratio_threshold`
-    ///    — the original behaviour, preserved for backwards compatibility.
-    /// 2. **Lower-ratio** (opt-in via `use_cost_model`): skip when the ratio
-    ///    is at least `cost_min_ratio` (default 0.5). Targets the medium
-    ///    band (0.5–0.8) where partial aggregation is often net-negative
-    ///    despite the ratio being below the fixed threshold. The per-row
-    ///    cost gauge is reported alongside via `probe_ns_per_row` for
-    ///    diagnosing whether a cost-based replacement of this static
-    ///    threshold is feasible.
-    fn update_state(&mut self, input_rows: usize, num_groups: usize) {
-        if self.is_locked {
+    /// Called from the partial-agg path after each input batch. Tracks
+    /// total rows / group count and, when `probe_rows_threshold` is
+    /// reached, drives the phase transition.
+    fn observe_partial_batch(&mut self, input_rows: usize, num_groups: usize) {
+        if self.phase != ProbePhase::Partial {
             return;
         }
         self.input_rows += input_rows;
         self.num_groups = num_groups;
-        if self.input_rows >= self.probe_rows_threshold {
-            let ratio = self.num_groups as f64 / self.input_rows as f64;
-
-            // Diagnostic gauges: always recorded at probe evaluation,
-            // independent of which (if any) skip rule fires.
-            let elapsed_ns = self
-                .elapsed_compute
-                .value()
-                .saturating_sub(self.elapsed_compute_at_probe_start);
-            let ns_per_row = (elapsed_ns as u64)
-                .checked_div(self.input_rows as u64)
-                .unwrap_or(0);
-            self.probe_ns_per_row.set(ns_per_row as usize);
-            self.probe_ratio_per_mille.set((ratio * 1000.0) as usize);
-
-            // Rule 1: fixed-ratio skip (existing behaviour).
-            if ratio >= self.probe_ratio_threshold {
-                self.should_skip = true;
-                self.is_locked = true;
-                return;
-            }
-
-            // Rule 2 (opt-in): lower-ratio skip.
-            if self.use_cost_model && ratio >= self.cost_min_ratio {
-                self.should_skip = true;
-                self.is_locked = true;
-            }
-            // No rule fired — leave `is_locked` false so the next batch
-            // can re-evaluate.
+        if self.input_rows < self.probe_rows_threshold {
+            return;
         }
+
+        let ratio = self.num_groups as f64 / self.input_rows as f64;
+        let partial_ns = self
+            .elapsed_compute
+            .value()
+            .saturating_sub(self.elapsed_compute_at_probe_start);
+        let partial_ns_per_row = (partial_ns as u64)
+            .checked_div(self.input_rows as u64)
+            .unwrap_or(0) as usize;
+        self.probe_partial_ns_per_row.set(partial_ns_per_row);
+        self.probe_ratio_per_mille.set((ratio * 1000.0) as usize);
+
+        // Rule 1 (fixed): high ratio — short-circuit straight to skip.
+        if ratio >= self.probe_ratio_threshold {
+            self.commit_skip();
+            return;
+        }
+
+        if !self.use_cost_model {
+            // Legacy behaviour: leave `is_locked = false`, allow
+            // re-evaluation on subsequent batches.
+            return;
+        }
+
+        // Enter A/B sampling — route subsequent input through passthrough
+        // until `ab_sampling_rows` have been observed, at which point
+        // `finalize_ab_decision` runs the cost-based comparison.
+        self.elapsed_compute_at_ab_start = Some(self.elapsed_compute.value());
+        self.phase = ProbePhase::AbSampling;
+    }
+
+    /// True iff the main loop should route the next input batch through
+    /// the passthrough (`transform_to_states`) path to feed the A/B
+    /// measurement instead of through the hash-table partial-agg path.
+    fn wants_passthrough_sample(&self) -> bool {
+        matches!(self.phase, ProbePhase::AbSampling)
+    }
+
+    /// Called after a passthrough batch has been processed during the
+    /// A/B sampling phase. Counts rows toward the sample window and,
+    /// when the window is full, triggers the cost-aware decision.
+    fn observe_ab_batch(&mut self, input_rows: usize) {
+        if self.phase != ProbePhase::AbSampling {
+            return;
+        }
+        self.ab_rows += input_rows;
+        if self.ab_rows >= self.ab_sampling_rows {
+            self.finalize_ab_decision();
+        }
+    }
+
+    /// Apply the cost-aware decision after the A/B sampling window
+    /// completes.
+    ///
+    /// Cost model (assuming `final_ns/row ≈ partial_ns/row`):
+    ///
+    /// ```text
+    /// cost_keep_partial = partial_ns × N + final_ns × N × ratio
+    /// cost_skip         = passthrough_ns × N + final_ns × N
+    ///
+    /// skip is cheaper  ⇔  ratio  >  passthrough_ns / partial_ns
+    /// ```
+    ///
+    /// The crossover is set entirely by the measured ratio of passthrough
+    /// to partial cost on this particular query / hardware — no magic
+    /// constants. If either measurement is zero (extremely fast or
+    /// degenerate input) we default to keeping partial.
+    fn finalize_ab_decision(&mut self) {
+        let ab_start = self
+            .elapsed_compute_at_ab_start
+            .expect("A/B start snapshot must be set when entering AbSampling");
+        let ab_ns = self.elapsed_compute.value().saturating_sub(ab_start);
+        let passthrough_ns_per_row =
+            (ab_ns as u64).checked_div(self.ab_rows as u64).unwrap_or(0) as usize;
+        self.probe_passthrough_ns_per_row
+            .set(passthrough_ns_per_row);
+
+        let partial_ns_per_row = self.probe_partial_ns_per_row.value();
+        let ratio = self.num_groups as f64 / self.input_rows as f64;
+
+        let should_skip = if partial_ns_per_row == 0 || passthrough_ns_per_row == 0 {
+            false
+        } else {
+            ratio > (passthrough_ns_per_row as f64 / partial_ns_per_row as f64)
+        };
+
+        if should_skip {
+            self.probe_cost_decision_skip.set(1);
+            self.commit_skip();
+        } else {
+            self.probe_cost_decision_skip.set(0);
+            self.phase = ProbePhase::Locked { should_skip: false };
+            self.is_locked = true;
+        }
+    }
+
+    /// Transition to the terminal `Locked { should_skip: true }` state.
+    /// Used by both Rule 1 (fixed-ratio short-circuit) and the cost-aware
+    /// path so the rest of the operator can rely on a single
+    /// `should_skip` flag.
+    fn commit_skip(&mut self) {
+        self.should_skip = true;
+        self.is_locked = true;
+        self.phase = ProbePhase::Locked { should_skip: true };
     }
 
     fn should_skip(&self) -> bool {
@@ -721,25 +813,33 @@ impl GroupedHashAggregateStream {
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
             let use_cost_model = options.skip_partial_aggregation_use_cost_model;
-            let cost_min_ratio = options.skip_partial_aggregation_cost_min_ratio;
+            let ab_sampling_rows = options.skip_partial_aggregation_ab_sampling_rows;
             let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
                 .with_category(MetricCategory::Rows)
                 .counter("skipped_aggregation_rows", partition);
-            let probe_ns_per_row = MetricBuilder::new(&agg.metrics)
+            let probe_partial_ns_per_row = MetricBuilder::new(&agg.metrics)
                 .with_category(MetricCategory::Timing)
-                .gauge("partial_agg_probe_ns_per_row", partition);
+                .gauge("partial_agg_probe_partial_ns_per_row", partition);
+            let probe_passthrough_ns_per_row = MetricBuilder::new(&agg.metrics)
+                .with_category(MetricCategory::Timing)
+                .gauge("partial_agg_probe_passthrough_ns_per_row", partition);
             let probe_ratio_per_mille = MetricBuilder::new(&agg.metrics)
                 .with_category(MetricCategory::Rows)
                 .gauge("partial_agg_probe_ratio_per_mille", partition);
+            let probe_cost_decision_skip = MetricBuilder::new(&agg.metrics)
+                .with_category(MetricCategory::Rows)
+                .gauge("partial_agg_probe_cost_decision_skip", partition);
             Some(SkipAggregationProbe::new(
                 probe_rows_threshold,
                 probe_ratio_threshold,
                 use_cost_model,
-                cost_min_ratio,
+                ab_sampling_rows,
                 skipped_aggregation_rows,
                 baseline_metrics.elapsed_compute().clone(),
-                probe_ns_per_row,
+                probe_partial_ns_per_row,
+                probe_passthrough_ns_per_row,
                 probe_ratio_per_mille,
+                probe_cost_decision_skip,
             ))
         } else {
             None
@@ -875,6 +975,16 @@ impl Stream for GroupedHashAggregateStream {
                                     self.exec_state = new_state;
                                     break 'reading_input;
                                 }
+                                // Probe may have transitioned into the
+                                // A/B sampling window. Route subsequent
+                                // batches through the passthrough path
+                                // so the probe can measure
+                                // `passthrough_ns/row`.
+                                if self.probe_wants_passthrough_sample() {
+                                    timer.done();
+                                    self.exec_state = ExecutionState::AbSampling;
+                                    break 'reading_input;
+                                }
                             }
 
                             // If we reach this point, try to update the memory reservation
@@ -936,6 +1046,62 @@ impl Stream for GroupedHashAggregateStream {
                             self.input =
                                 Box::pin(EmptyRecordBatchStream::new(input_schema));
                             self.exec_state = ExecutionState::Done;
+                        }
+                    }
+                }
+
+                ExecutionState::AbSampling => {
+                    // Mirror of `SkippingAggregation` — passthrough via
+                    // `transform_to_states` — except that:
+                    //   * the partial hash table is NOT emitted (we may
+                    //     still revert to it),
+                    //   * the probe observes per-row timing via
+                    //     `elapsed_compute`,
+                    //   * after each batch we check whether the probe
+                    //     has finalised: skip (emit hash + switch to
+                    //     `SkippingAggregation`) or keep partial
+                    //     (return to `ReadingInput`).
+                    match ready!(self.input.poll_next_unpin(cx)) {
+                        Some(Ok(batch)) => {
+                            let _timer = elapsed_compute.timer();
+                            let input_rows = batch.num_rows();
+                            let states = self.transform_to_states(&batch)?;
+                            if let Some(probe) = self.skip_aggregation_probe.as_mut() {
+                                probe.observe_ab_batch(input_rows);
+                            }
+                            // After observing, the probe may have
+                            // transitioned out of `AbSampling`.
+                            if self.should_skip_aggregation() {
+                                // Cost model chose skip — emit the
+                                // partial hash table accumulated during
+                                // the probe window, then continue in
+                                // `SkippingAggregation`.
+                                if let Some(emitted) = self.emit(EmitTo::All, false)? {
+                                    self.exec_state =
+                                        ExecutionState::ProducingOutput(emitted);
+                                } else {
+                                    self.exec_state = ExecutionState::SkippingAggregation;
+                                }
+                            } else if let Some(probe) =
+                                self.skip_aggregation_probe.as_ref()
+                                && !probe.wants_passthrough_sample()
+                                && probe.is_locked
+                            {
+                                // Cost model chose keep — fall back to
+                                // the partial-agg path for the rest of
+                                // the stream.
+                                self.exec_state = ExecutionState::ReadingInput;
+                            }
+                            return Poll::Ready(Some(Ok(
+                                states.record_output(&self.baseline_metrics)
+                            )));
+                        }
+                        Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+                        None => {
+                            // Input ended mid-sampling. Commit whatever
+                            // hash state we have via the normal
+                            // end-of-input path.
+                            self.set_input_done_and_produce_output()?;
                         }
                     }
                 }
@@ -1497,8 +1663,17 @@ impl GroupedHashAggregateStream {
             // Skip aggregation probe is not supported if stream has any spills,
             // currently spilling is not supported for Partial aggregation
             assert!(self.spill_state.spills.is_empty());
-            probe.update_state(input_rows, self.group_values.len());
+            probe.observe_partial_batch(input_rows, self.group_values.len());
         };
+    }
+
+    /// True iff the probe wants the next input batch routed through the
+    /// passthrough path for A/B sampling. Checked in the main loop
+    /// before the partial-agg hash insert.
+    fn probe_wants_passthrough_sample(&self) -> bool {
+        self.skip_aggregation_probe
+            .as_ref()
+            .is_some_and(|p| p.wants_passthrough_sample())
     }
 
     /// In case the probe indicates that aggregation may be
@@ -1910,114 +2085,187 @@ mod tests {
 
     // ---------------- SkipAggregationProbe unit tests ----------------
 
-    /// Build a probe with the given configuration. Skip-count metric and
-    /// diagnostic gauges are disconnected; `elapsed_compute` is exposed
-    /// so a test can drive it with `add_duration` to verify the
-    /// diagnostic gauge picks the value up.
-    fn make_probe(
+    /// Test rig that exposes the probe together with the `Time` source
+    /// it reads, so tests can drive measured per-row cost deterministically.
+    struct ProbeRig {
+        probe: SkipAggregationProbe,
+        elapsed: metrics::Time,
+        partial_ns_gauge: metrics::Gauge,
+        passthrough_ns_gauge: metrics::Gauge,
+        ratio_gauge: metrics::Gauge,
+        cost_decision_gauge: metrics::Gauge,
+    }
+
+    fn rig(
         probe_rows_threshold: usize,
         probe_ratio_threshold: f64,
         use_cost_model: bool,
-        cost_min_ratio: f64,
-    ) -> (SkipAggregationProbe, metrics::Time) {
-        let elapsed_compute = metrics::Time::new();
+        ab_sampling_rows: usize,
+    ) -> ProbeRig {
+        let elapsed = metrics::Time::new();
+        let partial_ns_gauge = metrics::Gauge::new();
+        let passthrough_ns_gauge = metrics::Gauge::new();
+        let ratio_gauge = metrics::Gauge::new();
+        let cost_decision_gauge = metrics::Gauge::new();
         let probe = SkipAggregationProbe::new(
             probe_rows_threshold,
             probe_ratio_threshold,
             use_cost_model,
-            cost_min_ratio,
+            ab_sampling_rows,
             metrics::Count::new(),
-            elapsed_compute.clone(),
-            metrics::Gauge::new(),
-            metrics::Gauge::new(),
+            elapsed.clone(),
+            partial_ns_gauge.clone(),
+            passthrough_ns_gauge.clone(),
+            ratio_gauge.clone(),
+            cost_decision_gauge.clone(),
         );
-        (probe, elapsed_compute)
+        ProbeRig {
+            probe,
+            elapsed,
+            partial_ns_gauge,
+            passthrough_ns_gauge,
+            ratio_gauge,
+            cost_decision_gauge,
+        }
     }
 
-    /// With the cost model off, the behaviour is exactly the legacy bare
-    /// ratio check.
+    /// With the cost model off the probe behaves like the original
+    /// bare-ratio check: skip only when the ratio crosses
+    /// `probe_ratio_threshold`.
     #[test]
     fn skip_probe_cost_model_off_matches_legacy_ratio_check() {
-        let (mut probe, _t) = make_probe(100, 0.8, false, 0.5);
+        let mut r = rig(100, 0.8, false, 10_000);
 
         // 100 rows / 50 groups → ratio 0.5, below 0.8 → don't skip
-        probe.update_state(100, 50);
-        assert!(!probe.should_skip());
-        assert!(!probe.is_locked);
+        r.probe.observe_partial_batch(100, 50);
+        assert!(!r.probe.should_skip());
+        assert!(!r.probe.is_locked);
+        assert!(!r.probe.wants_passthrough_sample());
 
-        // Next window: another 100 rows, total 200 / 170 groups → ratio
-        // 0.85, above 0.8 → skip.
-        probe.update_state(100, 170);
-        assert!(probe.should_skip());
-        assert!(probe.is_locked);
+        // Next batch: total 200 / 170 groups → ratio 0.85, above 0.8 → skip
+        r.probe.observe_partial_batch(100, 170);
+        assert!(r.probe.should_skip());
+        assert!(r.probe.is_locked);
     }
 
-    /// With the cost model on, a medium-ratio query (Q18-shape: ratio
-    /// 0.56, below 0.8 but at or above `cost_min_ratio`) is skipped.
+    /// Rule 1 (fixed-ratio) fires before A/B sampling even when the
+    /// cost model is on — short-circuit, no passthrough sampling needed.
     #[test]
-    fn skip_probe_cost_model_fires_in_medium_ratio_band() {
-        let (mut probe, _t) = make_probe(100, 0.8, true, 0.5);
+    fn skip_probe_cost_model_short_circuits_on_high_ratio() {
+        let mut r = rig(100, 0.8, true, 10_000);
 
-        // Ratio 0.56 — Q18's measured value. Above the 0.5 threshold.
-        probe.update_state(100, 56);
+        r.probe.observe_partial_batch(100, 90); // ratio 0.9
 
-        assert!(probe.should_skip());
-        assert!(probe.is_locked);
+        assert!(r.probe.should_skip());
+        assert!(r.probe.is_locked);
+        // No A/B sampling happened.
+        assert!(!r.probe.wants_passthrough_sample());
+        assert_eq!(r.passthrough_ns_gauge.value(), 0);
     }
 
-    /// Cost model on, ratio below `cost_min_ratio`: keep partial agg —
-    /// it's reducing too much to be worth skipping.
+    /// Below `probe_ratio_threshold`, the probe transitions into the
+    /// A/B sampling phase and requests passthrough routing from the
+    /// main loop.
     #[test]
-    fn skip_probe_cost_model_does_not_fire_below_min_ratio() {
-        let (mut probe, _t) = make_probe(100, 0.8, true, 0.5);
+    fn skip_probe_enters_ab_sampling_when_partial_window_closes() {
+        let mut r = rig(100, 0.8, true, 10_000);
 
-        // Ratio 0.3 — well below the 0.5 threshold.
-        probe.update_state(100, 30);
+        // Simulate 100k ns of partial work over 100 rows → 1000 ns/row.
+        r.elapsed.add_duration(Duration::from_nanos(100_000));
+        r.probe.observe_partial_batch(100, 60); // ratio 0.6
 
-        assert!(!probe.should_skip());
-        assert!(!probe.is_locked);
+        assert!(!r.probe.should_skip());
+        assert!(!r.probe.is_locked);
+        assert!(r.probe.wants_passthrough_sample());
+        assert_eq!(r.partial_ns_gauge.value(), 1_000);
+        assert_eq!(r.ratio_gauge.value(), 600);
     }
 
-    /// Cost model on still honours the original high-ratio rule: ratio
-    /// at or above `probe_ratio_threshold` skips, even though the
-    /// lower-ratio rule would also fire.
+    /// Cost-aware skip: ratio is greater than `passthrough/partial`, so
+    /// the cost model picks skip.
+    ///
+    /// Setup: partial = 100 ns/row, passthrough = 50 ns/row, ratio = 0.6.
+    /// Crossover = 50/100 = 0.5. 0.6 > 0.5 ⇒ skip.
     #[test]
-    fn skip_probe_cost_model_still_honours_high_ratio_rule() {
-        let (mut probe, _t) = make_probe(100, 0.8, true, 0.5);
+    fn skip_probe_cost_decision_chooses_skip_when_partial_is_expensive() {
+        let mut r = rig(100, 0.8, true, 100);
 
-        // Ratio 0.9 → skip via the fixed rule (Rule 1).
-        probe.update_state(100, 90);
+        // Partial window: 10_000 ns over 100 rows → 100 ns/row.
+        r.elapsed.add_duration(Duration::from_nanos(10_000));
+        r.probe.observe_partial_batch(100, 60); // ratio 0.6
+        assert!(r.probe.wants_passthrough_sample());
 
-        assert!(probe.should_skip());
-        assert!(probe.is_locked);
+        // A/B window: 5_000 ns over 100 rows → 50 ns/row.
+        r.elapsed.add_duration(Duration::from_nanos(5_000));
+        r.probe.observe_ab_batch(100);
+
+        assert!(r.probe.should_skip());
+        assert!(r.probe.is_locked);
+        assert!(!r.probe.wants_passthrough_sample());
+        assert_eq!(r.passthrough_ns_gauge.value(), 50);
+        assert_eq!(r.cost_decision_gauge.value(), 1);
     }
 
-    /// The diagnostic gauges record the measured per-row wall time and
-    /// the ratio (× 1000) on every probe evaluation, regardless of which
-    /// — if any — skip rule fires.
+    /// Cost-aware keep: ratio is below `passthrough/partial`, so the
+    /// cost model picks keep-partial (revert).
+    ///
+    /// Setup: partial = 100 ns/row, passthrough = 80 ns/row, ratio = 0.6.
+    /// Crossover = 80/100 = 0.8. 0.6 < 0.8 ⇒ keep.
+    #[test]
+    fn skip_probe_cost_decision_chooses_keep_when_passthrough_not_much_cheaper() {
+        let mut r = rig(100, 0.8, true, 100);
+
+        r.elapsed.add_duration(Duration::from_nanos(10_000));
+        r.probe.observe_partial_batch(100, 60); // ratio 0.6
+        assert!(r.probe.wants_passthrough_sample());
+
+        r.elapsed.add_duration(Duration::from_nanos(8_000));
+        r.probe.observe_ab_batch(100);
+
+        assert!(!r.probe.should_skip());
+        assert!(r.probe.is_locked);
+        assert!(!r.probe.wants_passthrough_sample());
+        assert_eq!(r.passthrough_ns_gauge.value(), 80);
+        assert_eq!(r.cost_decision_gauge.value(), 0);
+    }
+
+    /// A/B sampling needs *enough* rows in the window before it
+    /// finalises. A short partial batch during sampling shouldn't
+    /// trigger the decision early.
+    #[test]
+    fn skip_probe_ab_window_accumulates_across_batches() {
+        let mut r = rig(100, 0.8, true, 1000);
+
+        r.elapsed.add_duration(Duration::from_nanos(10_000));
+        r.probe.observe_partial_batch(100, 60);
+        assert!(r.probe.wants_passthrough_sample());
+
+        // 500 rows of A/B — below the 1000 row target.
+        r.elapsed.add_duration(Duration::from_nanos(25_000));
+        r.probe.observe_ab_batch(500);
+        assert!(r.probe.wants_passthrough_sample());
+        assert!(!r.probe.is_locked);
+
+        // Another 500 rows — total 1000, decision fires.
+        r.elapsed.add_duration(Duration::from_nanos(25_000));
+        r.probe.observe_ab_batch(500);
+        assert!(!r.probe.wants_passthrough_sample());
+        assert!(r.probe.is_locked);
+    }
+
+    /// Diagnostic gauges record the per-row measurements at every
+    /// observable transition, independent of which decision fires.
     #[test]
     fn skip_probe_records_diagnostic_gauges() {
-        let elapsed_compute = metrics::Time::new();
-        let probe_ns_per_row = metrics::Gauge::new();
-        let probe_ratio_per_mille = metrics::Gauge::new();
-        let mut probe = SkipAggregationProbe::new(
-            100,
-            0.8,
-            false,
-            0.5,
-            metrics::Count::new(),
-            elapsed_compute.clone(),
-            probe_ns_per_row.clone(),
-            probe_ratio_per_mille.clone(),
-        );
+        let mut r = rig(100, 0.8, false, 10_000);
 
         // 200_000 ns over 100 rows → 2_000 ns/row. Ratio 50/100 = 0.5 →
-        // 500 per-mille. No skip fires (legacy ratio check is off, no
-        // 0.8 reached), but the gauges still update.
-        elapsed_compute.add_duration(Duration::from_nanos(200_000));
-        probe.update_state(100, 50);
+        // 500 per-mille. No skip fires (legacy ratio check, below 0.8),
+        // but partial_ns_per_row + ratio gauges still update.
+        r.elapsed.add_duration(Duration::from_nanos(200_000));
+        r.probe.observe_partial_batch(100, 50);
 
-        assert_eq!(probe_ns_per_row.value(), 2_000);
-        assert_eq!(probe_ratio_per_mille.value(), 500);
+        assert_eq!(r.partial_ns_gauge.value(), 2_000);
+        assert_eq!(r.ratio_gauge.value(), 500);
     }
 }
