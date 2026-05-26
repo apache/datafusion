@@ -79,7 +79,8 @@ impl OptimizerRule for RequestColumnStatistics {
         // fixpoint without a manual "already visited" guard.
         let mut changed = scan.statistics_requests.insert(StatisticsRequest::RowCount);
         for field in scan.projected_schema.fields() {
-            let req = StatisticsRequest::Min(Column::new_unqualified(field.name()));
+            let req =
+                StatisticsRequest::Min(Arc::new(Column::new_unqualified(field.name())));
             changed |= scan.statistics_requests.insert(req);
         }
         Ok(if changed {
@@ -188,11 +189,15 @@ async fn custom_rule_requests_reach_custom_provider() -> Result<()> {
         "expected RowCount, got {got:?}"
     );
     assert!(
-        got.contains(&StatisticsRequest::Min(Column::new_unqualified("a"))),
+        got.contains(&StatisticsRequest::Min(Arc::new(Column::new_unqualified(
+            "a"
+        )))),
         "expected Min(a), got {got:?}"
     );
     assert!(
-        got.contains(&StatisticsRequest::Min(Column::new_unqualified("b"))),
+        got.contains(&StatisticsRequest::Min(Arc::new(Column::new_unqualified(
+            "b"
+        )))),
         "expected Min(b), got {got:?}"
     );
     Ok(())
