@@ -891,57 +891,44 @@ fn unsigned_to_char(value: u64) -> Result<char> {
     codepoint_to_char(codepoint)
 }
 
-/// Normalizes integer scalar payloads while preserving Spark formatting semantics:
-/// signed values format as decimal for `%d` / `%s` / `%c`, but use their original
-/// bit width for `%x` / `%o` via `unsigned_bits`.
-#[derive(Debug, Clone, Copy)]
-enum IntegerValue {
-    Signed { decimal: i64, unsigned_bits: u64 },
-    Unsigned(u64),
-}
+/// Formatting operations that differ between signed and unsigned integer
+/// primitives. Signed values format as decimal for `%d` / `%s` / `%c`, but use
+/// their original bit width for `%x` / `%o` via `unsigned_bits`.
+trait IntegerFormatValue {
+    fn unsigned_bits(self) -> u64;
 
-impl IntegerValue {
-    fn unsigned_bits(self) -> u64 {
-        match self {
-            Self::Signed { unsigned_bits, .. } => unsigned_bits,
-            Self::Unsigned(value) => value,
-        }
-    }
-
-    fn to_char(self) -> Result<char> {
-        match self {
-            Self::Signed { decimal, .. } => signed_to_char(decimal),
-            Self::Unsigned(value) => unsigned_to_char(value),
-        }
-    }
+    fn to_char(self) -> Result<char>;
 
     fn format_decimal(
         self,
         spec: &ConversionSpecifier,
         writer: &mut String,
-    ) -> Result<()> {
-        match self {
-            Self::Signed { decimal, .. } => spec.format_signed(writer, decimal),
-            Self::Unsigned(value) => spec.format_unsigned(writer, value),
-        }
-    }
+    ) -> Result<()>;
 
-    fn decimal_string(self) -> String {
-        match self {
-            Self::Signed { decimal, .. } => decimal.to_string(),
-            Self::Unsigned(value) => value.to_string(),
-        }
-    }
+    fn decimal_string(self) -> String;
 }
 
 macro_rules! signed_integer_value {
     ($source:ty, $unsigned:ty) => {
-        impl From<$source> for IntegerValue {
-            fn from(value: $source) -> Self {
-                Self::Signed {
-                    decimal: value as i64,
-                    unsigned_bits: (value as $unsigned) as u64,
-                }
+        impl IntegerFormatValue for $source {
+            fn unsigned_bits(self) -> u64 {
+                (self as $unsigned) as u64
+            }
+
+            fn to_char(self) -> Result<char> {
+                signed_to_char(self as i64)
+            }
+
+            fn format_decimal(
+                self,
+                spec: &ConversionSpecifier,
+                writer: &mut String,
+            ) -> Result<()> {
+                spec.format_signed(writer, self as i64)
+            }
+
+            fn decimal_string(self) -> String {
+                self.to_string()
             }
         }
     };
@@ -954,9 +941,25 @@ signed_integer_value!(i64, u64);
 
 macro_rules! unsigned_integer_value {
     ($source:ty) => {
-        impl From<$source> for IntegerValue {
-            fn from(value: $source) -> Self {
-                Self::Unsigned(value as u64)
+        impl IntegerFormatValue for $source {
+            fn unsigned_bits(self) -> u64 {
+                self as u64
+            }
+
+            fn to_char(self) -> Result<char> {
+                unsigned_to_char(self as u64)
+            }
+
+            fn format_decimal(
+                self,
+                spec: &ConversionSpecifier,
+                writer: &mut String,
+            ) -> Result<()> {
+                spec.format_unsigned(writer, self as u64)
+            }
+
+            fn decimal_string(self) -> String {
+                self.to_string()
             }
         }
     };
@@ -1375,9 +1378,9 @@ impl ConversionSpecifier {
         type_name: &str,
     ) -> Result<()>
     where
-        T: Copy + Into<IntegerValue>,
+        T: Copy + IntegerFormatValue,
     {
-        let Some(value) = value.map(Into::into) else {
+        let Some(value) = *value else {
             return if self.conversion_type.supports_integer() {
                 self.format_string(writer, "null")
             } else {
