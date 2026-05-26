@@ -385,7 +385,7 @@ fn try_perfect_list_zip(
     let nulls = if list_arrays.iter().any(|arr| arr.null_count() != 0) {
         let first_nulls = first.nulls();
         if list_arrays.iter().all(|arr| arr.nulls() == first_nulls) {
-            NullBuffer::union_many(list_arrays.iter().map(|arr| arr.nulls()))
+            first_nulls.cloned()
         } else {
             // Match the general path: arrays_zip only marks an output row null
             // when every concrete input list is null. Mixed null and non-null
