@@ -989,3 +989,34 @@ c-4
 
 statement ok
 DROP TABLE t21176;
+
+# Regression test for https://github.com/apache/datafusion/issues/22489
+# An outer ORDER BY / OFFSET must not reduce an inner LIMIT when separated
+# by a sort with different keys.
+
+statement ok
+CREATE TABLE t22489_t0 (id INT) AS VALUES (0), (1);
+
+statement ok
+CREATE TABLE t22489_t1 (id INT, j INT) AS VALUES (1, 1);
+
+query III
+SELECT * FROM (
+  SELECT * FROM (
+    SELECT t0.id, COUNT(t0.id) AS count_id, COUNT(DISTINCT j) AS nunique_j
+    FROM t22489_t0 t0 LEFT JOIN t22489_t1 t1 ON t0.id = t1.id
+    GROUP BY t0.id
+  ) q
+  ORDER BY id DESC NULLS LAST, count_id DESC NULLS LAST, nunique_j DESC NULLS LAST
+  LIMIT 8
+) q2
+ORDER BY id DESC NULLS LAST, count_id DESC NULLS LAST, nunique_j ASC NULLS LAST
+OFFSET 1;
+----
+0 1 0
+
+statement ok
+DROP TABLE t22489_t0;
+
+statement ok
+DROP TABLE t22489_t1;
