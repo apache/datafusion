@@ -50,7 +50,6 @@ use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err, internal_err,
@@ -924,7 +923,7 @@ impl BatchPartitioner {
 /// used to get 3 even streams of `RecordBatch`es
 ///
 ///
-///```text
+/// ```text
 ///        ▲                  ▲                  ▲
 ///        │                  │                  │
 ///        │                  │                  │
@@ -1190,21 +1189,6 @@ impl ExecutionPlan for RepartitionExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to hash partition expressions if this is a hash repartition
-        if let Partitioning::Hash(exprs, _) = self.partitioning() {
-            let mut tnr = TreeNodeRecursion::Continue;
-            for expr in exprs {
-                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-            }
-            return Ok(tnr);
-        }
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

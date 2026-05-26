@@ -29,6 +29,9 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::DynHash;
 
+mod tracker;
+pub use tracker::{DynamicFilterTracker, DynamicFilterTracking};
+
 /// State of a dynamic filter, tracking both updates and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilterState {
@@ -326,6 +329,31 @@ impl DynamicFilterPhysicalExpr {
             .await;
     }
 
+    /// Returns `true` if this filter has been marked complete via
+    /// [`Self::mark_complete`] and will therefore never change again.
+    pub(crate) fn is_complete(&self) -> bool {
+        self.inner.read().is_complete
+    }
+
+    /// Subscribe to this filter's updates for cheap, synchronous change
+    /// detection.
+    ///
+    /// The returned [`DynamicFilterSubscription`] lets a consumer poll whether
+    /// the filter's expression has advanced since it last looked, without
+    /// re-walking a predicate tree or re-deriving a generation on every check.
+    /// This is the building block used by [`DynamicFilterTracker`] to watch
+    /// every dynamic filter inside a (possibly composite) predicate.
+    pub(crate) fn subscribe(&self) -> DynamicFilterSubscription {
+        let mut receiver = self.state_watch.subscribe();
+        // Mark the current state as already-seen so the first `observe()` only
+        // reports updates that happen *after* subscription.
+        let last_generation = receiver.borrow_and_update().generation();
+        DynamicFilterSubscription {
+            receiver,
+            last_generation,
+        }
+    }
+
     /// Check if this dynamic filter is being actively used by any consumers.
     ///
     /// Returns `true` if there are references beyond the producer (e.g., the HashJoinExec
@@ -519,6 +547,77 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 
     fn expression_id(&self) -> Option<u64> {
         Some(self.inner.read().expression_id)
+    }
+}
+
+/// The result of polling a [`DynamicFilterSubscription`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DynamicFilterChange {
+    /// The filter's expression advanced since the previous observation.
+    pub(crate) changed: bool,
+    /// The filter has been marked complete; it will never change again and the
+    /// subscription can be dropped.
+    pub(crate) complete: bool,
+}
+
+/// A cheap, synchronous handle for observing updates to a single
+/// [`DynamicFilterPhysicalExpr`].
+///
+/// Obtained via [`DynamicFilterPhysicalExpr::subscribe`]. Steady-state polling
+/// via [`Self::observe`] is a single atomic load (the underlying
+/// [`tokio::sync::watch`] version counter); the lock is only taken when the
+/// filter has actually been updated.
+#[derive(Debug)]
+pub(crate) struct DynamicFilterSubscription {
+    receiver: watch::Receiver<FilterState>,
+    /// Last generation we reported as "seen". Used to distinguish a real
+    /// expression update from a bare [`DynamicFilterPhysicalExpr::mark_complete`]
+    /// (which re-broadcasts the current generation without changing the
+    /// expression).
+    last_generation: u64,
+}
+
+impl DynamicFilterSubscription {
+    /// Observe the latest state of the filter.
+    ///
+    /// Reports whether the filter's expression advanced since the previous call
+    /// and whether it has since been marked complete. Cheap when nothing has
+    /// changed: a single atomic comparison with no lock acquisition.
+    pub(crate) fn observe(&mut self) -> DynamicFilterChange {
+        match self.receiver.has_changed() {
+            Ok(true) => {
+                let state = *self.receiver.borrow_and_update();
+                let changed = state.generation() > self.last_generation;
+                if changed {
+                    self.last_generation = state.generation();
+                }
+                DynamicFilterChange {
+                    changed,
+                    complete: matches!(state, FilterState::Complete { .. }),
+                }
+            }
+            Ok(false) => DynamicFilterChange {
+                changed: false,
+                complete: false,
+            },
+            // The watch sender lives inside the predicate's
+            // `DynamicFilterPhysicalExpr`, which the owner of this subscription
+            // keeps alive, so observing a dropped sender signals a bug rather
+            // than normal completion. Flag it loudly in debug builds; in release
+            // degrade to "complete" (no further updates are possible) instead of
+            // silently masking it.
+            Err(_) => {
+                debug_assert!(
+                    false,
+                    "DynamicFilterSubscription observed a dropped watch sender; \
+                     the owning predicate should keep it alive"
+                );
+                DynamicFilterChange {
+                    changed: false,
+                    complete: true,
+                }
+            }
+        }
     }
 }
 

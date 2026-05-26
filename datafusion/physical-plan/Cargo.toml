@@ -42,6 +42,11 @@ force_hash_collisions = []
 test_utils = ["arrow/test_utils"]
 tokio_coop = []
 tokio_coop_fallback = []
+proto = [
+    "dep:datafusion-proto-models",
+    "dep:datafusion-proto-common",
+    "datafusion-physical-expr-common/proto",
+]
 
 [lib]
 name = "datafusion_physical_plan"
@@ -65,6 +70,8 @@ datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
 datafusion-physical-expr-common = { workspace = true }
+datafusion-proto-common = { workspace = true, optional = true }
+datafusion-proto-models = { workspace = true, optional = true }
 futures = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
@@ -115,4 +122,13 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "hash_join_semi_anti"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "dictionary_group_values"
+
+[[bench]]
+harness = false
+name = "multi_group_by"
