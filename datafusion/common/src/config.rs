@@ -664,7 +664,7 @@ config_namespace! {
         /// signal (`partial_agg_probe_ns_per_row` metric) can replace
         /// this static threshold is an open question — for now the
         /// metric is reported alongside so callers can evaluate.
-        pub skip_partial_aggregation_use_cost_model: bool, default = true
+        pub skip_partial_aggregation_use_cost_model: bool, default = false
 
         /// Effective ratio threshold used by the cost-aware skip rule.
         /// Skip partial aggregation when ratio at probe close is at
