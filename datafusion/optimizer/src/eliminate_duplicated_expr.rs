@@ -145,7 +145,12 @@ mod tests {
     use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
-    use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{Constraint, Constraints};
+    use datafusion_expr::{
+        col, logical_plan::builder::LogicalPlanBuilder,
+        logical_plan::builder::table_source_with_constraints,
+    };
     use std::sync::Arc;
 
     macro_rules! assert_optimized_plan_equal {
@@ -198,6 +203,50 @@ mod tests {
         Limit: skip=5, fetch=10
           Sort: test.a ASC NULLS FIRST, test.b ASC NULLS LAST
             TableScan: test
+        ")
+    }
+
+    #[test]
+    fn eliminate_sort_exprs_pk_removes_dependent_key() -> Result<()> {
+        // When `id` is a PRIMARY KEY (non-nullable), it uniquely determines
+        // `val`, so `ORDER BY id, val` can safely be reduced to `ORDER BY id`.
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+        ]);
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = table_source_with_constraints(&schema, constraints);
+        let plan = LogicalPlanBuilder::scan("t", source, None)?
+            .sort_by(vec![col("t.id"), col("t.val")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Sort: t.id ASC NULLS LAST
+          TableScan: t
+        ")
+    }
+
+    #[test]
+    fn eliminate_sort_exprs_nullable_unique_keeps_dependent_key() -> Result<()> {
+        // When `id` is a nullable UNIQUE column, SQL allows multiple NULL
+        // values in `id`.  Because NULLs are not considered equal, multiple
+        // rows may share `id = NULL` with different `val` values, so `id`
+        // does NOT functionally determine `val`.  `ORDER BY id, val` must
+        // therefore keep both keys.
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true), // nullable
+            Field::new("val", DataType::Int32, false),
+        ]);
+        let constraints = Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
+        let source = table_source_with_constraints(&schema, constraints);
+        let plan = LogicalPlanBuilder::scan("t", source, None)?
+            .sort_by(vec![col("t.id"), col("t.val")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Sort: t.id ASC NULLS LAST, t.val ASC NULLS LAST
+          TableScan: t
         ")
     }
 }

@@ -3399,6 +3399,22 @@ CREATE TABLE sales_global_with_unique (zip_code INT,
           (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
           (1, 'TUR', NULL, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)
 
+# create a table for testing, where sn is a non-null unique key
+statement ok
+CREATE TABLE sales_global_with_not_null_unique (zip_code INT,
+          country VARCHAR(3),
+          sn INT NOT NULL,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount FLOAT,
+          unique(sn)
+        ) as VALUES
+          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)
+
 # when group by contains primary key expression
 # we can use all the expressions in the table during selection
 # (not just group by expressions + aggregation result)
@@ -3565,12 +3581,13 @@ SELECT r.sn, r.amount, SUM(r.amount)
   GROUP BY r.sn
 ORDER BY r.sn
 
-# left semi join should propagate constraint of left side as is.
+# left semi join should preserve the left-side constraint when the UNIQUE key
+# is also NOT NULL, so the grouped column can still determine the rest.
 query IRR
 SELECT l.sn, l.amount, SUM(l.amount)
   FROM (SELECT *
-    FROM sales_global_with_unique as l
-    LEFT SEMI JOIN sales_global_with_unique as r
+    FROM sales_global_with_not_null_unique as l
+    LEFT SEMI JOIN sales_global_with_not_null_unique as r
     ON l.amount >= r.amount + 10)
   GROUP BY l.sn
 ORDER BY l.sn
@@ -3579,10 +3596,34 @@ ORDER BY l.sn
 2 75 75
 3 200 200
 4 100 100
-NULL 100 100
 
-# Similarly, left anti join should propagate constraint of left side as is.
+# left semi join with a nullable UNIQUE key cannot safely propagate the
+# constraint for expansion, because UNIQUE allows multiple NULLs.
+statement error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "l\.amount" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "l\.sn, sum\(l\.amount\)" appears in the SELECT clause satisfies this requirement
+SELECT l.sn, l.amount, SUM(l.amount)
+  FROM (SELECT *
+    FROM sales_global_with_unique as l
+    LEFT SEMI JOIN sales_global_with_unique as r
+    ON l.amount >= r.amount + 10)
+  GROUP BY l.sn
+ORDER BY l.sn
+
+# left anti join should likewise preserve the left-side constraint when the
+# UNIQUE key is also NOT NULL.
 query IRR
+SELECT l.sn, l.amount, SUM(l.amount)
+  FROM (SELECT *
+    FROM sales_global_with_not_null_unique as l
+    LEFT ANTI JOIN sales_global_with_not_null_unique as r
+    ON l.amount >= r.amount + 10)
+  GROUP BY l.sn
+ORDER BY l.sn
+----
+0 30 30
+
+# Similarly, left anti join with a nullable UNIQUE key cannot safely propagate
+# the constraint for expansion.
+statement error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "l\.amount" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "l\.sn, sum\(l\.amount\)" appears in the SELECT clause satisfies this requirement
 SELECT l.sn, l.amount, SUM(l.amount)
   FROM (SELECT *
     FROM sales_global_with_unique as l
@@ -3590,8 +3631,6 @@ SELECT l.sn, l.amount, SUM(l.amount)
     ON l.amount >= r.amount + 10)
   GROUP BY l.sn
 ORDER BY l.sn
-----
-0 30 30
 
 # Should support grouping by list column
 query ?I
@@ -5641,3 +5680,32 @@ set datafusion.execution.target_partitions = 4;
 
 statement count 0
 drop table t;
+
+# Test that GROUP BY with a UNIQUE constraint does not incorrectly collapse
+# NULL rows. UNIQUE allows multiple NULLs (NULLs are not equal in SQL), so
+# a UNIQUE column cannot be used to eliminate other GROUP BY columns.
+# Regression test for https://github.com/apache/datafusion/issues/21507
+
+statement ok
+CREATE TABLE t_unique_null(a INT, b INT, c INT, UNIQUE(a));
+
+statement ok
+INSERT INTO t_unique_null VALUES (1, 10, 100), (NULL, 20, 200), (NULL, 30, 300);
+
+# The two NULL rows must stay in separate groups (grouped by b as well).
+query II rowsort
+SELECT a, SUM(c) AS total FROM t_unique_null GROUP BY a, b;
+----
+1 100
+NULL 200
+NULL 300
+
+# GROUP BY on the UNIQUE column alone must still merge the NULL rows into one group.
+query II rowsort
+SELECT a, SUM(c) AS total FROM t_unique_null GROUP BY a;
+----
+1 100
+NULL 500
+
+statement ok
+DROP TABLE t_unique_null;

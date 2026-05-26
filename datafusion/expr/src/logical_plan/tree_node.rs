@@ -329,14 +329,18 @@ impl TreeNode for LogicalPlan {
                 static_term,
                 recursive_term,
                 is_distinct,
+                ..
             }) => (static_term, recursive_term).map_elements(f)?.update_data(
                 |(static_term, recursive_term)| {
-                    LogicalPlan::RecursiveQuery(RecursiveQuery {
-                        name,
-                        static_term,
-                        recursive_term,
-                        is_distinct,
-                    })
+                    LogicalPlan::RecursiveQuery(
+                        RecursiveQuery::try_new(
+                            name,
+                            static_term,
+                            recursive_term,
+                            is_distinct,
+                        )
+                        .expect("recursive query schema should remain valid"),
+                    )
                 },
             ),
             LogicalPlan::Statement(stmt) => match stmt {

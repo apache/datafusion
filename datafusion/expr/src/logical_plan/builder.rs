@@ -192,12 +192,14 @@ impl LogicalPlanBuilder {
         // Ensure that the recursive term has the same field types as the static term
         let coerced_recursive_term =
             coerce_plan_expr_for_schema(recursive_term, self.plan.schema())?;
-        Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
-            name,
-            static_term: self.plan,
-            recursive_term: Arc::new(coerced_recursive_term),
-            is_distinct,
-        })))
+        Ok(Self::from(LogicalPlan::RecursiveQuery(
+            RecursiveQuery::try_new(
+                name,
+                self.plan,
+                Arc::new(coerced_recursive_term),
+                is_distinct,
+            )?,
+        )))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
@@ -2890,6 +2892,32 @@ mod tests {
         assert_snapshot!(plan, @r"
         Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]
           TableScan: employee_csv projection=[id, state, salary]
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_aggregate_does_not_expand_nullable_unique_group_by_exprs()
+    -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("state", DataType::Utf8, false),
+            Field::new("salary", DataType::Int32, false),
+        ]);
+        let constraints = Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
+        let table_source = table_source_with_constraints(&schema, constraints);
+
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
+        let plan = LogicalPlanBuilder::scan("employee_csv", table_source, None)?
+            .with_options(options)
+            .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+            .build()?;
+
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv
         ");
 
         Ok(())

@@ -137,12 +137,15 @@ pub struct FunctionalDependence {
     // Column indices of dependent column(s):
     pub target_indices: Vec<usize>,
     /// Flag indicating whether one of the `source_indices` can receive NULL values.
-    /// For a data source, if the constraint in question is `Constraint::Unique`,
-    /// this flag is `true`. If the constraint in question is `Constraint::PrimaryKey`,
-    /// this flag is `false`.
-    /// Note that as the schema changes between different stages in a plan,
-    /// such as after LEFT JOIN or RIGHT JOIN operations, this property may
-    /// change.
+    ///
+    /// Base-table constraints only produce a functional dependency when all
+    /// determinant columns are non-nullable, so dependencies derived directly
+    /// from `Constraint::PrimaryKey` or `Constraint::Unique` start with this
+    /// flag set to `false`.
+    ///
+    /// As the schema changes between different stages in a plan, null-introducing
+    /// operators such as LEFT JOIN or RIGHT JOIN may conservatively downgrade an
+    /// existing dependency by setting this flag to `true`.
     pub nullable: bool,
     // The functional dependency mode:
     pub mode: Dependency,
@@ -196,15 +199,25 @@ impl FunctionalDependencies {
     }
 
     /// Creates a new `FunctionalDependencies` object from the given constraints.
+    ///
+    /// `nullable_flags` must contain one entry per field in the relation,
+    /// indicating whether that field is nullable.  A `UNIQUE` constraint whose
+    /// source columns include any nullable field is **not** a functional
+    /// dependency — because SQL treats `NULL` values as distinct, multiple rows
+    /// may carry `NULL` in a unique-key column without violating the constraint.
+    /// Such constraints are therefore omitted entirely.  When all source columns
+    /// are non-nullable a `UNIQUE` constraint is equivalent to a primary key and
+    /// is recorded with `nullable = false`.
     pub fn new_from_constraints(
         constraints: Option<&Constraints>,
-        n_field: usize,
+        nullable_flags: &[bool],
     ) -> Self {
+        let n_field = nullable_flags.len();
         if let Some(Constraints { inner: constraints }) = constraints {
             // Construct dependency objects based on each individual constraint:
             let dependencies = constraints
                 .iter()
-                .map(|constraint| {
+                .filter_map(|constraint| {
                     // All the field indices are associated with the whole table
                     // since we are dealing with table level constraints:
                     let dependency = match constraint {
@@ -213,15 +226,27 @@ impl FunctionalDependencies {
                             (0..n_field).collect::<Vec<_>>(),
                             false,
                         ),
-                        Constraint::Unique(indices) => FunctionalDependence::new(
-                            indices.to_vec(),
-                            (0..n_field).collect::<Vec<_>>(),
-                            true,
-                        ),
+                        Constraint::Unique(indices) => {
+                            // A UNIQUE constraint where any source column is
+                            // nullable is not a functional dependency: SQL does
+                            // not consider NULLs equal, so two rows may both
+                            // have NULL in the key and still satisfy the
+                            // constraint.  Only emit an FD when all source
+                            // columns are non-nullable, in which case it is
+                            // equivalent to a primary key.
+                            if indices.iter().any(|&i| nullable_flags[i]) {
+                                return None;
+                            }
+                            FunctionalDependence::new(
+                                indices.to_vec(),
+                                (0..n_field).collect::<Vec<_>>(),
+                                false,
+                            )
+                        }
                     };
                     // As primary keys are guaranteed to be unique, set the
                     // functional dependency mode to `Dependency::Single`:
-                    dependency.with_mode(Dependency::Single)
+                    Some(dependency.with_mode(Dependency::Single))
                 })
                 .collect::<Vec<_>>();
             Self::new(dependencies)
@@ -422,7 +447,6 @@ pub fn aggregate_functional_dependencies(
 ) -> FunctionalDependencies {
     let mut aggregate_func_dependencies = vec![];
     let aggr_input_fields = aggr_input_schema.field_names();
-    let aggr_fields = aggr_schema.fields();
     // Association covers the whole table:
     let target_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
     // Get functional dependencies of the schema:
@@ -484,9 +508,12 @@ pub fn aggregate_functional_dependencies(
     if !group_by_expr_names.is_empty() {
         let count = group_by_expr_names.len();
         let source_indices = (0..count).collect::<Vec<_>>();
-        let nullable = source_indices
-            .iter()
-            .any(|idx| aggr_fields[*idx].is_nullable());
+        // Aggregation with GROUP BY always produces unique output rows for
+        // each distinct combination of GROUP BY keys. The nullable flag is
+        // set to false here so that subsequent expansion (e.g. a second
+        // GROUP BY on the aggregate output) is never blocked by source
+        // field nullability.
+        let nullable = false;
         // If GROUP BY expressions do not already act as a determinant:
         if !aggregate_func_dependencies.iter().any(|item| {
             // If `item.source_indices` is a subset of GROUP BY expressions, we shouldn't add

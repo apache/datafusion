@@ -354,9 +354,12 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
-            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
-                // we take the schema of the static term as the schema of the entire recursive query
-                static_term.schema()
+            LogicalPlan::RecursiveQuery(RecursiveQuery { schema, .. }) => {
+                // Recursive queries expose the static term's field layout as
+                // their output schema, but their functional dependencies are
+                // computed separately because the recursive term can violate
+                // those of the anchor.
+                schema
             }
         }
     }
@@ -1081,12 +1084,12 @@ impl LogicalPlan {
             }) => {
                 self.assert_no_expressions(expr)?;
                 let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                    name: name.clone(),
-                    static_term: Arc::new(static_term),
-                    recursive_term: Arc::new(recursive_term),
-                    is_distinct: *is_distinct,
-                }))
+                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery::try_new(
+                    name.clone(),
+                    Arc::new(static_term),
+                    Arc::new(recursive_term),
+                    *is_distinct,
+                )?))
             }
             LogicalPlan::Analyze(a) => {
                 self.assert_no_expressions(expr)?;
@@ -2258,10 +2261,12 @@ impl PartialOrd for EmptyRelation {
 ///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
+    /// Output schema for the recursive query.
+    pub schema: DFSchemaRef,
     /// The static term (initial contents of the working table)
     pub static_term: Arc<LogicalPlan>,
     /// The recursive term (evaluated on the contents of the working table until
@@ -2270,6 +2275,49 @@ pub struct RecursiveQuery {
     /// Should the output of the recursive term be deduplicated (`UNION`) or
     /// not (`UNION ALL`).
     pub is_distinct: bool,
+}
+
+impl RecursiveQuery {
+    pub fn try_new(
+        name: String,
+        static_term: Arc<LogicalPlan>,
+        recursive_term: Arc<LogicalPlan>,
+        is_distinct: bool,
+    ) -> Result<Self> {
+        let schema = Arc::new(
+            static_term
+                .schema()
+                .as_ref()
+                .clone()
+                .with_functional_dependencies(FunctionalDependencies::empty())?,
+        );
+
+        Ok(Self {
+            name,
+            schema,
+            static_term,
+            recursive_term,
+            is_distinct,
+        })
+    }
+}
+
+impl PartialOrd for RecursiveQuery {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        (
+            &self.name,
+            &self.static_term,
+            &self.recursive_term,
+            &self.is_distinct,
+        )
+            .partial_cmp(&(
+                &other.name,
+                &other.static_term,
+                &other.recursive_term,
+                &other.is_distinct,
+            ))
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
 }
 
 /// Values expression. See
@@ -2966,9 +3014,11 @@ impl TableScanBuilder {
             return plan_err!("table_name cannot be empty");
         }
         let schema = source.schema();
+        let nullable_flags: Vec<bool> =
+            schema.fields().iter().map(|f| f.is_nullable()).collect();
         let func_dependencies = FunctionalDependencies::new_from_constraints(
             source.constraints(),
-            schema.fields.len(),
+            &nullable_flags,
         );
         let projected_schema = projection
             .as_ref()
@@ -5271,7 +5321,7 @@ mod tests {
                         Some(&Constraints::new_unverified(vec![Constraint::Unique(
                             vec![0],
                         )])),
-                        1,
+                        &[false],
                     ),
                 )
                 .unwrap(),

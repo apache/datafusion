@@ -1319,3 +1319,35 @@ RESET datafusion.execution.enable_recursive_ctes;
 
 statement ok
 RESET datafusion.sql_parser.enable_ident_normalization;
+
+# Regression test: functional dependencies from the static (anchor) term of a
+# recursive CTE must NOT be propagated to the outer SubqueryAlias.  The
+# recursive term can produce rows that violate any uniqueness constraint that
+# holds for the anchor alone.  Without this guard, the anchor's PRIMARY KEY FD
+# leaks into the SubqueryAlias schema; the replace_distinct_aggregate optimizer
+# rule then sees `id` as already unique and incorrectly eliminates DISTINCT,
+# returning duplicate rows instead of a deduplicated result.
+statement ok
+CREATE TABLE pk_table(id INT NOT NULL, val INT NOT NULL, PRIMARY KEY(id));
+
+statement ok
+INSERT INTO pk_table VALUES (1, 100), (2, 200);
+
+# Without the FD fix, the anchor's PRIMARY KEY FD propagates to SubqueryAlias:
+# nodes, making the optimizer believe id is unique across the whole CTE output.
+# The replace_distinct_aggregate rule then eliminates DISTINCT (id appears
+# unique), returning two rows of `1` instead of one.
+query I
+WITH RECURSIVE nodes AS (
+    SELECT id, val FROM pk_table
+    UNION ALL
+    SELECT 1 AS id, 300 AS val
+    FROM nodes
+    WHERE nodes.id = 2
+)
+SELECT DISTINCT id FROM nodes WHERE id = 1
+----
+1
+
+statement ok
+DROP TABLE pk_table;
