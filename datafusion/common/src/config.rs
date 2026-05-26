@@ -664,7 +664,7 @@ config_namespace! {
         /// signal (`partial_agg_probe_ns_per_row` metric) can replace
         /// this static threshold is an open question — for now the
         /// metric is reported alongside so callers can evaluate.
-        pub skip_partial_aggregation_use_cost_model: bool, default = false
+        pub skip_partial_aggregation_use_cost_model: bool, default = true
 
         /// Number of input rows used in the A/B sampling window after the
         /// initial partial probe completes. During this window the operator
