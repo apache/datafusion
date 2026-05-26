@@ -663,7 +663,7 @@ config_namespace! {
         /// aggregation for the cost-aware skip rule to fire. Only
         /// consulted when `skip_partial_aggregation_use_cost_model` is
         /// true.
-        pub skip_partial_aggregation_cost_ns_per_row: u64, default = 1000
+        pub skip_partial_aggregation_cost_ns_per_row: u64, default = 100
 
         /// Lower bound on aggregation ratio (num_groups / input_rows) for
         /// the cost-aware skip rule to fire. Below this ratio partial
