@@ -1333,6 +1333,22 @@ pub fn ensure_distribution(
         .map(|c| Arc::clone(&c.plan))
         .collect::<Vec<_>>();
 
+    // Skip the (often expensive) `with_new_children` rebuild when none of
+    // the children were actually replaced above. For nodes like
+    // `ProjectionExec`, `with_new_children` calls `try_new` and recomputes
+    // schema / equivalence properties / output ordering even when the
+    // input Arcs are identical. Profiling on a representative deep
+    // ProjectionExec stack showed `with_new_children` dominating
+    // `ensure_distribution` time for plans where no distribution change
+    // applies (point queries with no join / aggregate / unmet ordering),
+    // so the rebuild is wasted on the common case.
+    let original_children = plan.children();
+    let children_unchanged = children_plans.len() == original_children.len()
+        && children_plans
+            .iter()
+            .zip(original_children.iter())
+            .all(|(new, old)| Arc::ptr_eq(new, *old));
+
     plan = if plan.is::<UnionExec>()
         && !config.optimizer.prefer_existing_union
         && can_interleave(children_plans.iter())
@@ -1361,6 +1377,10 @@ pub fn ensure_distribution(
         //         Repartition (hash):
         //           Data
         Arc::new(InterleaveExec::try_new(children_plans)?)
+    } else if children_unchanged {
+        // Children are byte-identical Arcs as before; reuse the existing
+        // plan node and skip the schema/ordering recomputation.
+        plan
     } else {
         plan.with_new_children(children_plans)?
     };
