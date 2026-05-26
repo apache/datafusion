@@ -492,6 +492,16 @@ Previously it returned <code class="docutils literal notranslate"><span class="p
 “is this worth pruning?” decision lived in the Parquet opener). Files with column
 statistics, and predicates that carry a dynamic filter, are unaffected.</p>
 </section>
+<section id="queryplanner-adds-any-as-a-supertrait">
+<h3><code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait<a class="headerlink" href="#queryplanner-adds-any-as-a-supertrait" title="Link to this heading">#</a></h3>
+<p>To enable downcasting of <code class="docutils literal notranslate"><span class="pre">dyn</span> <span class="pre">QueryPlanner</span></code> to concrete query planner types (via
+<code class="docutils literal notranslate"><span class="pre">is::&lt;T&gt;()</span></code> / <code class="docutils literal notranslate"><span class="pre">downcast_ref::&lt;T&gt;()</span></code>), the <code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> trait now has <code class="docutils literal notranslate"><span class="pre">Any</span></code>
+as a supertrait:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- pub trait QueryPlanner: Debug</span>
+<span class="gi">+ pub trait QueryPlanner: Any + Debug</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -546,6 +556,7 @@ statistics, and predicates that carry a dynamic filter, are unaffected.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decimal-scalar-formatting-uses-human-readable-values">Decimal scalar formatting uses human-readable values</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-dynamic-physical-expr-is-deprecated"><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#queryplanner-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
 </ul>
 </li>
 </ul>
