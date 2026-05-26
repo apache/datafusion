@@ -608,15 +608,25 @@ impl LogicalPlan {
                     Transformed::new(plan, exprs.transformed, exprs.tnr)
                 }
             }
-            LogicalPlan::TableScan(mut scan) => {
-                // Only `filters` carry expressions; take them out, rewrite,
-                // and rebuild with `..scan` so every other field (including
-                // any added later) is carried through untouched.
-                let filters = std::mem::take(&mut scan.filters);
-                filters.map_elements(f)?.update_data(|filters| {
-                    LogicalPlan::TableScan(TableScan { filters, ..scan })
+            LogicalPlan::TableScan(TableScan {
+                table_name,
+                source,
+                projection,
+                projected_schema,
+                filters,
+                fetch,
+                statistics_requests,
+            }) => filters.map_elements(f)?.update_data(|filters| {
+                LogicalPlan::TableScan(TableScan {
+                    table_name,
+                    source,
+                    projection,
+                    projected_schema,
+                    filters,
+                    fetch,
+                    statistics_requests,
                 })
-            }
+            }),
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
                 on_expr,
                 select_expr,
