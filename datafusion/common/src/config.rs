@@ -279,7 +279,7 @@ config_namespace! {
         pub enable_options_value_normalization: bool, warn = "`enable_options_value_normalization` is deprecated and ignored", default = false
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
-        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
+        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks and Spark.
         pub dialect: Dialect, default = Dialect::Generic
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
@@ -342,6 +342,14 @@ pub enum Dialect {
     Ansi,
     DuckDB,
     Databricks,
+    Spark,
+}
+
+impl Dialect {
+    /// List of all supported dialect names, for use in error messages.
+    pub const AVAILABLE: &'static str =
+        "Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks, Spark";
 }
 
 impl AsRef<str> for Dialect {
@@ -360,6 +368,7 @@ impl AsRef<str> for Dialect {
             Self::Ansi => "ansi",
             Self::DuckDB => "duckdb",
             Self::Databricks => "databricks",
+            Self::Spark => "spark",
         }
     }
 }
@@ -382,11 +391,12 @@ impl FromStr for Dialect {
             "ansi" => Self::Ansi,
             "duckdb" => Self::DuckDB,
             "databricks" => Self::Databricks,
+            "spark" | "sparksql" => Self::Spark,
             other => {
-                let error_message = format!(
-                    "Invalid Dialect: {other}. Expected one of: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks"
-                );
-                return Err(DataFusionError::Configuration(error_message));
+                return Err(DataFusionError::Configuration(format!(
+                    "Invalid Dialect: {other}. Expected one of: {}",
+                    Self::AVAILABLE
+                )));
             }
         };
         Ok(value)
@@ -4089,5 +4099,17 @@ mod tests {
         // Other fields should be defaults
         assert_eq!(cdc.max_chunk_size, 1024 * 1024);
         assert_eq!(cdc.norm_level, 0);
+    }
+
+    #[test]
+    fn test_dialect_spark_roundtrip() {
+        use crate::config::Dialect;
+        use std::str::FromStr;
+
+        assert_eq!(Dialect::from_str("spark").unwrap(), Dialect::Spark);
+        assert_eq!(Dialect::from_str("sparksql").unwrap(), Dialect::Spark);
+        assert_eq!(Dialect::from_str("SPARK").unwrap(), Dialect::Spark);
+        assert_eq!(Dialect::Spark.as_ref(), "spark");
+        assert_eq!(Dialect::Spark.to_string(), "spark");
     }
 }

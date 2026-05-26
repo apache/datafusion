@@ -88,6 +88,9 @@ impl SessionStateBuilderSpark for SessionStateBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::common::config::Dialect;
+    use datafusion::prelude::SessionConfig;
+    use datafusion::prelude::SessionContext;
 
     #[test]
     fn test_session_state_with_spark_features() {
@@ -107,5 +110,28 @@ mod tests {
             !state.expr_planners().is_empty(),
             "Apache Spark expr planners should be registered"
         );
+    }
+
+    #[tokio::test]
+    async fn test_spark_dialect_with_spark_functions() {
+        let mut config = SessionConfig::new();
+        config.options_mut().sql_parser.dialect = Dialect::Spark;
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .with_spark_features()
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+
+        // Spark function + Spark dialect parsing
+        let result = ctx
+            .sql("SELECT sha2('abc', 256)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].num_rows(), 1);
     }
 }
