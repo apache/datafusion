@@ -334,7 +334,7 @@ fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> Resul
     let time_delta = compute_distance(time_diff, stride_nanos)?;
 
     origin.checked_add(time_delta).ok_or_else(|| {
-        arrow::error::ArrowError::InvalidArgumentError(format!(
+        ArrowError::InvalidArgumentError(format!(
             "date_bin origin {origin} + delta {time_delta} overflows i64"
         ))
         .into()
@@ -344,12 +344,12 @@ fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> Resul
 // distance from origin to bin
 fn compute_distance(time_diff: i64, stride: i64) -> Result<i64> {
     let remainder = time_diff.checked_rem(stride).ok_or_else(|| {
-        arrow::error::ArrowError::InvalidArgumentError(format!(
+        ArrowError::InvalidArgumentError(format!(
             "date_bin compute_distance time_diff {time_diff} % stride {stride} overflows i64"
         ))
     })?;
     let time_delta = time_diff.checked_sub(remainder).ok_or_else(|| {
-        arrow::error::ArrowError::InvalidArgumentError(format!(
+        ArrowError::InvalidArgumentError(format!(
             "date_bin compute_distance time_diff {time_diff} - remainder {remainder} overflows i64"
         ))
     })?;
@@ -357,7 +357,7 @@ fn compute_distance(time_diff: i64, stride: i64) -> Result<i64> {
     if time_diff < 0 && stride > 1 && time_delta != time_diff {
         // The origin is later than the source timestamp, round down to the previous bin
         time_delta.checked_sub(stride).ok_or_else(|| {
-            arrow::error::ArrowError::InvalidArgumentError(format!(
+            ArrowError::InvalidArgumentError(format!(
                 "date_bin compute_distance time_delta {time_delta} - stride {stride} overflows i64"
             ))
             .into()
