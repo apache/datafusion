@@ -1695,22 +1695,18 @@ mod tests {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Query-aware statistics requests.
-//
-// A small extension to the existing `Statistics` model: instead of "give me
-// everything you have for every column", a caller can ask for a specific list
-// of stats by name. `StatisticsRequest` is just that vocabulary — DataFusion
-// itself does not populate or consume it. It exists so a request can be
-// threaded from a `TableScan` (see `TableScan::statistics_requests`) through
-// `ScanArgs::statistics_requests` to a `TableProvider`, which is enough for a
-// query-aware statistics feature to be implemented outside of DataFusion.
-// ---------------------------------------------------------------------------
-
 use datafusion_common::Column;
 
 /// A statistic a caller would like a provider to supply, if it can do so
 /// cheaply.
+///
+/// A small, query-aware extension to the existing `Statistics` model: instead
+/// of "give me everything you have for every column", a caller can ask for a
+/// specific list of stats by name. `StatisticsRequest` is just that vocabulary
+/// — DataFusion itself does not populate or consume it. It exists so a request
+/// can be threaded from a `TableScan` (see `TableScan::statistics_requests`)
+/// through `ScanArgs::statistics_requests` to a `TableProvider`, which is enough
+/// for a query-aware statistics feature to be implemented outside of DataFusion.
 ///
 /// Each variant maps onto a field of [`datafusion_common::Statistics`] /
 /// [`datafusion_common::ColumnStatistics`], so a provider that already
