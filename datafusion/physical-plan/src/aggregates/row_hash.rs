@@ -129,9 +129,7 @@ struct SpillState {
     // Metrics related to spilling are managed inside `spill_manager`
 }
 
-/// Phases of the segment-level cost-aware skip decision.
-///
-/// One full cycle:
+/// Three phases of the cost-aware skip decision.
 ///
 /// 1. `Partial` — accumulate input through the hash table (normal
 ///    partial-agg path), measuring `partial_ns/row` and the
@@ -141,22 +139,15 @@ struct SpillState {
 ///    the passthrough path (`transform_to_states`) to measure
 ///    `passthrough_ns/row`. The hash table built so far is kept;
 ///    nothing is emitted yet.
-/// 3. `Active { should_skip, rows_since_decision }` — committed decision
-///    for the current segment. Skip when
+/// 3. `Locked { should_skip }` — final decision. Skip when
 ///    `ratio > passthrough_ns/row / partial_ns/row` (the cost-aware
-///    crossover); otherwise revert to partial agg.
-/// 4. When `rows_since_decision >= re_probe_interval`, the probe resets
-///    back to `Partial`, restarting the cycle on the next segment of
-///    input. Set the interval to 0 to disable re-probing entirely
-///    (the decision is final).
+///    crossover); otherwise revert to partial agg for the rest of the
+///    stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbePhase {
     Partial,
     AbSampling,
-    Active {
-        should_skip: bool,
-        rows_since_decision: usize,
-    },
+    Locked { should_skip: bool },
 }
 
 /// Tracks if the aggregate should skip partial aggregations.
@@ -176,10 +167,6 @@ struct SkipAggregationProbe {
     probe_ratio_threshold: f64,
     use_cost_model: bool,
     ab_sampling_rows: usize,
-    /// Rows processed under the committed decision before the probe
-    /// rewinds back to `Partial` for a fresh measurement cycle. 0
-    /// disables re-probing (one-shot decision).
-    re_probe_interval_rows: usize,
 
     // ========================================================================
     // STATE
@@ -226,12 +213,6 @@ struct SkipAggregationProbe {
     /// 0 otherwise. Distinguishes the cost-aware skip from the fixed
     /// Rule 1 skip and from "decision was to keep partial".
     probe_cost_decision_skip: metrics::Gauge,
-    /// Diagnostic counter: number of completed segments (probe + A/B +
-    /// active region). 1 if the probe ran once and didn't re-probe; N
-    /// when re-probing is enabled and the stream contains N segments.
-    /// A high number on a fast query is a hint that
-    /// `re_probe_interval_rows` is too small relative to the workload.
-    probe_segment_count: metrics::Count,
 }
 
 impl SkipAggregationProbe {
@@ -241,14 +222,12 @@ impl SkipAggregationProbe {
         probe_ratio_threshold: f64,
         use_cost_model: bool,
         ab_sampling_rows: usize,
-        re_probe_interval_rows: usize,
         skipped_aggregation_rows: metrics::Count,
         elapsed_compute: metrics::Time,
         probe_partial_ns_per_row: metrics::Gauge,
         probe_passthrough_ns_per_row: metrics::Gauge,
         probe_ratio_per_mille: metrics::Gauge,
         probe_cost_decision_skip: metrics::Gauge,
-        probe_segment_count: metrics::Count,
     ) -> Self {
         let elapsed_compute_at_probe_start = elapsed_compute.value();
         Self {
@@ -256,7 +235,6 @@ impl SkipAggregationProbe {
             probe_ratio_threshold,
             use_cost_model,
             ab_sampling_rows,
-            re_probe_interval_rows,
             phase: ProbePhase::Partial,
             input_rows: 0,
             num_groups: 0,
@@ -271,72 +249,22 @@ impl SkipAggregationProbe {
             probe_passthrough_ns_per_row,
             probe_ratio_per_mille,
             probe_cost_decision_skip,
-            probe_segment_count,
         }
     }
 
-    /// Called from the partial-agg path after each input batch. In
-    /// `Partial`, accumulates partial probe state and may transition to
-    /// A/B sampling or commit a skip. In `Active { should_skip: false }`
-    /// (keeping partial), increments the segment counter and triggers a
-    /// re-probe when the configured interval is reached.
+    /// Called from the partial-agg path after each input batch. Tracks
+    /// total rows / group count and, when `probe_rows_threshold` is
+    /// reached, drives the phase transition.
     fn observe_partial_batch(&mut self, input_rows: usize, num_groups: usize) {
-        match self.phase {
-            ProbePhase::Partial => {
-                self.input_rows += input_rows;
-                self.num_groups = num_groups;
-                if self.input_rows < self.probe_rows_threshold {
-                    return;
-                }
-                self.finalize_partial_probe();
-            }
-            ProbePhase::Active {
-                should_skip: false,
-                ref mut rows_since_decision,
-            } => {
-                *rows_since_decision += input_rows;
-                if self.re_probe_interval_rows > 0
-                    && *rows_since_decision >= self.re_probe_interval_rows
-                {
-                    self.start_reprobe();
-                }
-            }
-            _ => {}
+        if self.phase != ProbePhase::Partial {
+            return;
         }
-    }
-
-    /// Called from the [`ExecutionState::SkippingAggregation`] path. In
-    /// `Active { should_skip: true }`, increments the segment counter and
-    /// triggers a re-probe when the configured interval is reached. No-op
-    /// in any other phase.
-    fn tick_skip_batch(&mut self, input_rows: usize) {
-        if let ProbePhase::Active {
-            should_skip: true,
-            ref mut rows_since_decision,
-        } = self.phase
-        {
-            *rows_since_decision += input_rows;
-            if self.re_probe_interval_rows > 0
-                && *rows_since_decision >= self.re_probe_interval_rows
-            {
-                self.start_reprobe();
-            }
+        self.input_rows += input_rows;
+        self.num_groups = num_groups;
+        if self.input_rows < self.probe_rows_threshold {
+            return;
         }
-    }
 
-    /// `true` if the probe has just finished an active segment and is
-    /// ready for the main loop to re-enter the partial-agg path (a
-    /// fresh `Partial` measurement window).
-    fn wants_reprobe(&self) -> bool {
-        // Re-probe is requested when the probe is back in `Partial` with
-        // no accumulated input — exactly what `start_reprobe` leaves
-        // behind.
-        matches!(self.phase, ProbePhase::Partial) && self.input_rows == 0
-    }
-
-    /// Run the partial-probe → decision transition once the partial
-    /// window has accumulated `probe_rows_threshold` rows.
-    fn finalize_partial_probe(&mut self) {
         let ratio = self.num_groups as f64 / self.input_rows as f64;
         let partial_ns = self
             .elapsed_compute
@@ -348,9 +276,9 @@ impl SkipAggregationProbe {
         self.probe_partial_ns_per_row.set(partial_ns_per_row);
         self.probe_ratio_per_mille.set((ratio * 1000.0) as usize);
 
+        // Rule 1 (fixed): high ratio — short-circuit straight to skip.
         if ratio >= self.probe_ratio_threshold {
-            // Rule 1 (fixed): high ratio short-circuits to skip.
-            self.commit_decision(true);
+            self.commit_skip();
             return;
         }
 
@@ -365,22 +293,6 @@ impl SkipAggregationProbe {
         // `finalize_ab_decision` runs the cost-based comparison.
         self.elapsed_compute_at_ab_start = Some(self.elapsed_compute.value());
         self.phase = ProbePhase::AbSampling;
-    }
-
-    /// Reset state to begin a new probe cycle. Used both by re-probing
-    /// after the segment limit is reached and (conceptually) on probe
-    /// construction. Counters are zeroed; metrics gauges are *not*
-    /// cleared — they hold the most-recent reading.
-    fn start_reprobe(&mut self) {
-        self.probe_segment_count.add(1);
-        self.phase = ProbePhase::Partial;
-        self.input_rows = 0;
-        self.num_groups = 0;
-        self.ab_rows = 0;
-        self.elapsed_compute_at_probe_start = self.elapsed_compute.value();
-        self.elapsed_compute_at_ab_start = None;
-        self.should_skip = false;
-        self.is_locked = false;
     }
 
     /// True iff the main loop should route the next input batch through
@@ -438,21 +350,24 @@ impl SkipAggregationProbe {
             ratio > (passthrough_ns_per_row as f64 / partial_ns_per_row as f64)
         };
 
-        self.probe_cost_decision_skip
-            .set(if should_skip { 1 } else { 0 });
-        self.commit_decision(should_skip);
+        if should_skip {
+            self.probe_cost_decision_skip.set(1);
+            self.commit_skip();
+        } else {
+            self.probe_cost_decision_skip.set(0);
+            self.phase = ProbePhase::Locked { should_skip: false };
+            self.is_locked = true;
+        }
     }
 
-    /// Commit a decision and enter the `Active` segment phase. Used by
-    /// both Rule 1 short-circuit (skip) and the cost-aware path
-    /// (skip or keep); keeps the per-flag bookkeeping in one place.
-    fn commit_decision(&mut self, should_skip: bool) {
-        self.should_skip = should_skip;
+    /// Transition to the terminal `Locked { should_skip: true }` state.
+    /// Used by both Rule 1 (fixed-ratio short-circuit) and the cost-aware
+    /// path so the rest of the operator can rely on a single
+    /// `should_skip` flag.
+    fn commit_skip(&mut self) {
+        self.should_skip = true;
         self.is_locked = true;
-        self.phase = ProbePhase::Active {
-            should_skip,
-            rows_since_decision: 0,
-        };
+        self.phase = ProbePhase::Locked { should_skip: true };
     }
 
     fn should_skip(&self) -> bool {
@@ -899,8 +814,6 @@ impl GroupedHashAggregateStream {
                 options.skip_partial_aggregation_probe_ratio_threshold;
             let use_cost_model = options.skip_partial_aggregation_use_cost_model;
             let ab_sampling_rows = options.skip_partial_aggregation_ab_sampling_rows;
-            let re_probe_interval_rows =
-                options.skip_partial_aggregation_re_probe_interval_rows;
             let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
                 .with_category(MetricCategory::Rows)
                 .counter("skipped_aggregation_rows", partition);
@@ -916,22 +829,17 @@ impl GroupedHashAggregateStream {
             let probe_cost_decision_skip = MetricBuilder::new(&agg.metrics)
                 .with_category(MetricCategory::Rows)
                 .gauge("partial_agg_probe_cost_decision_skip", partition);
-            let probe_segment_count = MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Rows)
-                .counter("partial_agg_probe_segment_count", partition);
             Some(SkipAggregationProbe::new(
                 probe_rows_threshold,
                 probe_ratio_threshold,
                 use_cost_model,
                 ab_sampling_rows,
-                re_probe_interval_rows,
                 skipped_aggregation_rows,
                 baseline_metrics.elapsed_compute().clone(),
                 probe_partial_ns_per_row,
                 probe_passthrough_ns_per_row,
                 probe_ratio_per_mille,
                 probe_cost_decision_skip,
-                probe_segment_count,
             ))
         } else {
             None
@@ -1110,19 +1018,10 @@ impl Stream for GroupedHashAggregateStream {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         Some(Ok(batch)) => {
                             let _timer = elapsed_compute.timer();
-                            let input_rows = batch.num_rows();
                             if let Some(probe) = self.skip_aggregation_probe.as_mut() {
                                 probe.record_skipped(&batch);
                             }
                             let states = self.transform_to_states(&batch)?;
-                            // Drive the segment counter; if the probe
-                            // decides to re-probe, swing the operator
-                            // back to `ReadingInput` so the partial-agg
-                            // path runs again on the next batch.
-                            self.tick_skip_aggregation_probe(input_rows);
-                            if self.probe_wants_reprobe() {
-                                self.exec_state = ExecutionState::ReadingInput;
-                            }
                             return Poll::Ready(Some(Ok(
                                 states.record_output(&self.baseline_metrics)
                             )));
@@ -1777,24 +1676,6 @@ impl GroupedHashAggregateStream {
             .is_some_and(|p| p.wants_passthrough_sample())
     }
 
-    /// True iff the probe has finished an active segment and wants the
-    /// main loop to re-enter the partial-agg path for a fresh probe
-    /// cycle. Driven by `re_probe_interval_rows`.
-    fn probe_wants_reprobe(&self) -> bool {
-        self.skip_aggregation_probe
-            .as_ref()
-            .is_some_and(|p| p.wants_reprobe())
-    }
-
-    /// Tick the probe with rows that flowed through the passthrough
-    /// (`SkippingAggregation`) path, so it can drive the re-probe
-    /// segment counter.
-    fn tick_skip_aggregation_probe(&mut self, input_rows: usize) {
-        if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            probe.tick_skip_batch(input_rows);
-        }
-    }
-
     /// In case the probe indicates that aggregation may be
     /// skipped, forces stream to produce currently accumulated output.
     ///
@@ -2066,13 +1947,6 @@ mod tests {
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
             &datafusion_common::ScalarValue::Float64(Some(probe_ratio_threshold)),
         );
-        // This test exercises the legacy Rule 1 not-locked-until-skip
-        // behaviour. Disable the cost-aware path so the default-on A/B
-        // sampling doesn't change the decision shape.
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_use_cost_model",
-            &datafusion_common::ScalarValue::Boolean(Some(false)),
-        );
         task_ctx = task_ctx.with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
 
@@ -2220,7 +2094,6 @@ mod tests {
         passthrough_ns_gauge: metrics::Gauge,
         ratio_gauge: metrics::Gauge,
         cost_decision_gauge: metrics::Gauge,
-        segment_count: metrics::Count,
     }
 
     fn rig(
@@ -2229,41 +2102,22 @@ mod tests {
         use_cost_model: bool,
         ab_sampling_rows: usize,
     ) -> ProbeRig {
-        rig_with_re_probe(
-            probe_rows_threshold,
-            probe_ratio_threshold,
-            use_cost_model,
-            ab_sampling_rows,
-            0, // disable re-probing in legacy tests
-        )
-    }
-
-    fn rig_with_re_probe(
-        probe_rows_threshold: usize,
-        probe_ratio_threshold: f64,
-        use_cost_model: bool,
-        ab_sampling_rows: usize,
-        re_probe_interval_rows: usize,
-    ) -> ProbeRig {
         let elapsed = metrics::Time::new();
         let partial_ns_gauge = metrics::Gauge::new();
         let passthrough_ns_gauge = metrics::Gauge::new();
         let ratio_gauge = metrics::Gauge::new();
         let cost_decision_gauge = metrics::Gauge::new();
-        let segment_count = metrics::Count::new();
         let probe = SkipAggregationProbe::new(
             probe_rows_threshold,
             probe_ratio_threshold,
             use_cost_model,
             ab_sampling_rows,
-            re_probe_interval_rows,
             metrics::Count::new(),
             elapsed.clone(),
             partial_ns_gauge.clone(),
             passthrough_ns_gauge.clone(),
             ratio_gauge.clone(),
             cost_decision_gauge.clone(),
-            segment_count.clone(),
         );
         ProbeRig {
             probe,
@@ -2272,7 +2126,6 @@ mod tests {
             passthrough_ns_gauge,
             ratio_gauge,
             cost_decision_gauge,
-            segment_count,
         }
     }
 
@@ -2414,76 +2267,5 @@ mod tests {
 
         assert_eq!(r.partial_ns_gauge.value(), 2_000);
         assert_eq!(r.ratio_gauge.value(), 500);
-    }
-
-    /// After committing a skip decision, processing `re_probe_interval`
-    /// rows through `tick_skip_batch` rewinds the probe back to
-    /// `Partial`, ready for the main loop to re-enter the partial-agg
-    /// path on the next segment.
-    #[test]
-    fn skip_probe_reprobes_after_skip_segment() {
-        let mut r = rig_with_re_probe(100, 0.8, true, 100, 1000);
-
-        // Force a skip via Rule 1 (ratio 0.9).
-        r.probe.observe_partial_batch(100, 90);
-        assert!(r.probe.should_skip());
-        assert!(r.probe.is_locked);
-        assert!(!r.probe.wants_reprobe());
-        assert_eq!(r.segment_count.value(), 0);
-
-        // Stream 1000 rows through skip — at the threshold the probe
-        // resets back to `Partial`.
-        r.probe.tick_skip_batch(500);
-        assert!(!r.probe.wants_reprobe());
-        r.probe.tick_skip_batch(500);
-
-        assert!(r.probe.wants_reprobe());
-        assert!(!r.probe.should_skip());
-        assert!(!r.probe.is_locked);
-        assert_eq!(r.segment_count.value(), 1);
-    }
-
-    /// After committing a keep decision, accumulating
-    /// `re_probe_interval` more rows through `observe_partial_batch`
-    /// rewinds the probe so the next batch starts a fresh partial
-    /// measurement.
-    #[test]
-    fn skip_probe_reprobes_after_keep_segment() {
-        let mut r = rig_with_re_probe(100, 0.8, true, 100, 1000);
-
-        // partial=100ns/row, passthrough=80ns/row, ratio 0.6 →
-        // 0.6 < 80/100 = 0.8 → cost says keep.
-        r.elapsed.add_duration(Duration::from_nanos(10_000));
-        r.probe.observe_partial_batch(100, 60);
-        r.elapsed.add_duration(Duration::from_nanos(8_000));
-        r.probe.observe_ab_batch(100);
-        assert!(!r.probe.should_skip());
-        assert!(r.probe.is_locked);
-        assert_eq!(r.segment_count.value(), 0);
-
-        // Stream 1000 rows through the keep path — re-probe fires.
-        r.probe.observe_partial_batch(500, 320);
-        assert!(!r.probe.wants_reprobe());
-        r.probe.observe_partial_batch(500, 600);
-
-        assert!(r.probe.wants_reprobe());
-        assert!(!r.probe.is_locked);
-        assert_eq!(r.segment_count.value(), 1);
-    }
-
-    /// `re_probe_interval_rows = 0` disables re-probing entirely —
-    /// the original one-shot decision behaviour.
-    #[test]
-    fn skip_probe_re_probe_disabled_when_interval_zero() {
-        let mut r = rig_with_re_probe(100, 0.8, true, 100, 0);
-
-        r.probe.observe_partial_batch(100, 90); // skip via Rule 1
-        assert!(r.probe.should_skip());
-
-        // Even after a huge skip-window, the probe stays locked.
-        r.probe.tick_skip_batch(10_000_000);
-        assert!(!r.probe.wants_reprobe());
-        assert!(r.probe.is_locked);
-        assert_eq!(r.segment_count.value(), 0);
     }
 }

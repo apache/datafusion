@@ -675,15 +675,6 @@ config_namespace! {
         /// be cheap if the decision turns out to be "keep partial".
         pub skip_partial_aggregation_ab_sampling_rows: usize, default = 10_000
 
-        /// Rows processed under the committed skip/keep decision before
-        /// the cost-aware probe re-runs the partial-probe + A/B-sampling
-        /// cycle and possibly switches direction. Lets the operator
-        /// adapt to shifting data distributions (e.g. dense bursts of
-        /// repeated keys followed by sparse high-cardinality stretches).
-        /// Set to 0 to disable re-probing (one-shot decision, the
-        /// behaviour before this knob existed).
-        pub skip_partial_aggregation_re_probe_interval_rows: usize, default = 1_000_000
-
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.
