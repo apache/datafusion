@@ -1187,10 +1187,6 @@ mod tests {
         )
     }
 
-    /// When `physical_uncorrelated_scalar_subquery` is disabled, uncorrelated
-    /// scalar subqueries are rewritten to left joins by this rule (the
-    /// pre-DataFusion 54 behavior), instead of being left in the plan for
-    /// `ScalarSubqueryExec` to execute.
     #[test]
     fn uncorrelated_scalar_subquery_rewritten_when_flag_off() -> Result<()> {
         use datafusion_common::config::ConfigOptions;
