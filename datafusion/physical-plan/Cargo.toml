@@ -125,3 +125,8 @@ name = "dictionary_group_values"
 [[bench]]
 harness = false
 name = "multi_group_by"
+
+[[bench]]
+harness = false
+name = "partial_hash_agg"
+required-features = ["test_utils"]
