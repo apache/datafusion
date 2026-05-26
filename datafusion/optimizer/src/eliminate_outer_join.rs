@@ -1349,9 +1349,7 @@ mod tests {
 
         // Filter → Projection → LeftJoin is the shape produced by projection
         // pruning in queries such as TPC-DS q49, where the post-join
-        // Projection sits between the filter and the join. This test also
-        // introduces an alias `bb` for t2.b, so it exercises inlining the
-        // filter predicate through the projection.
+        // Projection sits between the filter and the join.
         let plan = LogicalPlanBuilder::from(t1)
             .join(
                 t2,
