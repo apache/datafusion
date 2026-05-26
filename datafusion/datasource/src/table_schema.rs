@@ -181,6 +181,12 @@ impl From<SchemaRef> for TableSchema {
     }
 }
 
+impl From<&SchemaRef> for TableSchema {
+    fn from(schema: &SchemaRef) -> Self {
+        TableSchemaBuilder::new(Arc::clone(schema)).build()
+    }
+}
+
 /// Builder for [`TableSchema`].
 ///
 /// The file schema is the only required input; partition columns are optional.
@@ -234,6 +240,18 @@ impl TableSchemaBuilder {
             table_partition_cols: self.table_partition_cols,
             table_schema: Arc::new(builder.finish()),
         }
+    }
+}
+
+impl From<SchemaRef> for TableSchemaBuilder {
+    fn from(schema: SchemaRef) -> Self {
+        TableSchemaBuilder::new(schema)
+    }
+}
+
+impl From<&SchemaRef> for TableSchemaBuilder {
+    fn from(schema: &SchemaRef) -> Self {
+        TableSchemaBuilder::new(Arc::clone(schema))
     }
 }
 

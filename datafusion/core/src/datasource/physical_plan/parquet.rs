@@ -54,7 +54,7 @@ mod tests {
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::file::FileSource;
-    use datafusion_datasource::{PartitionedFile, TableSchema};
+    use datafusion_datasource::{PartitionedFile, TableSchemaBuilder};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
@@ -1642,7 +1642,7 @@ mod tests {
             ),
         ]);
 
-        let table_schema = TableSchema::builder(Arc::clone(&schema))
+        let table_schema = TableSchemaBuilder::from(&schema)
             .with_table_partition_cols(vec![
                 Arc::new(Field::new("year", DataType::Utf8, false)),
                 Arc::new(Field::new("month", DataType::UInt8, false)),

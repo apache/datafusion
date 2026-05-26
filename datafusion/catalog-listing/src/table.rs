@@ -32,7 +32,7 @@ use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
-    ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
+    ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
 use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
@@ -321,7 +321,7 @@ impl ListingTable {
 
     /// Creates a file source for this table
     fn create_file_source(&self) -> Arc<dyn FileSource> {
-        let table_schema = TableSchema::builder(Arc::clone(&self.file_schema))
+        let table_schema = TableSchemaBuilder::from(&self.file_schema)
             .with_table_partition_cols(
                 self.options
                     .table_partition_cols

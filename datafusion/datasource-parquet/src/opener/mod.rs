@@ -1415,7 +1415,7 @@ mod test {
         stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
-    use datafusion_datasource::{PartitionedFile, TableSchema};
+    use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
@@ -1882,7 +1882,7 @@ mod test {
             Field::new("a", DataType::Int32, false),
         ]));
 
-        let table_schema_for_opener = TableSchema::builder(file_schema.clone())
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema)
             .with_table_partition_cols(vec![Arc::new(Field::new(
                 "part",
                 DataType::Int32,
@@ -1954,7 +1954,7 @@ mod test {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Float32, true),
         ]));
-        let table_schema_for_opener = TableSchema::builder(file_schema.clone())
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema)
             .with_table_partition_cols(vec![Arc::new(Field::new(
                 "part",
                 DataType::Int32,
@@ -2029,7 +2029,7 @@ mod test {
             Field::new("a", DataType::Int32, false),
         ]));
 
-        let table_schema_for_opener = TableSchema::builder(file_schema.clone())
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema)
             .with_table_partition_cols(vec![Arc::new(Field::new(
                 "part",
                 DataType::Int32,
@@ -2113,7 +2113,7 @@ mod test {
             Field::new("part", DataType::Int32, false),
         ]));
 
-        let table_schema_for_opener = TableSchema::builder(file_schema.clone())
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema)
             .with_table_partition_cols(vec![Arc::new(Field::new(
                 "part",
                 DataType::Int32,

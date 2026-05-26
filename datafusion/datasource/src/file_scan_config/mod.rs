@@ -1425,9 +1425,9 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::TableSchema;
     use crate::source::DataSourceExec;
     use crate::test_util::col;
+    use crate::{TableSchema, TableSchemaBuilder};
     use crate::{
         generate_test_files, test_util::MockSource, tests::aggr_test_schema,
         verify_sort_integrity,
@@ -1875,7 +1875,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
 
-        let table_schema = TableSchema::builder(Arc::clone(&file_schema))
+        let table_schema = TableSchemaBuilder::from(&file_schema)
             .with_table_partition_cols(vec![Arc::new(Field::new(
                 "date",
                 wrap_partition_type_in_dict(DataType::Utf8),
@@ -1943,7 +1943,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
 
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
 
         // Create a file source with a filter
         let file_source: Arc<dyn FileSource> = Arc::new(
@@ -1996,7 +1996,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
 
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
 
         let file_source: Arc<dyn FileSource> =
             Arc::new(MockSource::new(table_schema.clone()));
@@ -2058,7 +2058,7 @@ mod tests {
         )];
         let file = PartitionedFile::new("test_file.parquet", 100);
 
-        let table_schema = TableSchema::builder(Arc::clone(&schema))
+        let table_schema = TableSchemaBuilder::from(&schema)
             .with_table_partition_cols(
                 partition_cols
                     .iter()
@@ -2314,7 +2314,7 @@ mod tests {
         let file_group = FileGroup::new(vec![PartitionedFile::new("test.parquet", 1024)])
             .with_statistics(Arc::new(file_group_stats));
 
-        let table_schema = TableSchema::from(Arc::clone(&schema));
+        let table_schema = TableSchema::from(&schema);
 
         // Create a FileScanConfig with projection: only keep columns 0 and 2
         let config = FileScanConfigBuilder::new(
@@ -2545,7 +2545,7 @@ mod tests {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
 
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
 
         let file_groups = vec![FileGroup::new(vec![
@@ -2660,7 +2660,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_files_get_sorted() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![FileGroup::new(vec![
@@ -2694,7 +2694,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_already_sorted() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![FileGroup::new(vec![
@@ -2718,7 +2718,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_descending_sort() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![FileGroup::new(vec![
@@ -2757,7 +2757,7 @@ mod tests {
     fn sort_pushdown_exact_source_non_overlapping_returns_exact() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -2791,7 +2791,7 @@ mod tests {
     fn sort_pushdown_exact_source_overlapping_downgraded_to_inexact() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -2825,7 +2825,7 @@ mod tests {
     fn sort_pushdown_exact_source_out_of_order_returns_exact() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -2863,7 +2863,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_single_file_groups() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![
@@ -2889,7 +2889,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_multiple_groups() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![
@@ -2929,7 +2929,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_partial_statistics() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![
@@ -2969,7 +2969,7 @@ mod tests {
     fn sort_pushdown_inexact_source_with_statistics_sorting() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
 
         let file_groups = vec![FileGroup::new(vec![
@@ -3006,7 +3006,7 @@ mod tests {
         // time (all values in group 0 < group 1), degrading to single-threaded I/O.
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -3064,7 +3064,7 @@ mod tests {
         // sorting (which would undo the reversal). The result is Inexact.
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -3131,7 +3131,7 @@ mod tests {
         // Should NOT upgrade to Exact — NULLs would appear in wrong position.
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -3164,7 +3164,7 @@ mod tests {
         // Files are non-overlapping, no NULLs → should upgrade to Exact
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
-        let table_schema = TableSchema::from(Arc::clone(&file_schema));
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
