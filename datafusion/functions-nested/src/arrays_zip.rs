@@ -22,7 +22,7 @@ use arrow::array::{
     Array, ArrayRef, Capacities, ListArray, MutableArrayData, NullBufferBuilder,
     StructArray, new_null_array,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::cast::{
@@ -44,7 +44,7 @@ struct ListColumnView {
     /// Pre-computed per-row start offsets (length = num_rows + 1).
     offsets: Vec<usize>,
     /// Null bitmap from the input array (None means no nulls).
-    nulls: Option<arrow::buffer::NullBuffer>,
+    nulls: Option<NullBuffer>,
 }
 
 impl ListColumnView {
@@ -383,32 +383,37 @@ fn try_perfect_list_zip(
     }
 
     let nulls = if list_arrays.iter().any(|arr| arr.null_count() != 0) {
-        // Match the general path: arrays_zip only marks an output row null
-        // when every concrete input list is null. Mixed null and non-null
-        // empty lists still produce a non-null empty list, so this cannot use
-        // NullBuffer::union_many, which would make rows null if any input is.
-        let mut null_builder = NullBufferBuilder::new(num_rows);
-        for row_idx in 0..num_rows {
-            let mut all_null = true;
+        let first_nulls = first.nulls();
+        if list_arrays.iter().all(|arr| arr.nulls() == first_nulls) {
+            NullBuffer::union_many(list_arrays.iter().map(|arr| arr.nulls()))
+        } else {
+            // Match the general path: arrays_zip only marks an output row null
+            // when every concrete input list is null. Mixed null and non-null
+            // empty lists still produce a non-null empty list, but mixed null
+            // rows with values must fall back to preserve field-level nulls.
+            let mut null_builder = NullBufferBuilder::new(num_rows);
+            for row_idx in 0..num_rows {
+                let mut all_null = true;
 
-            for arr in &list_arrays {
-                if arr.is_null(row_idx) {
-                    if arr.offsets()[row_idx + 1] != arr.offsets()[row_idx] {
-                        return Ok(None);
+                for arr in &list_arrays {
+                    if arr.is_null(row_idx) {
+                        if arr.offsets()[row_idx + 1] != arr.offsets()[row_idx] {
+                            return Ok(None);
+                        }
+                    } else {
+                        all_null = false;
                     }
+                }
+
+                if all_null {
+                    null_builder.append_null();
                 } else {
-                    all_null = false;
+                    null_builder.append_non_null();
                 }
             }
 
-            if all_null {
-                null_builder.append_null();
-            } else {
-                null_builder.append_non_null();
-            }
+            null_builder.finish()
         }
-
-        null_builder.finish()
     } else {
         None
     };
@@ -555,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn null_row_with_hidden_values_uses_general_path() {
+    fn perfect_zip_reuses_null_rows_with_hidden_values() {
         let left =
             list_with_validity(vec![1, 2, 3, 4], vec![0, 2, 4], Some(vec![true, false]));
         let right = list_with_validity(
@@ -571,8 +576,38 @@ mod tests {
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
 
-        assert!(!result.offsets().ptr_eq(left.offsets()));
-        assert_eq!(result.value_offsets(), &[0, 2, 2]);
+        assert!(result.offsets().ptr_eq(left.offsets()));
+        assert_eq!(result.value_offsets(), &[0, 2, 4]);
         assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn mixed_null_row_with_hidden_values_uses_general_path() {
+        let left =
+            list_with_validity(vec![1, 2, 3, 4], vec![0, 2, 4], Some(vec![true, false]));
+        let right = list_with_validity(
+            vec![10, 20, 30, 40],
+            vec![0, 2, 4],
+            Some(vec![true, true]),
+        );
+
+        let result = arrays_zip_inner(&[
+            Arc::clone(&left) as ArrayRef,
+            Arc::clone(&right) as ArrayRef,
+        ])
+        .unwrap();
+        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let values = result
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+
+        assert!(!result.offsets().ptr_eq(left.offsets()));
+        assert_eq!(result.value_offsets(), &[0, 2, 4]);
+        assert!(values.column(0).is_null(2));
+        assert!(values.column(0).is_null(3));
+        assert!(!values.column(1).is_null(2));
+        assert!(!values.column(1).is_null(3));
     }
 }
