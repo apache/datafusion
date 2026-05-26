@@ -613,7 +613,9 @@ pub fn parse_table_schema_from_proto(
         .with_metadata(schema.metadata.clone()),
     );
 
-    Ok(TableSchema::new(file_schema, table_partition_cols))
+    Ok(TableSchema::builder(file_schema)
+        .with_table_partition_cols(table_partition_cols)
+        .build())
 }
 
 pub fn parse_protobuf_file_scan_config(
