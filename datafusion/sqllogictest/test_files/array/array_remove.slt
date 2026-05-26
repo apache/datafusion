@@ -271,7 +271,7 @@ query ??
 select array_remove_n(make_array(1, 2, 2, 1, 1), 2, NULL),
        array_remove_n(arrow_cast(make_array(1, 2, 2, 1, 1), 'LargeList(Int64)'), 2, NULL);
 ----
-[1, 2, 2, 1, 1] [1, 2, 2, 1, 1]
+NULL NULL
 
 # array_remove_n with null element scalar (LargeList)
 query ??
@@ -307,7 +307,7 @@ select array_remove_n(column1, column2, column3) from (values
 [1, 1, 1]
 NULL
 [5, 6, 5, 5]
-[7, 8, 8, 7, 7]
+NULL
 NULL
 
 # array_remove_n with null element from column (LargeList)
@@ -322,7 +322,7 @@ select array_remove_n(column1, column2, column3) from (values
 [1, 1, 1]
 NULL
 [5, 6, 5, 5]
-[7, 8, 8, 7, 7]
+NULL
 
 # array_remove_n scalar function #1
 query ???

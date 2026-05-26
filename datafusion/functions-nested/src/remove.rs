@@ -370,8 +370,11 @@ impl ScalarUDFImpl for ArrayRemoveAll {
             }
             element_arg => {
                 let element_array = element_arg.to_array(num_rows)?;
-                let result =
-                    array_remove_internal(&list_array, &element_array, &[Some(i64::MAX)])?;
+                let result = array_remove_internal(
+                    &list_array,
+                    &element_array,
+                    &[Some(i64::MAX)],
+                )?;
                 Ok(ColumnarValue::Array(result))
             }
         }
@@ -969,13 +972,43 @@ mod tests {
             Some(NullBuffer::from(vec![true, false])),
         ));
 
-        let result = super::array_remove_n_inner(&[array, element, max]).unwrap();
+        let udf = ArrayRemoveN::new();
+        let args_fields = vec![
+            Arc::new(Field::new("num", array.data_type().clone(), false)),
+            Arc::new(Field::new("el", DataType::Int32, false)),
+            Arc::new(Field::new("count", DataType::Int64, true)),
+        ];
+        let scalar_args = vec![None, None, None];
+        let return_field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &args_fields,
+                scalar_arguments: &scalar_args,
+            })
+            .unwrap();
+        let result = udf
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Array(array),
+                    ColumnarValue::Array(element),
+                    ColumnarValue::Array(max),
+                ],
+                arg_fields: args_fields,
+                number_rows: 2,
+                return_field,
+                config_options: Arc::new(Default::default()),
+            })
+            .unwrap();
         let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![Some(1), Some(2)]),
             None,
         ]);
 
-        assert_eq!(result.as_list::<i32>(), &expected);
+        match result {
+            ColumnarValue::Array(array) => {
+                assert_eq!(array.as_list::<i32>(), &expected);
+            }
+            _ => panic!("Expected ColumnarValue::Array"),
+        }
     }
 
     fn assert_array_remove_n(
