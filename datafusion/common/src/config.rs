@@ -648,29 +648,34 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
-        /// (experimental) When true, augment the fixed
-        /// `skip_partial_aggregation_probe_ratio_threshold` check with a
-        /// cost-aware rule: skip partial aggregation when the measured
-        /// per-row wall time exceeds
-        /// `skip_partial_aggregation_cost_ns_per_row` even at ratios below
-        /// the fixed threshold (provided the ratio is at least
-        /// `skip_partial_aggregation_cost_min_ratio`). Targets ClickBench
-        /// Q18-shape queries where the ratio (~0.56) is below 0.8 but
-        /// partial aggregation is net-negative due to heavy keys / aggs.
+        /// (experimental) When true, apply a *secondary* skip rule on top
+        /// of `skip_partial_aggregation_probe_ratio_threshold`: skip
+        /// partial aggregation when the measured ratio is at least
+        /// `skip_partial_aggregation_cost_min_ratio` (default 0.5).
+        /// Targets ClickBench Q18-shape queries where the ratio (~0.56)
+        /// sits just below the fixed 0.8 threshold so partial agg keeps
+        /// running, but the absolute work (heavy variable-length keys,
+        /// complex aggregates) makes it net-negative.
+        ///
+        /// Empirical motivation: lowering the global ratio threshold to
+        /// 0.6 fixes Q18 (1.73× faster) but risks regressing low-cost
+        /// queries at similar ratios. This flag exposes the lower
+        /// threshold as a separate, opt-in knob. Whether the cost-aware
+        /// signal (`partial_agg_probe_ns_per_row` metric) can replace
+        /// this static threshold is an open question — for now the
+        /// metric is reported alongside so callers can evaluate.
         pub skip_partial_aggregation_use_cost_model: bool, default = true
 
-        /// Minimum measured per-row wall time (nanoseconds) of partial
-        /// aggregation for the cost-aware skip rule to fire. Only
-        /// consulted when `skip_partial_aggregation_use_cost_model` is
-        /// true.
-        pub skip_partial_aggregation_cost_ns_per_row: u64, default = 100
-
-        /// Lower bound on aggregation ratio (num_groups / input_rows) for
-        /// the cost-aware skip rule to fire. Below this ratio partial
-        /// aggregation is considered valuable enough to keep regardless
-        /// of per-row cost. Only consulted when
-        /// `skip_partial_aggregation_use_cost_model` is true.
-        pub skip_partial_aggregation_cost_min_ratio: f64, default = 0.3
+        /// Effective ratio threshold used by the cost-aware skip rule.
+        /// Skip partial aggregation when ratio at probe close is at
+        /// least this value (provided
+        /// `skip_partial_aggregation_use_cost_model` is true).
+        ///
+        /// Default 0.5 is the empirical sweet spot from ClickBench: 0.4
+        /// would skip too aggressively (regresses low-cost queries
+        /// that benefit from partial), 0.7 fails to catch Q18-shape
+        /// queries.
+        pub skip_partial_aggregation_cost_min_ratio: f64, default = 0.5
 
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
