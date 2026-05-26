@@ -18,6 +18,7 @@
 use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal_expr, to_substrait_type,
 };
+use datafusion::arrow::datatypes::DataType;
 use datafusion::common::datatype::FieldExt;
 use datafusion::common::{
     DFSchemaRef, ScalarValue, internal_datafusion_err, not_impl_err, substrait_err,
@@ -34,7 +35,15 @@ pub fn from_scalar_function(
     fun: &expr::ScalarFunction,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    from_function(producer, fun.name(), &fun.args, schema)
+    let (_, output_field) = Expr::ScalarFunction(fun.clone()).to_field(schema)?;
+    from_function(
+        producer,
+        fun.name(),
+        &fun.args,
+        output_field.data_type(),
+        output_field.is_nullable(),
+        schema,
+    )
 }
 
 pub fn from_higher_order_function(
@@ -104,12 +113,20 @@ pub fn from_higher_order_function(
         .collect::<datafusion::common::Result<_>>()?;
 
     let function_anchor = producer.register_function(fun.name().to_string());
+
+    let (_, output_field) = Expr::HigherOrderFunction(fun.clone()).to_field(schema)?;
+    let output_type = to_substrait_type(
+        producer,
+        output_field.data_type(),
+        output_field.is_nullable(),
+    )?;
+
     #[expect(deprecated)]
     Ok(Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
             arguments,
-            output_type: None,
+            output_type: Some(output_type),
             options: vec![],
             args: vec![],
         })),
@@ -120,6 +137,8 @@ fn from_function(
     producer: &mut impl SubstraitProducer,
     name: &str,
     args: &[Expr],
+    output_type: &DataType,
+    output_nullability: bool,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
     let mut arguments: Vec<FunctionArgument> = vec![];
@@ -130,6 +149,7 @@ fn from_function(
     }
 
     let arguments = custom_argument_handler(name, arguments);
+    let output_type = to_substrait_type(producer, output_type, output_nullability)?;
 
     let function_anchor = producer.register_function(name.to_string());
     #[expect(deprecated)]
@@ -137,7 +157,7 @@ fn from_function(
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
             arguments,
-            output_type: None,
+            output_type: Some(output_type),
             options: vec![],
             args: vec![],
         })),
