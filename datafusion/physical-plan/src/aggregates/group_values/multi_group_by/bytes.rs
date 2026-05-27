@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aggregates::group_values::multi_group_by::{
-    GroupColumn, Nulls, nulls_equal_to, split_vec_min_alloc,
+    GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{
@@ -26,6 +26,7 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, exec_datafusion_err};
 use datafusion_physical_expr_common::binary_map::{INITIAL_BUFFER_CAPACITY, OutputType};
 use std::mem::size_of;
