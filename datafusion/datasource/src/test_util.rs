@@ -22,7 +22,7 @@ use crate::{
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{Result, tree_node::TreeNodeRecursion};
+use datafusion_common::Result;
 use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
@@ -40,7 +40,7 @@ pub(crate) struct MockSource {
 impl Default for MockSource {
     fn default() -> Self {
         let table_schema =
-            crate::table_schema::TableSchema::new(Arc::new(Schema::empty()), vec![]);
+            crate::table_schema::TableSchema::from(Arc::new(Schema::empty()));
         Self {
             metrics: ExecutionPlanMetricsSet::new(),
             filter: None,
@@ -124,13 +124,6 @@ impl FileSource for MockSource {
         &self,
     ) -> Option<&datafusion_physical_plan::projection::ProjectionExprs> {
         Some(&self.projection.source)
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 }
 

@@ -37,12 +37,12 @@ use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{
+    Result, exec_datafusion_err, internal_datafusion_err, not_impl_err,
+};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 use futures::{Stream, StreamExt, ready};
@@ -152,13 +152,6 @@ impl ExecutionPlan for RecursiveQueryExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.static_term, &self.recursive_term]
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 
     // TODO: control these hints and see whether we can
@@ -489,7 +482,14 @@ impl DistinctDeduplicator {
     /// We also detect duplicates by enforcing that group ids are increasing.
     fn deduplicate(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let size_before = self.group_values.len();
-        self.intern_output_buffer.reserve(batch.num_rows());
+        let additional = batch.num_rows();
+        self.intern_output_buffer
+            .try_reserve(additional)
+            .map_err(|e| {
+                exec_datafusion_err!(
+                    "failed to reserve {additional} recursive query group ids: {e}"
+                )
+            })?;
         self.group_values
             .intern(batch.columns(), &mut self.intern_output_buffer)?;
         let mask = new_groups_mask(&self.intern_output_buffer, size_before);

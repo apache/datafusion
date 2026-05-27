@@ -52,7 +52,7 @@ use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_conver
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
     DefaultPhysicalExtensionCodec, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
-    PhysicalProtoConverterExtension,
+    PhysicalPlanNodeExt, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
@@ -187,6 +187,7 @@ impl PhysicalExtensionCodec for CachingCodec {
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         datafusion::common::not_impl_err!("No custom extension nodes")
     }
@@ -196,6 +197,7 @@ impl PhysicalExtensionCodec for CachingCodec {
         &self,
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         datafusion::common::not_impl_err!("No custom extension nodes")
     }

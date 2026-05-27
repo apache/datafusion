@@ -21,9 +21,11 @@ use std::mem;
 use std::sync::Arc;
 
 use datafusion_catalog::Session;
-use datafusion_common::{HashMap, Result, ScalarValue, assert_or_internal_err};
-use datafusion_datasource::ListingTableUrl;
+use datafusion_common::{
+    HashMap, Result, ScalarValue, TableReference, assert_or_internal_err,
+};
 use datafusion_datasource::PartitionedFile;
+use datafusion_datasource::{FileExtensions, ListingTableUrl};
 use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
 use arrow::{
@@ -383,6 +385,7 @@ fn try_into_partitioned_file(
 
     let mut pf: PartitionedFile = object_meta.into();
     pf.partition_values = partition_values;
+    pf.table_reference.clone_from(table_path.get_table_ref());
 
     Ok(Some(pf))
 }
@@ -417,8 +420,15 @@ pub async fn pruned_partition_list<'a>(
             table_path
         );
 
-        // if no partition col => simply list all the files
-        Ok(objects.map_ok(|object_meta| object_meta.into()).boxed())
+        // if no partition col => list all the files
+        Ok(objects
+            .try_filter_map(|object_meta| {
+                futures::future::ready(object_meta_to_partitioned_file(
+                    object_meta,
+                    table_path.get_table_ref(),
+                ))
+            })
+            .boxed())
     } else {
         let df_schema = DFSchema::from_unqualified_fields(
             partition_cols
@@ -441,6 +451,22 @@ pub async fn pruned_partition_list<'a>(
             })
             .boxed())
     }
+}
+
+fn object_meta_to_partitioned_file(
+    object_meta: ObjectMeta,
+    table_ref: &Option<TableReference>,
+) -> Result<Option<PartitionedFile>> {
+    Ok(Some(PartitionedFile {
+        object_meta,
+        partition_values: vec![],
+        range: None,
+        statistics: None,
+        ordering: None,
+        extensions: FileExtensions::new(),
+        metadata_size_hint: None,
+        table_reference: table_ref.clone(),
+    }))
 }
 
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
