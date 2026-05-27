@@ -437,7 +437,7 @@ impl DefaultPhysicalPlanner {
         session_state: &'a SessionState,
     ) -> futures::future::BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
-            // When `physical_uncorrelated_scalar_subquery` is disabled, the
+            // When `enable_physical_uncorrelated_scalar_subquery` is disabled, the
             // `ScalarSubqueryToJoin` optimizer rule rewrites all uncorrelated
             // scalar subqueries to joins, so none should reach this point.
             // Skip collection in that case to avoid creating a no-op
@@ -445,7 +445,7 @@ impl DefaultPhysicalPlanner {
             let all_subqueries = if session_state
                 .config_options()
                 .optimizer
-                .physical_uncorrelated_scalar_subquery
+                .enable_physical_uncorrelated_scalar_subquery
             {
                 Self::collect_scalar_subqueries(logical_plan)
             } else {

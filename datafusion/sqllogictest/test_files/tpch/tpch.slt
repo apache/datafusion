@@ -23,12 +23,12 @@ include ./answers/q*.slt.part
 
 # test answers with uncorrelated scalar subqueries rewritten to joins
 statement ok
-set datafusion.optimizer.physical_uncorrelated_scalar_subquery = false;
+set datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery = false;
 
 include ./answers/q*.slt.part
 
 statement ok
-reset datafusion.optimizer.physical_uncorrelated_scalar_subquery;
+reset datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery;
 
 # test answers with sort merge join
 statement ok

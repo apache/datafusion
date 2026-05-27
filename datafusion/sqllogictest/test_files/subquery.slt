@@ -2093,10 +2093,10 @@ SELECT (SELECT v FROM (SELECT 1 AS v UNION ALL SELECT 2) AS t ORDER BY v LIMIT 1
 
 #############
 ## End-to-end correctness coverage for the flag-off path.
-## When `datafusion.optimizer.physical_uncorrelated_scalar_subquery` is false,
+## When `datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery` is false,
 ## uncorrelated scalar subqueries are rewritten to left joins by
 ## `ScalarSubqueryToJoin` instead of executed by `ScalarSubqueryExec`. This
-## restores pre-PR-21240 behavior, which has three known shortcomings the
+## restores pre-PR-21240 behavior, which has two known shortcomings the
 ## physical-execution path was built to fix: multi-row subqueries silently
 ## return wrong results, and uncorrelated scalar subqueries do not work in
 ## ORDER BY / JOIN ON / aggregate-function arguments. Those cases are
@@ -2105,7 +2105,7 @@ SELECT (SELECT v FROM (SELECT 1 AS v UNION ALL SELECT 2) AS t ORDER BY v LIMIT 1
 #############
 
 statement ok
-set datafusion.optimizer.physical_uncorrelated_scalar_subquery = false;
+set datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery = false;
 
 # Scalar subquery returning exactly one row → success
 query I
@@ -2178,7 +2178,7 @@ SELECT 1 = (SELECT CAST(NULL AS INT));
 NULL
 
 statement ok
-RESET datafusion.optimizer.physical_uncorrelated_scalar_subquery;
+RESET datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery;
 
 statement count 0
 DROP TABLE sq_values;

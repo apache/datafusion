@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarSubqueryToJoin`] rewriting correlated scalar subquery filters to `JOIN`s
+//! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -36,9 +36,14 @@ use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
 
-/// Optimizer rule that rewrites correlated scalar subquery filters to joins and
-/// places an additional projection on top of the filter, to preserve the
-/// original schema.
+/// Optimizer rule that rewrites scalar subquery filters to joins and places an
+/// additional projection on top of the filter to preserve the original schema.
+///
+/// When [`datafusion_common::config::OptimizerOptions::enable_physical_uncorrelated_scalar_subquery`] is
+/// true (the default), only *correlated* scalar subqueries are rewritten here;
+/// uncorrelated ones are left for physical execution via `ScalarSubqueryExec`.
+/// When the option is false, all scalar subqueries — correlated and
+/// uncorrelated — are rewritten to left joins by this rule.
 #[derive(Default, Debug)]
 pub struct ScalarSubqueryToJoin {}
 
@@ -93,7 +98,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let physical_uncorrelated = config
                     .options()
                     .optimizer
-                    .physical_uncorrelated_scalar_subquery;
+                    .enable_physical_uncorrelated_scalar_subquery;
                 // Optimization: skip the rest of the rule and its copies if
                 // there are no scalar subqueries this rule should rewrite
                 if !contains_scalar_subquery_to_rewrite(
@@ -154,7 +159,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let physical_uncorrelated = config
                     .options()
                     .optimizer
-                    .physical_uncorrelated_scalar_subquery;
+                    .enable_physical_uncorrelated_scalar_subquery;
                 // Optimization: skip the rest of the rule and its copies if there
                 // are no scalar subqueries this rule should rewrite
                 if !projection.expr.iter().any(|expr| {
@@ -246,7 +251,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
 /// Returns true if the expression contains a scalar subquery that this rule
 /// should rewrite to a join.
 ///
-/// When `physical_uncorrelated_scalar_subquery` is true (the default) only
+/// When `enable_physical_uncorrelated_scalar_subquery` is true (the default) only
 /// correlated scalar subqueries are rewritten — uncorrelated ones are handled
 /// by the physical planner via `ScalarSubqueryExec`. When it is false, all
 /// scalar subqueries (correlated and uncorrelated) are rewritten.
@@ -316,9 +321,15 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 /// where c.balance > o."avg(total)"
 /// ```
 ///
+/// When [`datafusion_common::config::OptimizerOptions::enable_physical_uncorrelated_scalar_subquery`] is
+/// false, this function also handles uncorrelated scalar subqueries, rewriting
+/// them as a `Left Join: Filter: Boolean(true)` instead of leaving them for
+/// `ScalarSubqueryExec`.
+///
 /// # Arguments
 ///
-/// * `subquery` - The correlated scalar subquery to decorrelate.
+/// * `subquery` - The scalar subquery to rewrite (correlated, or uncorrelated
+///   when `enable_physical_uncorrelated_scalar_subquery` is false).
 /// * `outer_input` - The outer plan that the decorrelated subquery is
 ///   left-joined onto — the input of the `Filter` or `Projection` node
 ///   that contained the subquery.
@@ -338,7 +349,7 @@ fn build_join(
 ) -> Result<Option<(LogicalPlan, HashMap<Column, Expr>)>> {
     // `build_join` also handles uncorrelated scalar subqueries (as a left
     // join with `Boolean(true)`) when the
-    // `physical_uncorrelated_scalar_subquery` option is disabled.
+    // `enable_physical_uncorrelated_scalar_subquery` option is disabled.
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let decorrelated_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
@@ -1205,7 +1216,9 @@ mod tests {
 
         let mut options = ConfigOptions::default();
         options.optimizer.filter_null_join_keys = true;
-        options.optimizer.physical_uncorrelated_scalar_subquery = false;
+        options
+            .optimizer
+            .enable_physical_uncorrelated_scalar_subquery = false;
         let context = crate::OptimizerContext::new_with_config_options(Arc::new(options));
 
         let rule: Arc<dyn OptimizerRule + Send + Sync> =
