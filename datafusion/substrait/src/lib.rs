@@ -89,6 +89,7 @@
 //! # }
 //! ```
 pub mod extensions;
+pub mod function_yaml;
 pub mod logical_plan;
 #[cfg(feature = "physical")]
 pub mod physical_plan;
