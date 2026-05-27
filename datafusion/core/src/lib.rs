@@ -804,9 +804,6 @@ pub mod common {
     }
 }
 
-// Backwards compatibility
-pub use common::config;
-
 // NB datafusion execution is re-exported in the `execution` module
 
 /// re-export of [`datafusion_catalog`] crate
