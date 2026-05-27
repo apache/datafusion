@@ -780,3 +780,57 @@ fn outer_offset_does_not_leak_through_sort_into_inner_limit() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn outer_offset_with_same_sort_key_still_pushes_limit() -> Result<()> {
+    // Companion to outer_offset_does_not_leak_through_sort_into_inner_limit:
+    // when both sorts use the *same* key, the inner LIMIT should still be
+    // pushed into the SortExec as TopK.
+    //
+    // Plan structure:
+    // GlobalLimitExec: skip=1, fetch=None        (outer OFFSET 1)
+    //   SortExec: [c1 ASC]                       (outer sort — same key)
+    //     GlobalLimitExec: skip=0, fetch=8        (inner LIMIT 8)
+    //       SortExec: [c1 ASC]                    (inner sort — same key)
+    //         EmptyExec
+    let schema = create_schema();
+    let empty = empty_exec(Arc::clone(&schema));
+
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+
+    let inner_sort = sort_exec(ordering.clone(), empty);
+    let inner_limit = global_limit_exec(inner_sort, 0, Some(8));
+    let outer_sort = sort_exec(ordering, inner_limit);
+    let outer_limit = global_limit_exec(outer_sort, 1, None);
+
+    let initial = format_plan(&outer_limit);
+    insta::assert_snapshot!(
+        initial,
+        @r"
+    GlobalLimitExec: skip=1, fetch=None
+      SortExec: expr=[c1@0 ASC], preserve_partitioning=[false]
+        GlobalLimitExec: skip=0, fetch=8
+          SortExec: expr=[c1@0 ASC], preserve_partitioning=[false]
+            EmptyExec
+    "
+    );
+
+    let after_optimize =
+        LimitPushdown::new().optimize(outer_limit, &ConfigOptions::new())?;
+    let optimized = format_plan(&after_optimize);
+    insta::assert_snapshot!(
+        optimized,
+        @r"
+    GlobalLimitExec: skip=1, fetch=None
+      SortExec: expr=[c1@0 ASC], preserve_partitioning=[false]
+        SortExec: TopK(fetch=8), expr=[c1@0 ASC], preserve_partitioning=[false]
+          EmptyExec
+    "
+    );
+
+    Ok(())
+}
