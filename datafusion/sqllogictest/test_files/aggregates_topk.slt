@@ -460,6 +460,22 @@ select count(*) from (select category from values_table group by category order 
 statement ok
 create table nullable_vals (v varchar) as values (NULL), (''), ('a'), ('b');
 
+# Verify this regression test exercises the TopK aggregation path
+query TT
+explain select distinct v from nullable_vals order by v asc nulls first limit 1;
+----
+logical_plan
+01)Sort: nullable_vals.v ASC NULLS FIRST, fetch=1
+02)--Aggregate: groupBy=[[nullable_vals.v]], aggr=[[]]
+03)----TableScan: nullable_vals projection=[v]
+physical_plan
+01)SortPreservingMergeExec: [v@0 ASC], fetch=1
+02)--SortExec: TopK(fetch=1), expr=[v@0 ASC], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[v@0 as v], aggr=[], lim=[1]
+04)------RepartitionExec: partitioning=Hash([v@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[v@0 as v], aggr=[], lim=[1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # NULLS FIRST: NULL should be the first row returned by LIMIT
 query T
 select distinct v from nullable_vals order by v asc nulls first limit 1;
