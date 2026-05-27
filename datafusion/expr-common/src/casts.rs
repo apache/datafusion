@@ -31,7 +31,47 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::ScalarValue;
 
-/// Convert a literal value from one data type to another
+/// Convert a literal [`ScalarValue`] to `target_type`, returning `None` if the
+/// value cannot be represented in `target_type` *exactly*.
+///
+/// This is a restricted, value-preserving cast used to rewrite comparison
+/// predicates of the form `CAST(col AS target_type) <op> literal` into
+/// `col <op> try_cast_literal_to_type(literal, col_type)` (see the
+/// `unwrap_cast` optimizer rules). That rewrite is only valid when casting the
+/// literal is exact and reversible, so this function deliberately refuses any
+/// cast that could change the comparison result.
+///
+/// # How it differs from [`ScalarValue::cast_to`]
+///
+/// [`ScalarValue::cast_to`] is the general-purpose cast: it is backed by the
+/// Arrow cast kernels, returns a `Result`, and performs *any* cast Arrow
+/// supports -- including ones that lose information or change the value's
+/// meaning. For example, `cast_to` will parse the string `"123"` into the
+/// integer `123`, format a number as a string, truncate the decimal `1.5` to
+/// the integer `1`, or convert a `Date` into a `Timestamp`.
+///
+/// `try_cast_literal_to_type` never errors, never returns a value that differs
+/// from its input, and returns `None` instead of performing such a lossy or
+/// cross-kind conversion. It only attempts:
+///
+/// * numeric → numeric, including integers, decimals, `Date32`/`Date64` and
+///   `Timestamp`s, rejecting values outside the target's range or that would
+///   lose decimal digits
+/// * string → string between `Utf8`, `LargeUtf8` and `Utf8View`
+/// * wrapping a value into, or unwrapping it out of, a `Dictionary` whose value
+///   type matches the literal's type
+/// * `Binary` → `FixedSizeBinary` of the matching length
+///
+/// Conversely it returns `None` for casts Arrow would happily perform but that
+/// are not safe to unwrap: parsing/formatting between strings and non-strings,
+/// anything involving floating point (which is not supported at all), and lossy
+/// `Date` ↔ `Timestamp` conversions.
+///
+/// # Notable exception
+///
+/// A `Timestamp` → `Timestamp` cast between different time units is allowed even
+/// though it can truncate (for example nanoseconds → seconds), and a unit
+/// conversion that overflows yields a `NULL` literal rather than `None`.
 pub fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,

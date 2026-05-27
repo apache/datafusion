@@ -4212,12 +4212,30 @@ impl ScalarValue {
         Some(v.as_ref().map(|v| v.as_str()))
     }
 
-    /// Try to cast this value to a ScalarValue of type `data_type`
+    /// Cast this value to a `ScalarValue` of type `target_type` using the
+    /// default [`CastOptions`].
+    ///
+    /// This is a general-purpose cast backed by the Arrow cast kernels. It
+    /// performs any cast Arrow supports, which means it may **lose information
+    /// or change a value's meaning** -- for example parsing the string `"123"`
+    /// into the integer `123`, formatting a number as a string, truncating the
+    /// decimal `1.5` to the integer `1`, or converting a `Date` into a
+    /// `Timestamp`. It returns an error for casts Arrow cannot perform.
+    ///
+    /// If instead you need a *value-preserving* cast -- one that returns `None`
+    /// rather than performing a lossy or cross-kind conversion, for example
+    /// when unwrapping `CAST(col AS T) = literal` comparisons -- use
+    /// `datafusion_expr_common::casts::try_cast_literal_to_type` instead.
     pub fn cast_to(&self, target_type: &DataType) -> Result<Self> {
         self.cast_to_with_options(target_type, &DEFAULT_CAST_OPTIONS)
     }
 
-    /// Try to cast this value to a ScalarValue of type `data_type` with [`CastOptions`]
+    /// Cast this value to a `ScalarValue` of type `target_type` with the given
+    /// [`CastOptions`].
+    ///
+    /// See [`ScalarValue::cast_to`] for the semantics (in particular, this is a
+    /// general-purpose, possibly lossy cast, unlike
+    /// `datafusion_expr_common::casts::try_cast_literal_to_type`).
     pub fn cast_to_with_options(
         &self,
         target_type: &DataType,
