@@ -168,6 +168,9 @@ impl RunOpt {
             self.enable_piecewise_merge_join;
         config.options_mut().execution.hash_join_buffering_capacity =
             self.hash_join_buffering_capacity;
+        if std::env::var("DISABLE_MATERIALIZED_CTES").is_ok() {
+            config.options_mut().execution.enable_materialized_ctes = false;
+        }
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
         // register tables

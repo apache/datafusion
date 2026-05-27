@@ -78,6 +78,7 @@ pub mod filter;
 pub mod filter_pushdown;
 pub mod joins;
 pub mod limit;
+pub mod materialized_cte;
 pub mod memory;
 pub mod metrics;
 pub mod operator_statistics;

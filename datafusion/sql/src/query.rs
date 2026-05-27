@@ -20,8 +20,12 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use crate::stack::StackGuard;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Constraints, DFSchema, Result, not_impl_err};
 use datafusion_expr::expr::{Sort, WildcardOptions};
+use datafusion_expr::logical_plan::{
+    Extension, MaterializedCteProducer, MaterializedCteReader,
+};
 
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
@@ -63,6 +67,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("FETCH clause is not supported yet");
         }
 
+        let has_with = with.is_some();
         if let Some(with) = with {
             self.plan_with_clause(with, planner_context)?;
         }
@@ -99,7 +104,112 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }?;
 
-        self.pipe_operators(plan, pipe_operators, planner_context)
+        let plan = self.pipe_operators(plan, pipe_operators, planner_context)?;
+
+        // Apply CTE materialization if this query had a WITH clause
+        if has_with {
+            self.apply_cte_materialization(plan, planner_context)
+        } else {
+            Ok(plan)
+        }
+    }
+
+    /// Apply CTE materialization to the plan.
+    ///
+    /// For each CTE that should be materialized (referenced more than once and
+    /// containing expensive operations, or explicitly marked MATERIALIZED), this
+    /// replaces SubqueryAlias references with MaterializedCteReader nodes and
+    /// wraps the plan in MaterializedCteProducer nodes.
+    fn apply_cte_materialization(
+        &self,
+        plan: LogicalPlan,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        // Check if materialized CTEs are enabled
+        if !self
+            .context_provider
+            .options()
+            .execution
+            .enable_materialized_ctes
+        {
+            return Ok(plan);
+        }
+
+        // Collect CTE names that should be materialized
+        let cte_names: Vec<String> = planner_context.cte_names().cloned().collect();
+        let mut ctes_to_materialize: Vec<(String, LogicalPlan)> = Vec::new();
+
+        for cte_name in &cte_names {
+            // Skip recursive CTEs (they have their own execution mechanism)
+            if planner_context.is_recursive_cte(cte_name) {
+                continue;
+            }
+
+            // Skip CTEs explicitly marked NOT MATERIALIZED
+            if planner_context.is_not_materialized_cte(cte_name) {
+                continue;
+            }
+
+            // Count references in the plan tree
+            let ref_count = count_cte_references(&plan, cte_name);
+
+            // Determine if we should materialize:
+            // 1. Explicitly marked MATERIALIZED, OR
+            // 2. Referenced more than once AND contains expensive operations
+            let should_materialize = planner_context.is_materialized_cte(cte_name)
+                || (ref_count > 1 && {
+                    let cte_plan = planner_context.get_cte(cte_name);
+                    cte_plan.map_or(false, should_materialize_cte)
+                });
+
+            if should_materialize && ref_count > 0 {
+                if let Some(cte_plan) = planner_context.get_cte(cte_name) {
+                    ctes_to_materialize.push((cte_name.clone(), cte_plan.clone()));
+                }
+            }
+        }
+
+        if ctes_to_materialize.is_empty() {
+            return Ok(plan);
+        }
+
+        // Sort CTEs by dependency order: CTEs that depend on other CTEs
+        // should be processed first (wrapped innermost = executed last)
+        ctes_to_materialize.sort_by(|(name_a, _), (name_b, _)| {
+            let a_deps_on_b = planner_context
+                .get_cte(name_a)
+                .map_or(false, |p| plan_references_cte(p, name_b));
+            let b_deps_on_a = planner_context
+                .get_cte(name_b)
+                .map_or(false, |p| plan_references_cte(p, name_a));
+            if a_deps_on_b {
+                std::cmp::Ordering::Less
+            } else if b_deps_on_a {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
+
+        // Apply materialization: replace references and wrap plan
+        let mut result_plan = plan;
+        for (cte_name, cte_plan) in ctes_to_materialize {
+            // Replace all SubqueryAlias references to this CTE with readers
+            result_plan = replace_cte_with_reader(result_plan, &cte_name)?;
+
+            // Wrap the plan in a producer
+            let producer = MaterializedCteProducer {
+                name: cte_name.clone(),
+                cte_plan: Arc::new(cte_plan),
+                continuation: Arc::new(result_plan.clone()),
+                schema: Arc::clone(result_plan.schema()),
+            };
+            result_plan = LogicalPlan::Extension(Extension {
+                node: Arc::new(producer),
+            });
+        }
+
+        Ok(result_plan)
     }
 
     /// Apply pipe operators to a plan
@@ -379,6 +489,75 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => Ok(plan),
         }
     }
+}
+
+/// Check if a plan is "expensive" enough to justify materialization.
+/// Walks past SubqueryAlias/Projection/Sort/Limit/Filter, returns true
+/// if it hits Aggregate/Distinct/Window/Union.
+fn should_materialize_cte(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Aggregate(_) => true,
+        LogicalPlan::Distinct(_) => true,
+        LogicalPlan::Window(_) => true,
+        LogicalPlan::Union(_) => true,
+        LogicalPlan::SubqueryAlias(alias) => should_materialize_cte(alias.input.as_ref()),
+        LogicalPlan::Projection(proj) => should_materialize_cte(proj.input.as_ref()),
+        LogicalPlan::Sort(sort) => should_materialize_cte(sort.input.as_ref()),
+        LogicalPlan::Limit(limit) => should_materialize_cte(limit.input.as_ref()),
+        LogicalPlan::Filter(filter) => should_materialize_cte(filter.input.as_ref()),
+        _ => false,
+    }
+}
+
+/// Check if a plan contains a SubqueryAlias reference to a given CTE name.
+fn plan_references_cte(plan: &LogicalPlan, cte_name: &str) -> bool {
+    let mut found = false;
+    plan.apply(|node| {
+        if let LogicalPlan::SubqueryAlias(alias) = node {
+            if alias.alias.table() == cte_name {
+                found = true;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .unwrap();
+    found
+}
+
+/// Count how many times a CTE (by SubqueryAlias name) is referenced in the plan tree.
+fn count_cte_references(plan: &LogicalPlan, cte_name: &str) -> usize {
+    let mut count = 0;
+    plan.apply(|node| {
+        if let LogicalPlan::SubqueryAlias(alias) = node {
+            if alias.alias.table() == cte_name {
+                count += 1;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .unwrap();
+    count
+}
+
+/// Replace SubqueryAlias nodes matching a CTE name with a MaterializedCteReader.
+fn replace_cte_with_reader(plan: LogicalPlan, cte_name: &str) -> Result<LogicalPlan> {
+    plan.transform_down(|node| {
+        if let LogicalPlan::SubqueryAlias(ref alias) = node {
+            if alias.alias.table() == cte_name {
+                let reader = MaterializedCteReader {
+                    name: cte_name.to_string(),
+                    schema: Arc::clone(&alias.schema),
+                };
+                let extension = LogicalPlan::Extension(Extension {
+                    node: Arc::new(reader),
+                });
+                return Ok(datafusion_common::tree_node::Transformed::yes(extension));
+            }
+        }
+        Ok(datafusion_common::tree_node::Transformed::no(node))
+    })
+    .map(|t| t.data)
 }
 
 /// Returns the order by expressions from the query.

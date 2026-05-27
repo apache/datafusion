@@ -187,13 +187,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // Normalize name and alias
                     let table_ref = self.object_name_to_table_reference(name)?;
                     let table_name = table_ref.to_string();
-                    let cte = planner_context.get_cte(&table_name);
+                    let cte_plan_cloned = planner_context.get_cte(&table_name).cloned();
+                    let is_cte = cte_plan_cloned.is_some();
+                    if is_cte {
+                        planner_context.increment_cte_ref_count(&table_name);
+                    }
                     (
                         match (
-                            cte,
+                            cte_plan_cloned,
                             self.context_provider.get_table_source(table_ref.clone()),
                         ) {
-                            (Some(cte_plan), _) => Ok(cte_plan.clone()),
+                            (Some(cte_plan), _) => Ok(cte_plan),
                             (_, Ok(provider)) => LogicalPlanBuilder::scan(
                                 table_ref.clone(),
                                 provider,

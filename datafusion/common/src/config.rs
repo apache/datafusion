@@ -631,6 +631,11 @@ config_namespace! {
         /// Should DataFusion support recursive CTEs
         pub enable_recursive_ctes: bool, default = true
 
+        /// Should DataFusion materialize CTEs that are referenced multiple times.
+        /// When enabled, CTEs referenced more than once with expensive computations
+        /// (aggregation, distinct, window functions) will be computed once and cached.
+        pub enable_materialized_ctes: bool, default = true
+
         /// Attempt to eliminate sorts by packing & sorting files with non-overlapping
         /// statistics into the same file groups.
         /// Currently experimental
