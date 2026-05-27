@@ -21,7 +21,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use crate::stack::StackGuard;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Constraints, DFSchema, Result, not_impl_err};
+use datafusion_common::{Constraints, DFSchema, DFSchemaRef, Result, not_impl_err};
 use datafusion_expr::expr::{Sort, WildcardOptions};
 use datafusion_expr::logical_plan::{
     Extension, MaterializedCteProducer, MaterializedCteReader,
@@ -159,13 +159,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let should_materialize = planner_context.is_materialized_cte(cte_name)
                 || (ref_count > 1 && {
                     let cte_plan = planner_context.get_cte(cte_name);
-                    cte_plan.map_or(false, should_materialize_cte)
+                    cte_plan.is_some_and(should_materialize_cte)
                 });
 
-            if should_materialize && ref_count > 0 {
-                if let Some(cte_plan) = planner_context.get_cte(cte_name) {
-                    ctes_to_materialize.push((cte_name.clone(), cte_plan.clone()));
-                }
+            if should_materialize
+                && ref_count > 0
+                && let Some(cte_plan) = planner_context.get_cte(cte_name)
+            {
+                ctes_to_materialize.push((cte_name.clone(), cte_plan.clone()));
             }
         }
 
@@ -178,10 +179,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         ctes_to_materialize.sort_by(|(name_a, _), (name_b, _)| {
             let a_deps_on_b = planner_context
                 .get_cte(name_a)
-                .map_or(false, |p| plan_references_cte(p, name_b));
+                .is_some_and(|p| plan_references_cte(p, name_b));
             let b_deps_on_a = planner_context
                 .get_cte(name_b)
-                .map_or(false, |p| plan_references_cte(p, name_a));
+                .is_some_and(|p| plan_references_cte(p, name_a));
             if a_deps_on_b {
                 std::cmp::Ordering::Less
             } else if b_deps_on_a {
@@ -195,7 +196,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut result_plan = plan;
         for (cte_name, cte_plan) in ctes_to_materialize {
             // Replace all SubqueryAlias references to this CTE with readers
-            result_plan = replace_cte_with_reader(result_plan, &cte_name)?;
+            result_plan =
+                replace_cte_with_reader(result_plan, &cte_name, cte_plan.schema())?;
 
             // Wrap the plan in a producer
             let producer = MaterializedCteProducer {
@@ -513,11 +515,11 @@ fn should_materialize_cte(plan: &LogicalPlan) -> bool {
 fn plan_references_cte(plan: &LogicalPlan, cte_name: &str) -> bool {
     let mut found = false;
     plan.apply(|node| {
-        if let LogicalPlan::SubqueryAlias(alias) = node {
-            if alias.alias.table() == cte_name {
-                found = true;
-                return Ok(TreeNodeRecursion::Stop);
-            }
+        if let LogicalPlan::SubqueryAlias(alias) = node
+            && alias.alias.table() == cte_name
+        {
+            found = true;
+            return Ok(TreeNodeRecursion::Jump);
         }
         Ok(TreeNodeRecursion::Continue)
     })
@@ -529,10 +531,11 @@ fn plan_references_cte(plan: &LogicalPlan, cte_name: &str) -> bool {
 fn count_cte_references(plan: &LogicalPlan, cte_name: &str) -> usize {
     let mut count = 0;
     plan.apply(|node| {
-        if let LogicalPlan::SubqueryAlias(alias) = node {
-            if alias.alias.table() == cte_name {
-                count += 1;
-            }
+        if let LogicalPlan::SubqueryAlias(alias) = node
+            && alias.alias.table() == cte_name
+        {
+            count += 1;
+            return Ok(TreeNodeRecursion::Jump);
         }
         Ok(TreeNodeRecursion::Continue)
     })
@@ -541,19 +544,23 @@ fn count_cte_references(plan: &LogicalPlan, cte_name: &str) -> usize {
 }
 
 /// Replace SubqueryAlias nodes matching a CTE name with a MaterializedCteReader.
-fn replace_cte_with_reader(plan: LogicalPlan, cte_name: &str) -> Result<LogicalPlan> {
+fn replace_cte_with_reader(
+    plan: LogicalPlan,
+    cte_name: &str,
+    cte_schema: &DFSchemaRef,
+) -> Result<LogicalPlan> {
     plan.transform_down(|node| {
-        if let LogicalPlan::SubqueryAlias(ref alias) = node {
-            if alias.alias.table() == cte_name {
-                let reader = MaterializedCteReader {
-                    name: cte_name.to_string(),
-                    schema: Arc::clone(&alias.schema),
-                };
-                let extension = LogicalPlan::Extension(Extension {
-                    node: Arc::new(reader),
-                });
-                return Ok(datafusion_common::tree_node::Transformed::yes(extension));
-            }
+        if let LogicalPlan::SubqueryAlias(ref alias) = node
+            && alias.alias.table() == cte_name
+        {
+            let reader = MaterializedCteReader {
+                name: cte_name.to_string(),
+                schema: Arc::clone(cte_schema),
+            };
+            let extension = LogicalPlan::Extension(Extension {
+                node: Arc::new(reader),
+            });
+            return Ok(datafusion_common::tree_node::Transformed::yes(extension));
         }
         Ok(datafusion_common::tree_node::Transformed::no(node))
     })

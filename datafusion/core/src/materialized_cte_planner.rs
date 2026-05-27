@@ -57,10 +57,11 @@ impl MaterializedCtePlanner {
     /// Get or create a cache for the given CTE name.
     fn get_or_create_cache(&self, name: &str) -> Arc<MaterializedCteCache> {
         let mut caches = self.caches.lock().unwrap();
-        caches
-            .entry(name.to_string())
-            .or_insert_with(|| Arc::new(MaterializedCteCache::new(name.to_string())))
-            .clone()
+        Arc::clone(
+            caches
+                .entry(name.to_string())
+                .or_insert_with(|| Arc::new(MaterializedCteCache::new(name.to_string()))),
+        )
     }
 }
 

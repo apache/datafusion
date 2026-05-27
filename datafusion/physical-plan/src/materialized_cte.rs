@@ -18,9 +18,10 @@
 //! Physical plan nodes for materialized CTEs.
 
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::execution_plan::{Boundedness, EmissionType, collect, execute_stream};
 use crate::memory::MemoryStream;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::stream::RecordBatchStreamAdapter;
@@ -70,6 +71,15 @@ impl MaterializedCteCache {
     pub fn get(&self) -> Option<&Vec<RecordBatch>> {
         self.batches.get()
     }
+
+    /// Get the cached batches, computing and storing them once if needed.
+    pub async fn get_or_try_init<F, Fut>(&self, f: F) -> Result<&Vec<RecordBatch>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Vec<RecordBatch>>>,
+    {
+        self.batches.get_or_try_init(f).await
+    }
 }
 
 /// Physical execution plan that materializes a CTE and then executes
@@ -113,12 +123,7 @@ impl MaterializedCteExec {
     fn compute_properties(continuation: &Arc<dyn ExecutionPlan>) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&continuation.schema())),
-            Partitioning::UnknownPartitioning(
-                continuation
-                    .properties()
-                    .output_partitioning()
-                    .partition_count(),
-            ),
+            Partitioning::UnknownPartitioning(1),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
@@ -174,6 +179,12 @@ impl ExecutionPlan for MaterializedCteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return internal_err!(
+                "MaterializedCteExec has a single output partition, got partition {partition}"
+            );
+        }
+
         let cache = Arc::clone(&self.cache);
         let cte_plan = Arc::clone(&self.cte_plan);
         let continuation = Arc::clone(&self.continuation);
@@ -183,24 +194,23 @@ impl ExecutionPlan for MaterializedCteExec {
 
         let fut = async move {
             // Materialize the CTE if not already done
-            if cache.get().is_none() {
-                let stream = cte_plan.execute(0, Arc::clone(&ctx))?;
-                let batches: Vec<RecordBatch> = stream.try_collect().await?;
+            let materialize_ctx = Arc::clone(&ctx);
+            cache
+                .get_or_try_init(|| async move {
+                    let batches = collect(cte_plan, materialize_ctx).await?;
 
-                let num_batches = batches.len();
-                let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-                log::info!(
-                    "Materializing CTE '{}': {} batches, {} rows",
-                    name,
-                    num_batches,
-                    num_rows
-                );
+                    let num_batches = batches.len();
+                    let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                    log::info!(
+                        "Materializing CTE '{name}': {num_batches} batches, {num_rows} rows"
+                    );
 
-                cache.store(batches)?;
-            }
+                    Ok(batches)
+                })
+                .await?;
 
             // Execute the continuation plan
-            continuation.execute(partition, ctx)
+            execute_stream(continuation, ctx)
         };
 
         // Use futures::stream::once to create a stream from the future,
@@ -299,9 +309,15 @@ impl ExecutionPlan for MaterializedCteReaderExec {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return internal_err!(
+                "MaterializedCteReaderExec has a single output partition, got partition {partition}"
+            );
+        }
+
         let batches = self.cache.get().ok_or_else(|| {
             datafusion_common::DataFusionError::Internal(format!(
                 "MaterializedCteReaderExec: cache for CTE '{}' is not yet populated. \
@@ -379,7 +395,7 @@ mod tests {
         let stream = reader.execute(0, context).unwrap();
         let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "+---+",
         ];
         assert_batches_eq!(expected, &batches);

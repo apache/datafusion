@@ -22,7 +22,8 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use crate::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 
 fn get_all_columns_from_schema(schema: &DFSchema) -> HashSet<String> {
@@ -100,12 +101,36 @@ impl UserDefinedLogicalNodeCore for MaterializedCteProducer {
         inputs: Vec<LogicalPlan>,
     ) -> Result<Self> {
         assert_eq!(inputs.len(), 2);
-        let continuation = &inputs[1];
+        let cte_plan = inputs[0].clone();
+        let cte_schema = Arc::clone(cte_plan.schema());
+        let name = self.name.clone();
+        let continuation = inputs[1]
+            .clone()
+            .transform_down(move |node| {
+                if let LogicalPlan::Extension(Extension {
+                    node: extension_node,
+                }) = &node
+                    && let Some(reader) = extension_node
+                        .as_any()
+                        .downcast_ref::<MaterializedCteReader>()
+                    && reader.name == name
+                {
+                    let reader = MaterializedCteReader {
+                        name: reader.name.clone(),
+                        schema: Arc::clone(&cte_schema),
+                    };
+                    return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                        node: Arc::new(reader),
+                    })));
+                }
+                Ok(Transformed::no(node))
+            })?
+            .data;
         Ok(Self {
             name: self.name.clone(),
-            cte_plan: Arc::new(inputs[0].clone()),
-            continuation: Arc::new(continuation.clone()),
+            cte_plan: Arc::new(cte_plan),
             schema: Arc::clone(continuation.schema()),
+            continuation: Arc::new(continuation),
         })
     }
 }
