@@ -65,7 +65,9 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave};
 use datafusion_physical_plan::windows::WindowAggExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, get_best_fitting_window};
-use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
+use datafusion_physical_plan::{
+    Distribution, ExecutionPlan, Partitioning, with_new_children_if_necessary,
+};
 
 use itertools::izip;
 
@@ -1333,22 +1335,6 @@ pub fn ensure_distribution(
         .map(|c| Arc::clone(&c.plan))
         .collect::<Vec<_>>();
 
-    // Skip the (often expensive) `with_new_children` rebuild when none of
-    // the children were actually replaced above. For nodes like
-    // `ProjectionExec`, `with_new_children` calls `try_new` and recomputes
-    // schema / equivalence properties / output ordering even when the
-    // input Arcs are identical. Profiling on a representative deep
-    // ProjectionExec stack showed `with_new_children` dominating
-    // `ensure_distribution` time for plans where no distribution change
-    // applies (point queries with no join / aggregate / unmet ordering),
-    // so the rebuild is wasted on the common case.
-    let original_children = plan.children();
-    let children_unchanged = children_plans.len() == original_children.len()
-        && children_plans
-            .iter()
-            .zip(original_children.iter())
-            .all(|(new, old)| Arc::ptr_eq(new, *old));
-
     plan = if plan.is::<UnionExec>()
         && !config.optimizer.prefer_existing_union
         && can_interleave(children_plans.iter())
@@ -1377,12 +1363,17 @@ pub fn ensure_distribution(
         //         Repartition (hash):
         //           Data
         Arc::new(InterleaveExec::try_new(children_plans)?)
-    } else if children_unchanged {
-        // Children are byte-identical Arcs as before; reuse the existing
-        // plan node and skip the schema/ordering recomputation.
-        plan
     } else {
-        plan.with_new_children(children_plans)?
+        // Route through `with_new_children_if_necessary` so the common
+        // case where no child was replaced above skips the expensive
+        // `with_new_children` rebuild. For nodes like `ProjectionExec`,
+        // `with_new_children` recomputes schema / equivalence properties /
+        // output ordering via `try_new` even when the input Arcs are
+        // identical, which dominates `ensure_distribution` time on deep
+        // projection stacks over plans where no distribution change
+        // applies (point queries with no join / aggregate / unmet
+        // ordering).
+        with_new_children_if_necessary(plan, children_plans)?
     };
 
     Ok(Transformed::yes(DistributionContext::new(
