@@ -218,6 +218,9 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
             max_extra = max_extra.max(target_count - current_len);
         }
     }
+    if O::from_usize(output_values_len).is_none() {
+        return exec_err!("array_resize: target size too large");
+    }
     validate_value_capacity(&data_type, output_values_len)?;
     validate_value_capacity(&data_type, max_extra)?;
 
@@ -393,6 +396,23 @@ mod tests {
             Some(vec![Some(1)]),
         ])) as ArrayRef;
         let count = Arc::new(Int64Array::from(vec![i64::MAX])) as ArrayRef;
+        let fill = Arc::new(Int64Array::from(vec![0])) as ArrayRef;
+
+        let err = array_resize_inner(&[list, count, fill]).unwrap_err();
+
+        assert_contains!(err.to_string(), "array_resize: target size too large");
+    }
+
+    #[test]
+    fn array_resize_rejects_cumulative_list_offset_overflow() {
+        let list = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1)]),
+            Some(vec![Some(2)]),
+        ])) as ArrayRef;
+        let count = Arc::new(Int64Array::from(vec![
+            i64::from(i32::MAX) / 2 + 1,
+            i64::from(i32::MAX) / 2 + 1,
+        ])) as ArrayRef;
         let fill = Arc::new(Int64Array::from(vec![0])) as ArrayRef;
 
         let err = array_resize_inner(&[list, count, fill]).unwrap_err();
