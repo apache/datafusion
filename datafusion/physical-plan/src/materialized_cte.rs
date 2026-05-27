@@ -168,7 +168,7 @@ impl ExecutionPlan for MaterializedCteExec {
             &self.name,
             &self.cache,
             partition_count,
-            statistics,
+            &statistics,
         )?;
         Ok(Arc::new(Self::new(
             self.name.clone(),
@@ -391,7 +391,7 @@ pub fn replace_materialized_cte_readers(
     name: &str,
     cache: &Arc<MaterializedCteCache>,
     partition_count: usize,
-    statistics: Arc<Statistics>,
+    statistics: &Arc<Statistics>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     plan.transform_up(|plan| {
         let Some(reader) = plan.downcast_ref::<MaterializedCteReaderExec>() else {
@@ -407,7 +407,7 @@ pub fn replace_materialized_cte_readers(
             plan.schema(),
             Arc::clone(cache),
             partition_count,
-            Arc::clone(&statistics),
+            Arc::clone(statistics),
         )) as Arc<dyn ExecutionPlan>))
     })
     .data()

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -30,6 +31,7 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
+    Operator,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, ExprWithAliasAndOrderBy, Ident, LimitClause, Offset, OffsetRows,
@@ -151,7 +153,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             // Count references in the plan tree
             let ref_count = count_cte_references(&plan, cte_name);
-
             // Determine if we should materialize:
             // 1. Explicitly marked MATERIALIZED, OR
             // 2. CTEs referenced more than once.
@@ -159,7 +160,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 || (ref_count > 1 && {
                     let cte_plan = planner_context.get_cte(cte_name);
                     cte_plan.is_some_and(|cte_plan| {
-                        should_materialize_multi_reference_cte(cte_plan, &plan, ref_count)
+                        should_materialize_multi_reference_cte(
+                            cte_plan, cte_name, &plan, ref_count,
+                        )
                     })
                 });
 
@@ -501,6 +504,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 /// CTEs and complex CTEs with many base table references stay materialized.
 fn should_materialize_multi_reference_cte(
     cte_plan: &LogicalPlan,
+    cte_name: &str,
     continuation_plan: &LogicalPlan,
     ref_count: usize,
 ) -> bool {
@@ -509,6 +513,13 @@ fn should_materialize_multi_reference_cte(
     }
 
     if ends_in_aggregate_distinct_or_window(cte_plan) {
+        if consumers_apply_disjoint_group_key_filters(
+            cte_name,
+            continuation_plan,
+            ref_count,
+        ) {
+            return false;
+        }
         return true;
     }
 
@@ -529,6 +540,205 @@ fn ends_in_aggregate_distinct_or_window(plan: &LogicalPlan) -> bool {
             let inputs = plan.inputs();
             inputs.len() == 1 && ends_in_aggregate_distinct_or_window(inputs[0])
         }
+    }
+}
+
+/// Detects Q39-style patterns where each CTE reference is filtered on a different
+/// literal value of a group-by key. In this case inlining is better because the
+/// optimizer can push the filter through the aggregate, specializing each copy.
+fn consumers_apply_disjoint_group_key_filters(
+    cte_name: &str,
+    continuation_plan: &LogicalPlan,
+    ref_count: usize,
+) -> bool {
+    let per_ref_filters = collect_per_reference_filters(continuation_plan, cte_name);
+    if per_ref_filters.len() != ref_count || per_ref_filters.is_empty() {
+        return false;
+    }
+
+    // Collect all column names that appear in any reference's filters.
+    let all_col_names: HashSet<&str> = per_ref_filters
+        .iter()
+        .flat_map(|filters| filters.iter().map(|(col, _)| col.as_str()))
+        .collect();
+
+    // For each column, check if every reference applies an equality filter on it
+    // with a distinct literal value per reference.
+    for col_name in all_col_names {
+        let mut seen_values: HashSet<&str> = HashSet::new();
+        let mut all_have_filter = true;
+        for filters in &per_ref_filters {
+            let mut found = false;
+            for (filter_col, filter_val) in filters {
+                if filter_col == col_name {
+                    seen_values.insert(filter_val.as_str());
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                all_have_filter = false;
+                break;
+            }
+        }
+        if all_have_filter && seen_values.len() == ref_count {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// For each CTE reference in the continuation plan, collect equality filter
+/// conditions (column_name, literal_value) that are attributed to that specific
+/// reference. Uses column qualifiers to match filters to the correct reference.
+fn collect_per_reference_filters(
+    plan: &LogicalPlan,
+    cte_name: &str,
+) -> Vec<Vec<(String, String)>> {
+    // Step 1: Find all CTE reference aliases and any filters on the path.
+    // A CTE reference is SubqueryAlias(cte_name) wrapped by an outer alias.
+    // Example: SubqueryAlias("inv1") → SubqueryAlias("inv") → [CTE body]
+    let mut ref_aliases: Vec<String> = Vec::new();
+    collect_cte_ref_aliases(plan, cte_name, &mut ref_aliases);
+
+    if ref_aliases.is_empty() {
+        return Vec::new();
+    }
+
+    // Step 2: Collect all equality filters from the plan (before the join).
+    // These are qualified like "inv1.d_moy = 4"
+    let mut all_filters: Vec<(Option<String>, String, String)> = Vec::new();
+    collect_all_equality_filters(plan, cte_name, &mut all_filters);
+
+    // Step 3: For each reference alias, find the filters that target it.
+    let mut results = Vec::new();
+    for alias in &ref_aliases {
+        let mut ref_filters = Vec::new();
+        for (qualifier, col_name, value) in &all_filters {
+            if qualifier.as_deref() == Some(alias.as_str()) {
+                ref_filters.push((col_name.clone(), value.clone()));
+            }
+        }
+        results.push(ref_filters);
+    }
+
+    results
+}
+
+/// Find the outer aliases wrapping each CTE reference.
+/// For "FROM inv inv1, inv inv2", finds ["inv1", "inv2"]
+fn collect_cte_ref_aliases(
+    plan: &LogicalPlan,
+    cte_name: &str,
+    aliases: &mut Vec<String>,
+) {
+    if let LogicalPlan::SubqueryAlias(outer_alias) = plan
+        && outer_alias.alias.table() != cte_name
+        && let LogicalPlan::SubqueryAlias(inner) = outer_alias.input.as_ref()
+        && inner.alias.table() == cte_name
+    {
+        aliases.push(outer_alias.alias.table().to_string());
+        return;
+    }
+    for input in plan.inputs() {
+        collect_cte_ref_aliases(input, cte_name, aliases);
+    }
+}
+
+/// Collect equality conditions from Filter nodes, extracting (qualifier, column_name, value).
+/// Also handles simple constant arithmetic (like 4+1).
+fn collect_all_equality_filters(
+    plan: &LogicalPlan,
+    cte_name: &str,
+    out: &mut Vec<(Option<String>, String, String)>,
+) {
+    if let LogicalPlan::SubqueryAlias(alias) = plan
+        && alias.alias.table() == cte_name
+    {
+        return;
+    }
+
+    if let LogicalPlan::Filter(filter) = plan {
+        extract_qualified_equality_conditions(&filter.predicate, out);
+    }
+
+    for input in plan.inputs() {
+        collect_all_equality_filters(input, cte_name, out);
+    }
+}
+
+fn extract_qualified_equality_conditions(
+    expr: &Expr,
+    out: &mut Vec<(Option<String>, String, String)>,
+) {
+    match expr {
+        Expr::BinaryExpr(binary) if binary.op == Operator::Eq => {
+            match (binary.left.as_ref(), binary.right.as_ref()) {
+                (Expr::Column(col), rhs) => {
+                    if let Some(val) = try_eval_constant(rhs) {
+                        out.push((
+                            col.relation.as_ref().map(|r| r.table().to_string()),
+                            col.name().to_string(),
+                            val,
+                        ));
+                    }
+                }
+                (lhs, Expr::Column(col)) => {
+                    if let Some(val) = try_eval_constant(lhs) {
+                        out.push((
+                            col.relation.as_ref().map(|r| r.table().to_string()),
+                            col.name().to_string(),
+                            val,
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Expr::BinaryExpr(binary) if binary.op == Operator::And => {
+            extract_qualified_equality_conditions(&binary.left, out);
+            extract_qualified_equality_conditions(&binary.right, out);
+        }
+        _ => {}
+    }
+}
+
+/// Try to evaluate an expression as a constant value (literal or simple arithmetic).
+fn try_eval_constant(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Literal(val, _) => Some(val.to_string()),
+        Expr::BinaryExpr(binary) => {
+            let left = try_eval_constant_i64(&binary.left)?;
+            let right = try_eval_constant_i64(&binary.right)?;
+            let result = match binary.op {
+                Operator::Plus => left.checked_add(right)?,
+                Operator::Minus => left.checked_sub(right)?,
+                Operator::Multiply => left.checked_mul(right)?,
+                _ => return None,
+            };
+            Some(result.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn try_eval_constant_i64(expr: &Expr) -> Option<i64> {
+    match expr {
+        Expr::Literal(val, _) => {
+            use datafusion_common::ScalarValue;
+            match val {
+                ScalarValue::Int8(Some(v)) => Some(*v as i64),
+                ScalarValue::Int16(Some(v)) => Some(*v as i64),
+                ScalarValue::Int32(Some(v)) => Some(*v as i64),
+                ScalarValue::Int64(Some(v)) => Some(*v),
+                ScalarValue::UInt8(Some(v)) => Some(*v as i64),
+                ScalarValue::UInt16(Some(v)) => Some(*v as i64),
+                ScalarValue::UInt32(Some(v)) => Some(*v as i64),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 

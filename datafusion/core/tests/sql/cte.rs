@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use arrow::array::StringArray;
 use datafusion::catalog::MemTable;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion::physical_plan::materialized_cte::{
@@ -243,7 +244,7 @@ async fn materialized_cte_reader_preserves_producer_statistics() -> Result<()> {
         fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
             if plan.is::<MaterializedCteReaderExec>() {
                 self.reader_rows
-                    .push(plan.partition_statistics(None)?.num_rows.clone());
+                    .push(plan.partition_statistics(None)?.num_rows);
             }
 
             Ok(true)
@@ -269,6 +270,82 @@ async fn materialized_cte_reader_preserves_producer_statistics() -> Result<()> {
         "+-----------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn q39_filter_pushdown_regression() -> Result<()> {
+    // TPC-DS Q39 pattern: CTE aggregates over all months,
+    // but each reference filters on a different d_moy value.
+    // When inlined, predicate pushdown can push d_moy=4 / d_moy=5 into the scan.
+    // When materialized, ALL months are computed then filtered post-hoc.
+
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.enable_materialized_ctes = true;
+    let ctx = SessionContext::new_with_config(config);
+
+    ctx.sql("CREATE TABLE inventory (inv_item_sk INT, inv_warehouse_sk INT, inv_date_sk INT, inv_quantity_on_hand INT) AS VALUES (1,1,1,100),(1,1,2,200),(1,1,3,50)").await?.collect().await?;
+    ctx.sql("CREATE TABLE item (i_item_sk INT) AS VALUES (1)")
+        .await?
+        .collect()
+        .await?;
+    ctx.sql("CREATE TABLE warehouse (w_warehouse_name VARCHAR, w_warehouse_sk INT) AS VALUES ('wh1', 1)").await?.collect().await?;
+    ctx.sql("CREATE TABLE date_dim (d_date_sk INT, d_year INT, d_moy INT) AS VALUES (1, 1998, 4), (2, 1998, 5), (3, 1998, 6)").await?.collect().await?;
+
+    let q39 = "
+    EXPLAIN with inv as
+    (select w_warehouse_name,w_warehouse_sk,i_item_sk,d_moy
+           ,stdev,mean, case mean when 0 then null else stdev/mean end cov
+     from(select w_warehouse_name,w_warehouse_sk,i_item_sk,d_moy
+                ,stddev_samp(inv_quantity_on_hand) stdev,avg(inv_quantity_on_hand) mean
+          from inventory
+              ,item
+              ,warehouse
+              ,date_dim
+          where inv_item_sk = i_item_sk
+            and inv_warehouse_sk = w_warehouse_sk
+            and inv_date_sk = d_date_sk
+            and d_year = 1998
+          group by w_warehouse_name,w_warehouse_sk,i_item_sk,d_moy) foo
+     where case mean when 0 then 0 else stdev/mean end > 1)
+    select inv1.w_warehouse_sk,inv1.i_item_sk,inv1.d_moy,inv1.mean, inv1.cov
+            ,inv2.w_warehouse_sk,inv2.i_item_sk,inv2.d_moy,inv2.mean, inv2.cov
+    from inv inv1,inv inv2
+    where inv1.i_item_sk = inv2.i_item_sk
+      and inv1.w_warehouse_sk =  inv2.w_warehouse_sk
+      and inv1.d_moy=4
+      and inv2.d_moy=4+1
+    order by inv1.w_warehouse_sk,inv1.i_item_sk,inv1.d_moy,inv1.mean,inv1.cov
+            ,inv2.d_moy,inv2.mean, inv2.cov
+    ";
+
+    let df = ctx.sql(q39).await?;
+    let results = df.collect().await?;
+    let plan_str = results
+        .iter()
+        .flat_map(|b| {
+            let col = b.column(1);
+            (0..col.len()).map(move |i| {
+                col.as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .value(i)
+                    .to_string()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // With the disjoint group-key filter heuristic, Q39's CTE should NOT be
+    // materialized because each reference filters on a different d_moy value,
+    // allowing predicate pushdown to specialize each aggregate copy.
+    assert!(
+        !plan_str.contains("MaterializedCteExec")
+            && !plan_str.contains("MaterializedCteProducer"),
+        "Q39 CTE should NOT be materialized when consumers apply disjoint \
+         filters on group-by keys (d_moy=4 vs d_moy=5)"
+    );
 
     Ok(())
 }

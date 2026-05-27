@@ -122,7 +122,7 @@ impl ExtensionPlanner for MaterializedCtePlanner {
                 &producer.name,
                 &cache,
                 partition_count,
-                statistics,
+                &statistics,
             )?;
             let exec = MaterializedCteExec::new(
                 producer.name.clone(),
