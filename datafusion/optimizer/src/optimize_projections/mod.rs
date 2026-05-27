@@ -30,8 +30,10 @@ use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::logical_plan::TableScanBuilder;
+use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
+    Aggregate, Distinct, EmptyRelation, Expr, Projection, Unnest, Window,
     logical_plan::LogicalPlan,
 };
 
