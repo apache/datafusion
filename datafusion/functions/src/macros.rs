@@ -245,11 +245,10 @@ macro_rules! make_math_unary_udf {
 
             impl $UDF {
                 pub fn new() -> Self {
-                    use DataType::*;
                     Self {
                         signature: Signature::uniform(
                             1,
-                            vec![Float64, Float32],
+                            vec![DataType::Float64, DataType::Float32],
                             Volatility::Immutable,
                         ),
                     }
@@ -270,7 +269,6 @@ macro_rules! make_math_unary_udf {
 
                     match arg_type {
                         DataType::Float32 => Ok(DataType::Float32),
-                        // For other types (possible values float64/null/int), use Float64
                         _ => Ok(DataType::Float64),
                     }
                 }
@@ -382,7 +380,6 @@ macro_rules! make_math_binary_udf {
 
             impl $UDF {
                 pub fn new() -> Self {
-                    use DataType::*;
                     Self {
                         // Float64 is listed first so that integer (and other
                         // non-float) arguments coerce to Float64 rather than
@@ -394,7 +391,7 @@ macro_rules! make_math_binary_udf {
                         // is ever applied.
                         signature: Signature::uniform(
                             2,
-                            vec![Float64, Float32],
+                            vec![DataType::Float64, DataType::Float32],
                             Volatility::Immutable,
                         ),
                     }
@@ -411,10 +408,8 @@ macro_rules! make_math_binary_udf {
                 }
 
                 fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-                    let arg_type = &arg_types[0];
-
-                    match arg_type {
-                        DataType::Float32 => Ok(DataType::Float32),
+                    match (&arg_types[0], &arg_types[1]) {
+                        (DataType::Float32, DataType::Float32) => Ok(DataType::Float32),
                         _ => Ok(DataType::Float64),
                     }
                 }
