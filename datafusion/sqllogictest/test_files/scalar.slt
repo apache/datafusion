@@ -236,15 +236,18 @@ select atan2(0, 1), atan2(1, 2), atan2(2, 2);
 ----
 0 0.463647609001 0.785398163397
 
-# atan2 always returns Float64, including integer, Float32, and NULL inputs
-query TTTT
+# atan2 returns Float32 only when both arguments are Float32; every other
+# numeric combination (integers, Float64, mixed, NULL) is computed in Float64
+query TTTTTT
 select
-  arrow_typeof(atan2(1, 1)),
   arrow_typeof(atan2(arrow_cast(1.0, 'Float32'), arrow_cast(1.0, 'Float32'))),
+  arrow_typeof(atan2(1, 1)),
+  arrow_typeof(atan2(arrow_cast(1.0, 'Float32'), arrow_cast(1.0, 'Float64'))),
+  arrow_typeof(atan2(arrow_cast(1.0, 'Float64'), arrow_cast(1.0, 'Float32'))),
   arrow_typeof(atan2(null, null)),
   arrow_typeof(atan2(null, 64));
 ----
-Float64 Float64 Float64 Float64
+Float32 Float64 Float64 Float64 Float64 Float64
 
 # atan2 with integer inputs is computed in double precision
 query B

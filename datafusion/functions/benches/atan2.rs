@@ -17,7 +17,7 @@
 
 extern crate criterion;
 
-use arrow::datatypes::{DataType, Field, Float64Type};
+use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
 use arrow::util::bench_util::create_primitive_array;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
@@ -32,6 +32,34 @@ fn criterion_benchmark(c: &mut Criterion) {
     let config_options = Arc::new(ConfigOptions::default());
 
     for size in [1024, 4096, 8192] {
+        let y_f32 = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
+        let x_f32 = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
+        let f32_args = vec![ColumnarValue::Array(y_f32), ColumnarValue::Array(x_f32)];
+        let f32_arg_fields = f32_args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+        let return_field_f32 = Field::new("f", DataType::Float32, true).into();
+
+        c.bench_function(&format!("atan2 f32 array: {size}"), |b| {
+            b.iter(|| {
+                black_box(
+                    atan2_fn
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: f32_args.clone(),
+                            arg_fields: f32_arg_fields.clone(),
+                            number_rows: size,
+                            return_field: Arc::clone(&return_field_f32),
+                            config_options: Arc::clone(&config_options),
+                        })
+                        .unwrap(),
+                )
+            })
+        });
+
         let y_f64 = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let x_f64 = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let f64_args = vec![ColumnarValue::Array(y_f64), ColumnarValue::Array(x_f64)];
@@ -60,6 +88,32 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         });
     }
+
+    let scalar_f32_args = vec![
+        ColumnarValue::Scalar(ScalarValue::Float32(Some(1.0))),
+        ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))),
+    ];
+    let scalar_f32_arg_fields = vec![
+        Field::new("a", DataType::Float32, false).into(),
+        Field::new("b", DataType::Float32, false).into(),
+    ];
+    let return_field_f32 = Field::new("f", DataType::Float32, false).into();
+
+    c.bench_function("atan2 f32 scalar", |b| {
+        b.iter(|| {
+            black_box(
+                atan2_fn
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: scalar_f32_args.clone(),
+                        arg_fields: scalar_f32_arg_fields.clone(),
+                        number_rows: 1,
+                        return_field: Arc::clone(&return_field_f32),
+                        config_options: Arc::clone(&config_options),
+                    })
+                    .unwrap(),
+            )
+        })
+    });
 
     let scalar_f64_args = vec![
         ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0))),

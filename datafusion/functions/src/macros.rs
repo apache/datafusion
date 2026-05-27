@@ -345,8 +345,12 @@ macro_rules! make_math_unary_udf {
 
 /// Macro to create a binary math UDF.
 ///
-/// A binary math function takes two numeric arguments, coerces them to Float64,
-/// applies a binary floating function to the arguments, and returns Float64.
+/// A binary math function takes two numeric arguments. When both arguments are
+/// Float32 the function is evaluated in single precision and returns Float32.
+/// Any other combination of numeric (or null) argument types is coerced to
+/// Float64 and returns Float64; in particular integers are widened to Float64
+/// rather than Float32 so that values needing more than 24 bits of mantissa are
+/// not silently rounded.
 ///
 /// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
 /// $NAME: the name of the function
@@ -362,9 +366,9 @@ macro_rules! make_math_binary_udf {
             use std::sync::Arc;
 
             use arrow::array::{ArrayRef, AsArray};
-            use arrow::datatypes::{DataType, Float64Type};
+            use arrow::datatypes::{DataType, Float32Type, Float64Type};
             use datafusion_common::utils::take_function_args;
-            use datafusion_common::{Result, ScalarValue, internal_err};
+            use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
                 ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
@@ -378,12 +382,8 @@ macro_rules! make_math_binary_udf {
 
             impl $UDF {
                 pub fn new() -> Self {
-                    use DataType::*;
                     Self {
-                        signature: Signature::exact(
-                            vec![Float64, Float64],
-                            Volatility::Immutable,
-                        ),
+                        signature: Signature::user_defined(Volatility::Immutable),
                     }
                 }
             }
@@ -397,8 +397,43 @@ macro_rules! make_math_binary_udf {
                     &self.signature
                 }
 
-                fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                    Ok(DataType::Float64)
+                fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+                    let arg_type = &arg_types[0];
+
+                    match arg_type {
+                        DataType::Float32 => Ok(DataType::Float32),
+                        _ => Ok(DataType::Float64),
+                    }
+                }
+
+                fn coerce_types(
+                    &self,
+                    arg_types: &[DataType],
+                ) -> Result<Vec<DataType>> {
+                    let [y, x] = take_function_args(self.name(), arg_types)?;
+
+                    // Evaluate in single precision only when both arguments are
+                    // already Float32. Every other numeric (or null) combination
+                    // is computed in Float64 so that integer inputs are widened
+                    // without losing precision, rather than being rounded to
+                    // Float32.
+                    let coerced = match (y, x) {
+                        (DataType::Float32, DataType::Float32) => DataType::Float32,
+                        (y, x)
+                            if (y.is_numeric() || y.is_null())
+                                && (x.is_numeric() || x.is_null()) =>
+                        {
+                            DataType::Float64
+                        }
+                        (y, x) => {
+                            return plan_err!(
+                                "Function '{}' expects numeric arguments, got {y} and {x}",
+                                self.name()
+                            );
+                        }
+                    };
+
+                    Ok(vec![coerced.clone(), coerced])
                 }
 
                 fn output_ordering(
@@ -412,7 +447,10 @@ macro_rules! make_math_binary_udf {
                     &self,
                     args: ScalarFunctionArgs,
                 ) -> Result<ColumnarValue> {
-                    let ScalarFunctionArgs { args, .. } = args;
+                    let ScalarFunctionArgs {
+                        args, return_field, ..
+                    } = args;
+                    let return_type = return_field.data_type();
                     let [y, x] = take_function_args(self.name(), args)?;
 
                     match (y, x) {
@@ -421,13 +459,20 @@ macro_rules! make_math_binary_udf {
                             ColumnarValue::Scalar(x_scalar),
                         ) => match (&y_scalar, &x_scalar) {
                             (y, x) if y.is_null() || x.is_null() => {
-                                Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+                                ColumnarValue::Scalar(ScalarValue::Null)
+                                    .cast_to(return_type, None)
                             }
                             (
                                 ScalarValue::Float64(Some(yv)),
                                 ScalarValue::Float64(Some(xv)),
                             ) => Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
                                 f64::$BINARY_FUNC(*yv, *xv),
+                            )))),
+                            (
+                                ScalarValue::Float32(Some(yv)),
+                                ScalarValue::Float32(Some(xv)),
+                            ) => Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(
+                                f32::$BINARY_FUNC(*yv, *xv),
                             )))),
                             _ => internal_err!(
                                 "Unexpected scalar types for function {}: {:?}, {:?}",
@@ -438,25 +483,38 @@ macro_rules! make_math_binary_udf {
                         },
                         (y, x) => {
                             let args = ColumnarValue::values_to_arrays(&[y, x])?;
-                            match (args[0].data_type(), args[1].data_type()) {
-                                (DataType::Float64, DataType::Float64) => {
+                            let arr: ArrayRef = match args[0].data_type() {
+                                DataType::Float64 => {
                                     let y = args[0].as_primitive::<Float64Type>();
                                     let x = args[1].as_primitive::<Float64Type>();
-                                    let result = arrow::compute::binary::<_, _, _, Float64Type>(
-                                        y,
-                                        x,
-                                        |y, x| f64::$BINARY_FUNC(y, x),
-                                    )?;
-
-                                    Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
+                                    let result =
+                                        arrow::compute::binary::<_, _, _, Float64Type>(
+                                            y,
+                                            x,
+                                            |y, x| f64::$BINARY_FUNC(y, x),
+                                        )?;
+                                    Arc::new(result) as _
                                 }
-                                (left, right) => {
-                                    internal_err!(
-                                        "Unexpected array types for function {}: {left:?}, {right:?}",
+                                DataType::Float32 => {
+                                    let y = args[0].as_primitive::<Float32Type>();
+                                    let x = args[1].as_primitive::<Float32Type>();
+                                    let result =
+                                        arrow::compute::binary::<_, _, _, Float32Type>(
+                                            y,
+                                            x,
+                                            |y, x| f32::$BINARY_FUNC(y, x),
+                                        )?;
+                                    Arc::new(result) as _
+                                }
+                                other => {
+                                    return internal_err!(
+                                        "Unsupported data type {other:?} for function {}",
                                         self.name()
-                                    )
+                                    );
                                 }
-                            }
+                            };
+
+                            Ok(ColumnarValue::Array(arr))
                         }
                     }
                 }
