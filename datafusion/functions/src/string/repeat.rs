@@ -26,7 +26,9 @@ use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{NativeType, logical_int64, logical_string};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
+};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
@@ -174,16 +176,13 @@ fn compute_repeat(s: &str, count: i64, max_size: usize) -> Result<String> {
 
 fn repeat_len(string_len: usize, count: i64, max_size: usize) -> Result<usize> {
     let count = repeat_count(count, max_size)?;
-    let result_len = match string_len.checked_mul(count) {
-        Some(result_len) => result_len,
-        None => {
-            return exec_err!(
-                "string size overflow on repeat, max size is {}, but got {}",
-                max_size,
-                usize::MAX
-            );
-        }
-    };
+    let result_len = string_len.checked_mul(count).ok_or_else(|| {
+        exec_datafusion_err!(
+            "string size overflow on repeat, max size is {}, but got {}",
+            max_size,
+            usize::MAX
+        )
+    })?;
     if result_len > max_size {
         return exec_err!(
             "string size overflow on repeat, max size is {}, but got {}",
@@ -263,16 +262,14 @@ where
             match (string, number) {
                 (Some(string), Some(number)) if number >= 0 => {
                     let item_capacity = repeat_len(string.len(), number, max_str_len)?;
-                    total_capacity = match total_capacity.checked_add(item_capacity) {
-                        Some(total_capacity) => total_capacity,
-                        None => {
-                            return exec_err!(
+                    total_capacity =
+                        total_capacity.checked_add(item_capacity).ok_or_else(|| {
+                            exec_datafusion_err!(
                                 "string size overflow on repeat, max size is {}, but got {}",
                                 max_str_len,
                                 usize::MAX
-                            );
-                        }
-                    };
+                            )
+                        })?;
                     max_item_capacity = max_item_capacity.max(item_capacity);
                 }
                 _ => (),
