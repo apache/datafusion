@@ -116,10 +116,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Apply CTE materialization to the plan.
     ///
-    /// For each CTE that should be materialized (referenced more than once and
-    /// containing expensive operations, or explicitly marked MATERIALIZED), this
-    /// replaces SubqueryAlias references with MaterializedCteReader nodes and
-    /// wraps the plan in MaterializedCteProducer nodes.
+    /// For each CTE that should be materialized, this replaces SubqueryAlias
+    /// references with MaterializedCteReader nodes and wraps the plan in
+    /// MaterializedCteProducer nodes.
     fn apply_cte_materialization(
         &self,
         plan: LogicalPlan,
@@ -155,11 +154,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             // Determine if we should materialize:
             // 1. Explicitly marked MATERIALIZED, OR
-            // 2. Referenced more than once AND contains expensive operations
+            // 2. CTEs referenced more than once.
             let should_materialize = planner_context.is_materialized_cte(cte_name)
                 || (ref_count > 1 && {
                     let cte_plan = planner_context.get_cte(cte_name);
-                    cte_plan.is_some_and(should_materialize_cte)
+                    cte_plan.is_some_and(|cte_plan| {
+                        should_materialize_multi_reference_cte(cte_plan, &plan, ref_count)
+                    })
                 });
 
             if should_materialize
@@ -493,22 +494,73 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
-/// Check if a plan is "expensive" enough to justify materialization.
-/// Walks past SubqueryAlias/Projection/Sort/Limit/Filter, returns true
-/// if it hits Aggregate/Distinct/Window/Union.
-fn should_materialize_cte(plan: &LogicalPlan) -> bool {
+/// Decide whether to materialize a CTE referenced more than once.
+///
+/// Multi-reference CTEs stay materialized by default, but cheap CTEs and CTEs
+/// consumed below a top-level limit are left inline. Aggregate/distinct/window
+/// CTEs and complex CTEs with many base table references stay materialized.
+fn should_materialize_multi_reference_cte(
+    cte_plan: &LogicalPlan,
+    continuation_plan: &LogicalPlan,
+    ref_count: usize,
+) -> bool {
+    if ref_count <= 1 || is_cheap_to_inline(cte_plan) {
+        return false;
+    }
+
+    if ends_in_aggregate_distinct_or_window(cte_plan) {
+        return true;
+    }
+
+    let base_table_references = count_base_table_references(cte_plan);
+    if base_table_references > 2 && base_table_references * ref_count > 10 {
+        return true;
+    }
+
+    !contains_limit_on_single_child_path(continuation_plan)
+}
+
+fn ends_in_aggregate_distinct_or_window(plan: &LogicalPlan) -> bool {
     match plan {
         LogicalPlan::Aggregate(_) => true,
         LogicalPlan::Distinct(_) => true,
         LogicalPlan::Window(_) => true,
-        LogicalPlan::Union(_) => true,
-        LogicalPlan::SubqueryAlias(alias) => should_materialize_cte(alias.input.as_ref()),
-        LogicalPlan::Projection(proj) => should_materialize_cte(proj.input.as_ref()),
-        LogicalPlan::Sort(sort) => should_materialize_cte(sort.input.as_ref()),
-        LogicalPlan::Limit(limit) => should_materialize_cte(limit.input.as_ref()),
-        LogicalPlan::Filter(filter) => should_materialize_cte(filter.input.as_ref()),
-        _ => false,
+        _ => {
+            let inputs = plan.inputs();
+            inputs.len() == 1 && ends_in_aggregate_distinct_or_window(inputs[0])
+        }
     }
+}
+
+fn is_cheap_to_inline(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::EmptyRelation(_) => true,
+        _ => {
+            let inputs = plan.inputs();
+            inputs.len() == 1 && is_cheap_to_inline(inputs[0])
+        }
+    }
+}
+
+fn count_base_table_references(plan: &LogicalPlan) -> usize {
+    let mut count = 0;
+    plan.apply(|node| {
+        if let LogicalPlan::TableScan(_) = node {
+            count += 1;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .unwrap();
+    count
+}
+
+fn contains_limit_on_single_child_path(plan: &LogicalPlan) -> bool {
+    if matches!(plan, LogicalPlan::Limit(_)) {
+        return true;
+    }
+
+    let inputs = plan.inputs();
+    inputs.len() == 1 && contains_limit_on_single_child_path(inputs[0])
 }
 
 /// Check if a plan contains a SubqueryAlias reference to a given CTE name.
