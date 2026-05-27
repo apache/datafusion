@@ -30,6 +30,7 @@ use parking_lot::Mutex;
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display},
+    hash::{Hash, Hasher},
     sync::Arc,
     vec::IntoIter,
 };
@@ -519,20 +520,19 @@ impl From<MetricsSet> for ExecutionPlanMetricsSet {
 /// telemetry]<https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/data-model.md>,
 /// etc.
 ///
-/// As the name and value are expected to mostly be constant strings,
-/// use a [`Cow`] to avoid copying / allocations in this common case.
+/// As the name and value are expected to often be constant strings, borrowed
+/// static strings avoid allocations in that common case. Dynamic strings are
+/// stored behind [`Arc<str>`] so cloning labels does not copy the underlying
+/// string data.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Label {
-    name: Cow<'static, str>,
-    value: Cow<'static, str>,
+    name: LabelValue,
+    value: LabelValue,
 }
 
 impl Label {
     /// Create a new [`Label`]
-    pub fn new(
-        name: impl Into<Cow<'static, str>>,
-        value: impl Into<Cow<'static, str>>,
-    ) -> Self {
+    pub fn new(name: impl Into<LabelValue>, value: impl Into<LabelValue>) -> Self {
         let name = name.into();
         let value = value.into();
         Self { name, value }
@@ -540,18 +540,101 @@ impl Label {
 
     /// Returns the name of this label
     pub fn name(&self) -> &str {
-        self.name.as_ref()
+        self.name.as_str()
     }
 
     /// Returns the value of this label
     pub fn value(&self) -> &str {
-        self.value.as_ref()
+        self.value.as_str()
     }
 }
 
 impl Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}={}", self.name, self.value)
+    }
+}
+
+/// A label name or value.
+///
+/// String literals preserve the existing allocation-free path. Dynamic strings
+/// can be stored behind [`Arc<str>`], so cloning a [`Label`] only increments an
+/// atomic reference count and does not allocate or copy the underlying string
+/// data.
+#[derive(Clone)]
+pub struct LabelValue(LabelValueInner);
+
+/// Internal representation for label names and values.
+///
+/// `LabelValue` is public because `Label::new` accepts it, but these storage
+/// variants are implementation details. Keeping them private prevents external
+/// code from constructing or matching on `Static` and `Shared` directly.
+#[derive(Clone)]
+enum LabelValueInner {
+    Static(&'static str),
+    Shared(Arc<str>),
+}
+
+impl LabelValue {
+    /// Return this label value as a string slice.
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            LabelValueInner::Static(value) => value,
+            LabelValueInner::Shared(value) => value.as_ref(),
+        }
+    }
+}
+
+impl From<&'static str> for LabelValue {
+    fn from(value: &'static str) -> Self {
+        Self(LabelValueInner::Static(value))
+    }
+}
+
+impl From<String> for LabelValue {
+    fn from(value: String) -> Self {
+        Self(LabelValueInner::Shared(Arc::from(value)))
+    }
+}
+
+impl From<Arc<str>> for LabelValue {
+    fn from(value: Arc<str>) -> Self {
+        Self(LabelValueInner::Shared(value))
+    }
+}
+
+impl From<Cow<'static, str>> for LabelValue {
+    fn from(value: Cow<'static, str>) -> Self {
+        match value {
+            Cow::Borrowed(value) => value.into(),
+            Cow::Owned(value) => value.into(),
+        }
+    }
+}
+
+impl PartialEq for LabelValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for LabelValue {}
+
+impl Hash for LabelValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl Debug for LabelValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl Display for LabelValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Display::fmt(self.as_str(), f)
     }
 }
 
@@ -607,6 +690,18 @@ mod tests {
         let metric = Metric::new_with_labels(value, partition, vec![label]);
 
         assert_eq!("output_rows{partition=2, foo=bar}=66", metric.to_string())
+    }
+
+    #[test]
+    fn test_label_owned_and_borrowed_values_are_equal() {
+        let borrowed = Label::new("foo", "bar");
+        let owned = Label::new("foo".to_string(), "bar".to_string());
+        let shared = Label::new("foo", Arc::<str>::from("bar"));
+
+        assert_eq!(borrowed, owned);
+        assert_eq!(borrowed, shared);
+        assert_eq!(borrowed.to_string(), owned.to_string());
+        assert_eq!(borrowed.to_string(), shared.to_string());
     }
 
     #[test]

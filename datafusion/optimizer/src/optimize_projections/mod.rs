@@ -32,7 +32,7 @@ use datafusion_common::{
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
     Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
-    logical_plan::LogicalPlan, utils::expr_to_columns,
+    logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -287,23 +287,15 @@ fn optimize_projections(
             .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::TableScan(table_scan) => {
-            let TableScan {
-                table_name,
-                source,
-                projection,
-                filters,
-                fetch,
-                projected_schema: _,
-            } = table_scan;
-
             // Get indices referred to in the original (schema with all fields)
             // given projected indices.
-            let projection = match &projection {
+            let projection = match &table_scan.projection {
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
-            let new_scan =
-                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+            let new_scan = TableScanBuilder::from(table_scan)
+                .with_projection(Some(projection))
+                .build()?;
 
             return Transformed::yes(LogicalPlan::TableScan(new_scan))
                 .transform_data(|plan| optimize_subqueries(plan, config));
@@ -683,6 +675,30 @@ fn optimize_subqueries(
 /// - `Ok(None)`: Signals that merge is not beneficial (and has not taken place).
 /// - `Err(error)`: An error occurred during the function call.
 fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Projection>> {
+    // Collapse the whole chain in one pass; otherwise an N-deep chain needs
+    // N outer optimizer passes to fully fold.
+    let mut current = proj;
+    let mut transformed_any = false;
+    loop {
+        let Transformed {
+            data, transformed, ..
+        } = merge_consecutive_projections_one_level(current)?;
+        current = data;
+        if !transformed {
+            break;
+        }
+        transformed_any = true;
+    }
+    Ok(if transformed_any {
+        Transformed::yes(current)
+    } else {
+        Transformed::no(current)
+    })
+}
+
+fn merge_consecutive_projections_one_level(
+    proj: Projection,
+) -> Result<Transformed<Projection>> {
     let Projection {
         expr,
         input,
@@ -752,9 +768,12 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
                     if metadata.is_none() && expr.schema_name().to_string() == name {
                         expr
                     } else {
-                        Expr::Alias(
-                            Alias::new(expr, relation, name).with_metadata(metadata),
-                        )
+                        Expr::Alias(Alias {
+                            expr: Box::new(expr),
+                            relation,
+                            name,
+                            metadata,
+                        })
                     }
                 })
             }),

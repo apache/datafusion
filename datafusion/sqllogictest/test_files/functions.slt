@@ -805,10 +805,10 @@ SELECT overlay('abc' placing 'X' from 5 for 1)
 abcX
 
 # Start positions must be positive.
-statement error negative substring length not allowed
+statement error overlay start position must be at least 1: 0
 SELECT overlay('abc' placing 'X' from 0 for 1)
 
-statement error negative substring length not allowed
+statement error overlay start position must be at least 1: -1
 SELECT overlay('abc' placing 'X' from -1 for 1)
 
 # Negative count keeps the suffix from before the start position.
@@ -840,6 +840,12 @@ query B
 SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT random()+1 r1, random()+1 r2) WHERE r1 > 0 AND r2 > 0)
 ----
 false
+
+# Verify that rand() is accepted as an alias for random()
+query TB
+SELECT arrow_typeof(rand()), rand() >= 0 AND rand() < 1
+----
+Float64 true
 
 #######
 # verify that random() returns a different value for each row

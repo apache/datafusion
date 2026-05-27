@@ -41,7 +41,7 @@ use arrow::datatypes::{
 
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err, exec_datafusion_err,
     internal_datafusion_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
@@ -282,7 +282,12 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        self.all_values.reserve(values.len() - values.null_count());
+        let additional = values.len() - values.null_count();
+        self.all_values.try_reserve(additional).map_err(|e| {
+            exec_datafusion_err!(
+                "failed to reserve {additional} values for median accumulator: {e}"
+            )
+        })?;
         self.all_values.extend(values.iter().flatten());
         Ok(())
     }

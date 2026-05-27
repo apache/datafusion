@@ -633,6 +633,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("path", DataType::Utf8, false),
+            Field::new("table", DataType::Utf8, false),
             Field::new(
                 "file_modified",
                 DataType::Timestamp(TimeUnit::Millisecond, None),
@@ -649,6 +650,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
 
         // construct record batch from metadata
         let mut path_arr = vec![];
+        let mut table_arr = vec![];
         let mut file_modified_arr = vec![];
         let mut file_size_bytes_arr = vec![];
         let mut e_tag_arr = vec![];
@@ -661,7 +663,9 @@ impl TableFunctionImpl for StatisticsCacheFunc {
         if let Some(file_statistics_cache) = self.cache_manager.get_file_statistic_cache()
         {
             for (path, entry) in file_statistics_cache.list_entries() {
-                path_arr.push(path.to_string());
+                path_arr.push(path.path.to_string());
+                table_arr
+                    .push(path.table.map_or_else(|| "".to_string(), |t| t.to_string()));
                 file_modified_arr
                     .push(Some(entry.object_meta.last_modified.timestamp_millis()));
                 file_size_bytes_arr.push(entry.object_meta.size);
@@ -678,6 +682,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
             schema.clone(),
             vec![
                 Arc::new(StringArray::from(path_arr)),
+                Arc::new(StringArray::from(table_arr)),
                 Arc::new(TimestampMillisecondArray::from(file_modified_arr)),
                 Arc::new(UInt64Array::from(file_size_bytes_arr)),
                 Arc::new(StringArray::from(e_tag_arr)),

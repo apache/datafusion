@@ -3173,3 +3173,88 @@ async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
     );
     Ok(())
 }
+
+// Regression test for https://github.com/apache/datafusion/issues/22065:
+// the decoder must preserve `null_aware = true` (NOT IN semantics)
+// across a to_proto -> from_proto round trip. `null_equality` is at
+// its default (`NullEqualsNothing`).
+#[tokio::test]
+async fn roundtrip_join_null_aware() -> Result<()> {
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_expr::JoinType;
+
+    let ctx = SessionContext::new();
+    let sql = "
+        SELECT id
+        FROM (VALUES (1), (2), (3)) AS t1(id)
+        WHERE id NOT IN (
+            SELECT bad_id
+            FROM (VALUES (CAST(1 AS INT)), (CAST(NULL AS INT))) AS excludes(bad_id)
+        )
+    ";
+
+    let df = ctx.sql(sql).await?;
+    let plan = ctx.state().optimize(df.logical_plan())?;
+
+    let mut found_null_aware = false;
+    plan.apply(|n| {
+        if let LogicalPlan::Join(j) = n
+            && j.join_type == JoinType::LeftAnti
+            && j.null_aware
+        {
+            found_null_aware = true;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert!(found_null_aware);
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+// Regression test for `null_equality` round-trip (related to #22065):
+// the decoder must preserve a non-default `null_equality`
+// (`NullEqualsNull`) across a to_proto -> from_proto round trip.
+// `null_aware` is at its default (`false`).
+#[tokio::test]
+async fn roundtrip_join_null_equality() -> Result<()> {
+    use datafusion_common::NullEquality;
+    use datafusion_expr::JoinType;
+    use datafusion_expr::logical_plan::{Join, JoinConstraint};
+
+    let ctx = SessionContext::new();
+
+    let left_schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let right_schema =
+        Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+    ctx.register_table(
+        "t1",
+        Arc::new(datafusion::datasource::empty::EmptyTable::new(left_schema)),
+    )?;
+    ctx.register_table(
+        "t2",
+        Arc::new(datafusion::datasource::empty::EmptyTable::new(right_schema)),
+    )?;
+    let left = ctx.table("t1").await?.into_optimized_plan()?;
+    let right = ctx.table("t2").await?.into_optimized_plan()?;
+
+    let join = LogicalPlan::Join(Join::try_new(
+        Arc::new(left),
+        Arc::new(right),
+        vec![(col("t1.a"), col("t2.b"))],
+        None,
+        JoinType::Inner,
+        JoinConstraint::On,
+        NullEquality::NullEqualsNull,
+        false,
+    )?);
+
+    let bytes = logical_plan_to_bytes(&join)?;
+    let rt = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{join:?}"), format!("{rt:?}"));
+
+    Ok(())
+}
