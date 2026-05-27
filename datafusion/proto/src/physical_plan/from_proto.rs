@@ -319,15 +319,7 @@ pub fn parse_physical_expr_with_converter(
             input_schema,
             proto_converter,
         )?)),
-        ExprType::Negative(e) => {
-            Arc::new(NegativeExpr::new(parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?))
-        }
+        ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Case(e) => Arc::new(CaseExpr::try_new(
             e.expr

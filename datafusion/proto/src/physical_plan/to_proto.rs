@@ -37,7 +37,7 @@ use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindo
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
     CaseExpr, CastExpr, DynamicFilterPhysicalExpr, IsNotNullExpr, IsNullExpr, Literal,
-    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
@@ -386,17 +386,6 @@ pub fn serialize_physical_expr_with_converter(
                     )),
                 }),
             )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
-                protobuf::PhysicalNegativeNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.arg(), codec)?,
-                    )),
-                },
-            ))),
         })
     } else if let Some(lit) = expr.downcast_ref::<Literal>() {
         Ok(protobuf::PhysicalExprNode {
