@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt;
 use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
@@ -133,9 +134,11 @@ impl DateTruncGranularity {
                 | Self::Microsecond
         )
     }
+}
 
-    fn as_str(self) -> &'static str {
-        match self {
+impl fmt::Display for DateTruncGranularity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
             Self::Microsecond => "microsecond",
             Self::Millisecond => "millisecond",
             Self::Second => "second",
@@ -146,7 +149,8 @@ impl DateTruncGranularity {
             Self::Month => "month",
             Self::Quarter => "quarter",
             Self::Year => "year",
-        }
+        };
+        f.write_str(value)
     }
 }
 
@@ -663,8 +667,7 @@ fn date_trunc_coarse(
 
     value.ok_or_else(|| {
         exec_datafusion_err!(
-            "Timestamp {input} out of range after truncating to {}",
-            granularity.as_str()
+            "Timestamp {input} out of range after truncating to {granularity}"
         )
     })
 }
