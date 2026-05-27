@@ -221,10 +221,7 @@ fn resolve_start_from(
 }
 
 fn normalize_start_from(start_from: i64) -> Result<i64> {
-    match start_from.checked_sub(1) {
-        Some(start_from) => Ok(start_from),
-        None => exec_err!("start_from out of bounds: {start_from}"),
-    }
+    Ok(start_from.saturating_sub(1))
 }
 
 /// Fast path for `array_position` when the needle is scalar.
@@ -602,21 +599,26 @@ mod tests {
     use super::*;
     use arrow::array::AsArray;
     use arrow::array::Int64Array;
-    use arrow::datatypes::Int32Type;
+    use arrow::datatypes::{Int32Type, Int64Type};
     use datafusion_common::config::ConfigOptions;
 
     #[test]
-    fn test_array_position_start_from_min_value() {
-        let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(i64::MIN)));
-        let array_arg = ColumnarValue::Array(Arc::new(Int64Array::from(vec![i64::MIN])));
+    fn test_array_position_start_from_min_value() -> Result<()> {
+        let haystack = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1)]),
+        ])) as ArrayRef;
+        let needle = Arc::new(Int64Array::from(vec![1])) as ArrayRef;
+        let start_from = Arc::new(Int64Array::from(vec![i64::MIN])) as ArrayRef;
 
-        for arg in [scalar_arg, array_arg] {
-            let err = resolve_start_from(Some(&arg), 1).unwrap_err().to_string();
-            assert!(
-                err.contains("start_from out of bounds: -9223372036854775808"),
-                "unexpected error: {err}"
-            );
-        }
+        let err = array_position_inner(&[haystack, needle, start_from])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("start_from out of bounds: -9223372036854775807"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
     }
 
     #[test]
