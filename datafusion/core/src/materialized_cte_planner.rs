@@ -28,10 +28,11 @@ use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::{MaterializedCteProducer, MaterializedCteReader};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
-use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::materialized_cte::{
     MaterializedCteCache, MaterializedCteExec, MaterializedCteReaderExec,
+    materialized_cte_statistics, replace_materialized_cte_readers,
 };
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use crate::execution::context::SessionState;
 use crate::physical_planner::{ExtensionPlanner, PhysicalPlanner};
@@ -44,6 +45,8 @@ use crate::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 pub struct MaterializedCtePlanner {
     /// Map of CTE name to shared cache
     caches: Mutex<HashMap<String, Arc<MaterializedCteCache>>>,
+    /// Map of CTE name to the number of partitions readers should expose
+    partition_counts: Mutex<HashMap<String, usize>>,
 }
 
 impl MaterializedCtePlanner {
@@ -51,6 +54,7 @@ impl MaterializedCtePlanner {
     pub fn new() -> Self {
         Self {
             caches: Mutex::new(HashMap::new()),
+            partition_counts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -62,6 +66,31 @@ impl MaterializedCtePlanner {
                 .entry(name.to_string())
                 .or_insert_with(|| Arc::new(MaterializedCteCache::new(name.to_string()))),
         )
+    }
+
+    fn create_cache(&self, name: &str) -> Arc<MaterializedCteCache> {
+        let cache = Arc::new(MaterializedCteCache::new(name.to_string()));
+        self.caches
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), Arc::clone(&cache));
+        cache
+    }
+
+    fn set_partition_count(&self, name: &str, partition_count: usize) {
+        self.partition_counts
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), partition_count);
+    }
+
+    fn partition_count(&self, name: &str) -> usize {
+        self.partition_counts
+            .lock()
+            .unwrap()
+            .get(name)
+            .copied()
+            .unwrap_or(1)
     }
 }
 
@@ -83,9 +112,18 @@ impl ExtensionPlanner for MaterializedCtePlanner {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // Handle MaterializedCteProducer
         if let Some(producer) = node.as_any().downcast_ref::<MaterializedCteProducer>() {
-            let cache = self.get_or_create_cache(&producer.name);
+            let cache = self.create_cache(&producer.name);
             let cte_plan = Arc::clone(&physical_inputs[0]);
-            let continuation = Arc::clone(&physical_inputs[1]);
+            let partition_count = cte_plan.output_partitioning().partition_count();
+            let statistics = materialized_cte_statistics(cte_plan.as_ref())?;
+            self.set_partition_count(&producer.name, partition_count);
+            let continuation = replace_materialized_cte_readers(
+                Arc::clone(&physical_inputs[1]),
+                &producer.name,
+                &cache,
+                partition_count,
+                statistics,
+            )?;
             let exec = MaterializedCteExec::new(
                 producer.name.clone(),
                 cte_plan,
@@ -99,7 +137,15 @@ impl ExtensionPlanner for MaterializedCtePlanner {
         if let Some(reader) = node.as_any().downcast_ref::<MaterializedCteReader>() {
             let cache = self.get_or_create_cache(&reader.name);
             let schema = Arc::clone(reader.schema.inner());
-            let exec = MaterializedCteReaderExec::new(reader.name.clone(), schema, cache);
+            let statistics =
+                Arc::new(datafusion_physical_plan::Statistics::new_unknown(&schema));
+            let exec = MaterializedCteReaderExec::new(
+                reader.name.clone(),
+                schema,
+                cache,
+                self.partition_count(&reader.name),
+                statistics,
+            );
             return Ok(Some(Arc::new(exec)));
         }
 

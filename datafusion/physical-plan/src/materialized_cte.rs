@@ -21,17 +21,20 @@ use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::execution_plan::{Boundedness, EmissionType, collect, execute_stream};
+use crate::coop::cooperative;
+use crate::execution_plan::{Boundedness, EmissionType, collect_partitioned};
 use crate::memory::MemoryStream;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::operator_statistics::StatisticsRegistry;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
@@ -45,7 +48,7 @@ pub struct MaterializedCteCache {
     /// Name of the CTE (for debugging)
     name: String,
     /// The cached batches, populated once by the producer
-    batches: OnceCell<Vec<RecordBatch>>,
+    batches: OnceCell<Vec<Vec<RecordBatch>>>,
 }
 
 impl MaterializedCteCache {
@@ -58,7 +61,7 @@ impl MaterializedCteCache {
     }
 
     /// Store batches into the cache. Returns error if already populated.
-    pub fn store(&self, batches: Vec<RecordBatch>) -> Result<()> {
+    pub fn store(&self, batches: Vec<Vec<RecordBatch>>) -> Result<()> {
         self.batches.set(batches).map_err(|_| {
             datafusion_common::DataFusionError::Internal(format!(
                 "MaterializedCteCache '{}' was already populated",
@@ -68,15 +71,15 @@ impl MaterializedCteCache {
     }
 
     /// Get the cached batches. Returns None if not yet populated.
-    pub fn get(&self) -> Option<&Vec<RecordBatch>> {
+    pub fn get(&self) -> Option<&Vec<Vec<RecordBatch>>> {
         self.batches.get()
     }
 
     /// Get the cached batches, computing and storing them once if needed.
-    pub async fn get_or_try_init<F, Fut>(&self, f: F) -> Result<&Vec<RecordBatch>>
+    pub async fn get_or_try_init<F, Fut>(&self, f: F) -> Result<&Vec<Vec<RecordBatch>>>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Vec<RecordBatch>>>,
+        Fut: Future<Output = Result<Vec<Vec<RecordBatch>>>>,
     {
         self.batches.get_or_try_init(f).await
     }
@@ -109,24 +112,15 @@ impl MaterializedCteExec {
         continuation: Arc<dyn ExecutionPlan>,
         cache: Arc<MaterializedCteCache>,
     ) -> Self {
-        let properties = Self::compute_properties(&continuation);
+        let properties = Arc::clone(continuation.properties());
         Self {
             name,
             cte_plan,
             continuation,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
-            properties: Arc::new(properties),
+            properties,
         }
-    }
-
-    fn compute_properties(continuation: &Arc<dyn ExecutionPlan>) -> PlanProperties {
-        PlanProperties::new(
-            EquivalenceProperties::new(Arc::clone(&continuation.schema())),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
     }
 }
 
@@ -166,10 +160,20 @@ impl ExecutionPlan for MaterializedCteExec {
                 children.len()
             );
         }
+        let cte_plan = Arc::clone(&children[0]);
+        let partition_count = cte_plan.output_partitioning().partition_count();
+        let statistics = materialized_cte_statistics(cte_plan.as_ref())?;
+        let continuation = replace_materialized_cte_readers(
+            Arc::clone(&children[1]),
+            &self.name,
+            &self.cache,
+            partition_count,
+            statistics,
+        )?;
         Ok(Arc::new(Self::new(
             self.name.clone(),
-            Arc::clone(&children[0]),
-            Arc::clone(&children[1]),
+            cte_plan,
+            continuation,
             Arc::clone(&self.cache),
         )))
     }
@@ -179,9 +183,10 @@ impl ExecutionPlan for MaterializedCteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
+        let output_partitions = self.properties.output_partitioning().partition_count();
+        if partition >= output_partitions {
             return internal_err!(
-                "MaterializedCteExec has a single output partition, got partition {partition}"
+                "MaterializedCteExec got partition {partition}, expected less than {output_partitions}"
             );
         }
 
@@ -197,20 +202,25 @@ impl ExecutionPlan for MaterializedCteExec {
             let materialize_ctx = Arc::clone(&ctx);
             cache
                 .get_or_try_init(|| async move {
-                    let batches = collect(cte_plan, materialize_ctx).await?;
+                    let partitions =
+                        collect_partitioned(cte_plan, materialize_ctx).await?;
 
-                    let num_batches = batches.len();
-                    let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                    let num_partitions = partitions.len();
+                    let num_batches: usize = partitions.iter().map(Vec::len).sum();
+                    let num_rows: usize = partitions
+                        .iter()
+                        .flatten()
+                        .map(|b| b.num_rows())
+                        .sum();
                     log::info!(
-                        "Materializing CTE '{name}': {num_batches} batches, {num_rows} rows"
+                        "Materializing CTE '{name}': {num_partitions} partitions, {num_batches} batches, {num_rows} rows"
                     );
 
-                    Ok(batches)
+                    Ok(partitions)
                 })
                 .await?;
 
-            // Execute the continuation plan
-            execute_stream(continuation, ctx)
+            continuation.execute(partition, ctx)
         };
 
         // Use futures::stream::once to create a stream from the future,
@@ -243,6 +253,8 @@ pub struct MaterializedCteReaderExec {
     cache: Arc<MaterializedCteCache>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Statistics from the plan that produces the materialized CTE
+    statistics: Arc<Statistics>,
     /// Cache holding plan properties
     properties: Arc<PlanProperties>,
 }
@@ -253,21 +265,30 @@ impl MaterializedCteReaderExec {
         name: String,
         schema: SchemaRef,
         cache: Arc<MaterializedCteCache>,
+        partition_count: usize,
+        statistics: Arc<Statistics>,
     ) -> Self {
-        let properties = Self::compute_properties(Arc::clone(&schema));
+        let partition_count = reader_partition_count(partition_count, &statistics);
+        let properties = Self::compute_properties(Arc::clone(&schema), partition_count);
         Self {
             name,
             schema,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
+            statistics,
             properties: Arc::new(properties),
         }
     }
 
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+    /// The CTE this reader reads from.
+    pub fn cte_name(&self) -> &str {
+        &self.name
+    }
+
+    fn compute_properties(schema: SchemaRef, partition_count: usize) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(partition_count),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
@@ -312,9 +333,10 @@ impl ExecutionPlan for MaterializedCteReaderExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
+        let output_partitions = self.properties.output_partitioning().partition_count();
+        if partition >= output_partitions {
             return internal_err!(
-                "MaterializedCteReaderExec has a single output partition, got partition {partition}"
+                "MaterializedCteReaderExec got partition {partition}, expected less than {output_partitions}"
             );
         }
 
@@ -326,9 +348,15 @@ impl ExecutionPlan for MaterializedCteReaderExec {
             ))
         })?;
 
+        let partition_batches = if output_partitions == 1 {
+            batches.iter().flatten().cloned().collect()
+        } else {
+            batches.get(partition).cloned().unwrap_or_default()
+        };
+
         let stream =
-            MemoryStream::try_new(batches.clone(), Arc::clone(&self.schema), None)?;
-        Ok(Box::pin(stream))
+            MemoryStream::try_new(partition_batches, Arc::clone(&self.schema), None)?;
+        Ok(Box::pin(cooperative(stream)))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -336,8 +364,53 @@ impl ExecutionPlan for MaterializedCteReaderExec {
     }
 
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
-        Ok(Arc::new(Statistics::new_unknown(&self.schema)))
+        Ok(Arc::clone(&self.statistics))
     }
+}
+
+fn reader_partition_count(partition_count: usize, statistics: &Statistics) -> usize {
+    match statistics.num_rows.get_value() {
+        Some(rows) if *rows < partition_count => 1,
+        _ => partition_count,
+    }
+}
+
+/// Estimate the statistics exposed by materialized CTE readers.
+pub fn materialized_cte_statistics(plan: &dyn ExecutionPlan) -> Result<Arc<Statistics>> {
+    Ok(Arc::clone(
+        StatisticsRegistry::default_with_builtin_providers()
+            .compute(plan)?
+            .base_arc(),
+    ))
+}
+
+/// Replace readers for a materialized CTE with readers that use the provided
+/// cache and expose the provided partition count and statistics.
+pub fn replace_materialized_cte_readers(
+    plan: Arc<dyn ExecutionPlan>,
+    name: &str,
+    cache: &Arc<MaterializedCteCache>,
+    partition_count: usize,
+    statistics: Arc<Statistics>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(|plan| {
+        let Some(reader) = plan.downcast_ref::<MaterializedCteReaderExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+
+        if reader.cte_name() != name {
+            return Ok(Transformed::no(plan));
+        }
+
+        Ok(Transformed::yes(Arc::new(MaterializedCteReaderExec::new(
+            name.to_string(),
+            plan.schema(),
+            Arc::clone(cache),
+            partition_count,
+            Arc::clone(&statistics),
+        )) as Arc<dyn ExecutionPlan>))
+    })
+    .data()
 }
 
 #[cfg(test)]
@@ -346,6 +419,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::assert_batches_eq;
+    use datafusion_common::stats::Precision;
     use futures::TryStreamExt;
 
     fn test_schema() -> SchemaRef {
@@ -357,6 +431,14 @@ mod tests {
         RecordBatch::try_new(Arc::clone(schema), vec![array]).unwrap()
     }
 
+    fn test_statistics(schema: &SchemaRef) -> Arc<Statistics> {
+        Arc::new(Statistics::new_unknown(schema))
+    }
+
+    fn test_statistics_with_rows(schema: &SchemaRef, rows: usize) -> Arc<Statistics> {
+        Arc::new(Statistics::new_unknown(schema).with_num_rows(Precision::Exact(rows)))
+    }
+
     #[test]
     fn test_cache_store_and_get() {
         let cache = MaterializedCteCache::new("test".into());
@@ -364,11 +446,12 @@ mod tests {
 
         let schema = test_schema();
         let batch = test_batch(&schema);
-        cache.store(vec![batch.clone()]).unwrap();
+        cache.store(vec![vec![batch.clone()]]).unwrap();
 
         let cached = cache.get().unwrap();
         assert_eq!(cached.len(), 1);
-        assert_eq!(cached[0].num_rows(), 3);
+        assert_eq!(cached[0].len(), 1);
+        assert_eq!(cached[0][0].num_rows(), 3);
     }
 
     #[test]
@@ -377,8 +460,8 @@ mod tests {
         let schema = test_schema();
         let batch = test_batch(&schema);
 
-        cache.store(vec![batch.clone()]).unwrap();
-        assert!(cache.store(vec![batch]).is_err());
+        cache.store(vec![vec![batch.clone()]]).unwrap();
+        assert!(cache.store(vec![vec![batch]]).is_err());
     }
 
     #[tokio::test]
@@ -386,10 +469,15 @@ mod tests {
         let schema = test_schema();
         let batch = test_batch(&schema);
         let cache = Arc::new(MaterializedCteCache::new("test".into()));
-        cache.store(vec![batch.clone()]).unwrap();
+        cache.store(vec![vec![batch.clone()]]).unwrap();
 
-        let reader =
-            MaterializedCteReaderExec::new("test".into(), Arc::clone(&schema), cache);
+        let reader = MaterializedCteReaderExec::new(
+            "test".into(),
+            Arc::clone(&schema),
+            cache,
+            1,
+            test_statistics(&schema),
+        );
 
         let context = Arc::new(TaskContext::default());
         let stream = reader.execute(0, context).unwrap();
@@ -402,12 +490,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_reader_exec_preserves_cache_partitions() {
+        let schema = test_schema();
+        let batch = test_batch(&schema);
+        let cache = Arc::new(MaterializedCteCache::new("test".into()));
+        cache
+            .store(vec![vec![batch.clone()], vec![batch.clone()]])
+            .unwrap();
+
+        let reader = MaterializedCteReaderExec::new(
+            "test".into(),
+            Arc::clone(&schema),
+            cache,
+            2,
+            test_statistics(&schema),
+        );
+
+        assert_eq!(
+            reader.properties().output_partitioning().partition_count(),
+            2
+        );
+
+        let context = Arc::new(TaskContext::default());
+        let stream = reader.execute(1, context).unwrap();
+        let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+
+        let expected = [
+            "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "+---+",
+        ];
+        assert_batches_eq!(expected, &batches);
+    }
+
+    #[tokio::test]
+    async fn test_reader_exec_coalesces_exact_scalar_cache() {
+        let schema = test_schema();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        let cache = Arc::new(MaterializedCteCache::new("test".into()));
+        cache.store(vec![vec![], vec![batch.clone()]]).unwrap();
+
+        let reader = MaterializedCteReaderExec::new(
+            "test".into(),
+            Arc::clone(&schema),
+            cache,
+            2,
+            test_statistics_with_rows(&schema, 1),
+        );
+
+        assert_eq!(
+            reader.properties().output_partitioning().partition_count(),
+            1
+        );
+
+        let context = Arc::new(TaskContext::default());
+        let stream = reader.execute(0, context).unwrap();
+        let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+
+        let expected = ["+---+", "| a |", "+---+", "| 1 |", "+---+"];
+        assert_batches_eq!(expected, &batches);
+    }
+
+    #[tokio::test]
     async fn test_reader_exec_fails_when_cache_empty() {
         let schema = test_schema();
         let cache = Arc::new(MaterializedCteCache::new("test".into()));
 
-        let reader =
-            MaterializedCteReaderExec::new("test".into(), Arc::clone(&schema), cache);
+        let reader = MaterializedCteReaderExec::new(
+            "test".into(),
+            Arc::clone(&schema),
+            cache,
+            1,
+            test_statistics(&schema),
+        );
 
         let context = Arc::new(TaskContext::default());
         let result = reader.execute(0, context);
