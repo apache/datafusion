@@ -147,10 +147,13 @@ jobs:
           \`\`\`
 
           </details>"
+          
+          # Use --raw-field (not --field): always sends the value as a literal string. while --field would treat a leading `@` as a file to read
+          # (even though the body does not start with user input we are being cautious)
           if [ -n "$COMMENT_ID" ]; then
-            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" --method PATCH --field body="$BODY"
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" --method PATCH --raw-field body="$BODY"
           else
-            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --method POST --field body="$BODY"
+            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --method POST --raw-field body="$BODY"
           fi
 
       # Clear a stale comment once the breaking change is resolved.
