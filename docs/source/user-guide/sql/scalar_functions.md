@@ -3290,6 +3290,7 @@ _Alias of [current_date](#current_date)._
 - [array_scale](#array_scale)
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
+- [array_subtract](#array_subtract)
 - [array_to_string](#array_to_string)
 - [array_transform](#array_transform)
 - [array_union](#array_union)
@@ -3347,6 +3348,7 @@ _Alias of [current_date](#current_date)._
 - [list_scale](#list_scale)
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
+- [list_subtract](#list_subtract)
 - [list_to_string](#list_to_string)
 - [list_transform](#list_transform)
 - [list_union](#list_union)
@@ -4513,6 +4515,34 @@ array_sort(array, desc, nulls_first)
 
 - list_sort
 
+### `array_subtract`
+
+Returns the element-wise difference of two numeric arrays of equal length, computed as `array1[i] - array2[i]` per position. NULL is propagated per element: if either input element at position `i` is NULL, the corresponding output element is NULL (positions are preserved). Returns NULL if either entire input array is NULL. Errors if the per-row lengths differ. Returns an empty array if both inputs are empty.
+
+```sql
+array_subtract(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_subtract([10.0, 20.0, 30.0], [1.0, 2.0, 3.0]);
++--------------------------------------------------------------+
+| array_subtract(List([10.0,20.0,30.0]),List([1.0,2.0,3.0]))   |
++--------------------------------------------------------------+
+| [9.0, 18.0, 27.0]                                            |
++--------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_subtract
+
 ### `array_to_string`
 
 Converts each element to its text representation.
@@ -4984,6 +5014,10 @@ _Alias of [array_slice](#array_slice)._
 ### `list_sort`
 
 _Alias of [array_sort](#array_sort)._
+
+### `list_subtract`
+
+_Alias of [array_subtract](#array_subtract)._
 
 ### `list_to_string`
 
