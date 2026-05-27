@@ -26,7 +26,7 @@
 //!
 //! The generator intentionally fails when it cannot infer a complete Substrait
 //! declaration. Use [`FunctionYamlOverrides`] for signatures or return types
-//! that cannot be derived from DataFusion's [`Signature`] metadata.
+//! that cannot be derived from DataFusion's `Signature` metadata.
 
 use datafusion::common::Result;
 use datafusion::execution::SessionStateDefaults;

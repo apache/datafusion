@@ -413,40 +413,59 @@ fn deduplicate_impls(impls: &mut Vec<ext::ScalarFunctionImplsItem>) {
     impls.retain(|implementation| seen.insert(signature_key(implementation)));
 }
 
-fn signature_key(
-    implementation: &ext::ScalarFunctionImplsItem,
-) -> (
-    Vec<(Option<String>, String)>,
-    Option<(Option<u64>, Option<String>)>,
-    String,
-) {
-    (
-        implementation
+#[derive(Hash, PartialEq, Eq)]
+struct ArgumentKey {
+    name: Option<String>,
+    type_repr: String,
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct VariadicKey {
+    min_bits: Option<u64>,
+    parameter_consistency: Option<String>,
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct SignatureKey {
+    args: Vec<ArgumentKey>,
+    variadic: Option<VariadicKey>,
+    return_type: String,
+}
+
+fn signature_key(implementation: &ext::ScalarFunctionImplsItem) -> SignatureKey {
+    SignatureKey {
+        args: implementation
             .args
             .as_ref()
             .map(|args| args.iter().map(argument_key).collect())
             .unwrap_or_default(),
-        implementation.variadic.as_ref().map(|variadic| {
-            (
-                variadic.min.map(f64::to_bits),
-                variadic
+        variadic: implementation
+            .variadic
+            .as_ref()
+            .map(|variadic| VariadicKey {
+                min_bits: variadic.min.map(f64::to_bits),
+                parameter_consistency: variadic
                     .parameter_consistency
                     .map(|consistency| consistency.to_string()),
-            )
-        }),
-        type_name(&implementation.return_.0).to_string(),
-    )
+            }),
+        return_type: type_name(&implementation.return_.0).to_string(),
+    }
 }
 
-fn argument_key(argument: &ext::ArgumentsItem) -> (Option<String>, String) {
+fn argument_key(argument: &ext::ArgumentsItem) -> ArgumentKey {
     match argument {
-        ext::ArgumentsItem::ValueArg(arg) => {
-            (arg.name.clone(), type_name(&arg.value).to_string())
-        }
-        ext::ArgumentsItem::EnumerationArg(arg) => {
-            (arg.name.clone(), format!("{:?}", arg.options))
-        }
-        ext::ArgumentsItem::TypeArg(arg) => (arg.name.clone(), arg.type_.clone()),
+        ext::ArgumentsItem::ValueArg(arg) => ArgumentKey {
+            name: arg.name.clone(),
+            type_repr: type_name(&arg.value).to_string(),
+        },
+        ext::ArgumentsItem::EnumerationArg(arg) => ArgumentKey {
+            name: arg.name.clone(),
+            type_repr: format!("{:?}", arg.options),
+        },
+        ext::ArgumentsItem::TypeArg(arg) => ArgumentKey {
+            name: arg.name.clone(),
+            type_repr: arg.type_.clone(),
+        },
     }
 }
 

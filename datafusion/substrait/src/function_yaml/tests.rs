@@ -285,7 +285,7 @@ fn emits_alias_metadata_and_detects_duplicate_impls() {
 fn maps_aggregate_metadata() {
     let implementation =
         aggregate_impl("sum", true, function_impl(vec![], None, "fp64".to_string()));
-    assert_eq!(implementation.ordered.unwrap().0, false);
+    assert!(!implementation.ordered.unwrap().0);
     assert_eq!(implementation.decomposable, Some(ext::Decomposable::Many));
     assert_eq!(type_name(&implementation.intermediate.unwrap().0), "fp64");
     assert_eq!(aggregate_decomposable("median"), ext::Decomposable::None);
