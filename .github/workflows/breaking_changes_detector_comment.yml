@@ -104,39 +104,63 @@ jobs:
             echo "${DELIM}"
           } >> "$GITHUB_OUTPUT"
 
-      # The marker `<!-- semver-check-comment -->` is what makes the comment
-      # "sticky": maintain-one-comment uses it to find and replace (or
-      # delete) the existing comment instead of stacking new ones.
+
+      # Find any existing sticky comment by its hidden marker so we can update
+      # or delete it instead of stacking new ones.
+      - name: Find existing sticky comment
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.read.outputs.pr_number }}
+        run: |
+          COMMENT_ID=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.body | contains("<!-- semver-check-comment -->")) | .id' \
+            | head -n1)
+          echo "comment_id=${COMMENT_ID}" >> "$GITHUB_OUTPUT"
+
+      # update the existing comment found above, or create a new one. The hidden
+      # marker `<!-- semver-check-comment -->` stays in the body so the next run
+      # finds it again. LOGS is interpolated via a shell parameter expansion,
+      # whose result bash does not re-scan, so untrusted log content cannot
+      # inject further commands.
       - name: Upsert sticky comment
         if: steps.read.outputs.result != 'success'
-        uses: actions-cool/maintain-one-comment@909842216bc8e8658364c572ec52100f4c2cc50a  # v3.3.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          number: ${{ steps.read.outputs.pr_number }}
-          body-include: '<!-- semver-check-comment -->'
-          body: |
-            <!-- semver-check-comment -->
-            Thank you for opening this pull request!
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.read.outputs.pr_number }}
+          COMMENT_ID: ${{ steps.find.outputs.comment_id }}
+          LOGS: ${{ steps.read.outputs.logs }}
+        run: |
+          set -euo pipefail
+          BODY="<!-- semver-check-comment -->
+          Thank you for opening this pull request!
 
-            Reviewer note: [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) reported the current version number is not SemVer-compatible with the changes in this pull request (compared against the base branch).
+          Reviewer note: [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) reported the current version number is not SemVer-compatible with the changes in this pull request (compared against the base branch).
 
-            <details>
-            <summary>Details</summary>
+          <details>
+          <summary>Details</summary>
 
-            ```
-            ${{ steps.read.outputs.logs }}
-            ```
+          \`\`\`
+          ${LOGS}
+          \`\`\`
 
-            </details>
+          </details>"
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" --method PATCH --field body="$BODY"
+          else
+            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --method POST --field body="$BODY"
+          fi
 
+      # Clear a stale comment once the breaking change is resolved.
       - name: Delete sticky comment
-        if: steps.read.outputs.result == 'success'
-        uses: actions-cool/maintain-one-comment@909842216bc8e8658364c572ec52100f4c2cc50a  # v3.3.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          number: ${{ steps.read.outputs.pr_number }}
-          body-include: '<!-- semver-check-comment -->'
-          delete: true
+        if: steps.read.outputs.result == 'success' && steps.find.outputs.comment_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ steps.find.outputs.comment_id }}
+        run: gh api -X DELETE "repos/${REPO}/issues/comments/${COMMENT_ID}"
 
       - name: Add "auto detected api change" label
         if: steps.read.outputs.result != 'success'
