@@ -20,8 +20,9 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, Float16Array, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float16, Float32, Float64};
 use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
-use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_common::{
+    Result, ScalarValue, exec_err, plan_err, utils::take_function_args,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -64,14 +65,8 @@ impl Default for NanvlFunc {
 impl NanvlFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Float16, Float16]),
-                    Exact(vec![Float32, Float32]),
-                    Exact(vec![Float64, Float64]),
-                ],
-                Volatility::Immutable,
-            ),
+            // Argument coercion is handled by `coerce_types`.
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -86,27 +81,42 @@ impl ScalarUDFImpl for NanvlFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            Float16 => Ok(Float16),
-            Float32 => Ok(Float32),
+        match (&arg_types[0], &arg_types[1]) {
+            (Float16, Float16) => Ok(Float16),
+            (Float32, Float32) => Ok(Float32),
             _ => Ok(Float64),
         }
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [x, y] = take_function_args(self.name(), arg_types)?;
+
+        // Integers, decimals, and NULL become Float64; choosing Float64 ensures
+        // we can represent as many inputs as possible before rounding. The two
+        // inputs are then unified to the widest float type. For example,
+        // (Float16, Float32) -> Float32, not Float64.
+        let to_float = |t: &DataType| match t {
+            Float16 => Ok(Float16),
+            Float32 => Ok(Float32),
+            t if t.is_numeric() || t.is_null() => Ok(Float64),
+            t => plan_err!("Function 'nanvl' expects numeric arguments, got {t}"),
+        };
+        let common = match (to_float(x)?, to_float(y)?) {
+            (Float64, _) | (_, Float64) => Float64,
+            (Float32, _) | (_, Float32) => Float32,
+            _ => Float16,
+        };
+        Ok(vec![common.clone(), common])
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [x, y] = take_function_args(self.name(), args.args)?;
 
         match (x, y) {
-            (ColumnarValue::Scalar(ScalarValue::Float16(Some(v))), y) if v.is_nan() => {
-                Ok(y)
-            }
-            (ColumnarValue::Scalar(ScalarValue::Float32(Some(v))), y) if v.is_nan() => {
-                Ok(y)
-            }
-            (ColumnarValue::Scalar(ScalarValue::Float64(Some(v))), y) if v.is_nan() => {
-                Ok(y)
-            }
+            // Scalar x: return y if x is NaN, otherwise x (which may be NULL).
+            (ColumnarValue::Scalar(ref x), y) if scalar_is_nan(x) => Ok(y),
             (x @ ColumnarValue::Scalar(_), _) => Ok(x),
+            // At least one argument is an array: evaluate element-wise.
             (x, y) => {
                 let args = ColumnarValue::values_to_arrays(&[x, y])?;
                 Ok(ColumnarValue::Array(nanvl(&args)?))
@@ -116,6 +126,15 @@ impl ScalarUDFImpl for NanvlFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn scalar_is_nan(scalar: &ScalarValue) -> bool {
+    match scalar {
+        ScalarValue::Float16(Some(v)) => v.is_nan(),
+        ScalarValue::Float32(Some(v)) => v.is_nan(),
+        ScalarValue::Float64(Some(v)) => v.is_nan(),
+        _ => false,
     }
 }
 
