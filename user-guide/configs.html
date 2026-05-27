@@ -808,8 +808,8 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel using the provided <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> level</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.optimizer.repartition_file_min_size</p></td>
-<td><p>10485760</p></td>
-<td><p>Minimum total files size in bytes to perform file scan repartitioning.</p></td>
+<td><p>1048576</p></td>
+<td><p>Minimum total file size in bytes for file-group byte-range splitting to fire. Files (or merged file groups) smaller than this stay as one partition. Lower values produce more, smaller partitions — better at filling <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> worth of cores when files are modestly sized, at the cost of slightly more per-partition open / metadata-load overhead.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.optimizer.repartition_joins</p></td>
 <td><p>true</p></td>
