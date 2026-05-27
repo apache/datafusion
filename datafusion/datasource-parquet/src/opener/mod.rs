@@ -52,9 +52,7 @@ use datafusion_common::{ColumnStatistics, Result, ScalarValue, Statistics, exec_
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
-use datafusion_physical_expr_common::physical_expr::{
-    PhysicalExpr, is_dynamic_physical_expr,
-};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
@@ -618,18 +616,19 @@ impl ParquetMorselizer {
             .with_category(MetricCategory::Rows)
             .global_counter("num_predicate_creation_errors");
 
-        // Apply literal replacements to projection and predicate
-        let file_pruner = predicate
-            .as_ref()
-            .filter(|p| is_dynamic_physical_expr(p) || partitioned_file.has_statistics())
-            .and_then(|p| {
-                FilePruner::try_new(
-                    Arc::clone(p),
-                    &logical_file_schema,
-                    &partitioned_file,
-                    predicate_creation_errors.clone(),
-                )
-            });
+        // `FilePruner::try_new` decides whether a pruner is worthwhile (it needs
+        // a statistics struct, and either real column statistics or a dynamic
+        // filter that can prune via partition-value folding) and returns `None`
+        // otherwise. For a static predicate the pruner's tracker reports no
+        // changes, so it runs once and adds no ongoing cost.
+        let file_pruner = predicate.as_ref().and_then(|p| {
+            FilePruner::try_new(
+                Arc::clone(p),
+                &logical_file_schema,
+                &partitioned_file,
+                predicate_creation_errors.clone(),
+            )
+        });
 
         Ok(PreparedParquetOpen {
             partition_index: self.partition_index,
@@ -677,30 +676,21 @@ impl PreparedParquetOpen {
     /// Returns `None` if the file can be skipped completely.
     fn prune_file(mut self) -> Result<Option<Self>> {
         // Prune this file using the file level statistics and partition values.
-        // Since dynamic filters may have been updated since planning it is possible that we are able
-        // to prune files now that we couldn't prune at planning time.
-        // It is assumed that there is no point in doing pruning here if the predicate is not dynamic,
-        // as it would have been done at planning time.
-        // We'll also check this after every record batch we read,
-        // and if at some point we are able to prove we can prune the file using just the file level statistics
-        // we can end the stream early.
+        // Since dynamic filters may have been updated since planning it is
+        // possible that we are able to prune files now that we couldn't prune at
+        // planning time. The `FilePruner` (built when the predicate is dynamic or
+        // the file carries statistics) also watches any still-active dynamic
+        // filter, so the
+        // `EarlyStoppingStream` wrapping the scan can re-check after each batch
+        // and end the stream early once a tightened filter proves the file can
+        // be skipped.
         //
-        // Make a FilePruner only if there is either
-        // 1. a dynamic expr in the predicate
-        // 2. the file has file-level statistics.
-        //
-        // File-level statistics may prune the file without loading
-        // any row groups or metadata.
-        //
-        // Dynamic filters may prune the file after initial
-        // planning, as the dynamic filter is updated during
-        // execution.
-        //
-        // The case where there is a dynamic filter but no
-        // statistics corresponds to a dynamic filter that
-        // references partition columns. While rare, this is possible
-        // e.g. `select * from table order by partition_col limit
-        // 10` could hit this condition.
+        // File-level statistics may prune the file without loading any row
+        // groups or metadata. Partition column predicates are already folded to
+        // literals (see `replace_columns_with_literals` above), so a dynamic
+        // filter that references only partition columns can prune here too even
+        // when the file has no column statistics, e.g.
+        // `select * from t order by partition_col limit 10`.
         if let Some(file_pruner) = &mut self.file_pruner
             && file_pruner.should_prune()?
         {
@@ -1247,16 +1237,21 @@ impl RowGroupsPrunedParquetOpen {
         }
         .into_stream();
 
-        // Wrap the stream so a dynamic filter can stop the file scan early.
-        if let Some(file_pruner) = prepared.file_pruner {
-            Ok(EarlyStoppingStream::new(
-                stream,
-                file_pruner,
-                files_ranges_pruned_statistics,
-            )
-            .boxed())
-        } else {
-            Ok(stream)
+        // Wrap the stream so a dynamic filter can stop the file scan early, but
+        // only when the pruner is still watching a filter that can change
+        // mid-scan. For a static (or already-complete) predicate the up-front
+        // `prune_file` check already captured everything that can be pruned, so
+        // per-batch re-checking would only add overhead.
+        match prepared.file_pruner {
+            Some(file_pruner) if file_pruner.is_watching() => {
+                Ok(EarlyStoppingStream::new(
+                    stream,
+                    file_pruner,
+                    files_ranges_pruned_statistics,
+                )
+                .boxed())
+            }
+            _ => Ok(stream),
         }
     }
 }
@@ -1420,7 +1415,7 @@ mod test {
         stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
-    use datafusion_datasource::{PartitionedFile, TableSchema};
+    use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
@@ -1500,7 +1495,7 @@ mod test {
 
         /// Create a simple table schema from a file schema (for files without partition columns).
         fn with_schema(mut self, file_schema: SchemaRef) -> Self {
-            self.table_schema = Some(TableSchema::from_file_schema(file_schema));
+            self.table_schema = Some(TableSchema::from(file_schema));
             self
         }
 
@@ -1887,10 +1882,13 @@ mod test {
             Field::new("a", DataType::Int32, false),
         ]));
 
-        let table_schema_for_opener = TableSchema::new(
-            file_schema.clone(),
-            vec![Arc::new(Field::new("part", DataType::Int32, false))],
-        );
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Int32,
+                false,
+            ))])
+            .build();
         let make_opener = |predicate| {
             ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
@@ -1956,10 +1954,13 @@ mod test {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Float32, true),
         ]));
-        let table_schema_for_opener = TableSchema::new(
-            file_schema.clone(),
-            vec![Arc::new(Field::new("part", DataType::Int32, false))],
-        );
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Int32,
+                false,
+            ))])
+            .build();
         let make_opener = |predicate| {
             ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
@@ -2028,10 +2029,13 @@ mod test {
             Field::new("a", DataType::Int32, false),
         ]));
 
-        let table_schema_for_opener = TableSchema::new(
-            file_schema.clone(),
-            vec![Arc::new(Field::new("part", DataType::Int32, false))],
-        );
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Int32,
+                false,
+            ))])
+            .build();
         let make_opener = |predicate| {
             ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
@@ -2109,10 +2113,13 @@ mod test {
             Field::new("part", DataType::Int32, false),
         ]));
 
-        let table_schema_for_opener = TableSchema::new(
-            file_schema.clone(),
-            vec![Arc::new(Field::new("part", DataType::Int32, false))],
-        );
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Int32,
+                false,
+            ))])
+            .build();
         let make_opener = |predicate| {
             ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))

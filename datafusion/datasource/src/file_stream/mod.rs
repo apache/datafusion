@@ -315,7 +315,7 @@ mod tests {
 
             let on_error = self.on_error;
 
-            let table_schema = TableSchema::new(file_schema, vec![]);
+            let table_schema = TableSchema::from(file_schema);
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),
@@ -352,7 +352,7 @@ mod tests {
 
     /// Create the smallest valid file scan config for builder validation tests.
     fn builder_test_config() -> FileScanConfig {
-        let table_schema = TableSchema::new(Arc::new(Schema::empty()), vec![]);
+        let table_schema = TableSchema::from(Arc::new(Schema::empty()));
         FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("test:///").unwrap(),
             Arc::new(MockSource::new(table_schema)),
@@ -1575,10 +1575,12 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
 
-            let table_schema = TableSchema::new(
-                Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)])),
-                vec![],
-            );
+            let table_schema =
+                TableSchema::from(Arc::new(Schema::new(vec![Field::new(
+                    "i",
+                    DataType::Int32,
+                    false,
+                )])));
             FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),

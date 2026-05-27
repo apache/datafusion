@@ -1705,15 +1705,16 @@ EXPLAIN SELECT named_struct('sum', a + b) AS s FROM ordered ORDER BY s['sum'];
 ----
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[named_struct(sum, a@0 + b@1) as s], file_type=csv, has_header=true
 
-# Wrapping a non-ordered column into a struct — SortExec required
+# Wrapping a non-ordered column into a struct — SortExec required.
 # Reuses the `ordered` table above which has WITH ORDER (a + b).
+# The simplifier resolves `get_field(named_struct(...), 'a')` so the sort key
+# is not extracted into a separate scan projection column.
 query TT
 EXPLAIN SELECT named_struct('a', a, 'b', b) AS s FROM ordered ORDER BY s['a'];
 ----
 physical_plan
-01)ProjectionExec: expr=[s@0 as s]
-02)--SortExec: expr=[__datafusion_extracted_1@1 ASC NULLS LAST], preserve_partitioning=[false]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[named_struct(a, a@0, b, b@1) as s, get_field(named_struct(a, a@0, b, b@1), a) as __datafusion_extracted_1], file_type=csv, has_header=true
+01)SortExec: expr=[get_field(s@0, a) ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[named_struct(a, a@0, b, b@1) as s], file_type=csv, has_header=true
 
 # Simple column ordering tests using a table ordered by (a)
 statement ok
@@ -1737,9 +1738,8 @@ query TT
 EXPLAIN SELECT named_struct('a', a, 'b', b) AS s FROM ordered_by_a ORDER BY s['b'];
 ----
 physical_plan
-01)ProjectionExec: expr=[s@0 as s]
-02)--SortExec: expr=[__datafusion_extracted_1@1 ASC NULLS LAST], preserve_partitioning=[false]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[named_struct(a, a@0, b, b@1) as s, get_field(named_struct(a, a@0, b, b@1), b) as __datafusion_extracted_1], file_type=csv, has_header=true
+01)SortExec: expr=[get_field(s@0, b) ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[named_struct(a, a@0, b, b@1) as s], file_type=csv, has_header=true
 
 # Mixed projection: top-level column alongside struct, order by struct field
 query TT
