@@ -98,7 +98,7 @@ pub use spans::{Location, Span, Spans};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::{RecursionUnnestOption, UnnestOptions};
-pub use utils::project_schema;
+// pub use utils::project_schema;
 
 // These are hidden from docs purely to avoid polluting the public view of what this crate exports.
 // These are just re-exports of macros by the same name, which gets around the 'cannot refer to
