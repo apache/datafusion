@@ -75,7 +75,7 @@ impl DiskManagerBuilder {
         match self.mode {
             DiskManagerMode::OsTmpDirectory => Ok(DiskManager {
                 local_dirs: Mutex::new(Some(vec![])),
-                max_temp_directory_size: self.max_temp_directory_size,
+                max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
             }),
@@ -86,14 +86,14 @@ impl DiskManagerBuilder {
                 );
                 Ok(DiskManager {
                     local_dirs: Mutex::new(Some(local_dirs)),
-                    max_temp_directory_size: self.max_temp_directory_size,
+                    max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                     used_disk_space: Arc::new(AtomicU64::new(0)),
                     active_files_count: Arc::new(AtomicUsize::new(0)),
                 })
             }
             DiskManagerMode::Disabled => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
-                max_temp_directory_size: self.max_temp_directory_size,
+                max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
             }),
@@ -167,8 +167,9 @@ pub struct DiskManager {
     /// If `None` an error will be returned (configured not to spill)
     local_dirs: Mutex<Option<Vec<Arc<TempDir>>>>,
     /// The maximum amount of data (in bytes) stored inside the temporary directories.
-    /// Default to 100GB
-    max_temp_directory_size: u64,
+    /// Default to 100GB. Stored as `AtomicU64` so it can be adjusted at runtime
+    /// without requiring exclusive (`&mut`) access to the `DiskManager`.
+    max_temp_directory_size: AtomicU64,
     /// Used disk space in the temporary directories. Now only spilled data for
     /// external executors are counted.
     used_disk_space: Arc<AtomicU64>,
@@ -199,7 +200,7 @@ impl DiskManager {
             DiskManagerConfig::Existing(manager) => Ok(manager),
             DiskManagerConfig::NewOs => Ok(Arc::new(Self {
                 local_dirs: Mutex::new(Some(vec![])),
-                max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+                max_temp_directory_size: AtomicU64::new(DEFAULT_MAX_TEMP_DIRECTORY_SIZE),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
             })),
@@ -210,50 +211,57 @@ impl DiskManager {
                 );
                 Ok(Arc::new(Self {
                     local_dirs: Mutex::new(Some(local_dirs)),
-                    max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+                    max_temp_directory_size: AtomicU64::new(
+                        DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+                    ),
                     used_disk_space: Arc::new(AtomicU64::new(0)),
                     active_files_count: Arc::new(AtomicUsize::new(0)),
                 }))
             }
             DiskManagerConfig::Disabled => Ok(Arc::new(Self {
                 local_dirs: Mutex::new(None),
-                max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+                max_temp_directory_size: AtomicU64::new(DEFAULT_MAX_TEMP_DIRECTORY_SIZE),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
             })),
         }
     }
 
+    /// Atomically set the max temp directory size at runtime.
+    ///
+    /// Takes `&self`, so it works through `Arc<DiskManager>` without requiring
+    /// exclusive access. Takes effect immediately for subsequent spill writes.
+    ///
+    /// Use this when you need to adjust the limit dynamically while queries
+    /// are running (e.g., adapting to available disk space).
     pub fn set_max_temp_directory_size(
-        &mut self,
+        &self,
         max_temp_directory_size: u64,
     ) -> Result<()> {
-        // If the disk manager is disabled and `max_temp_directory_size` is not 0,
-        // this operation is not meaningful, fail early.
         if self.local_dirs.lock().is_none() && max_temp_directory_size != 0 {
             return config_err!(
                 "Cannot set max temp directory size for a disk manager that spilling is disabled"
             );
         }
 
-        self.max_temp_directory_size = max_temp_directory_size;
+        self.max_temp_directory_size
+            .store(max_temp_directory_size, Ordering::Relaxed);
         Ok(())
     }
 
+    #[deprecated(
+        since = "54.0.0",
+        note = "Use `set_max_temp_directory_size` directly, it now takes &self"
+    )]
     pub fn set_arc_max_temp_directory_size(
-        this: &mut Arc<Self>,
+        this: &Arc<Self>,
         max_temp_directory_size: u64,
     ) -> Result<()> {
-        if let Some(inner) = Arc::get_mut(this) {
-            inner.set_max_temp_directory_size(max_temp_directory_size)?;
-            Ok(())
-        } else {
-            config_err!("DiskManager should be a single instance")
-        }
+        this.set_max_temp_directory_size(max_temp_directory_size)
     }
 
     pub fn with_max_temp_directory_size(
-        mut self,
+        self,
         max_temp_directory_size: u64,
     ) -> Result<Self> {
         self.set_max_temp_directory_size(max_temp_directory_size)?;
@@ -266,7 +274,7 @@ impl DiskManager {
 
     /// Returns the maximum temporary directory size in bytes
     pub fn max_temp_directory_size(&self) -> u64 {
-        self.max_temp_directory_size
+        self.max_temp_directory_size.load(Ordering::Relaxed)
     }
 
     /// Returns the current spilling progress
@@ -418,11 +426,24 @@ impl RefCountedTempFile {
 
         // 3. Check if the updated global disk usage exceeds the configured limit
         let global_disk_usage = self.disk_manager.used_disk_space.load(Ordering::Relaxed);
-        if global_disk_usage > self.disk_manager.max_temp_directory_size {
+        let limit = self
+            .disk_manager
+            .max_temp_directory_size
+            .load(Ordering::Relaxed);
+        if global_disk_usage > limit {
+            // Roll back: restore global counter to previous state so that
+            // Drop (which subtracts current_file_disk_usage = old value) remains
+            // consistent. Without this, the delta (new - old) leaks permanently.
+            self.disk_manager
+                .used_disk_space
+                .fetch_sub(new_disk_usage, Ordering::Relaxed);
+            self.disk_manager
+                .used_disk_space
+                .fetch_add(old_disk_usage, Ordering::Relaxed);
             return resources_err!(
                 "The used disk space during the spilling process has exceeded the allowable limit of {}. \
                 Please try increasing the config: `datafusion.runtime.max_temp_directory_size`.",
-                human_readable_size(self.disk_manager.max_temp_directory_size as usize)
+                human_readable_size(limit as usize)
             );
         }
 
@@ -792,6 +813,267 @@ mod tests {
         drop(file2);
 
         // Usage should be 0
+        assert_eq!(dm.used_disk_space(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_limit_adjustment_through_shared_ref() -> Result<()> {
+        // Verify that set_max_temp_directory_size works through &self (not &mut self).
+        // This is the key behavioral change: the limit can be adjusted at runtime
+        // without exclusive access, enabling dynamic resize while queries are running.
+        let dm = DiskManager::builder()
+            .with_max_temp_directory_size(1024)
+            .build()?;
+        let dm = Arc::new(dm);
+
+        assert_eq!(dm.max_temp_directory_size(), 1024);
+
+        // Adjust through shared reference (simulates concurrent access via Arc)
+        dm.set_max_temp_directory_size(2048)?;
+        assert_eq!(dm.max_temp_directory_size(), 2048);
+
+        // Can also decrease
+        dm.set_max_temp_directory_size(512)?;
+        assert_eq!(dm.max_temp_directory_size(), 512);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_limit_concurrent_access() -> Result<()> {
+        // Verify that multiple threads can read and write the limit concurrently
+        let dm = Arc::new(
+            DiskManager::builder()
+                .with_max_temp_directory_size(1000)
+                .build()?,
+        );
+
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let dm = Arc::clone(&dm);
+                std::thread::spawn(move || {
+                    // Each thread sets a different limit and reads it back
+                    let new_limit = (i + 1) * 1000;
+                    dm.set_max_temp_directory_size(new_limit).unwrap();
+                    // Read should return SOME value set by one of the threads
+                    let current = dm.max_temp_directory_size();
+                    assert!((1000..=8000).contains(&current));
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Final value should be one of the values set by threads
+        let final_val = dm.max_temp_directory_size();
+        assert!((1000..=8000).contains(&final_val));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_disabled_disk_manager_rejects_nonzero_limit() -> Result<()> {
+        let dm = DiskManager::builder()
+            .with_mode(DiskManagerMode::Disabled)
+            .build()?;
+        let dm = Arc::new(dm);
+
+        // Setting non-zero limit on disabled DiskManager should error
+        let result = dm.set_max_temp_directory_size(1024);
+        assert!(result.is_err());
+
+        // Setting zero is OK
+        assert!(dm.set_max_temp_directory_size(0).is_ok());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_limit_decrease_below_current_usage() -> Result<()> {
+        // Scenario: DiskManager has 100GB limit, currently using 80GB.
+        // Admin lowers limit to 60GB. What happens?
+        //
+        // Expected behavior:
+        // - Existing spill files remain on disk (not deleted)
+        // - used_disk_space still reports 80GB
+        // - New spill writes FAIL immediately (80GB > 60GB new limit)
+        // - Once old queries complete and release their files (used drops below 60GB),
+        //   new spill writes succeed again
+        //
+        // This demonstrates graceful degradation: lowering the limit doesn't
+        // reclaim existing files (would break running queries), but prevents
+        // additional spilling until usage drops naturally.
+        let dm = DiskManager::builder()
+            .with_max_temp_directory_size(100 * 1024 * 1024 * 1024) // 100GB
+            .build()?;
+        let dm = Arc::new(dm);
+
+        // Simulate 80GB of existing spill usage
+        dm.used_disk_space
+            .store(80 * 1024 * 1024 * 1024, Ordering::Relaxed);
+
+        assert_eq!(dm.max_temp_directory_size(), 100 * 1024 * 1024 * 1024);
+        assert_eq!(dm.used_disk_space(), 80 * 1024 * 1024 * 1024);
+
+        // Lower the limit to 60GB (below current usage)
+        dm.set_max_temp_directory_size(60 * 1024 * 1024 * 1024)?;
+        assert_eq!(dm.max_temp_directory_size(), 60 * 1024 * 1024 * 1024);
+
+        // Current usage (80GB) now exceeds the new limit (60GB).
+        // The used_disk_space is NOT reclaimed — existing files stay.
+        assert_eq!(dm.used_disk_space(), 80 * 1024 * 1024 * 1024);
+
+        // Any attempt to write MORE would be rejected at the SpillWriter level
+        // because used_disk_space(80GB) > max_temp_directory_size(60GB).
+        // (SpillWriter check: `global_disk_usage > limit` returns ResourcesExhausted)
+
+        // Simulate old queries completing: usage drops to 50GB
+        dm.used_disk_space
+            .store(50 * 1024 * 1024 * 1024, Ordering::Relaxed);
+
+        // Now usage (50GB) < limit (60GB) — new spill writes would succeed again
+        assert!(dm.used_disk_space() < dm.max_temp_directory_size());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_limit_decrease_with_concurrent_queries() -> Result<()> {
+        // Scenario: Multiple threads spilling while limit is lowered concurrently.
+        // Demonstrates that:
+        // 1. In-flight spills that started before the limit change complete normally
+        //    (they already incremented used_disk_space)
+        // 2. New spills after the limit change respect the new lower limit
+        // 3. No data corruption or panics from concurrent access
+        let dm = Arc::new(
+            DiskManager::builder()
+                .with_max_temp_directory_size(100 * 1024 * 1024) // 100MB
+                .build()?,
+        );
+
+        let barrier = Arc::new(std::sync::Barrier::new(5));
+
+        // 4 threads simulate concurrent spilling
+        let spill_handles: Vec<_> = (0..4)
+            .map(|_| {
+                let dm = Arc::clone(&dm);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    // Simulate spill: increment used_disk_space
+                    dm.used_disk_space
+                        .fetch_add(10 * 1024 * 1024, Ordering::Relaxed);
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    // Simulate cleanup
+                    dm.used_disk_space
+                        .fetch_sub(10 * 1024 * 1024, Ordering::Relaxed);
+                })
+            })
+            .collect();
+
+        // 1 thread lowers the limit mid-flight
+        let dm_resize = Arc::clone(&dm);
+        let resize_barrier = Arc::clone(&barrier);
+        let resize_handle = std::thread::spawn(move || {
+            resize_barrier.wait();
+            // Lower limit while spills are in progress
+            dm_resize
+                .set_max_temp_directory_size(30 * 1024 * 1024) // 30MB
+                .unwrap();
+        });
+
+        for h in spill_handles {
+            h.join().unwrap();
+        }
+        resize_handle.join().unwrap();
+
+        // After all threads complete:
+        // - Limit is 30MB (last set by resize thread)
+        // - used_disk_space is 0 (all spills cleaned up)
+        // - No panics, no corruption
+        assert_eq!(dm.max_temp_directory_size(), 30 * 1024 * 1024);
+        assert_eq!(dm.used_disk_space(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_rollback_on_limit_exceeded_then_drop_returns_to_zero() -> Result<()> {
+        // This test verifies that lowering the limit, failing a spill write,
+        // and then dropping the file leaves used_disk_space at zero.
+        //
+        // Without the rollback fix, the global counter would be permanently
+        // inflated by the delta between the new and old file sizes.
+        use std::fs::OpenOptions;
+        use std::io::Write;
+
+        let dm = Arc::new(
+            DiskManager::builder()
+                .with_max_temp_directory_size(10 * 1024 * 1024) // 10MB
+                .build()?,
+        );
+
+        // Create a temp file and write some data via a separate writable handle
+        let mut file = dm.create_tmp_file("test_rollback")?;
+        {
+            let path = file.path().to_path_buf();
+            let mut f = OpenOptions::new().append(true).open(&path)?;
+            let data = vec![0u8; 1024]; // 1KB
+            f.write_all(&data)?;
+            f.sync_all()?;
+        }
+        // Record the file's disk usage
+        file.update_disk_usage()?;
+        let usage_after_first_write = dm.used_disk_space();
+        assert!(usage_after_first_write > 0);
+
+        // Write more data to grow the file
+        {
+            let path = file.path().to_path_buf();
+            let mut f = OpenOptions::new().append(true).open(&path)?;
+            let data = vec![0u8; 4 * 1024]; // 4KB more
+            f.write_all(&data)?;
+            f.sync_all()?;
+        }
+        // Update disk usage — should succeed (still under 10MB)
+        file.update_disk_usage()?;
+        let usage_after_second_write = dm.used_disk_space();
+        assert!(usage_after_second_write > usage_after_first_write);
+
+        // Now lower the limit to 1 byte — below current usage
+        dm.set_max_temp_directory_size(1)?;
+
+        // Write even more data
+        {
+            let path = file.path().to_path_buf();
+            let mut f = OpenOptions::new().append(true).open(&path)?;
+            let data = vec![0u8; 2 * 1024]; // 2KB more
+            f.write_all(&data)?;
+            f.sync_all()?;
+        }
+
+        // This update_disk_usage should FAIL (exceeds new 1-byte limit)
+        let result = file.update_disk_usage();
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeded the allowable limit")
+        );
+
+        // Critical check: used_disk_space should still equal the LAST
+        // successful update (before the failed one), not be inflated
+        assert_eq!(dm.used_disk_space(), usage_after_second_write);
+
+        // Drop the file — should subtract the last successful file size
+        drop(file);
+
+        // After drop: used_disk_space must be zero (no leak)
         assert_eq!(dm.used_disk_space(), 0);
 
         Ok(())

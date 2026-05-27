@@ -35,7 +35,6 @@ use arrow::array::{RecordBatch, UInt32Array};
 use arrow::compute::{BatchCoalescer, take_record_batch};
 use arrow::datatypes::SchemaRef;
 use arrow::row::{OwnedRow, RowConverter};
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{HashMap, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -330,17 +329,6 @@ impl ExecutionPlan for PartitionedTopKExec {
             self.partition_prefix_len,
             self.fetch,
         )?))
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
     }
 
     fn execute(

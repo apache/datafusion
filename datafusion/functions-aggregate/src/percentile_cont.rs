@@ -38,7 +38,8 @@ use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 
 use crate::min_max::{max_udaf, min_udaf};
 use datafusion_common::{
-    Result, ScalarValue, internal_datafusion_err, utils::take_function_args,
+    Result, ScalarValue, exec_datafusion_err, internal_datafusion_err,
+    utils::take_function_args,
 };
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -420,7 +421,12 @@ where
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        self.all_values.reserve(values.len() - values.null_count());
+        let additional = values.len() - values.null_count();
+        self.all_values.try_reserve(additional).map_err(|e| {
+            exec_datafusion_err!(
+                "failed to reserve {additional} values for percentile_cont accumulator: {e}"
+            )
+        })?;
         self.all_values.extend(values.iter().flatten());
         Ok(())
     }
