@@ -21,6 +21,7 @@
 //! to different data types, originally extracted from the optimizer's
 //! unwrap_cast module to be shared between logical and physical layers.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 
 use arrow::datatypes::{
@@ -31,23 +32,57 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::ScalarValue;
 
-/// Convert a literal value from one data type to another
-pub fn try_cast_literal_to_type(
-    lit_value: &ScalarValue,
+/// Accepts either an owned [`ScalarValue`] or a `&ScalarValue` as the literal
+/// argument to [`try_cast_literal_to_type`].
+///
+/// `std` does not provide a blanket `From<&T> for Cow<'_, T>`, and
+/// [`ScalarValue`] lives in another crate, so we cannot rely on
+/// `impl Into<Cow<'_, ScalarValue>>`. This small trait fills that gap: passing
+/// an owned value lets the cast *move* its string contents instead of
+/// re-allocating them.
+pub trait IntoScalarCow<'a> {
+    fn into_scalar_cow(self) -> Cow<'a, ScalarValue>;
+}
+
+impl<'a> IntoScalarCow<'a> for ScalarValue {
+    fn into_scalar_cow(self) -> Cow<'a, ScalarValue> {
+        Cow::Owned(self)
+    }
+}
+
+impl<'a> IntoScalarCow<'a> for &'a ScalarValue {
+    fn into_scalar_cow(self) -> Cow<'a, ScalarValue> {
+        Cow::Borrowed(self)
+    }
+}
+
+/// Convert a literal value from one data type to another.
+///
+/// Accepts either an owned [`ScalarValue`] or a `&ScalarValue`. When an owned
+/// value is passed, string casts move the underlying `String` into the new
+/// value instead of re-allocating it.
+pub fn try_cast_literal_to_type<'a>(
+    lit_value: impl IntoScalarCow<'a>,
     target_type: &DataType,
 ) -> Option<ScalarValue> {
-    let lit_data_type = lit_value.data_type();
-    if !is_supported_type(&lit_data_type) || !is_supported_type(target_type) {
+    let lit_value = lit_value.into_scalar_cow();
+    if !is_supported_type(&lit_value.data_type()) || !is_supported_type(target_type) {
         return None;
     }
     if lit_value.is_null() {
         // null value can be cast to any type of null value
         return ScalarValue::try_from(target_type).ok();
     }
-    try_cast_numeric_literal(lit_value, target_type)
-        .or_else(|| try_cast_string_literal(lit_value, target_type))
-        .or_else(|| try_cast_dictionary(lit_value, target_type))
-        .or_else(|| try_cast_binary(lit_value, target_type))
+    // The numeric/dictionary/binary casts only need a reference. The string
+    // cast goes last so it is free to consume `lit_value` and move the string
+    // out of an owned `Cow` rather than re-allocating it.
+    if let Some(value) = try_cast_numeric_literal(&lit_value, target_type)
+        .or_else(|| try_cast_dictionary(&lit_value, target_type))
+        .or_else(|| try_cast_binary(&lit_value, target_type))
+    {
+        return Some(value);
+    }
+    try_cast_string_literal(lit_value, target_type)
 }
 
 /// Returns true if unwrap_cast_in_comparison supports this data type
@@ -332,17 +367,26 @@ fn try_cast_numeric_literal(
 }
 
 fn try_cast_string_literal(
-    lit_value: &ScalarValue,
+    lit_value: Cow<'_, ScalarValue>,
     target_type: &DataType,
 ) -> Option<ScalarValue> {
-    let string_value = lit_value.try_as_str()?.map(|s| s.to_string());
-    let scalar_value = match target_type {
-        DataType::Utf8 => ScalarValue::Utf8(string_value),
-        DataType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),
-        DataType::Utf8View => ScalarValue::Utf8View(string_value),
+    // Resolve the target string variant first so we bail out for non-string
+    // targets before consuming the value.
+    let wrap: fn(Option<String>) -> ScalarValue = match target_type {
+        DataType::Utf8 => ScalarValue::Utf8,
+        DataType::LargeUtf8 => ScalarValue::LargeUtf8,
+        DataType::Utf8View => ScalarValue::Utf8View,
         _ => return None,
     };
-    Some(scalar_value)
+    // Move the string out of an owned value; clone a borrowed one.
+    let string_value = match lit_value {
+        Cow::Owned(
+            ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s),
+        ) => s,
+        Cow::Owned(_) => return None,
+        Cow::Borrowed(value) => value.try_as_str()?.map(|s| s.to_string()),
+    };
+    Some(wrap(string_value))
 }
 
 /// Attempt to cast to/from a dictionary type by wrapping/unwrapping the dictionary
@@ -774,7 +818,7 @@ mod tests {
     fn test_try_cast_literal_to_timestamp() {
         // same timestamp
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            ScalarValue::TimestampNanosecond(Some(123456), None),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
@@ -786,7 +830,7 @@ mod tests {
 
         // TimestampNanosecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            ScalarValue::TimestampNanosecond(Some(123456), None),
             &DataType::Timestamp(TimeUnit::Microsecond, None),
         )
         .unwrap();
@@ -798,7 +842,7 @@ mod tests {
 
         // TimestampNanosecond to TimestampMillisecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            ScalarValue::TimestampNanosecond(Some(123456), None),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
@@ -807,7 +851,7 @@ mod tests {
 
         // TimestampNanosecond to TimestampSecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            ScalarValue::TimestampNanosecond(Some(123456), None),
             &DataType::Timestamp(TimeUnit::Second, None),
         )
         .unwrap();
@@ -816,7 +860,7 @@ mod tests {
 
         // TimestampMicrosecond to TimestampNanosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMicrosecond(Some(123), None),
+            ScalarValue::TimestampMicrosecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
@@ -828,7 +872,7 @@ mod tests {
 
         // TimestampMicrosecond to TimestampMillisecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMicrosecond(Some(123), None),
+            ScalarValue::TimestampMicrosecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
@@ -837,7 +881,7 @@ mod tests {
 
         // TimestampMicrosecond to TimestampSecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMicrosecond(Some(123456789), None),
+            ScalarValue::TimestampMicrosecond(Some(123456789), None),
             &DataType::Timestamp(TimeUnit::Second, None),
         )
         .unwrap();
@@ -845,7 +889,7 @@ mod tests {
 
         // TimestampMillisecond to TimestampNanosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMillisecond(Some(123), None),
+            ScalarValue::TimestampMillisecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
@@ -856,7 +900,7 @@ mod tests {
 
         // TimestampMillisecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMillisecond(Some(123), None),
+            ScalarValue::TimestampMillisecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Microsecond, None),
         )
         .unwrap();
@@ -866,7 +910,7 @@ mod tests {
         );
         // TimestampMillisecond to TimestampSecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMillisecond(Some(123456789), None),
+            ScalarValue::TimestampMillisecond(Some(123456789), None),
             &DataType::Timestamp(TimeUnit::Second, None),
         )
         .unwrap();
@@ -874,7 +918,7 @@ mod tests {
 
         // TimestampSecond to TimestampNanosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampSecond(Some(123), None),
+            ScalarValue::TimestampSecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
@@ -885,7 +929,7 @@ mod tests {
 
         // TimestampSecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampSecond(Some(123), None),
+            ScalarValue::TimestampSecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Microsecond, None),
         )
         .unwrap();
@@ -896,7 +940,7 @@ mod tests {
 
         // TimestampSecond to TimestampMillisecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampSecond(Some(123), None),
+            ScalarValue::TimestampSecond(Some(123), None),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
@@ -907,7 +951,7 @@ mod tests {
 
         // overflow
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampSecond(Some(i64::MAX), None),
+            ScalarValue::TimestampSecond(Some(i64::MAX), None),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
@@ -928,6 +972,58 @@ mod tests {
                 expect_cast(s1.clone(), s2.data_type(), expected_value);
             }
         }
+    }
+
+    #[test]
+    fn test_try_cast_literal_to_type_owned_moves_strings() {
+        // an owned string value can be passed directly (no `&`) and is moved
+        // into the target string variant
+        let cases = [
+            (DataType::Utf8, ScalarValue::Utf8(Some("abc".to_owned()))),
+            (
+                DataType::LargeUtf8,
+                ScalarValue::LargeUtf8(Some("abc".to_owned())),
+            ),
+            (
+                DataType::Utf8View,
+                ScalarValue::Utf8View(Some("abc".to_owned())),
+            ),
+        ];
+        for (target_type, expected) in cases {
+            let actual = try_cast_literal_to_type(
+                ScalarValue::Utf8(Some("abc".to_owned())),
+                &target_type,
+            );
+            assert_eq!(actual, Some(expected));
+        }
+
+        // owned non-string casts and dictionary wrapping still work
+        assert_eq!(
+            try_cast_literal_to_type(ScalarValue::Int32(Some(1)), &DataType::Int64),
+            Some(ScalarValue::Int64(Some(1)))
+        );
+        assert_eq!(
+            try_cast_literal_to_type(
+                ScalarValue::Utf8(Some("abc".to_owned())),
+                &DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Utf8)
+                ),
+            ),
+            Some(ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Utf8(Some("abc".to_owned()))),
+            ))
+        );
+
+        // unsupported owned cast returns None
+        assert_eq!(
+            try_cast_literal_to_type(
+                ScalarValue::Utf8(Some("abc".to_owned())),
+                &DataType::Int32
+            ),
+            None
+        );
     }
 
     #[test]

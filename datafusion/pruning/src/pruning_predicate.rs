@@ -1817,11 +1817,18 @@ fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
     None
 }
 
-/// Wrap a string in a `Literal` whose `ScalarValue` matches `target_type`
-fn string_literal_as(value: String, target_type: &DataType) -> Arc<dyn PhysicalExpr> {
-    let utf8 = ScalarValue::Utf8(Some(value));
-    let scalar = try_cast_literal_to_type(&utf8, target_type).unwrap_or(utf8);
-    Arc::new(phys_expr::Literal::new(scalar))
+/// Wrap a string in a `Literal` whose `ScalarValue` matches `target_type`.
+///
+/// Returns `None` if `target_type` is not a supported cast target for a string,
+/// in which case the caller should skip pruning rather than emit a literal
+/// whose type does not match the column statistics. The owned `value` is moved
+/// into the literal without re-allocating.
+fn string_literal_as(
+    value: String,
+    target_type: &DataType,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    let scalar = try_cast_literal_to_type(ScalarValue::Utf8(Some(value)), target_type)?;
+    Some(Arc::new(phys_expr::Literal::new(scalar)))
 }
 
 /// Convert `column LIKE literal` where P is a constant prefix of the literal
@@ -1856,12 +1863,12 @@ fn build_like_match(
     }
     let (lower_bound, upper_bound) = if has_wildcard {
         let incremented_prefix = increment_utf8(&decoded_prefix)?;
-        let lower_bound_lit = string_literal_as(decoded_prefix, target_type);
-        let upper_bound_lit = string_literal_as(incremented_prefix, target_type);
+        let lower_bound_lit = string_literal_as(decoded_prefix, target_type)?;
+        let upper_bound_lit = string_literal_as(incremented_prefix, target_type)?;
         (lower_bound_lit, upper_bound_lit)
     } else {
         // the like expression is a literal and can be converted into a comparison
-        let bound = string_literal_as(decoded_prefix, target_type);
+        let bound = string_literal_as(decoded_prefix, target_type)?;
         (Arc::clone(&bound), bound)
     };
     let lower_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
