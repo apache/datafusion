@@ -298,6 +298,63 @@ impl PhysicalExpr for CastExpr {
 
         write!(f, ")")
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
+                protobuf::PhysicalCastNode {
+                    expr: Some(Box::new(ctx.encode_child(self.expr())?)),
+                    arrow_type: Some(self.cast_type().try_into()?),
+                },
+            ))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CastExpr {
+    /// Reconstruct a [`CastExpr`] from its protobuf representation.
+    ///
+    /// Takes the whole [`PhysicalExprNode`] so the decode signature matches
+    /// other migrated expressions and can inspect outer-node metadata if
+    /// needed in the future.
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_common::DataFusionError;
+        use datafusion_common::internal_err;
+        use datafusion_proto_models::protobuf;
+
+        let cast_expr = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::Cast(cast_expr)) => {
+                cast_expr.as_ref()
+            }
+            _ => return internal_err!("PhysicalExprNode is not a CastExpr"),
+        };
+
+        let expr = ctx.decode_required_expression(
+            cast_expr.expr.as_deref(),
+            "CastExpr",
+            "expr",
+        )?;
+        let arrow_type = cast_expr.arrow_type.as_ref().ok_or_else(|| {
+            DataFusionError::Internal(
+                "CastExpr is missing required field 'arrow_type'".to_string(),
+            )
+        })?;
+
+        Ok(Arc::new(CastExpr::new(expr, arrow_type.try_into()?, None)))
+    }
 }
 
 /// Return a PhysicalExpression representing `expr` casted to
