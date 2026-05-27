@@ -383,4 +383,35 @@ mod tests {
             "array_repeat: repeated inner array length exceeds capacity"
         );
     }
+
+    #[test]
+    fn list_repeat_rejects_inner_i32_offset_overflow() {
+        let list = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+        ])) as ArrayRef;
+        let count =
+            Arc::new(Int64Array::from(vec![i64::from(i32::MAX / 2) + 1])) as ArrayRef;
+
+        let err = array_repeat_inner(&[list, count]).unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "array_repeat: offset 2147483648 exceeds the maximum value for offset type"
+        );
+    }
+
+    #[test]
+    fn list_repeat_rejects_outer_i32_offset_overflow() {
+        let list = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![]),
+        ])) as ArrayRef;
+        let count = Arc::new(Int64Array::from(vec![i64::from(i32::MAX) + 1])) as ArrayRef;
+
+        let err = array_repeat_inner(&[list, count]).unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "array_repeat: offset 2147483648 exceeds the maximum value for offset type"
+        );
+    }
 }
