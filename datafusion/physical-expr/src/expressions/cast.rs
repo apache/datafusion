@@ -331,7 +331,7 @@ impl CastExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_common::DataFusionError;
+        use datafusion_common::internal_datafusion_err;
         use datafusion_common::internal_err;
         use datafusion_proto_models::protobuf;
 
@@ -348,9 +348,7 @@ impl CastExpr {
             "expr",
         )?;
         let arrow_type = cast_expr.arrow_type.as_ref().ok_or_else(|| {
-            DataFusionError::Internal(
-                "CastExpr is missing required field 'arrow_type'".to_string(),
-            )
+            internal_datafusion_err!("CastExpr is missing required field 'arrow_type'")
         })?;
 
         Ok(Arc::new(CastExpr::new(expr, arrow_type.try_into()?, None)))
