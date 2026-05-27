@@ -461,19 +461,37 @@ select round(exp(a), 5), round(exp(e), 5), round(exp(f), 5) from signed_integers
 ## factorial
 
 # factorial scalar function
-query III rowsort
+query RRR rowsort
 select factorial(0), factorial(10), factorial(15);
 ----
 1 3628800 1307674368000
 
+query TR
+select arrow_typeof(factorial(21)), factorial(21);
+----
+Decimal256(76, 0) 51090942171709440000
+
+query R
+select factorial(21);
+----
+51090942171709440000
+
+query TR
+select arrow_typeof(factorial(56)), factorial(56);
+----
+Decimal256(76, 0) 710998587804863451854045647463724949736497978881168458687447040000000000000
+
+query error DataFusion error: Execution error: Overflow happened on FACTORIAL\(57\)
+select factorial(57);
+
 # factorial scalar nulls
-query I rowsort
+query R rowsort
 select factorial(null);
 ----
 NULL
 
 # factorial with columns
-query III rowsort
+query RRR rowsort
 select factorial(a), factorial(e), factorial(f) from unsigned_integers;
 ----
 1 24 3628800
