@@ -197,22 +197,21 @@ struct SkipAggregationProbe {
     /// Operator-wide `elapsed_compute`; the probe reads `value()` at
     /// phase transitions to derive per-row costs.
     elapsed_compute: metrics::Time,
-    /// Diagnostic gauge: measured partial-agg wall time per input row
-    /// (ns) at the end of the `Partial` phase. Always reported when
-    /// the partial probe completes, regardless of subsequent decision.
-    probe_partial_ns_per_row: metrics::Gauge,
-    /// Diagnostic gauge: measured passthrough wall time per input row
-    /// (ns) at the end of the `AbSampling` phase. Reported only when
-    /// A/B sampling actually runs (cost model enabled and Rule 1 didn't
-    /// already fire).
-    probe_passthrough_ns_per_row: metrics::Gauge,
-    /// Diagnostic gauge: aggregation ratio at the partial probe close,
-    /// scaled by 1000 (`usize` gauge → integer storage).
-    probe_ratio_per_mille: metrics::Gauge,
-    /// Diagnostic gauge: 1 if the cost-aware decision chose to skip,
-    /// 0 otherwise. Distinguishes the cost-aware skip from the fixed
-    /// Rule 1 skip and from "decision was to keep partial".
-    probe_cost_decision_skip: metrics::Gauge,
+    /// Operator metrics set + partition — saved so the diagnostic
+    /// gauges below can be lazily registered the first time the probe
+    /// has something useful to report. Queries that never reach
+    /// `probe_rows_threshold` (small inputs, short streams) won't
+    /// register them at all, so EXPLAIN ANALYZE stays clean of empty
+    /// "...=0" noise on workloads where the cost-aware path doesn't
+    /// engage.
+    agg_metrics: metrics::ExecutionPlanMetricsSet,
+    partition: usize,
+    /// Diagnostic gauges, lazily created on first set. See
+    /// [`Self::ensure_probe_gauges`] for the names and categories.
+    probe_partial_ns_per_row: Option<metrics::Gauge>,
+    probe_passthrough_ns_per_row: Option<metrics::Gauge>,
+    probe_ratio_per_mille: Option<metrics::Gauge>,
+    probe_cost_decision_skip: Option<metrics::Gauge>,
 }
 
 impl SkipAggregationProbe {
@@ -224,10 +223,8 @@ impl SkipAggregationProbe {
         ab_sampling_rows: usize,
         skipped_aggregation_rows: metrics::Count,
         elapsed_compute: metrics::Time,
-        probe_partial_ns_per_row: metrics::Gauge,
-        probe_passthrough_ns_per_row: metrics::Gauge,
-        probe_ratio_per_mille: metrics::Gauge,
-        probe_cost_decision_skip: metrics::Gauge,
+        agg_metrics: metrics::ExecutionPlanMetricsSet,
+        partition: usize,
     ) -> Self {
         let elapsed_compute_at_probe_start = elapsed_compute.value();
         Self {
@@ -245,11 +242,45 @@ impl SkipAggregationProbe {
             is_locked: false,
             skipped_aggregation_rows,
             elapsed_compute,
-            probe_partial_ns_per_row,
-            probe_passthrough_ns_per_row,
-            probe_ratio_per_mille,
-            probe_cost_decision_skip,
+            agg_metrics,
+            partition,
+            probe_partial_ns_per_row: None,
+            probe_passthrough_ns_per_row: None,
+            probe_ratio_per_mille: None,
+            probe_cost_decision_skip: None,
         }
+    }
+
+    /// Lazily register all four cost-aware diagnostic gauges with the
+    /// operator's metric set. Called the first time the probe has data
+    /// to report (i.e. when `finalize_partial_probe` runs). Idempotent:
+    /// once the gauges exist, this is a cheap `Option::is_some` check.
+    /// Small queries that never reach `probe_rows_threshold` skip this
+    /// entirely, so EXPLAIN ANALYZE stays free of "...=0" noise.
+    fn ensure_probe_gauges(&mut self) {
+        if self.probe_partial_ns_per_row.is_some() {
+            return;
+        }
+        self.probe_partial_ns_per_row = Some(
+            MetricBuilder::new(&self.agg_metrics)
+                .with_category(MetricCategory::Timing)
+                .gauge("partial_agg_probe_partial_ns_per_row", self.partition),
+        );
+        self.probe_passthrough_ns_per_row = Some(
+            MetricBuilder::new(&self.agg_metrics)
+                .with_category(MetricCategory::Timing)
+                .gauge("partial_agg_probe_passthrough_ns_per_row", self.partition),
+        );
+        self.probe_ratio_per_mille = Some(
+            MetricBuilder::new(&self.agg_metrics)
+                .with_category(MetricCategory::Rows)
+                .gauge("partial_agg_probe_ratio_per_mille", self.partition),
+        );
+        self.probe_cost_decision_skip = Some(
+            MetricBuilder::new(&self.agg_metrics)
+                .with_category(MetricCategory::Rows)
+                .gauge("partial_agg_probe_cost_decision_skip", self.partition),
+        );
     }
 
     /// Called from the partial-agg path after each input batch. Tracks
@@ -265,6 +296,11 @@ impl SkipAggregationProbe {
             return;
         }
 
+        // Register the diagnostic gauges with the operator's metric set
+        // on first reach — keeps EXPLAIN ANALYZE clean on small workloads
+        // that never engage the cost-aware path.
+        self.ensure_probe_gauges();
+
         let ratio = self.num_groups as f64 / self.input_rows as f64;
         let partial_ns = self
             .elapsed_compute
@@ -273,8 +309,12 @@ impl SkipAggregationProbe {
         let partial_ns_per_row = (partial_ns as u64)
             .checked_div(self.input_rows as u64)
             .unwrap_or(0) as usize;
-        self.probe_partial_ns_per_row.set(partial_ns_per_row);
-        self.probe_ratio_per_mille.set((ratio * 1000.0) as usize);
+        if let Some(g) = self.probe_partial_ns_per_row.as_ref() {
+            g.set(partial_ns_per_row);
+        }
+        if let Some(g) = self.probe_ratio_per_mille.as_ref() {
+            g.set((ratio * 1000.0) as usize);
+        }
 
         // Rule 1 (fixed): high ratio — short-circuit straight to skip.
         if ratio >= self.probe_ratio_threshold {
@@ -332,16 +372,24 @@ impl SkipAggregationProbe {
     /// constants. If either measurement is zero (extremely fast or
     /// degenerate input) we default to keeping partial.
     fn finalize_ab_decision(&mut self) {
+        // Gauges were registered when we entered the partial probe;
+        // they should exist here (we reached `finalize_partial_probe`
+        // before transitioning to `AbSampling`).
         let ab_start = self
             .elapsed_compute_at_ab_start
             .expect("A/B start snapshot must be set when entering AbSampling");
         let ab_ns = self.elapsed_compute.value().saturating_sub(ab_start);
         let passthrough_ns_per_row =
             (ab_ns as u64).checked_div(self.ab_rows as u64).unwrap_or(0) as usize;
-        self.probe_passthrough_ns_per_row
-            .set(passthrough_ns_per_row);
+        if let Some(g) = self.probe_passthrough_ns_per_row.as_ref() {
+            g.set(passthrough_ns_per_row);
+        }
 
-        let partial_ns_per_row = self.probe_partial_ns_per_row.value();
+        let partial_ns_per_row = self
+            .probe_partial_ns_per_row
+            .as_ref()
+            .map(|g| g.value())
+            .unwrap_or(0);
         let ratio = self.num_groups as f64 / self.input_rows as f64;
 
         let should_skip = if partial_ns_per_row == 0 || passthrough_ns_per_row == 0 {
@@ -350,11 +398,12 @@ impl SkipAggregationProbe {
             ratio > (passthrough_ns_per_row as f64 / partial_ns_per_row as f64)
         };
 
+        if let Some(g) = self.probe_cost_decision_skip.as_ref() {
+            g.set(if should_skip { 1 } else { 0 });
+        }
         if should_skip {
-            self.probe_cost_decision_skip.set(1);
             self.commit_skip();
         } else {
-            self.probe_cost_decision_skip.set(0);
             self.phase = ProbePhase::Locked { should_skip: false };
             self.is_locked = true;
         }
@@ -817,18 +866,6 @@ impl GroupedHashAggregateStream {
             let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
                 .with_category(MetricCategory::Rows)
                 .counter("skipped_aggregation_rows", partition);
-            let probe_partial_ns_per_row = MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Timing)
-                .gauge("partial_agg_probe_partial_ns_per_row", partition);
-            let probe_passthrough_ns_per_row = MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Timing)
-                .gauge("partial_agg_probe_passthrough_ns_per_row", partition);
-            let probe_ratio_per_mille = MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Rows)
-                .gauge("partial_agg_probe_ratio_per_mille", partition);
-            let probe_cost_decision_skip = MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Rows)
-                .gauge("partial_agg_probe_cost_decision_skip", partition);
             Some(SkipAggregationProbe::new(
                 probe_rows_threshold,
                 probe_ratio_threshold,
@@ -836,10 +873,8 @@ impl GroupedHashAggregateStream {
                 ab_sampling_rows,
                 skipped_aggregation_rows,
                 baseline_metrics.elapsed_compute().clone(),
-                probe_partial_ns_per_row,
-                probe_passthrough_ns_per_row,
-                probe_ratio_per_mille,
-                probe_cost_decision_skip,
+                agg.metrics.clone(),
+                partition,
             ))
         } else {
             None
@@ -2093,15 +2128,30 @@ mod tests {
 
     // ---------------- SkipAggregationProbe unit tests ----------------
 
-    /// Test rig that exposes the probe together with the `Time` source
-    /// it reads, so tests can drive measured per-row cost deterministically.
+    /// Test rig that exposes the probe + its operator metrics set so
+    /// tests can drive `elapsed_compute` and read the diagnostic gauges
+    /// by name (they are lazily registered on first reach).
     struct ProbeRig {
         probe: SkipAggregationProbe,
         elapsed: metrics::Time,
-        partial_ns_gauge: metrics::Gauge,
-        passthrough_ns_gauge: metrics::Gauge,
-        ratio_gauge: metrics::Gauge,
-        cost_decision_gauge: metrics::Gauge,
+        agg_metrics: metrics::ExecutionPlanMetricsSet,
+    }
+
+    impl ProbeRig {
+        /// Read a lazily-registered gauge by name, returning 0 when the
+        /// gauge has not been registered yet (i.e. the probe never
+        /// reached the partial-probe finalisation).
+        fn gauge(&self, name: &str) -> usize {
+            self.agg_metrics
+                .clone_inner()
+                .iter()
+                .find(|m| m.value().name() == name)
+                .and_then(|m| match m.value() {
+                    metrics::MetricValue::Gauge { gauge, .. } => Some(gauge.value()),
+                    _ => None,
+                })
+                .unwrap_or(0)
+        }
     }
 
     fn rig(
@@ -2111,10 +2161,7 @@ mod tests {
         ab_sampling_rows: usize,
     ) -> ProbeRig {
         let elapsed = metrics::Time::new();
-        let partial_ns_gauge = metrics::Gauge::new();
-        let passthrough_ns_gauge = metrics::Gauge::new();
-        let ratio_gauge = metrics::Gauge::new();
-        let cost_decision_gauge = metrics::Gauge::new();
+        let agg_metrics = metrics::ExecutionPlanMetricsSet::new();
         let probe = SkipAggregationProbe::new(
             probe_rows_threshold,
             probe_ratio_threshold,
@@ -2122,18 +2169,13 @@ mod tests {
             ab_sampling_rows,
             metrics::Count::new(),
             elapsed.clone(),
-            partial_ns_gauge.clone(),
-            passthrough_ns_gauge.clone(),
-            ratio_gauge.clone(),
-            cost_decision_gauge.clone(),
+            agg_metrics.clone(),
+            0,
         );
         ProbeRig {
             probe,
             elapsed,
-            partial_ns_gauge,
-            passthrough_ns_gauge,
-            ratio_gauge,
-            cost_decision_gauge,
+            agg_metrics,
         }
     }
 
@@ -2168,7 +2210,7 @@ mod tests {
         assert!(r.probe.is_locked);
         // No A/B sampling happened.
         assert!(!r.probe.wants_passthrough_sample());
-        assert_eq!(r.passthrough_ns_gauge.value(), 0);
+        assert_eq!(r.gauge("partial_agg_probe_passthrough_ns_per_row"), 0);
     }
 
     /// Below `probe_ratio_threshold`, the probe transitions into the
@@ -2185,8 +2227,8 @@ mod tests {
         assert!(!r.probe.should_skip());
         assert!(!r.probe.is_locked);
         assert!(r.probe.wants_passthrough_sample());
-        assert_eq!(r.partial_ns_gauge.value(), 1_000);
-        assert_eq!(r.ratio_gauge.value(), 600);
+        assert_eq!(r.gauge("partial_agg_probe_partial_ns_per_row"), 1_000);
+        assert_eq!(r.gauge("partial_agg_probe_ratio_per_mille"), 600);
     }
 
     /// Cost-aware skip: ratio is greater than `passthrough/partial`, so
@@ -2210,8 +2252,8 @@ mod tests {
         assert!(r.probe.should_skip());
         assert!(r.probe.is_locked);
         assert!(!r.probe.wants_passthrough_sample());
-        assert_eq!(r.passthrough_ns_gauge.value(), 50);
-        assert_eq!(r.cost_decision_gauge.value(), 1);
+        assert_eq!(r.gauge("partial_agg_probe_passthrough_ns_per_row"), 50);
+        assert_eq!(r.gauge("partial_agg_probe_cost_decision_skip"), 1);
     }
 
     /// Cost-aware keep: ratio is below `passthrough/partial`, so the
@@ -2233,8 +2275,8 @@ mod tests {
         assert!(!r.probe.should_skip());
         assert!(r.probe.is_locked);
         assert!(!r.probe.wants_passthrough_sample());
-        assert_eq!(r.passthrough_ns_gauge.value(), 80);
-        assert_eq!(r.cost_decision_gauge.value(), 0);
+        assert_eq!(r.gauge("partial_agg_probe_passthrough_ns_per_row"), 80);
+        assert_eq!(r.gauge("partial_agg_probe_cost_decision_skip"), 0);
     }
 
     /// A/B sampling needs *enough* rows in the window before it
@@ -2273,7 +2315,7 @@ mod tests {
         r.elapsed.add_duration(Duration::from_nanos(200_000));
         r.probe.observe_partial_batch(100, 50);
 
-        assert_eq!(r.partial_ns_gauge.value(), 2_000);
-        assert_eq!(r.ratio_gauge.value(), 500);
+        assert_eq!(r.gauge("partial_agg_probe_partial_ns_per_row"), 2_000);
+        assert_eq!(r.gauge("partial_agg_probe_ratio_per_mille"), 500);
     }
 }
