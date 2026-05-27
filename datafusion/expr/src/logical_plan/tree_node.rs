@@ -37,12 +37,17 @@
 //! * [`LogicalPlan::with_new_exprs`]: Create a new plan with different expressions
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
+use std::fmt::Formatter;
+
 use crate::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
     DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
     LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
     Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
     Values, Window, dml::CopyTo,
+};
+use datafusion_common::display::{
+    DisplayAs, DisplayFormatType, FormattedTreeNode, MAIN_CONTENT_KEY,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -52,6 +57,67 @@ use datafusion_common::tree_node::{
     TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{Result, internal_err};
+
+impl FormattedTreeNode for LogicalPlan {
+    fn node_name(&self) -> String {
+        match self {
+            LogicalPlan::Projection(_) => "Projection",
+            LogicalPlan::Filter(_) => "Filter",
+            LogicalPlan::Window(_) => "WindowAggr",
+            LogicalPlan::Aggregate(_) => "Aggregate",
+            LogicalPlan::Sort(_) => "Sort",
+            LogicalPlan::Join(join) => {
+                let join_type = if join.filter.is_none()
+                    && join.on.is_empty()
+                    && join.join_type == datafusion_common::JoinType::Inner
+                {
+                    "Cross".to_string()
+                } else {
+                    join.join_type.to_string()
+                };
+                return format!("{join_type} Join");
+            }
+            LogicalPlan::Repartition(_) => "Repartition",
+            LogicalPlan::Union(_) => "Union",
+            LogicalPlan::TableScan(_) => "TableScan",
+            LogicalPlan::EmptyRelation(_) => "EmptyRelation",
+            LogicalPlan::Subquery(_) => "Subquery",
+            LogicalPlan::SubqueryAlias(_) => "SubqueryAlias",
+            LogicalPlan::Limit(_) => "Limit",
+            LogicalPlan::Statement(stmt) => return stmt.name().to_string(),
+            LogicalPlan::Values(_) => "Values",
+            LogicalPlan::Explain(_) => "Explain",
+            LogicalPlan::Analyze(_) => "Analyze",
+            LogicalPlan::Extension(ext) => return ext.node.name().to_string(),
+            LogicalPlan::Distinct(distinct) => match distinct {
+                Distinct::All(_) => "Distinct",
+                Distinct::On(_) => "DistinctOn",
+            },
+            LogicalPlan::Dml(_) => "Dml",
+            LogicalPlan::Ddl(ddl) => return ddl.name().to_string(),
+            LogicalPlan::Copy(_) => "CopyTo",
+            LogicalPlan::DescribeTable(_) => "DescribeTable",
+            LogicalPlan::Unnest(_) => "Unnest",
+            LogicalPlan::RecursiveQuery(_) => "RecursiveQuery",
+        }
+        .to_string()
+    }
+}
+
+impl DisplayAs for LogicalPlan {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        if let DisplayFormatType::TreeRender = t {
+            let full = self.display().to_string();
+            let second = full
+                .split_once(':')
+                .map(|(_, second)| second.trim_start())
+                .unwrap_or("");
+            return write!(f, "{MAIN_CONTENT_KEY}={second}");
+        }
+        // DisplayAs only used to render tree for now
+        unimplemented!()
+    }
+}
 
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(

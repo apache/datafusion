@@ -472,10 +472,32 @@ explain format indent select * from values (1);
 logical_plan Values: (Int64(1))
 physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
+# By default, when format=tree is used, the logical plan is NOT rendered as a tree
+query TT
+explain format tree select * from values (1);
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       DataSourceExec      │
+03)│    --------------------   │
+04)│         bytes: 128        │
+05)│       format: memory      │
+06)│          rows: 1          │
+07)└───────────────────────────┘
+
+statement ok
+set datafusion.explain.logical_plan_tree = true;
+
 # tree mode
 query TT
 explain format tree select * from values (1);
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           Values          │
+03)│    --------------------   │
+04)│         (Int64(1))        │
+05)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       DataSourceExec      │
@@ -489,6 +511,12 @@ physical_plan
 query TT
 explain format TrEE select * from values (1);
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           Values          │
+03)│    --------------------   │
+04)│         (Int64(1))        │
+05)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       DataSourceExec      │
@@ -502,6 +530,12 @@ physical_plan
 query TT
 explain format 'tree' select * from values (1);
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           Values          │
+03)│    --------------------   │
+04)│         (Int64(1))        │
+05)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       DataSourceExec      │
@@ -515,6 +549,12 @@ physical_plan
 query TT
 explain format "tree" select * from values (1);
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           Values          │
+03)│    --------------------   │
+04)│         (Int64(1))        │
+05)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       DataSourceExec      │
@@ -523,6 +563,9 @@ physical_plan
 05)│       format: memory      │
 06)│          rows: 1          │
 07)└───────────────────────────┘
+
+statement ok
+reset datafusion.explain.logical_plan_tree;
 
 # number is not a valid format
 query error DataFusion error: SQL error: ParserError\("Expected: an explain format such as TREE, found: 123 at Line: 1, Column: 16"\)

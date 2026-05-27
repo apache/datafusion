@@ -21,115 +21,22 @@
 //! This module provides functionality for rendering an execution plan as a tree structure.
 //! It helps in visualizing how different operations in a query are connected and organized.
 
-use std::collections::HashMap;
-use std::fmt::Formatter;
-use std::sync::Arc;
-use std::{cmp, fmt};
+use core::fmt;
+use std::{cmp, fmt::Formatter, sync::Arc};
+
+pub use datafusion_common::display::{RenderTree, RenderTreeNode};
+use indexmap::IndexMap;
 
 use crate::{DisplayFormatType, ExecutionPlan};
 
-// TODO: It's never used.
-/// Represents a 2D coordinate in the rendered tree.
-/// Used to track positions of nodes and their connections.
-pub struct Coordinate {
-    /// Horizontal position in the tree
-    #[expect(dead_code)]
-    pub x: usize,
-    /// Vertical position in the tree
-    #[expect(dead_code)]
-    pub y: usize,
-}
-
-impl Coordinate {
-    pub fn new(x: usize, y: usize) -> Self {
-        Coordinate { x, y }
-    }
-}
-
-/// Represents a node in the render tree, containing information about an execution plan operator
-/// and its relationships to other operators.
-pub struct RenderTreeNode {
-    /// The name of physical `ExecutionPlan`.
-    pub name: String,
-    /// Execution info collected from `ExecutionPlan`.
-    pub extra_text: HashMap<String, String>,
-    /// Positions of child nodes in the rendered tree.
-    pub child_positions: Vec<Coordinate>,
-}
-
-impl RenderTreeNode {
-    pub fn new(name: String, extra_text: HashMap<String, String>) -> Self {
-        RenderTreeNode {
-            name,
-            extra_text,
-            child_positions: vec![],
-        }
-    }
-
-    fn add_child_position(&mut self, x: usize, y: usize) {
-        self.child_positions.push(Coordinate::new(x, y));
-    }
-}
-
-/// Main structure for rendering an execution plan as a tree.
-/// Manages a 2D grid of nodes and their layout information.
-pub struct RenderTree {
-    /// Storage for tree nodes in a flattened 2D grid
-    pub nodes: Vec<Option<Arc<RenderTreeNode>>>,
-    /// Total width of the rendered tree
-    pub width: usize,
-    /// Total height of the rendered tree
-    pub height: usize,
-}
-
-impl RenderTree {
-    /// Creates a new render tree from an execution plan.
-    pub fn create_tree(plan: &dyn ExecutionPlan) -> Self {
-        let (width, height) = get_tree_width_height(plan);
-
-        let mut result = Self::new(width, height);
-
-        create_tree_recursive(&mut result, plan, 0, 0);
-
-        result
-    }
-
-    fn new(width: usize, height: usize) -> Self {
-        RenderTree {
-            nodes: vec![None; (width + 1) * (height + 1)],
-            width,
-            height,
-        }
-    }
-
-    pub fn get_node(&self, x: usize, y: usize) -> Option<Arc<RenderTreeNode>> {
-        if x >= self.width || y >= self.height {
-            return None;
-        }
-
-        let pos = self.get_position(x, y);
-        self.nodes.get(pos).and_then(|node| node.clone())
-    }
-
-    pub fn set_node(&mut self, x: usize, y: usize, node: Arc<RenderTreeNode>) {
-        let pos = self.get_position(x, y);
-        if let Some(slot) = self.nodes.get_mut(pos) {
-            *slot = Some(node);
-        }
-    }
-
-    pub fn has_node(&self, x: usize, y: usize) -> bool {
-        if x >= self.width || y >= self.height {
-            return false;
-        }
-
-        let pos = self.get_position(x, y);
-        self.nodes.get(pos).is_some_and(|node| node.is_some())
-    }
-
-    fn get_position(&self, x: usize, y: usize) -> usize {
-        y * self.width + x
-    }
+pub(crate) fn render_tree<'a>(
+    plan: &dyn ExecutionPlan,
+    max_width: usize,
+) -> impl fmt::Display + 'a {
+    let (width, height) = get_tree_width_height(plan);
+    let mut result = RenderTree::new(max_width, width, height);
+    create_tree_recursive(&mut result, plan, 0, 0);
+    result
 }
 
 /// Calculates the required dimensions of the tree.
@@ -196,7 +103,7 @@ fn create_tree_recursive(
     y: usize,
 ) -> usize {
     let display_info = fmt_display(plan).to_string();
-    let mut extra_info = HashMap::new();
+    let mut extra_info = IndexMap::new();
 
     // Parse the key-value pairs from the formatted string.
     // See DisplayFormatType::TreeRender for details

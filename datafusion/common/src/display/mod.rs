@@ -19,7 +19,9 @@
 
 mod graphviz;
 pub mod human_readable;
+mod tree;
 pub use graphviz::*;
+pub use tree::*;
 
 use std::{
     fmt::{self, Display, Formatter},
@@ -134,4 +136,119 @@ impl StringifiedPlan {
 pub trait ToStringifiedPlan {
     /// Create a stringified plan with the specified type
     fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
+}
+
+pub trait DisplayAs {
+    /// Format according to `DisplayFormatType`, used when verbose representation looks
+    /// different from the default one
+    ///
+    /// Should not include a newline
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
+}
+
+impl DisplayAs for &dyn DisplayAs {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        (*self).fmt_as(t, f)
+    }
+}
+
+impl<T: DisplayAs + ?Sized> DisplayAs for Arc<T> {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        self.as_ref().fmt_as(t, f)
+    }
+}
+
+/// The key used in `DisplayFormatType::TreeRender` to represent the main content of a node.
+/// This content is rendered centered without displaying the key itself.
+///
+/// # Example
+///
+/// For example, implementing `DisplayAs` with `MAIN_CONTENT_KEY` and an additional key-value pair:
+///
+/// ```rust
+/// # use std::fmt::{Formatter, Result};
+/// # use datafusion_common::display::{DisplayAs, DisplayFormatType, MAIN_CONTENT_KEY};
+/// # struct MyNode;
+/// # impl DisplayAs for MyNode {
+/// fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> Result {
+///     if let DisplayFormatType::TreeRender = t {
+///         write!(f, "{MAIN_CONTENT_KEY}=My main content text\n")?;
+///         write!(f, "my_key=my_value")?;
+///     }
+///     Ok(())
+/// }
+/// # }
+/// ```
+///
+/// If the node name is `"Projection"`, it is rendered inside a box in the following way (the main content key
+/// is omitted, and the other key-value pairs are rendered in alphabetical order):
+///
+/// ```text
+/// ┌───────────────────────────┐
+/// │         Projection        │
+/// │    --------------------   │
+/// │    My main content text   │
+/// │      my_key: my_value     │
+/// └───────────────────────────┘
+/// ```
+pub const MAIN_CONTENT_KEY: &str = "__main_content__";
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DisplayFormatType {
+    /// Default, compact format. Example: `FilterExec: c12 < 10.0`
+    ///
+    /// This format is designed to provide a detailed textual description
+    /// of all parts of the plan.
+    Default,
+    /// Verbose, showing all available details.
+    ///
+    /// This form is even more detailed than [`Self::Default`]
+    Verbose,
+    /// TreeRender, displayed in the `tree` explain type.
+    ///
+    /// This format is inspired by DuckDB's explain plans. The information
+    /// presented should be "user friendly", and contain only the most relevant
+    /// information for understanding a plan. It should NOT contain the same level
+    /// of detail information as the  [`Self::Default`] format.
+    ///
+    /// In this mode, each line has one of two formats:
+    ///
+    /// 1. A string without a `=`, which is printed in its own line
+    ///
+    /// 2. A string with a `=` that is treated as a `key=value pair`. Everything
+    ///    before the first `=` is treated as the key, and everything after the
+    ///    first `=` is treated as the value. If key is __main_content__ it will be omitted
+    ///
+    /// For example, if the output of `TreeRender` is this:
+    /// ```text
+    /// Parquet
+    /// partition_sizes=[1]
+    /// ```
+    ///
+    /// It is rendered in the center of a box in the following way:
+    ///
+    /// ```text
+    /// ┌───────────────────────────┐
+    /// │       DataSourceExec      │
+    /// │    --------------------   │
+    /// │    partition_sizes: [1]   │
+    /// │          Parquet          │
+    /// └───────────────────────────┘
+    ///  ```
+    /// For logical plan
+    /// ```text
+    /// __main_content__=table1.string_col != Utf8View("foo")
+    /// ```
+    ///
+    /// Is rendered as:
+    ///
+    /// ```text
+    /// ┌───────────────────────────┐
+    /// │           Filter          │
+    /// │    --------------------   │
+    /// │    table1.string_col !=   │
+    /// │       Utf8View("foo")     │
+    /// └───────────────────────────┘
+    /// ```
+    TreeRender,
 }

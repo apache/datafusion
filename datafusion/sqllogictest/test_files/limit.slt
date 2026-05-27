@@ -385,10 +385,29 @@ SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 1
 
+statement ok
+set datafusion.explain.logical_plan_tree = true;
+
 # Verify that EXPLAIN FORMAT TREE shows fetch on FilterExec
 query TT
 EXPLAIN FORMAT TREE SELECT a FROM t1 WHERE a > 3 LIMIT 5;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           Limit           │
+03)│    --------------------   │
+04)│      skip=0, fetch=5      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│      t1.a > Int32(3)      │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│         TableScan         │
+13)│    --------------------   │
+14)│     t1 projection=[a]     │
+15)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -403,6 +422,9 @@ physical_plan
 11)│       format: memory      │
 12)│          rows: 1          │
 13)└───────────────────────────┘
+
+statement ok
+reset datafusion.explain.logical_plan_tree;
 
 # generate BIGINT data from 1 to 1000 in multiple partitions
 statement ok

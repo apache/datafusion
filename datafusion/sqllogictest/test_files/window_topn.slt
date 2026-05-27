@@ -193,6 +193,9 @@ statement ok
 SET datafusion.explain.format = tree;
 
 statement ok
+SET datafusion.explain.logical_plan_tree = true;
+
+statement ok
 SET datafusion.explain.physical_plan_only = true;
 
 query TT
@@ -200,6 +203,54 @@ EXPLAIN SELECT * FROM (
   SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
 ) WHERE rn <= 3;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│     window_topn_t.id,     │
+05)│        window_topn_t      │
+06)│  .pk, window_topn_t.val,  │
+07)│   row_number() PARTITION  │
+08)│    BY [window_topn_t.pk]  │
+09)│   ORDER BY [window_topn_t │
+10)│    .val ASC NULLS LAST]   │
+11)│        RANGE BETWEEN      │
+12)│          UNBOUNDED        │
+13)│        PRECEDING AND      │
+14)│      CURRENT ROW AS rn    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│           Filter          │
+18)│    --------------------   │
+19)│ row_number() PARTITION BY │
+20)│  [window_topn_t.pk] ORDER │
+21)│    BY [window_topn_t.val  │
+22)│    ASC NULLS LAST] RANGE  │
+23)│      BETWEEN UNBOUNDED    │
+24)│        PRECEDING AND      │
+25)│       CURRENT ROW <=      │
+26)│          UInt64(3)        │
+27)└─────────────┬─────────────┘
+28)┌─────────────┴─────────────┐
+29)│         WindowAggr        │
+30)│    --------------------   │
+31)│ windowExpr=[[row_number() │
+32)│        PARTITION BY       │
+33)│       [window_topn_t      │
+34)│       .pk] ORDER BY       │
+35)│       [window_topn_t      │
+36)│    .val ASC NULLS LAST]   │
+37)│        RANGE BETWEEN      │
+38)│          UNBOUNDED        │
+39)│        PRECEDING AND      │
+40)│        CURRENT ROW]]      │
+41)└─────────────┬─────────────┘
+42)┌─────────────┴─────────────┐
+43)│         TableScan         │
+44)│    --------------------   │
+45)│ window_topn_t projection= │
+46)│       [id, pk, val]       │
+47)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -252,6 +303,9 @@ physical_plan
 
 statement ok
 SET datafusion.explain.format = indent;
+
+statement ok
+RESET datafusion.explain.logical_plan_tree;
 
 statement ok
 SET datafusion.explain.physical_plan_only = false;

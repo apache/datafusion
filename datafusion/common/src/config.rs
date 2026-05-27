@@ -1399,6 +1399,10 @@ config_namespace! {
         /// When set to 0, the tree will have no width limit.
         pub tree_maximum_render_width: usize, default = 240
 
+        /// (format=tree only) When set to true, the explain statement will print logical plans in a tree-rendered format.
+        /// When set to false, it will print logical plans in the default indented format.
+        pub logical_plan_tree: bool, default = false
+
         /// Verbosity level for "EXPLAIN ANALYZE". Default is "dev"
         /// "summary" shows common metrics for high-level insights.
         /// "dev" provides deep operator-level introspection for developers.

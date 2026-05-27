@@ -29,18 +29,7 @@
 //!
 //! Entrypoint of this crate is trait [ExecutionPlan].
 
-pub use datafusion_common::hash_utils;
-pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
-pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
-pub use datafusion_expr::{Accumulator, ColumnarValue};
-use datafusion_physical_expr::PhysicalSortExpr;
-pub use datafusion_physical_expr::window::WindowExpr;
-pub use datafusion_physical_expr::{
-    Distribution, Partitioning, PhysicalExpr, expressions,
-};
-
-pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+pub use crate::display::{DefaultDisplay, VerboseDisplay};
 pub use crate::execution_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, collect, collect_partitioned,
     displayable, execute_input_stream, execute_stream, execute_stream_partitioned,
@@ -53,6 +42,17 @@ pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
 pub use crate::work_table::WorkTable;
+pub use datafusion_common::display::{DisplayAs, DisplayFormatType};
+pub use datafusion_common::hash_utils;
+pub use datafusion_common::utils::project_schema;
+pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
+pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+pub use datafusion_expr::{Accumulator, ColumnarValue};
+use datafusion_physical_expr::PhysicalSortExpr;
+pub use datafusion_physical_expr::window::WindowExpr;
+pub use datafusion_physical_expr::{
+    Distribution, Partitioning, PhysicalExpr, expressions,
+};
 pub use spill::spill_manager::SpillManager;
 
 mod ordering;

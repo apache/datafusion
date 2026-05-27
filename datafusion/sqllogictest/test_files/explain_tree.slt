@@ -160,10 +160,61 @@ UNION ALL SELECT * FROM table1
 
 ######## Begin Queries ########
 
+# By default, logical plan is not displayed with tree format (backward compatibility)
+query TT
+explain SELECT int_col FROM table1 WHERE string_col != 'foo';
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│         FilterExec        │
+03)│    --------------------   │
+04)│         predicate:        │
+05)│     string_col != foo     │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│      RepartitionExec      │
+09)│    --------------------   │
+10)│ partition_count(in->out): │
+11)│           1 -> 4          │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)│    --------------------   │
+19)│          files: 1         │
+20)│        format: csv        │
+21)└───────────────────────────┘
+
+statement ok
+set datafusion.explain.logical_plan_tree = true;
+
 # Filter
 query TT
 explain SELECT int_col FROM table1 WHERE string_col != 'foo';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│       table1.int_col      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│    table1.string_col !=   │
+10)│       Utf8View("foo")     │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│         TableScan         │
+14)│    --------------------   │
+15)│ table1 projection=[int_col│
+16)│       , string_col],      │
+17)│       partial_filter      │
+18)│  s=[table1.string_col !=  │
+19)│      Utf8View("foo")]     │
+20)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -191,6 +242,22 @@ physical_plan
 query TT
 explain SELECT string_col, SUM(bigint_col) FROM table1 GROUP BY string_col;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Aggregate         │
+03)│    --------------------   │
+04)│      groupBy=[[table1     │
+05)│       .string_col]],      │
+06)│      aggr=[[sum(table1    │
+07)│       .bigint_col)]]      │
+08)└─────────────┬─────────────┘
+09)┌─────────────┴─────────────┐
+10)│         TableScan         │
+11)│    --------------------   │
+12)│     table1 projection=    │
+13)│        [string_col,       │
+14)│         bigint_col]       │
+15)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       AggregateExec       │
@@ -242,6 +309,18 @@ physical_plan
 query TT
 explain SELECT int_col FROM table1 LIMIT 3,2;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           Limit           │
+03)│    --------------------   │
+04)│      skip=3, fetch=2      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│         TableScan         │
+08)│    --------------------   │
+09)│ table1 projection=[int_col│
+10)│         ], fetch=5        │
+11)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│      GlobalLimitExec      │
@@ -259,6 +338,20 @@ physical_plan
 query TT
 explain SELECT * FROM limit_table LIMIT 10;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           Limit           │
+03)│    --------------------   │
+04)│      skip=0, fetch=10     │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│         TableScan         │
+08)│    --------------------   │
+09)│  limit_table projection=  │
+10)│   [int_col, string_col,   │
+11)│   bigint_col, date_col],  │
+12)│          fetch=10         │
+13)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│   CoalescePartitionsExec  │
@@ -282,6 +375,28 @@ ON
   (table1.int_col = table2.int_col)
   AND (((table1.int_col + table2.int_col) % 2) = 0)
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│ table1.string_col, table2 │
+05)│         .date_col         │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│         Inner Join        │
+09)│    --------------------   │
+10)│  table1.int_col = table2  │
+11)│   .int_col Filter: CAST   ├──────────────┐
+12)│  (table1.int_col + table2 │              │
+13)│    .int_col AS Int64) %   │              │
+14)│     Int64(2) = Int64(0)   │              │
+15)└─────────────┬─────────────┘              │
+16)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+17)│         TableScan         ││         TableScan         │
+18)│    --------------------   ││    --------------------   │
+19)│ table1 projection=[int_col││ table2 projection=[int_col│
+20)│       , string_col]       ││        , date_col]        │
+21)└───────────────────────────┘└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│        HashJoinExec       │
@@ -309,6 +424,7 @@ physical_plan
 24)-----------------------------│        format: csv        │
 25)-----------------------------└───────────────────────────┘
 
+
 # 3 Joins
 query TT
 explain SELECT
@@ -319,6 +435,38 @@ FROM
   table1 JOIN table2 ON table1.int_col = table2.int_col
          JOIN table3 ON table2.int_col = table3.int_col;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│ table1.string_col, table2 │
+05)│     .date_col, table3     │
+06)│         .date_col         │
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│         Inner Join        │
+10)│    --------------------   │
+11)│  table2.int_col = table3  ├───────────────────────────────────────────┐
+12)│          .int_col         │                                           │
+13)└─────────────┬─────────────┘                                           │
+14)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
+15)│         Projection        │                             │         TableScan         │
+16)│    --------------------   │                             │    --------------------   │
+17)│ table1.string_col, table2 │                             │ table3 projection=[int_col│
+18)│ .int_col, table2.date_col │                             │        , date_col]        │
+19)└─────────────┬─────────────┘                             └───────────────────────────┘
+20)┌─────────────┴─────────────┐
+21)│         Inner Join        │
+22)│    --------------------   │
+23)│  table1.int_col = table2  ├──────────────┐
+24)│          .int_col         │              │
+25)└─────────────┬─────────────┘              │
+26)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+27)│         TableScan         ││         TableScan         │
+28)│    --------------------   ││    --------------------   │
+29)│ table1 projection=[int_col││ table2 projection=[int_col│
+30)│       , string_col]       ││        , date_col]        │
+31)└───────────────────────────┘└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│        HashJoinExec       │
@@ -355,6 +503,38 @@ explain SELECT int_col FROM table1
 WHERE string_col != 'foo' AND string_col != 'bar' AND string_col != 'a really long string constant'
 ;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│       table1.int_col      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│    table1.string_col !=   │
+10)│       Utf8View("foo")     │
+11)│    AND table1.string_col  │
+12)│   != Utf8View("bar") AND  │
+13)│    table1.string_col !=   │
+14)│     Utf8View("a really    │
+15)│    long string constant   │
+16)│             ")            │
+17)└─────────────┬─────────────┘
+18)┌─────────────┴─────────────┐
+19)│         TableScan         │
+20)│    --------------------   │
+21)│ table1 projection=[int_col│
+22)│       , string_col],      │
+23)│       partial_filter      │
+24)│  s=[table1.string_col !=  │
+25)│      Utf8View("foo"),     │
+26)│     table1.string_col !   │
+27)│ = Utf8View("bar"), table1 │
+28)│  .string_col != Utf8View( │
+29)│   "a really long string   │
+30)│         constant")]       │
+31)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -387,6 +567,80 @@ query TT
 explain SELECT int_col FROM table1
 WHERE string_col != 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│       table1.int_col      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│    table1.string_col !=   │
+10)│          Utf8View(        │
+11)│     "aaaaaaaaaaaaaaaa     │
+12)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+13)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+14)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+15)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+16)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+17)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+18)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+19)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+20)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+21)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+22)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+23)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+24)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+25)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+26)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+27)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+28)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+29)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+30)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+31)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+32)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+33)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+34)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+35)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+36)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+37)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+38)│            ...            │
+39)└─────────────┬─────────────┘
+40)┌─────────────┴─────────────┐
+41)│         TableScan         │
+42)│    --------------------   │
+43)│ table1 projection=[int_col│
+44)│       , string_col],      │
+45)│       partial_filter      │
+46)│  s=[table1.string_col !=  │
+47)│          Utf8View(        │
+48)│       "aaaaaaaaaaaaa      │
+49)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+50)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+51)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+52)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+53)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+54)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+55)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+56)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+57)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+58)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+59)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+60)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+61)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+62)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+63)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+64)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+65)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+66)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+67)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+68)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+69)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+70)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+71)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+72)│            ...            │
+73)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -443,6 +697,30 @@ query TT
 explain SELECT int_col FROM table1
 WHERE string_col != 'aaaaaaaaaaaaa';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│       table1.int_col      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│    table1.string_col !=   │
+10)│          Utf8View(        │
+11)│      "aaaaaaaaaaaaa")     │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│         TableScan         │
+15)│    --------------------   │
+16)│ table1 projection=[int_col│
+17)│       , string_col],      │
+18)│       partial_filter      │
+19)│  s=[table1.string_col !=  │
+20)│          Utf8View(        │
+21)│       "aaaaaaaaaaaaa      │
+22)│            ")]            │
+23)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -471,6 +749,31 @@ query TT
 explain SELECT int_col FROM table1
 WHERE string_col != 'aaaaaaaaaaaaaaa';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│       table1.int_col      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│    table1.string_col !=   │
+10)│          Utf8View(        │
+11)│      "aaaaaaaaaaaaaaa     │
+12)│             ")            │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│         TableScan         │
+16)│    --------------------   │
+17)│ table1 projection=[int_col│
+18)│       , string_col],      │
+19)│       partial_filter      │
+20)│  s=[table1.string_col !=  │
+21)│          Utf8View(        │
+22)│       "aaaaaaaaaaaaa      │
+23)│           aa")]           │
+24)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -500,6 +803,27 @@ physical_plan
 query TT
 explain SELECT int_col FROM table1 WHERE string_col != 'foo';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│       table1.int_col      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│    table1.string_col !=   │
+10)│       Utf8View("foo")     │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│         TableScan         │
+14)│    --------------------   │
+15)│ table1 projection=[int_col│
+16)│       , string_col],      │
+17)│       partial_filter      │
+18)│  s=[table1.string_col !=  │
+19)│      Utf8View("foo")]     │
+20)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -528,6 +852,27 @@ physical_plan
 query TT
 explain SELECT int_col FROM table2 WHERE string_col != 'foo';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│       table2.int_col      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│    table2.string_col !=   │
+10)│       Utf8View("foo")     │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│         TableScan         │
+14)│    --------------------   │
+15)│ table2 projection=[int_col│
+16)│       , string_col],      │
+17)│       partial_filter      │
+18)│  s=[table2.string_col !=  │
+19)│      Utf8View("foo")]     │
+20)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -558,6 +903,24 @@ physical_plan
 query TT
 explain SELECT int_col FROM table3 WHERE string_col != 'foo';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│       table3.int_col      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│    table3.string_col !=   │
+10)│       Utf8View("foo")     │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│         TableScan         │
+14)│    --------------------   │
+15)│ table3 projection=[int_col│
+16)│       , string_col]       │
+17)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -577,6 +940,27 @@ physical_plan
 query TT
 explain SELECT int_col FROM table4 WHERE string_col != 'foo';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│       table4.int_col      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│ table4.string_col != Utf8(│
+10)│           "foo")          │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│         TableScan         │
+14)│    --------------------   │
+15)│ table4 projection=[int_col│
+16)│       , string_col],      │
+17)│       partial_filter      │
+18)│  s=[table4.string_col !=  │
+19)│        Utf8("foo")]       │
+20)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -604,6 +988,27 @@ physical_plan
 query TT
 explain SELECT int_col FROM table5 WHERE string_col != 'foo';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│       table5.int_col      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│    table5.string_col !=   │
+10)│       Utf8View("foo")     │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│         TableScan         │
+14)│    --------------------   │
+15)│ table5 projection=[int_col│
+16)│       , string_col],      │
+17)│       partial_filter      │
+18)│  s=[table5.string_col !=  │
+19)│      Utf8View("foo")]     │
+20)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         FilterExec        │
@@ -632,6 +1037,32 @@ physical_plan
 query TT
 explain select count(*) over() from table1;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│    count(Int64(1)) ROWS   │
+05)│      BETWEEN UNBOUNDED    │
+06)│   PRECEDING AND UNBOUNDED │
+07)│    FOLLOWING AS count(*)  │
+08)│        ROWS BETWEEN       │
+09)│          UNBOUNDED        │
+10)│        PRECEDING AND      │
+11)│     UNBOUNDED FOLLOWING   │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│         WindowAggr        │
+15)│    --------------------   │
+16)│ windowExpr=[[count(Int64(1│
+17)│ )) ROWS BETWEEN UNBOUNDED │
+18)│   PRECEDING AND UNBOUNDED │
+19)│         FOLLOWING]]       │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│         TableScan         │
+23)│    --------------------   │
+24)│    table1 projection=[]   │
+25)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -667,6 +1098,45 @@ explain SELECT
     SUM(v1) OVER (ORDER BY v1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS rolling_sum
 FROM generate_series(1, 1000) AS t1(v1);
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│ t1.v1, sum(t1.v1) ORDER BY│
+05)│   [t1.v1 ASC NULLS LAST]  │
+06)│       ROWS BETWEEN 1      │
+07)│        PRECEDING AND      │
+08)│       CURRENT ROW AS      │
+09)│         rolling_sum       │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│         WindowAggr        │
+13)│    --------------------   │
+14)│  windowExpr=[[sum(t1.v1)  │
+15)│     ORDER BY [t1.v1 ASC   │
+16)│      NULLS LAST] ROWS     │
+17)│          BETWEEN 1        │
+18)│        PRECEDING AND      │
+19)│        CURRENT ROW]]      │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│       SubqueryAlias       │
+23)│    --------------------   │
+24)│             t1            │
+25)└─────────────┬─────────────┘
+26)┌─────────────┴─────────────┐
+27)│         Projection        │
+28)│    --------------------   │
+29)│ generate_series().value AS│
+30)│             v1            │
+31)└─────────────┬─────────────┘
+32)┌─────────────┴─────────────┐
+33)│         TableScan         │
+34)│    --------------------   │
+35)│     generate_series()     │
+36)│         projection=       │
+37)│          [value]          │
+38)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -710,6 +1180,40 @@ explain select
   row_number() over ()
 from table1
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│    count(Int64(1)) ROWS   │
+05)│      BETWEEN UNBOUNDED    │
+06)│   PRECEDING AND UNBOUNDED │
+07)│    FOLLOWING AS count(*)  │
+08)│        ROWS BETWEEN       │
+09)│          UNBOUNDED        │
+10)│        PRECEDING AND      │
+11)│     UNBOUNDED FOLLOWING   │
+12)│    , row_number() ROWS    │
+13)│      BETWEEN UNBOUNDED    │
+14)│   PRECEDING AND UNBOUNDED │
+15)│          FOLLOWING        │
+16)└─────────────┬─────────────┘
+17)┌─────────────┴─────────────┐
+18)│         WindowAggr        │
+19)│    --------------------   │
+20)│ windowExpr=[[count(Int64(1│
+21)│ )) ROWS BETWEEN UNBOUNDED │
+22)│   PRECEDING AND UNBOUNDED │
+23)│   FOLLOWING, row_number() │
+24)│   ROWS BETWEEN UNBOUNDED  │
+25)│        PRECEDING AND      │
+26)│          UNBOUNDED        │
+27)│         FOLLOWING]]       │
+28)└─────────────┬─────────────┘
+29)┌─────────────┴─────────────┐
+30)│         TableScan         │
+31)│    --------------------   │
+32)│    table1 projection=[]   │
+33)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -752,6 +1256,20 @@ physical_plan
 query TT
 explain SELECT * FROM table1 ORDER BY string_col;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│   table1.string_col ASC   │
+05)│         NULLS LAST        │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│         TableScan         │
+09)│    --------------------   │
+10)│ table1 projection=[int_col│
+11)│ , string_col, bigint_col, │
+12)│          date_col]        │
+13)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│          SortExec         │
@@ -769,6 +1287,20 @@ physical_plan
 query TT
 explain SELECT * FROM table1 ORDER BY string_col LIMIT 1;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│   table1.string_col ASC   │
+05)│     NULLS LAST, fetch=1   │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│         TableScan         │
+09)│    --------------------   │
+10)│ table1 projection=[int_col│
+11)│ , string_col, bigint_col, │
+12)│          date_col]        │
+13)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       SortExec(TopK)      │
@@ -788,6 +1320,23 @@ physical_plan
 query TT
 explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table1;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│   table1.int_col, table1  │
+05)│     .bigint_col, CAST     │
+06)│     (table1.int_col AS    │
+07)│       Int64) + table1     │
+08)│       .bigint_col AS      │
+09)│           sum_col         │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│         TableScan         │
+13)│    --------------------   │
+14)│ table1 projection=[int_col│
+15)│       , bigint_col]       │
+16)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -823,6 +1372,46 @@ explain select
   row_number() over (ORDER BY int_col ASC)
 from table1
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│  rank() ORDER BY [table1  │
+05)│    .int_col DESC NULLS    │
+06)│    FIRST] RANGE BETWEEN   │
+07)│   UNBOUNDED PRECEDING AND │
+08)│  CURRENT ROW, row_number( │
+09)│     ) ORDER BY [table1    │
+10)│     .int_col ASC NULLS    │
+11)│     LAST] RANGE BETWEEN   │
+12)│     UNBOUNDED PRECEDING   │
+13)│       AND CURRENT ROW     │
+14)└─────────────┬─────────────┘
+15)┌─────────────┴─────────────┐
+16)│         WindowAggr        │
+17)│    --------------------   │
+18)│ windowExpr=[[row_number() │
+19)│      ORDER BY [table1     │
+20)│     .int_col ASC NULLS    │
+21)│     LAST] RANGE BETWEEN   │
+22)│     UNBOUNDED PRECEDING   │
+23)│      AND CURRENT ROW]]    │
+24)└─────────────┬─────────────┘
+25)┌─────────────┴─────────────┐
+26)│         WindowAggr        │
+27)│    --------------------   │
+28)│ windowExpr=[[rank() ORDER │
+29)│   BY [table1.int_col DESC │
+30)│     NULLS FIRST] RANGE    │
+31)│      BETWEEN UNBOUNDED    │
+32)│    PRECEDING AND CURRENT  │
+33)│            ROW]]          │
+34)└─────────────┬─────────────┘
+35)┌─────────────┴─────────────┐
+36)│         TableScan         │
+37)│    --------------------   │
+38)│table1 projection=[int_col]│
+39)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -897,6 +1486,23 @@ physical_plan
 query TT
 explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table2;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│   table2.int_col, table2  │
+05)│     .bigint_col, CAST     │
+06)│     (table2.int_col AS    │
+07)│       Int64) + table2     │
+08)│       .bigint_col AS      │
+09)│           sum_col         │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│         TableScan         │
+13)│    --------------------   │
+14)│ table2 projection=[int_col│
+15)│       , bigint_col]       │
+16)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       DataSourceExec      │
@@ -909,6 +1515,23 @@ physical_plan
 query TT
 explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table3;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│   table3.int_col, table3  │
+05)│     .bigint_col, CAST     │
+06)│     (table3.int_col AS    │
+07)│       Int64) + table3     │
+08)│       .bigint_col AS      │
+09)│           sum_col         │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│         TableScan         │
+13)│    --------------------   │
+14)│ table3 projection=[int_col│
+15)│       , bigint_col]       │
+16)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -934,6 +1557,22 @@ physical_plan
 query TT
 explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table4;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│   table4.int_col, table4  │
+05)│    .bigint_col, table4    │
+06)│     .int_col + table4     │
+07)│       .bigint_col AS      │
+08)│           sum_col         │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│         TableScan         │
+12)│    --------------------   │
+13)│ table4 projection=[int_col│
+14)│       , bigint_col]       │
+15)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -967,6 +1606,23 @@ physical_plan
 query TT
 explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table5;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│   table5.int_col, table5  │
+05)│     .bigint_col, CAST     │
+06)│     (table5.int_col AS    │
+07)│       Int64) + table5     │
+08)│       .bigint_col AS      │
+09)│           sum_col         │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│         TableScan         │
+13)│    --------------------   │
+14)│ table5 projection=[int_col│
+15)│       , bigint_col]       │
+16)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -1002,6 +1658,24 @@ EXPLAIN SELECT *
 FROM annotated_data_infinite2
 ORDER BY a, b, d;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│ annotated_data_infinite2.a│
+05)│       ASC NULLS LAST,     │
+06)│      annotated_data_i     │
+07)│ nfinite2.b ASC NULLS LAST,│
+08)│  annotated_data_infinite2 │
+09)│     .d ASC NULLS LAST     │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│         TableScan         │
+13)│    --------------------   │
+14)│  annotated_data_infinite2 │
+15)│    projection=[a0, a, b,  │
+16)│            c, d]          │
+17)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│      PartialSortExec      │
@@ -1023,6 +1697,25 @@ FROM annotated_data_infinite2
 ORDER BY a, b, d
 LIMIT 50;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│ annotated_data_infinite2.a│
+05)│       ASC NULLS LAST,     │
+06)│      annotated_data_i     │
+07)│ nfinite2.b ASC NULLS LAST,│
+08)│  annotated_data_infinite2 │
+09)│  .d ASC NULLS LAST, fetch │
+10)│            =50            │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│         TableScan         │
+14)│    --------------------   │
+15)│  annotated_data_infinite2 │
+16)│    projection=[a0, a, b,  │
+17)│            c, d]          │
+18)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│      PartialSortExec      │
@@ -1044,6 +1737,22 @@ physical_plan
 query TT
 explain select * from table1 inner join table2 on table1.int_col = table2.int_col and table1.string_col = table2.string_col;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Inner Join        │
+03)│    --------------------   │
+04)│  table1.int_col = table2  │
+05)│      .int_col, table1     ├──────────────┐
+06)│       .string_col =       │              │
+07)│      table2.string_col    │              │
+08)└─────────────┬─────────────┘              │
+09)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+10)│         TableScan         ││         TableScan         │
+11)│    --------------------   ││    --------------------   │
+12)│ table1 projection=[int_col││ table2 projection=[int_col│
+13)│ , string_col, bigint_col, ││ , string_col, bigint_col, │
+14)│          date_col]        ││          date_col]        │
+15)└───────────────────────────┘└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│        HashJoinExec       │
@@ -1073,6 +1782,22 @@ physical_plan
 query TT
 explain select * from table1 left outer join table2 on table1.int_col = table2.int_col and table1.string_col = table2.string_col;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Left Join         │
+03)│    --------------------   │
+04)│  table1.int_col = table2  │
+05)│      .int_col, table1     ├──────────────┐
+06)│       .string_col =       │              │
+07)│      table2.string_col    │              │
+08)└─────────────┬─────────────┘              │
+09)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+10)│         TableScan         ││         TableScan         │
+11)│    --------------------   ││    --------------------   │
+12)│ table1 projection=[int_col││ table2 projection=[int_col│
+13)│ , string_col, bigint_col, ││ , string_col, bigint_col, │
+14)│          date_col]        ││          date_col]        │
+15)└───────────────────────────┘└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│        HashJoinExec       │
@@ -1104,6 +1829,23 @@ physical_plan
 query TT
 explain select int_col from table1 where exists (select count(*) from table2);
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│       LeftSemi Join       │
+03)│    --------------------   ├──────────────┐
+04)└─────────────┬─────────────┘              │
+05)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+06)│         TableScan         ││       SubqueryAlias       │
+07)│    --------------------   ││    --------------------   │
+08)│ table1 projection=[int_col││     __correlated_sq_1     │
+09)│    ], partial_filters=    ││                           │
+10)│      [Boolean(true)]      ││                           │
+11)└───────────────────────────┘└─────────────┬─────────────┘
+12)-----------------------------┌─────────────┴─────────────┐
+13)-----------------------------│       EmptyRelation       │
+14)-----------------------------│    --------------------   │
+15)-----------------------------│           rows=1          │
+16)-----------------------------└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│     NestedLoopJoinExec    │
@@ -1121,6 +1863,18 @@ physical_plan
 query TT
 explain select * from table1 cross join table2 ;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Cross Join        │
+03)│    --------------------   ├──────────────┐
+04)└─────────────┬─────────────┘              │
+05)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+06)│         TableScan         ││         TableScan         │
+07)│    --------------------   ││    --------------------   │
+08)│ table1 projection=[int_col││ table2 projection=[int_col│
+09)│ , string_col, bigint_col, ││ , string_col, bigint_col, │
+10)│          date_col]        ││          date_col]        │
+11)└───────────────────────────┘└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       CrossJoinExec       ├──────────────┐
@@ -1139,6 +1893,24 @@ set datafusion.optimizer.prefer_hash_join = false;
 query TT
 explain select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Inner Join        │
+03)│    --------------------   ├──────────────┐
+04)│       t1.c1 = t2.c1       │              │
+05)└─────────────┬─────────────┘              │
+06)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+07)│       SubqueryAlias       ││       SubqueryAlias       │
+08)│    --------------------   ││    --------------------   │
+09)│             t1            ││             t2            │
+10)└─────────────┬─────────────┘└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+12)│         TableScan         ││         TableScan         │
+13)│    --------------------   ││    --------------------   │
+14)│ hashjoin_datatype_table_t1││ hashjoin_datatype_table_t2│
+15)│   projection=[c1, c2, c3, ││   projection=[c1, c2, c3, │
+16)│             c4]           ││             c4]           │
+17)└───────────────────────────┘└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│     SortMergeJoinExec     │
@@ -1207,6 +1979,33 @@ SELECT count(*) FROM (
     SELECT distinct name FROM t2
 ) GROUP BY name
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│count(Int64(1)) AS count(*)│
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│         Aggregate         │
+08)│    --------------------   │
+09)│  groupBy=[[name]], aggr=[ │
+10)│     [count(Int64(1))]]    │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│           Union           │
+14)│    --------------------   ├──────────────┐
+15)└─────────────┬─────────────┘              │
+16)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+17)│         Aggregate         ││         Aggregate         │
+18)│    --------------------   ││    --------------------   │
+19)│ groupBy=[[t1.name]], aggr=││ groupBy=[[t2.name]], aggr=│
+20)│            [[]]           ││            [[]]           │
+21)└─────────────┬─────────────┘└─────────────┬─────────────┘
+22)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+23)│         TableScan         ││         TableScan         │
+24)│    --------------------   ││    --------------------   │
+25)│    t1 projection=[name]   ││    t2 projection=[name]   │
+26)└───────────────────────────┘└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -1264,6 +2063,22 @@ SELECT id, name FROM t1
 UNION ALL
 SELECT id, name FROM t2;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           Union           │
+03)│    --------------------   ├──────────────┐
+04)└─────────────┬─────────────┘              │
+05)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+06)│         TableScan         ││         Projection        │
+07)│    --------------------   ││    --------------------   │
+08)│  t1 projection=[id, name] ││ CAST(t2.id AS Int32) AS id│
+09)│                           ││         , t2.name         │
+10)└───────────────────────────┘└─────────────┬─────────────┘
+11)-----------------------------┌─────────────┴─────────────┐
+12)-----------------------------│         TableScan         │
+13)-----------------------------│    --------------------   │
+14)-----------------------------│  t2 projection=[id, name] │
+15)-----------------------------└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│         UnionExec         ├──────────────┐
@@ -1308,6 +2123,24 @@ explain SELECT * FROM data
 WHERE ticker = 'A' 
 ORDER BY "date", "time";
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│ data.date ASC NULLS LAST, │
+05)│  data.time ASC NULLS LAST │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│           Filter          │
+09)│    --------------------   │
+10)│data.ticker = Utf8View("A")│
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│         TableScan         │
+14)│    --------------------   │
+15)│   data projection=[date,  │
+16)│        ticker, time]      │
+17)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
@@ -1343,6 +2176,25 @@ explain SELECT * FROM data
 WHERE ticker = 'A' AND CAST(time AS DATE) = date
 ORDER BY "time"
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│  data.time ASC NULLS LAST │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│ data.ticker = Utf8View("A"│
+10)│  ) AND CAST(data.time AS  │
+11)│     Date32) = data.date   │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│         TableScan         │
+15)│    --------------------   │
+16)│   data projection=[date,  │
+17)│        ticker, time]      │
+18)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
@@ -1378,6 +2230,25 @@ explain SELECT * FROM data
 WHERE ticker = 'A' AND CAST(time AS DATE) = date
 ORDER BY "date"
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│  data.date ASC NULLS LAST │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│ data.ticker = Utf8View("A"│
+10)│  ) AND CAST(data.time AS  │
+11)│     Date32) = data.date   │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│         TableScan         │
+15)│    --------------------   │
+16)│   data projection=[date,  │
+17)│        ticker, time]      │
+18)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
@@ -1413,6 +2284,25 @@ explain SELECT * FROM data
 WHERE ticker = 'A' AND CAST(time AS DATE) = date
 ORDER BY "ticker"
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│ data.ticker ASC NULLS LAST│
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│ data.ticker = Utf8View("A"│
+10)│  ) AND CAST(data.time AS  │
+11)│     Date32) = data.date   │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│         TableScan         │
+15)│    --------------------   │
+16)│   data projection=[date,  │
+17)│        ticker, time]      │
+18)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│   CoalescePartitionsExec  │
@@ -1447,6 +2337,26 @@ explain SELECT * FROM data
 WHERE ticker = 'A' AND CAST(time AS DATE) = date
 ORDER BY "time", "date";
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│ data.time ASC NULLS LAST, │
+05)│  data.date ASC NULLS LAST │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│           Filter          │
+09)│    --------------------   │
+10)│ data.ticker = Utf8View("A"│
+11)│  ) AND CAST(data.time AS  │
+12)│     Date32) = data.date   │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│         TableScan         │
+16)│    --------------------   │
+17)│   data projection=[date,  │
+18)│        ticker, time]      │
+19)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
@@ -1486,6 +2396,26 @@ WHERE date = '2006-01-02'
 ORDER BY "ticker", "time"
 LIMIT 5;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│ data.ticker ASC NULLS LAST│
+05)│   , data.time ASC NULLS   │
+06)│        LAST, fetch=5      │
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│           Filter          │
+10)│    --------------------   │
+11)│  data.date = Date32("2006 │
+12)│          -01-02")         │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│         TableScan         │
+16)│    --------------------   │
+17)│   data projection=[date,  │
+18)│        ticker, time]      │
+19)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
@@ -1528,6 +2458,25 @@ explain SELECT * FROM data
 WHERE date = '2006-01-02' 
 ORDER BY "ticker", "time";
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│ data.ticker ASC NULLS LAST│
+05)│ , data.time ASC NULLS LAST│
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│           Filter          │
+09)│    --------------------   │
+10)│  data.date = Date32("2006 │
+11)│          -01-02")         │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│         TableScan         │
+15)│    --------------------   │
+16)│   data projection=[date,  │
+17)│        ticker, time]      │
+18)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
@@ -1570,6 +2519,32 @@ EXPLAIN WITH RECURSIVE nodes AS (
 )
 SELECT * FROM nodes
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│       SubqueryAlias       │
+03)│    --------------------   │
+04)│           nodes           │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│       RecursiveQuery      │
+08)│    --------------------   ├──────────────┐
+09)│     is_distinct=false     │              │
+10)└─────────────┬─────────────┘              │
+11)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+12)│         Projection        ││         Projection        │
+13)│    --------------------   ││    --------------------   │
+14)│       Int64(1) AS id      ││ nodes.id + Int64(1) AS id │
+15)└─────────────┬─────────────┘└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+17)│       EmptyRelation       ││           Filter          │
+18)│    --------------------   ││    --------------------   │
+19)│           rows=1          ││    nodes.id < Int64(10)   │
+20)└───────────────────────────┘└─────────────┬─────────────┘
+21)-----------------------------┌─────────────┴─────────────┐
+22)-----------------------------│         TableScan         │
+23)-----------------------------│    --------------------   │
+24)-----------------------------│   nodes projection=[id]   │
+25)-----------------------------└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│     RecursiveQueryExec    ├──────────────┐
@@ -1608,6 +2583,27 @@ query TT
 explain COPY (VALUES (1, 'foo', 1, '2023-01-01'), (2, 'bar', 2, '2023-01-02'), (3, 'baz', 3, '2023-01-03'))
 TO 'test_files/scratch/explain_tree/1.json';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           CopyTo          │
+03)│    --------------------   │
+04)│   format=json output_url  │
+05)│    =test_files/scratch    │
+06)│    /explain_tree/1.json   │
+07)│         options: ()       │
+08)└─────────────┬─────────────┘
+09)┌─────────────┴─────────────┐
+10)│           Values          │
+11)│    --------------------   │
+12)│  (Int64(1), Utf8("foo"),  │
+13)│    Int64(1), Utf8("2023   │
+14)│   -01-01")), (Int64(2),   │
+15)│    Utf8("bar"), Int64(2)  │
+16)│  , Utf8("2023-01-02")),   │
+17)│  (Int64(3), Utf8("baz"),  │
+18)│   Int64(3), Utf8("2023-01 │
+19)│           -03"))          │
+20)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│        DataSinkExec       │
@@ -1631,6 +2627,27 @@ query TT
 explain COPY (VALUES (1, 'foo', 1, '2023-01-01'), (2, 'bar', 2, '2023-01-02'), (3, 'baz', 3, '2023-01-03'))
 TO 'test_files/scratch/explain_tree/2.csv';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           CopyTo          │
+03)│    --------------------   │
+04)│   format=csv output_url   │
+05)│    =test_files/scratch    │
+06)│    /explain_tree/2.csv    │
+07)│         options: ()       │
+08)└─────────────┬─────────────┘
+09)┌─────────────┴─────────────┐
+10)│           Values          │
+11)│    --------------------   │
+12)│  (Int64(1), Utf8("foo"),  │
+13)│    Int64(1), Utf8("2023   │
+14)│   -01-01")), (Int64(2),   │
+15)│    Utf8("bar"), Int64(2)  │
+16)│  , Utf8("2023-01-02")),   │
+17)│  (Int64(3), Utf8("baz"),  │
+18)│   Int64(3), Utf8("2023-01 │
+19)│           -03"))          │
+20)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│        DataSinkExec       │
@@ -1654,6 +2671,27 @@ query TT
 explain COPY (VALUES (1, 'foo', 1, '2023-01-01'), (2, 'bar', 2, '2023-01-02'), (3, 'baz', 3, '2023-01-03'))
 TO 'test_files/scratch/explain_tree/3.arrow';
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           CopyTo          │
+03)│    --------------------   │
+04)│  format=arrow output_url  │
+05)│    =test_files/scratch    │
+06)│   /explain_tree/3.arrow   │
+07)│         options: ()       │
+08)└─────────────┬─────────────┘
+09)┌─────────────┴─────────────┐
+10)│           Values          │
+11)│    --------------------   │
+12)│  (Int64(1), Utf8("foo"),  │
+13)│    Int64(1), Utf8("2023   │
+14)│   -01-01")), (Int64(2),   │
+15)│    Utf8("bar"), Int64(2)  │
+16)│  , Utf8("2023-01-02")),   │
+17)│  (Int64(3), Utf8("baz"),  │
+18)│   Int64(3), Utf8("2023-01 │
+19)│           -03"))          │
+20)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│        DataSinkExec       │
@@ -1681,6 +2719,37 @@ CREATE TABLE IF NOT EXISTS t1 (a INT) AS VALUES(1),(2),(3),(4),(5),(6),(7),(8),(
 query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│count(Int64(1)) AS count(*)│
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│         Aggregate         │
+08)│    --------------------   │
+09)│ groupBy=[[]], aggr=[[count│
+10)│        (Int64(1))]]       │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│         Projection        │
+14)│    --------------------   │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│           Limit           │
+18)│    --------------------   │
+19)│      skip=6, fetch=3      │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│           Filter          │
+23)│    --------------------   │
+24)│      t1.a > Int32(3)      │
+25)└─────────────┬─────────────┘
+26)┌─────────────┴─────────────┐
+27)│         TableScan         │
+28)│    --------------------   │
+29)│     t1 projection=[a]     │
+30)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -1743,6 +2812,14 @@ drop table t1;
 query TT
 EXPLAIN SELECT * FROM generate_series(1, 100)
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         TableScan         │
+03)│    --------------------   │
+04)│     generate_series()     │
+05)│         projection=       │
+06)│          [value]          │
+07)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       LazyMemoryExec      │
@@ -1756,6 +2833,23 @@ physical_plan
 query TT
 EXPLAIN SELECT c1, c2, c3 FROM sink_table WHERE c3 > 0 LIMIT 5;
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│           Limit           │
+03)│    --------------------   │
+04)│      skip=0, fetch=5      │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│           Filter          │
+08)│    --------------------   │
+09)│  sink_table.c3 > Int16(0) │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│         TableScan         │
+13)│    --------------------   │
+14)│ sink_table projection=[c1,│
+15)│           c2, c3]         │
+16)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│   CoalescePartitionsExec  │
@@ -1788,6 +2882,33 @@ physical_plan
 query TT
 EXPLAIN select count(*) from (values ('a', 'b'), ('c', 'd')) as t (c1, c2)
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Projection        │
+03)│    --------------------   │
+04)│count(Int64(1)) AS count(*)│
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│         Aggregate         │
+08)│    --------------------   │
+09)│ groupBy=[[]], aggr=[[count│
+10)│        (Int64(1))]]       │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│       SubqueryAlias       │
+14)│    --------------------   │
+15)│             t             │
+16)└─────────────┬─────────────┘
+17)┌─────────────┴─────────────┐
+18)│         Projection        │
+19)│    --------------------   │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│           Values          │
+23)│    --------------------   │
+24)│  (Utf8("a"), Utf8("b")),  │
+25)│   (Utf8("c"), Utf8("d"))  │
+26)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -1801,6 +2922,39 @@ physical_plan
 query TT
 EXPLAIN select count(*) from (values ('a', 'b'), ('c', 'd')) as t (c1, c2) order by 1 limit 10
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│            Sort           │
+03)│    --------------------   │
+04)│  count(*) ASC NULLS LAST, │
+05)│          fetch=10         │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│         Projection        │
+09)│    --------------------   │
+10)│count(Int64(1)) AS count(*)│
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│         Aggregate         │
+14)│    --------------------   │
+15)│ groupBy=[[]], aggr=[[count│
+16)│        (Int64(1))]]       │
+17)└─────────────┬─────────────┘
+18)┌─────────────┴─────────────┐
+19)│       SubqueryAlias       │
+20)│    --------------------   │
+21)│             t             │
+22)└─────────────┬─────────────┘
+23)┌─────────────┴─────────────┐
+24)│         Projection        │
+25)│    --------------------   │
+26)└─────────────┬─────────────┘
+27)┌─────────────┴─────────────┐
+28)│           Values          │
+29)│    --------------------   │
+30)│  (Utf8("a"), Utf8("b")),  │
+31)│   (Utf8("c"), Utf8("d"))  │
+32)└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -1821,11 +2975,66 @@ CREATE TABLE t (k int)
 query TT
 EXPLAIN SELECT * FROM t t1, t t2, t t3, t t4, t t5, t t6, t t7, t t8, t t9, t t10 
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Cross Join        │
+03)│    --------------------   ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+04)└─────────────┬─────────────┘                                                                                                                                                                                                                                        
+05)┌─────────────┴─────────────┐                                                                                                                                                                                                                                        ┌─────────────┴─────────────┐
+06)│         Cross Join        │                                                                                                                                                                                                                                        
+07)│    --------------------   ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐              
+08)│                           │                                                                                                                                                                                                                         │              
+09)└─────────────┬─────────────┘                                                                                                                                                                                                                         │              
+10)┌─────────────┴─────────────┐                                                                                                                                                                                                           ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+11)│         Cross Join        │                                                                                                                                                                                                           │       SubqueryAlias       │
+12)│    --------------------   ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐              │    --------------------   │
+13)│                           │                                                                                                                                                                                            │              │             t9            │
+14)└─────────────┬─────────────┘                                                                                                                                                                                            │              └─────────────┬─────────────┘
+15)┌─────────────┴─────────────┐                                                                                                                                                                              ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+16)│         Cross Join        │                                                                                                                                                                              │       SubqueryAlias       ││         TableScan         │
+17)│    --------------------   ├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐              │    --------------------   ││    --------------------   │
+18)│                           │                                                                                                                                                               │              │             t8            ││      t projection=[k]     │
+19)└─────────────┬─────────────┘                                                                                                                                                               │              └─────────────┬─────────────┘└───────────────────────────┘
+20)┌─────────────┴─────────────┐                                                                                                                                                 ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+21)│         Cross Join        │                                                                                                                                                 │       SubqueryAlias       ││         TableScan         │
+22)│    --------------------   ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐              │    --------------------   ││    --------------------   │
+23)│                           │                                                                                                                                  │              │             t7            ││      t projection=[k]     │
+24)└─────────────┬─────────────┘                                                                                                                                  │              └─────────────┬─────────────┘└───────────────────────────┘
+25)┌─────────────┴─────────────┐                                                                                                                    ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+26)│         Cross Join        │                                                                                                                    │       SubqueryAlias       ││         TableScan         │
+27)│    --------------------   ├─────────────────────────────────────────────────────────────────────────────────────────────────────┐              │    --------------------   ││    --------------------   │
+28)│                           │                                                                                                     │              │             t6            ││      t projection=[k]     │
+29)└─────────────┬─────────────┘                                                                                                     │              └─────────────┬─────────────┘└───────────────────────────┘
+30)┌─────────────┴─────────────┐                                                                                       ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+31)│         Cross Join        │                                                                                       │       SubqueryAlias       ││         TableScan         │
+32)│    --------------------   ├────────────────────────────────────────────────────────────────────────┐              │    --------------------   ││    --------------------   │
+33)│                           │                                                                        │              │             t5            ││      t projection=[k]     │
+34)└─────────────┬─────────────┘                                                                        │              └─────────────┬─────────────┘└───────────────────────────┘
+35)┌─────────────┴─────────────┐                                                          ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+36)│         Cross Join        │                                                          │       SubqueryAlias       ││         TableScan         │
+37)│    --------------------   ├───────────────────────────────────────────┐              │    --------------------   ││    --------------------   │
+38)│                           │                                           │              │             t4            ││      t projection=[k]     │
+39)└─────────────┬─────────────┘                                           │              └─────────────┬─────────────┘└───────────────────────────┘
+40)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+41)│         Cross Join        │                             │       SubqueryAlias       ││         TableScan         │
+42)│    --------------------   ├──────────────┐              │    --------------------   ││    --------------------   │
+43)│                           │              │              │             t3            ││      t projection=[k]     │
+44)└─────────────┬─────────────┘              │              └─────────────┬─────────────┘└───────────────────────────┘
+45)┌─────────────┴─────────────┐┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+46)│       SubqueryAlias       ││       SubqueryAlias       ││         TableScan         │
+47)│    --------------------   ││    --------------------   ││    --------------------   │
+48)│             t1            ││             t2            ││      t projection=[k]     │
+49)└─────────────┬─────────────┘└─────────────┬─────────────┘└───────────────────────────┘
+50)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+51)│         TableScan         ││         TableScan         │
+52)│    --------------------   ││    --------------------   │
+53)│      t projection=[k]     ││      t projection=[k]     │
+54)└───────────────────────────┘└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
 02)│       CrossJoinExec       ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 03)└─────────────┬─────────────┘                                                                                                                                                                                                                                        
-04)┌─────────────┴─────────────┐                                                                                                                                                                                                                                        
+04)┌─────────────┴─────────────┐                                                                                                                                                                                                                                        ┌─────────────┴─────────────┐
 05)│       CrossJoinExec       │                                                                                                                                                                                                                                        
 06)│                           │                                                                                                                                                                                                                                        
 07)│                           ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐              
@@ -1896,73 +3105,118 @@ SET datafusion.explain.tree_maximum_render_width = 0
 query TT
 EXPLAIN SELECT * FROM t t1, t t2, t t3, t t4, t t5, t t6, t t7, t t8, t t9, t t10 
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)
+03)
+04)
+05)┌─────────────┴─────────────┐                                                                                                                                                                                                                                        ┌─────────────┴─────────────┐
+06)
+07)
+08)
+09)
+10)┌─────────────┴─────────────┐                                                                                                                                                                                                           ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+11)
+12)
+13)
+14)
+15)┌─────────────┴─────────────┐                                                                                                                                                                              ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+16)
+17)
+18)
+19)
+20)┌─────────────┴─────────────┐                                                                                                                                                 ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+21)
+22)
+23)
+24)
+25)┌─────────────┴─────────────┐                                                                                                                    ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+26)
+27)
+28)
+29)
+30)┌─────────────┴─────────────┐                                                                                       ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+31)
+32)
+33)
+34)
+35)┌─────────────┴─────────────┐                                                          ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+36)
+37)
+38)
+39)
+40)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+41)
+42)
+43)
+44)
+45)┌─────────────┴─────────────┐┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+46)
+47)
+48)
+49)
+50)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 physical_plan
 01)┌───────────────────────────┐
-02)│       CrossJoinExec       ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-03)└─────────────┬─────────────┘                                                                                                                                                                                                                                                      │
+02)
+03)
 04)┌─────────────┴─────────────┐                                                                                                                                                                                                                                        ┌─────────────┴─────────────┐
-05)│       CrossJoinExec       │                                                                                                                                                                                                                                        │       DataSourceExec      │
-06)│                           │                                                                                                                                                                                                                                        │    --------------------   │
-07)│                           ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐              │          bytes: 0         │
-08)│                           │                                                                                                                                                                                                                         │              │       format: memory      │
-09)│                           │                                                                                                                                                                                                                         │              │          rows: 0          │
-10)└─────────────┬─────────────┘                                                                                                                                                                                                                         │              └───────────────────────────┘
+05)
+06)
+07)
+08)
+09)
+10)
 11)┌─────────────┴─────────────┐                                                                                                                                                                                                           ┌─────────────┴─────────────┐
-12)│       CrossJoinExec       │                                                                                                                                                                                                           │       DataSourceExec      │
-13)│                           │                                                                                                                                                                                                           │    --------------------   │
-14)│                           ├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐              │          bytes: 0         │
-15)│                           │                                                                                                                                                                                            │              │       format: memory      │
-16)│                           │                                                                                                                                                                                            │              │          rows: 0          │
-17)└─────────────┬─────────────┘                                                                                                                                                                                            │              └───────────────────────────┘
+12)
+13)
+14)
+15)
+16)
+17)
 18)┌─────────────┴─────────────┐                                                                                                                                                                              ┌─────────────┴─────────────┐
-19)│       CrossJoinExec       │                                                                                                                                                                              │       DataSourceExec      │
-20)│                           │                                                                                                                                                                              │    --------------------   │
-21)│                           ├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐              │          bytes: 0         │
-22)│                           │                                                                                                                                                               │              │       format: memory      │
-23)│                           │                                                                                                                                                               │              │          rows: 0          │
-24)└─────────────┬─────────────┘                                                                                                                                                               │              └───────────────────────────┘
+19)
+20)
+21)
+22)
+23)
+24)
 25)┌─────────────┴─────────────┐                                                                                                                                                 ┌─────────────┴─────────────┐
-26)│       CrossJoinExec       │                                                                                                                                                 │       DataSourceExec      │
-27)│                           │                                                                                                                                                 │    --------------------   │
-28)│                           ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐              │          bytes: 0         │
-29)│                           │                                                                                                                                  │              │       format: memory      │
-30)│                           │                                                                                                                                  │              │          rows: 0          │
-31)└─────────────┬─────────────┘                                                                                                                                  │              └───────────────────────────┘
+26)
+27)
+28)
+29)
+30)
+31)
 32)┌─────────────┴─────────────┐                                                                                                                    ┌─────────────┴─────────────┐
-33)│       CrossJoinExec       │                                                                                                                    │       DataSourceExec      │
-34)│                           │                                                                                                                    │    --------------------   │
-35)│                           ├─────────────────────────────────────────────────────────────────────────────────────────────────────┐              │          bytes: 0         │
-36)│                           │                                                                                                     │              │       format: memory      │
-37)│                           │                                                                                                     │              │          rows: 0          │
-38)└─────────────┬─────────────┘                                                                                                     │              └───────────────────────────┘
+33)
+34)
+35)
+36)
+37)
+38)
 39)┌─────────────┴─────────────┐                                                                                       ┌─────────────┴─────────────┐
-40)│       CrossJoinExec       │                                                                                       │       DataSourceExec      │
-41)│                           │                                                                                       │    --------------------   │
-42)│                           ├────────────────────────────────────────────────────────────────────────┐              │          bytes: 0         │
-43)│                           │                                                                        │              │       format: memory      │
-44)│                           │                                                                        │              │          rows: 0          │
-45)└─────────────┬─────────────┘                                                                        │              └───────────────────────────┘
+40)
+41)
+42)
+43)
+44)
+45)
 46)┌─────────────┴─────────────┐                                                          ┌─────────────┴─────────────┐
-47)│       CrossJoinExec       │                                                          │       DataSourceExec      │
-48)│                           │                                                          │    --------------------   │
-49)│                           ├───────────────────────────────────────────┐              │          bytes: 0         │
-50)│                           │                                           │              │       format: memory      │
-51)│                           │                                           │              │          rows: 0          │
-52)└─────────────┬─────────────┘                                           │              └───────────────────────────┘
+47)
+48)
+49)
+50)
+51)
+52)
 53)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
-54)│       CrossJoinExec       │                             │       DataSourceExec      │
-55)│                           │                             │    --------------------   │
-56)│                           ├──────────────┐              │          bytes: 0         │
-57)│                           │              │              │       format: memory      │
-58)│                           │              │              │          rows: 0          │
-59)└─────────────┬─────────────┘              │              └───────────────────────────┘
+54)
+55)
+56)
+57)
+58)
+59)
 60)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-61)│       DataSourceExec      ││       DataSourceExec      │
-62)│    --------------------   ││    --------------------   │
-63)│          bytes: 0         ││          bytes: 0         │
-64)│       format: memory      ││       format: memory      │
-65)│          rows: 0          ││          rows: 0          │
-66)└───────────────────────────┘└───────────────────────────┘
 
 # Setting the tree_maximum_render_size to a smaller size
 statement ok
@@ -1971,66 +3225,121 @@ SET datafusion.explain.tree_maximum_render_width = 60
 query TT
 EXPLAIN SELECT * FROM t t1, t t2, t t3, t t4, t t5, t t6, t t7, t t8, t t9, t t10 
 ----
+logical_plan
+01)┌───────────────────────────┐
+02)│         Cross Join        │
+03)│    --------------------   ├──────────────────────────────────────────────────────────
+04)└─────────────┬─────────────┘                                                          
+05)┌─────────────┴─────────────┐                                                                                                                                                                                                                                        ┌─────────────┴─────────────┐
+06)│         Cross Join        │                                                          
+07)│    --------------------   ├──────────────────────────────────────────────────────────
+08)│                           │                                                          
+09)└─────────────┬─────────────┘                                                          
+10)┌─────────────┴─────────────┐                                                                                                                                                                                                           ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+11)│         Cross Join        │                                                          
+12)│    --------------------   ├──────────────────────────────────────────────────────────
+13)│                           │                                                          
+14)└─────────────┬─────────────┘                                                          
+15)┌─────────────┴─────────────┐                                                                                                                                                                              ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+16)│         Cross Join        │                                                          
+17)│    --------------------   ├──────────────────────────────────────────────────────────
+18)│                           │                                                          
+19)└─────────────┬─────────────┘                                                          
+20)┌─────────────┴─────────────┐                                                                                                                                                 ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+21)│         Cross Join        │                                                          
+22)│    --------------------   ├──────────────────────────────────────────────────────────
+23)│                           │                                                          
+24)└─────────────┬─────────────┘                                                          
+25)┌─────────────┴─────────────┐                                                                                                                    ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+26)│         Cross Join        │                                                          
+27)│    --------------------   ├──────────────────────────────────────────────────────────
+28)│                           │                                                          
+29)└─────────────┬─────────────┘                                                          
+30)┌─────────────┴─────────────┐                                                                                       ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+31)│         Cross Join        │                                                          
+32)│    --------------------   ├──────────────────────────────────────────────────────────
+33)│                           │                                                          
+34)└─────────────┬─────────────┘                                                          
+35)┌─────────────┴─────────────┐                                                          ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+36)│         Cross Join        │                                                          
+37)│    --------------------   ├───────────────────────────────────────────┐              
+38)│                           │                                           │              
+39)└─────────────┬─────────────┘                                           │              
+40)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+41)│         Cross Join        │                             │       SubqueryAlias       │
+42)│    --------------------   ├──────────────┐              │    --------------------   │
+43)│                           │              │              │             t3            │
+44)└─────────────┬─────────────┘              │              └─────────────┬─────────────┘
+45)┌─────────────┴─────────────┐┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+46)│       SubqueryAlias       ││       SubqueryAlias       ││         TableScan         │
+47)│    --------------------   ││    --------------------   ││    --------------------   │
+48)│             t1            ││             t2            ││      t projection=[k]     │
+49)└─────────────┬─────────────┘└─────────────┬─────────────┘└───────────────────────────┘
+50)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+51)│         TableScan         ││         TableScan         │
+52)│    --------------------   ││    --------------------   │
+53)│      t projection=[k]     ││      t projection=[k]     │
+54)└───────────────────────────┘└───────────────────────────┘
 physical_plan
 01)┌───────────────────────────┐
-02)│       CrossJoinExec       ├──────────────────────────────────────────────────────────        
-03)└─────────────┬─────────────┘
-04)┌─────────────┴─────────────┐
-05)│       CrossJoinExec       │
-06)│                           │
-07)│                           ├──────────────────────────────────────────────────────────        
-08)│                           │
-09)│                           │
-10)└─────────────┬─────────────┘
-11)┌─────────────┴─────────────┐
-12)│       CrossJoinExec       │
-13)│                           │
-14)│                           ├──────────────────────────────────────────────────────────        
-15)│                           │
-16)│                           │
-17)└─────────────┬─────────────┘
-18)┌─────────────┴─────────────┐
-19)│       CrossJoinExec       │
-20)│                           │
-21)│                           ├──────────────────────────────────────────────────────────        
-22)│                           │
-23)│                           │
-24)└─────────────┬─────────────┘
-25)┌─────────────┴─────────────┐
-26)│       CrossJoinExec       │
-27)│                           │
-28)│                           ├──────────────────────────────────────────────────────────        
-29)│                           │
-30)│                           │
-31)└─────────────┬─────────────┘
-32)┌─────────────┴─────────────┐
-33)│       CrossJoinExec       │
-34)│                           │
-35)│                           ├──────────────────────────────────────────────────────────        
-36)│                           │
-37)│                           │
-38)└─────────────┬─────────────┘
-39)┌─────────────┴─────────────┐
-40)│       CrossJoinExec       │
-41)│                           │
-42)│                           ├──────────────────────────────────────────────────────────        
-43)│                           │
-44)│                           │
-45)└─────────────┬─────────────┘
-46)┌─────────────┴─────────────┐
-47)│       CrossJoinExec       │
-48)│                           │
-49)│                           ├───────────────────────────────────────────┐
-50)│                           │                                           │
-51)│                           │                                           │
-52)└─────────────┬─────────────┘                                           │
-53)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐        
-54)│       CrossJoinExec       │                             │       DataSourceExec      │        
-55)│                           │                             │    --------------------   │        
-56)│                           ├──────────────┐              │          bytes: 0         │        
-57)│                           │              │              │       format: memory      │        
-58)│                           │              │              │          rows: 0          │        
-59)└─────────────┬─────────────┘              │              └───────────────────────────┘        
+02)│       CrossJoinExec       ├──────────────────────────────────────────────────────────
+03)└─────────────┬─────────────┘                                                          
+04)┌─────────────┴─────────────┐                                                                                                                                                                                                                                        ┌─────────────┴─────────────┐
+05)│       CrossJoinExec       │                                                          
+06)│                           │                                                          
+07)│                           ├──────────────────────────────────────────────────────────
+08)│                           │                                                          
+09)│                           │                                                          
+10)└─────────────┬─────────────┘                                                          
+11)┌─────────────┴─────────────┐                                                                                                                                                                                                           ┌─────────────┴─────────────┐
+12)│       CrossJoinExec       │                                                          
+13)│                           │                                                          
+14)│                           ├──────────────────────────────────────────────────────────
+15)│                           │                                                          
+16)│                           │                                                          
+17)└─────────────┬─────────────┘                                                          
+18)┌─────────────┴─────────────┐                                                                                                                                                                              ┌─────────────┴─────────────┐
+19)│       CrossJoinExec       │                                                          
+20)│                           │                                                          
+21)│                           ├──────────────────────────────────────────────────────────
+22)│                           │                                                          
+23)│                           │                                                          
+24)└─────────────┬─────────────┘                                                          
+25)┌─────────────┴─────────────┐                                                                                                                                                 ┌─────────────┴─────────────┐
+26)│       CrossJoinExec       │                                                          
+27)│                           │                                                          
+28)│                           ├──────────────────────────────────────────────────────────
+29)│                           │                                                          
+30)│                           │                                                          
+31)└─────────────┬─────────────┘                                                          
+32)┌─────────────┴─────────────┐                                                                                                                    ┌─────────────┴─────────────┐
+33)│       CrossJoinExec       │                                                          
+34)│                           │                                                          
+35)│                           ├──────────────────────────────────────────────────────────
+36)│                           │                                                          
+37)│                           │                                                          
+38)└─────────────┬─────────────┘                                                          
+39)┌─────────────┴─────────────┐                                                                                       ┌─────────────┴─────────────┐
+40)│       CrossJoinExec       │                                                          
+41)│                           │                                                          
+42)│                           ├──────────────────────────────────────────────────────────
+43)│                           │                                                          
+44)│                           │                                                          
+45)└─────────────┬─────────────┘                                                          
+46)┌─────────────┴─────────────┐                                                          ┌─────────────┴─────────────┐
+47)│       CrossJoinExec       │                                                          
+48)│                           │                                                          
+49)│                           ├───────────────────────────────────────────┐              
+50)│                           │                                           │              
+51)│                           │                                           │              
+52)└─────────────┬─────────────┘                                           │              
+53)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
+54)│       CrossJoinExec       │                             │       DataSourceExec      │
+55)│                           │                             │    --------------------   │
+56)│                           ├──────────────┐              │          bytes: 0         │
+57)│                           │              │              │       format: memory      │
+58)│                           │              │              │          rows: 0          │
+59)└─────────────┬─────────────┘              │              └───────────────────────────┘
 60)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 61)│       DataSourceExec      ││       DataSourceExec      │
 62)│    --------------------   ││    --------------------   │
@@ -2048,3 +3357,6 @@ RESET datafusion.explain.format;
 
 statement ok
 RESET datafusion.explain.tree_maximum_render_width;
+
+statement ok
+RESET datafusion.explain.logical_plan_tree;
