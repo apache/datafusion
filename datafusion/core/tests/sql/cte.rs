@@ -18,16 +18,16 @@
 use super::*;
 
 #[tokio::test]
-async fn multi_reference_cte_duckdb_materialization_heuristic() -> Result<()> {
+async fn multi_reference_cte_materialization_heuristic() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.sql("CREATE TABLE cte_duckdb_scan AS VALUES (1), (2)")
+    ctx.sql("CREATE TABLE cte_scan_source AS VALUES (1), (2)")
         .await?
         .collect()
         .await?;
 
     let reused_scan = ctx
         .sql(
-            "WITH t AS (SELECT column1 AS a FROM cte_duckdb_scan) \
+            "WITH t AS (SELECT column1 AS a FROM cte_scan_source) \
              SELECT count(*) FROM t l JOIN t r ON l.a = r.a",
         )
         .await?;
@@ -49,7 +49,7 @@ async fn multi_reference_cte_duckdb_materialization_heuristic() -> Result<()> {
 
     let limited_reuse = ctx
         .sql(
-            "WITH t AS (SELECT column1 AS a FROM cte_duckdb_scan) \
+            "WITH t AS (SELECT column1 AS a FROM cte_scan_source) \
              SELECT * FROM t l JOIN t r ON l.a = r.a LIMIT 1",
         )
         .await?;
