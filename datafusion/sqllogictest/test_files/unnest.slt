@@ -1479,5 +1479,33 @@ FROM (
 ----
 9
 
+# The volatile guard also applies when deterministic grouping columns are present.
+query I
+SELECT COUNT(*)
+FROM (
+    SELECT 1
+    FROM (
+        SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+        FROM unused_unnest_pruning
+    )
+    GROUP BY id, uuid()
+);
+----
+9
+
+# DISTINCT is duplicate-insensitive only for deterministic expressions. A volatile
+# DISTINCT expression still observes the row multiplication from UNNEST.
+query I
+SELECT COUNT(*)
+FROM (
+    SELECT DISTINCT uuid()
+    FROM (
+        SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+        FROM unused_unnest_pruning
+    )
+);
+----
+9
+
 statement ok
 DROP TABLE unused_unnest_pruning;
