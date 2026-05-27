@@ -918,10 +918,10 @@ mod tests {
         let pf = PartitionedFile::new("foo/bar.parquet", 10)
             .with_arrow_schema(Arc::clone(&arrow_schema));
 
-        let proto = protobuf::PartitionedFile::try_from(&pf).unwrap();
+        let proto = protobuf::PartitionedFile::try_from_proto(&pf).unwrap();
         assert!(proto.arrow_schema.is_some());
 
-        let decoded = PartitionedFile::try_from(&proto).unwrap();
+        let decoded = PartitionedFile::try_from_proto(&proto).unwrap();
         assert_eq!(
             decoded.arrow_schema.as_ref().map(|s| s.as_ref()),
             Some(arrow_schema.as_ref())
