@@ -215,14 +215,22 @@ impl NotExpr {
             Some(protobuf::physical_expr_node::ExprType::NotExpr(e)) => e.as_ref(),
             _ => return internal_err!("PhysicalExprNode is not a NotExpr"),
         };
-        let expr = expr.as_deref().ok_or_else(|| {
-            internal_datafusion_err!(
-                "NotExpr is missing required field 'expr' (expr_id: {:?}, expr_type: NotExpr)",
-                node.expr_id
-            )
-        })?;
+        let expr = ctx
+            .decode_required_expression(expr.as_deref(), "NotExpr", "expr")
+            .map_err(|err| match err {
+                datafusion_common::DataFusionError::Internal(msg)
+                    if msg == "NotExpr is missing required field 'expr'" =>
+                {
+                    internal_datafusion_err!(
+                        "{msg} (expr_id: {:?}, expr_type: {:?})",
+                        node.expr_id,
+                        &node.expr_type
+                    )
+                }
+                other => other,
+            })?;
 
-        Ok(Arc::new(NotExpr::new(ctx.decode(expr)?)))
+        Ok(Arc::new(NotExpr::new(expr)))
     }
 }
 
@@ -231,39 +239,35 @@ pub fn not(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(NotExpr::new(arg)))
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::LazyLock;
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use std::sync::Arc;
 
     use super::*;
-    use crate::expressions::{Column, col};
 
-    use arrow::{array::BooleanArray, datatypes::*};
-    use datafusion_physical_expr_common::physical_expr::fmt_sql;
+    use arrow::datatypes::Schema;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::{
+        PhysicalExprDecode, PhysicalExprDecodeCtx,
+    };
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalNot, physical_expr_node,
+    };
 
-    #[cfg(feature = "proto")]
+    struct NoopDecoder;
+
+    impl PhysicalExprDecode for NoopDecoder {
+        fn decode(
+            &self,
+            _node: &PhysicalExprNode,
+            _schema: &Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            unreachable!("missing child should be rejected before decoding")
+        }
+    }
+
     #[test]
     fn test_from_proto_missing_child() {
-        use datafusion_common::DataFusionError;
-        use datafusion_physical_expr_common::physical_expr::proto_decode::{
-            PhysicalExprDecode, PhysicalExprDecodeCtx,
-        };
-        use datafusion_proto_models::protobuf::{
-            PhysicalExprNode, PhysicalNot, physical_expr_node,
-        };
-
-        struct NoopDecoder;
-
-        impl PhysicalExprDecode for NoopDecoder {
-            fn decode(
-                &self,
-                _node: &PhysicalExprNode,
-                _schema: &Schema,
-            ) -> Result<Arc<dyn PhysicalExpr>> {
-                unreachable!("missing child should be rejected before decoding")
-            }
-        }
-
         let node = PhysicalExprNode {
             expr_id: Some(42),
             expr_type: Some(physical_expr_node::ExprType::NotExpr(Box::new(
@@ -278,8 +282,19 @@ mod tests {
         assert!(matches!(err, DataFusionError::Internal(msg)
                 if msg.contains("NotExpr is missing required field 'expr'")
                     && msg.contains("expr_id: Some(42)")
-                    && msg.contains("expr_type: NotExpr")));
+                    && msg.contains("expr_type: Some(NotExpr")));
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::LazyLock;
+
+    use super::*;
+    use crate::expressions::{Column, col};
+
+    use arrow::{array::BooleanArray, datatypes::*};
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
     fn neg_op() -> Result<()> {
