@@ -1479,6 +1479,23 @@ FROM (
 ----
 9
 
+# Deterministic plan check for the volatile GROUP BY guard: the UNNEST remains.
+query TT
+EXPLAIN SELECT COUNT(*)
+FROM (
+    SELECT 1
+    FROM (
+        SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+        FROM unused_unnest_pruning
+    )
+    GROUP BY uuid()
+);
+----
+logical_plan
+<slt:ignore>Unnest:<slt:ignore>
+physical_plan
+<slt:ignore>UnnestExec<slt:ignore>
+
 # The volatile guard also applies when deterministic grouping columns are present.
 query I
 SELECT COUNT(*)
