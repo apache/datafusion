@@ -1701,6 +1701,31 @@ mod tests {
     }
 
     #[test]
+    fn test_get_valid_types_array_and_index_preserves_list_field_name() -> Result<()> {
+        let struct_fields = vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("prim", DataType::Boolean, true),
+        ];
+        let current_type = DataType::List(Arc::new(Field::new(
+            "element",
+            DataType::Struct(struct_fields.into()),
+            true,
+        )));
+        let signature = Signature::array_and_index(Volatility::Immutable);
+
+        assert_eq!(
+            get_valid_types(
+                "array_element",
+                &signature.type_signature,
+                &[current_type.clone(), DataType::Int64],
+            )?,
+            vec![vec![current_type, DataType::Int64]]
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_get_valid_types_element_and_array() -> Result<()> {
         let function = "element_and_array";
         let signature = Signature::element_and_array(Volatility::Immutable);
