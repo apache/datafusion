@@ -118,7 +118,7 @@ FROM
     (
         SELECT
             'store channel' AS channel,
-            concat('store', s_store_id) AS id,
+            'store' || s_store_id AS id,
             sales,
             returns,
             (profit - profit_loss) AS profit
@@ -126,7 +126,7 @@ FROM
         UNION ALL
         SELECT
             'catalog channel' AS channel,
-            concat('catalog_page', cp_catalog_page_id) AS id,
+            'catalog_page' || cp_catalog_page_id AS id,
             sales,
             returns,
             (profit - profit_loss) AS profit
@@ -134,7 +134,7 @@ FROM
         UNION ALL
         SELECT
             'web channel' AS channel,
-            concat('web_site', web_site_id) AS id,
+            'web_site' || web_site_id AS id,
             sales,
             returns,
             (profit - profit_loss) AS profit

@@ -31,7 +31,7 @@ WITH
         FROM store_sales, customer
         WHERE ss_customer_sk = c_customer_sk
         GROUP BY c_customer_sk
-        having
+        HAVING
             sum(ss_quantity * ss_sales_price)
             > (50 / 100.0) * (SELECT * FROM max_store_sales)
     )
@@ -91,7 +91,7 @@ WITH
         FROM store_sales, customer
         WHERE ss_customer_sk = c_customer_sk
         GROUP BY c_customer_sk
-        having
+        HAVING
             sum(ss_quantity * ss_sales_price)
             > (50 / 100.0) * (SELECT * FROM max_store_sales)
     )

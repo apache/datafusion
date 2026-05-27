@@ -52,7 +52,7 @@ FROM
             w_county,
             w_state,
             w_country,
-            concat('DHL', ',', 'BARIAN') AS ship_carriers,
+            'DHL' || ',' || 'BARIAN' AS ship_carriers,
             d_year AS year,
             sum(
                 CASE WHEN d_moy = 1 THEN ws_ext_sales_price * ws_quantity ELSE 0 END
@@ -151,7 +151,7 @@ FROM
             w_county,
             w_state,
             w_country,
-            concat('DHL', ',', 'BARIAN') AS ship_carriers,
+            'DHL' || ',' || 'BARIAN' AS ship_carriers,
             d_year AS year,
             sum(
                 CASE WHEN d_moy = 1 THEN cs_sales_price * cs_quantity ELSE 0 END

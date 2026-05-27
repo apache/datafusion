@@ -12,7 +12,7 @@ FROM
                         FROM store_sales ss1
                         WHERE ss_store_sk = 4
                         GROUP BY ss_item_sk
-                        having
+                        HAVING
                             avg(ss_net_profit)
                             > 0.9
                             * (
@@ -36,7 +36,7 @@ FROM
                         FROM store_sales ss1
                         WHERE ss_store_sk = 4
                         GROUP BY ss_item_sk
-                        having
+                        HAVING
                             avg(ss_net_profit)
                             > 0.9
                             * (

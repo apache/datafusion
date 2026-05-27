@@ -25,7 +25,7 @@ WITH
                     catalog_returns
                     ON (cs_order_number = cr_order_number AND cs_item_sk = cr_item_sk)
                 WHERE i_category = 'Books'
-                union
+                UNION
                 SELECT
                     d_year,
                     i_brand_id,
@@ -41,7 +41,7 @@ WITH
                     store_returns
                     ON (ss_ticket_number = sr_ticket_number AND ss_item_sk = sr_item_sk)
                 WHERE i_category = 'Books'
-                union
+                UNION
                 SELECT
                     d_year,
                     i_brand_id,

@@ -45,7 +45,7 @@ SELECT channel, item, return_ratio, return_rank, currency_rank FROM
                 ) in_web
         ) web
     WHERE (web.return_rank <= 10 OR web.currency_rank <= 10)
-    union
+    UNION
     SELECT
         'catalog' AS channel,
         catalog.item,
@@ -92,7 +92,7 @@ SELECT channel, item, return_ratio, return_rank, currency_rank FROM
                 ) in_cat
         ) catalog
     WHERE (catalog.return_rank <= 10 OR catalog.currency_rank <= 10)
-    union
+    UNION
     SELECT
         'store' AS channel,
         store.item,
