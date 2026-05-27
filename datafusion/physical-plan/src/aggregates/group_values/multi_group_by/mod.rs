@@ -734,7 +734,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///
     /// The hash collision may be not frequent, so the fallback will indeed hardly happen.
     /// In most situations, `scalarized_indices` will found to be empty after finishing to
-    /// preform `vectorized_equal_to`.
+    /// perform `vectorized_equal_to`.
     fn scalarized_intern_remaining(
         &mut self,
         cols: &[ArrayRef],

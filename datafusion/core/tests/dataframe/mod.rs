@@ -840,7 +840,7 @@ async fn test_aggregate_with_pk() -> Result<()> {
     let aggr_expr = vec![];
     let df = df.aggregate(group_expr, aggr_expr)?;
 
-    // Since id and name are functionally dependant, we can use name among
+    // Since id and name are functionally dependent, we can use name among
     // expression even if it is not part of the group by expression and can
     // select "name" column even though it wasn't explicitly grouped
     let df = df.select(vec![col("id"), col("name")])?;
@@ -895,7 +895,7 @@ async fn test_aggregate_with_pk2() -> Result<()> {
     "
     );
 
-    // Since id and name are functionally dependant, we can use name among expression
+    // Since id and name are functionally dependent, we can use name among expression
     // even if it is not part of the group by expression.
     let df_results = df.collect().await?;
 
@@ -943,7 +943,7 @@ async fn test_aggregate_with_pk3() -> Result<()> {
     "
     );
 
-    // Since id and name are functionally dependant, we can use name among expression
+    // Since id and name are functionally dependent, we can use name among expression
     // even if it is not part of the group by expression.
     let df_results = df.collect().await?;
 

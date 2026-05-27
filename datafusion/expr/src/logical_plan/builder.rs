@@ -33,8 +33,8 @@ use crate::expr_rewriter::{
 use crate::logical_plan::{
     Aggregate, Analyze, Distinct, DistinctOn, EmptyRelation, Explain, Filter, Join,
     JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-    Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
-    Window,
+    Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder, Union, Unnest,
+    Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
@@ -515,8 +515,11 @@ impl LogicalPlanBuilder {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        let table_scan =
-            TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
+        let table_scan = TableScanBuilder::new(table_name, table_source)
+            .with_projection(projection)
+            .with_filters(filters)
+            .with_fetch(fetch)
+            .build()?;
 
         // Inline TableScan
         if table_scan.filters.is_empty()
