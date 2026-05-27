@@ -1464,5 +1464,20 @@ ORDER BY id;
 ----
 1
 
+# Volatile GROUP BY expressions are evaluated once per input row, so removing a
+# row-multiplying UNNEST changes the number of groups even when elem is unused.
+query I
+SELECT COUNT(*)
+FROM (
+    SELECT 1
+    FROM (
+        SELECT id, UNNEST(make_array(1, 2, 3)) AS elem
+        FROM unused_unnest_pruning
+    )
+    GROUP BY uuid()
+);
+----
+9
+
 statement ok
 DROP TABLE unused_unnest_pruning;

@@ -514,6 +514,10 @@ fn remove_row_preserving_unused_unnest_from_duplicate_insensitive_input(
     input: &LogicalPlan,
     required_exprs: &[Expr],
 ) -> Result<Option<LogicalPlan>> {
+    if required_exprs.iter().any(Expr::is_volatile) {
+        return Ok(None);
+    }
+
     match input {
         LogicalPlan::Unnest(unnest)
             if can_remove_unused_unnest_for_exprs(unnest, required_exprs)? =>
@@ -541,9 +545,12 @@ fn remove_row_preserving_unused_unnest_from_duplicate_insensitive_input(
 }
 
 fn can_remove_unused_unnest_for_exprs(unnest: &Unnest, exprs: &[Expr]) -> Result<bool> {
-    // This rewrite is only safe when UNNEST cannot eliminate input rows and no
-    // required expression depends on an unnested output column.
-    if !unnest_preserves_at_least_one_row_per_input(unnest) {
+    // This rewrite is only safe when UNNEST cannot eliminate input rows, no
+    // required expression depends on an unnested output column, and row
+    // multiplication cannot affect expression evaluation.
+    if !unnest_preserves_at_least_one_row_per_input(unnest)
+        || exprs.iter().any(Expr::is_volatile)
+    {
         return Ok(false);
     }
 
@@ -1095,8 +1102,9 @@ mod tests {
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
-        BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator, Projection,
-        UserDefinedLogicalNodeCore, WindowFunctionDefinition, binary_expr,
+        BinaryExpr, ColumnarValue, Expr, Extension, Like, LogicalPlan, Operator,
+        Projection, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, binary_expr,
         build_join_schema,
         builder::table_scan_with_filters,
         col,
@@ -1179,6 +1187,41 @@ mod tests {
         builder
             .aggregate(vec![col("id")], Vec::<Expr>::new())?
             .build()
+    }
+
+    fn volatile_expr() -> Expr {
+        ScalarUDF::new_from_impl(VolatileUdf::new()).call(vec![])
+    }
+
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct VolatileUdf {
+        signature: Signature,
+    }
+
+    impl VolatileUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::nullary(Volatility::Volatile),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for VolatileUdf {
+        fn name(&self) -> &str {
+            "volatile"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Float64)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("VolatileUdf: not intended for execution")
+        }
     }
 
     #[derive(Debug, Hash, PartialEq, Eq)]
@@ -1548,6 +1591,43 @@ mod tests {
           Unnest: lists[elem|depth=1] structs[]
             Projection: List([1, 2]) AS elem
               TableScan: test projection=[]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_unused_unnest_under_volatile_group_by() -> Result<()> {
+        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
+            .aggregate(vec![volatile_expr()], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[volatile()]], aggr=[[]]
+          Projection:
+            Unnest: lists[elem|depth=1] structs[]
+              Projection: List([1, 2]) AS elem
+                TableScan: test projection=[]
+        "
+        )
+    }
+
+    #[test]
+    fn keep_projected_unused_unnest_under_volatile_group_by() -> Result<()> {
+        let plan = id_elem_unnest_plan(vec![Some(1), Some(2)])?
+            .project(vec![lit(1)])?
+            .aggregate(vec![volatile_expr()], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[volatile()]], aggr=[[]]
+          Projection:
+            Unnest: lists[elem|depth=1] structs[]
+              Projection: List([1, 2]) AS elem
+                TableScan: test projection=[]
         "
         )
     }
