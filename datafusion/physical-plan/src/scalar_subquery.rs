@@ -27,11 +27,9 @@
 use std::fmt;
 use std::sync::Arc;
 
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, ScalarValue, Statistics, exec_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
-use datafusion_physical_expr::PhysicalExpr;
 
 use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
@@ -225,13 +223,6 @@ impl ExecutionPlan for ScalarSubqueryExec {
         )))
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         // Only the main input (first child); subquery children don't contribute
         // to ordering.
@@ -386,13 +377,6 @@ mod tests {
                 children.remove(0),
                 Arc::clone(&self.execute_calls),
             )))
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(

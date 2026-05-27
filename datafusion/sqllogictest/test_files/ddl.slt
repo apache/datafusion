@@ -654,7 +654,7 @@ LOCATION 'test_files/scratch/ddl/test_table';
 query TTT
 DESCRIBE aggregate_table;
 ----
-id Int64 YES
+id Int64 NO
 
 # Should insert into an empty table
 statement ok
@@ -971,3 +971,23 @@ drop view v;
 
 statement count 0
 drop table t;
+
+# https://github.com/apache/datafusion/issues/22167
+# https://github.com/apache/datafusion/issues/13487
+# CREATE TABLE AS / CREATE VIEW must reject queries whose result schema
+# has duplicate (unqualified) column names, since the resulting object
+# stores only unqualified names and would otherwise be unselectable.
+statement ok
+CREATE TABLE dup_src AS VALUES(1, 2);
+
+statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name column1
+CREATE TABLE dup_ctas AS SELECT * FROM dup_src LEFT JOIN dup_src y ON dup_src.column1 = y.column2;
+
+statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name column1
+CREATE VIEW dup_view AS SELECT * FROM dup_src LEFT JOIN dup_src y ON dup_src.column1 = y.column2;
+
+statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name column1
+SELECT * INTO dup_into FROM dup_src LEFT JOIN dup_src y ON dup_src.column1 = y.column2;
+
+statement ok
+DROP TABLE dup_src;

@@ -647,6 +647,7 @@ impl DefaultPhysicalPlanner {
                     filters,
                     fetch,
                     projected_schema,
+                    statistics_requests,
                     ..
                 } = scan;
 
@@ -656,10 +657,13 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let filters_vec = filters.into_iter().collect::<Vec<_>>();
+                    let stats_requests =
+                        statistics_requests.iter().cloned().collect::<Vec<_>>();
                     let opts = ScanArgs::default()
                         .with_projection(projection.as_deref())
                         .with_filters(Some(&filters_vec))
-                        .with_limit(*fetch);
+                        .with_limit(*fetch)
+                        .with_statistics_requests(&stats_requests);
                     let res = source.scan_with_args(session_state, opts).await?;
                     Arc::clone(res.plan())
                 } else {
@@ -4475,20 +4479,6 @@ mod tests {
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
         }
-
-        fn apply_expressions(
-            &self,
-            f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            // Visit expressions in the output ordering from equivalence properties
-            let mut tnr = TreeNodeRecursion::Continue;
-            if let Some(ordering) = self.cache.output_ordering() {
-                for sort_expr in ordering {
-                    tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-                }
-            }
-            Ok(tnr)
-        }
     }
 
     //  Produces an execution plan where the schema is mismatched from
@@ -4628,12 +4618,6 @@ digraph {
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
         }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
-        }
     }
     impl DisplayAs for OkExtensionNode {
         fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
@@ -4679,12 +4663,6 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
-        }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for InvariantFailsExtensionNode {
@@ -4803,12 +4781,6 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
-        }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for ExecutableInvariantFails {

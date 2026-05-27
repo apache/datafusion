@@ -54,10 +54,12 @@ use crate::protobuf::{
     },
 };
 
+use crate::convert::{FromProto, TryFromProto};
+
 use super::{AsLogicalPlan, LogicalExtensionCodec};
 
-impl From<&protobuf::UnnestOptions> for UnnestOptions {
-    fn from(opts: &protobuf::UnnestOptions) -> Self {
+impl FromProto<&protobuf::UnnestOptions> for UnnestOptions {
+    fn from_proto(opts: &protobuf::UnnestOptions) -> Self {
         use datafusion_common::NullHandling;
         use protobuf::unnest_options::NullHandling as ProtoNullHandling;
         let null_handling = match ProtoNullHandling::try_from(opts.null_handling) {
@@ -85,8 +87,8 @@ impl From<&protobuf::UnnestOptions> for UnnestOptions {
     }
 }
 
-impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
-    fn from(units: protobuf::WindowFrameUnits) -> Self {
+impl FromProto<protobuf::WindowFrameUnits> for WindowFrameUnits {
+    fn from_proto(units: protobuf::WindowFrameUnits) -> Self {
         match units {
             protobuf::WindowFrameUnits::Rows => Self::Rows,
             protobuf::WindowFrameUnits::Range => Self::Range,
@@ -95,10 +97,10 @@ impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
     }
 }
 
-impl TryFrom<protobuf::TableReference> for TableReference {
+impl TryFromProto<protobuf::TableReference> for TableReference {
     type Error = Error;
 
-    fn try_from(value: protobuf::TableReference) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: protobuf::TableReference) -> Result<Self, Self::Error> {
         use protobuf::table_reference::TableReferenceEnum;
         let table_reference_enum = value
             .table_reference_enum
@@ -121,8 +123,8 @@ impl TryFrom<protobuf::TableReference> for TableReference {
     }
 }
 
-impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
-    fn from(stringified_plan: &protobuf::StringifiedPlan) -> Self {
+impl FromProto<&protobuf::StringifiedPlan> for StringifiedPlan {
+    fn from_proto(stringified_plan: &protobuf::StringifiedPlan) -> Self {
         Self {
             plan_type: match stringified_plan
                 .plan_type
@@ -164,19 +166,25 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
     }
 }
 
-impl TryFrom<protobuf::WindowFrame> for WindowFrame {
+impl TryFromProto<protobuf::WindowFrame> for WindowFrame {
     type Error = Error;
 
-    fn try_from(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
-        let units = protobuf::WindowFrameUnits::try_from(window.window_frame_units)
-            .map_err(|_| Error::unknown("WindowFrameUnits", window.window_frame_units))?
-            .into();
-        let start_bound = window.start_bound.required("start_bound")?;
+    fn try_from_proto(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
+        let units = WindowFrameUnits::from_proto(
+            protobuf::WindowFrameUnits::try_from(window.window_frame_units).map_err(
+                |_| Error::unknown("WindowFrameUnits", window.window_frame_units),
+            )?,
+        );
+        let start_bound = WindowFrameBound::try_from_proto(
+            window
+                .start_bound
+                .ok_or_else(|| Error::required("start_bound"))?,
+        )?;
         let end_bound = window
             .end_bound
             .map(|end_bound| match end_bound {
                 protobuf::window_frame::EndBound::Bound(end_bound) => {
-                    end_bound.try_into()
+                    WindowFrameBound::try_from_proto(end_bound)
                 }
             })
             .transpose()?
@@ -185,10 +193,10 @@ impl TryFrom<protobuf::WindowFrame> for WindowFrame {
     }
 }
 
-impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
+impl TryFromProto<protobuf::WindowFrameBound> for WindowFrameBound {
     type Error = Error;
 
-    fn try_from(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
+    fn try_from_proto(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
         let bound_type =
             protobuf::WindowFrameBoundType::try_from(bound.window_frame_bound_type)
                 .map_err(|_| {
@@ -208,8 +216,8 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
     }
 }
 
-impl From<protobuf::JoinType> for JoinType {
-    fn from(t: protobuf::JoinType) -> Self {
+impl FromProto<protobuf::JoinType> for JoinType {
+    fn from_proto(t: protobuf::JoinType) -> Self {
         match t {
             protobuf::JoinType::Inner => JoinType::Inner,
             protobuf::JoinType::Left => JoinType::Left,
@@ -225,8 +233,8 @@ impl From<protobuf::JoinType> for JoinType {
     }
 }
 
-impl From<protobuf::JoinConstraint> for JoinConstraint {
-    fn from(t: protobuf::JoinConstraint) -> Self {
+impl FromProto<protobuf::JoinConstraint> for JoinConstraint {
+    fn from_proto(t: protobuf::JoinConstraint) -> Self {
         match t {
             protobuf::JoinConstraint::On => JoinConstraint::On,
             protobuf::JoinConstraint::Using => JoinConstraint::Using,
@@ -234,8 +242,8 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
     }
 }
 
-impl From<protobuf::NullEquality> for NullEquality {
-    fn from(t: protobuf::NullEquality) -> Self {
+impl FromProto<protobuf::NullEquality> for NullEquality {
+    fn from_proto(t: protobuf::NullEquality) -> Self {
         match t {
             protobuf::NullEquality::NullEqualsNothing => NullEquality::NullEqualsNothing,
             protobuf::NullEquality::NullEqualsNull => NullEquality::NullEqualsNull,
@@ -243,8 +251,8 @@ impl From<protobuf::NullEquality> for NullEquality {
     }
 }
 
-impl From<protobuf::dml_node::Type> for WriteOp {
-    fn from(t: protobuf::dml_node::Type) -> Self {
+impl FromProto<protobuf::dml_node::Type> for WriteOp {
+    fn from_proto(t: protobuf::dml_node::Type) -> Self {
         match t {
             protobuf::dml_node::Type::Update => WriteOp::Update,
             protobuf::dml_node::Type::Delete => WriteOp::Delete,
@@ -259,8 +267,8 @@ impl From<protobuf::dml_node::Type> for WriteOp {
     }
 }
 
-impl From<protobuf::NullTreatment> for NullTreatment {
-    fn from(t: protobuf::NullTreatment) -> Self {
+impl FromProto<protobuf::NullTreatment> for NullTreatment {
+    fn from_proto(t: protobuf::NullTreatment) -> Self {
         match t {
             protobuf::NullTreatment::RespectNulls => NullTreatment::RespectNulls,
             protobuf::NullTreatment::IgnoreNulls => NullTreatment::IgnoreNulls,
@@ -316,7 +324,7 @@ pub fn parse_expr(
                 .window_frame
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
-                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                    let window_frame = WindowFrame::try_from_proto(window_frame.clone())?;
                     window_frame
                         .regularize_order_bys(&mut order_by)
                         .map(|_| window_frame)
@@ -334,7 +342,7 @@ pub fn parse_expr(
                             "Received a WindowExprNode message with unknown NullTreatment {null_treatment}",
                         ))
                     })?;
-                    Some(NullTreatment::from(null_treatment))
+                    Some(NullTreatment::from_proto(null_treatment))
                 }
                 None => None,
             };
@@ -383,7 +391,7 @@ pub fn parse_expr(
             alias
                 .relation
                 .first()
-                .map(|r| TableReference::try_from(r.clone()))
+                .map(|r| TableReference::try_from_proto(r.clone()))
                 .transpose()?,
             alias.alias.clone(),
         ))),
@@ -586,7 +594,10 @@ pub fn parse_expr(
             in_list.negated,
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
-            let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
+            let qualifier = qualifier
+                .to_owned()
+                .map(TableReference::try_from_proto)
+                .transpose()?;
             #[expect(deprecated)]
             Ok(Expr::Wildcard {
                 qualifier,
@@ -624,7 +635,7 @@ pub fn parse_expr(
                             "Received an AggregateUdfExprNode message with unknown NullTreatment {null_treatment}",
                         ))
                     })?;
-                    Some(NullTreatment::from(null_treatment))
+                    Some(NullTreatment::from_proto(null_treatment))
                 }
                 None => None,
             };
@@ -757,42 +768,11 @@ fn parse_escape_char(s: &str) -> Result<Option<char>> {
 }
 
 pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
-    match op {
-        "And" => Ok(Operator::And),
-        "Or" => Ok(Operator::Or),
-        "Eq" => Ok(Operator::Eq),
-        "NotEq" => Ok(Operator::NotEq),
-        "LtEq" => Ok(Operator::LtEq),
-        "Lt" => Ok(Operator::Lt),
-        "Gt" => Ok(Operator::Gt),
-        "GtEq" => Ok(Operator::GtEq),
-        "Plus" => Ok(Operator::Plus),
-        "Minus" => Ok(Operator::Minus),
-        "Multiply" => Ok(Operator::Multiply),
-        "Divide" => Ok(Operator::Divide),
-        "Modulo" => Ok(Operator::Modulo),
-        "IsDistinctFrom" => Ok(Operator::IsDistinctFrom),
-        "IsNotDistinctFrom" => Ok(Operator::IsNotDistinctFrom),
-        "BitwiseAnd" => Ok(Operator::BitwiseAnd),
-        "BitwiseOr" => Ok(Operator::BitwiseOr),
-        "BitwiseXor" => Ok(Operator::BitwiseXor),
-        "BitwiseShiftLeft" => Ok(Operator::BitwiseShiftLeft),
-        "BitwiseShiftRight" => Ok(Operator::BitwiseShiftRight),
-        "RegexIMatch" => Ok(Operator::RegexIMatch),
-        "RegexMatch" => Ok(Operator::RegexMatch),
-        "RegexNotIMatch" => Ok(Operator::RegexNotIMatch),
-        "RegexNotMatch" => Ok(Operator::RegexNotMatch),
-        "LikeMatch" => Ok(Operator::LikeMatch),
-        "ILikeMatch" => Ok(Operator::ILikeMatch),
-        "NotLikeMatch" => Ok(Operator::NotLikeMatch),
-        "NotILikeMatch" => Ok(Operator::NotILikeMatch),
-        "StringConcat" => Ok(Operator::StringConcat),
-        "AtArrow" => Ok(Operator::AtArrow),
-        "ArrowAt" => Ok(Operator::ArrowAt),
-        other => Err(proto_error(format!(
-            "Unsupported binary operator '{other:?}'"
-        ))),
-    }
+    // The proto-string <-> `Operator` mapping is canonically owned by
+    // `datafusion-expr-common` so `datafusion-proto` (logical plans) and
+    // `PhysicalExpr` decoders (e.g. `BinaryExpr`) share one source of truth.
+    Operator::from_proto_name(op)
+        .ok_or_else(|| proto_error(format!("Unsupported binary operator '{op:?}'")))
 }
 
 fn parse_optional_expr(
