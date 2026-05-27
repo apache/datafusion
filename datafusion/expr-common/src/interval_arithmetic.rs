@@ -4161,13 +4161,18 @@ mod tests {
     }
 
     #[test]
-    fn test_cardinality_full_i64_range_does_not_overflow() -> Result<()> {
+    fn test_cardinality_full_integer_range_does_not_overflow() -> Result<()> {
         let interval = Interval::try_new(
             ScalarValue::Int64(Some(i64::MIN)),
             ScalarValue::Int64(Some(i64::MAX)),
         )?;
         assert_eq!(interval.cardinality(), None);
 
+        let interval = Interval::try_new(
+            ScalarValue::UInt64(Some(0)),
+            ScalarValue::UInt64(Some(u64::MAX)),
+        )?;
+        assert_eq!(interval.cardinality(), None);
         Ok(())
     }
 
