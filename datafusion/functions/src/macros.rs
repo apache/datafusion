@@ -368,7 +368,7 @@ macro_rules! make_math_binary_udf {
             use arrow::array::{ArrayRef, AsArray};
             use arrow::datatypes::{DataType, Float32Type, Float64Type};
             use datafusion_common::utils::take_function_args;
-            use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
+            use datafusion_common::{Result, ScalarValue, internal_err};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
                 ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
@@ -382,8 +382,21 @@ macro_rules! make_math_binary_udf {
 
             impl $UDF {
                 pub fn new() -> Self {
+                    use DataType::*;
                     Self {
-                        signature: Signature::user_defined(Volatility::Immutable),
+                        // Float64 is listed first so that integer (and other
+                        // non-float) arguments coerce to Float64 rather than
+                        // Float32; genuine Float32 arguments still match
+                        // exactly and stay in single precision. Coercing
+                        // integers to Float64 matters for correctness: Float32
+                        // has only a 24-bit mantissa, so widening a large
+                        // integer to Float32 would round it before the function
+                        // is ever applied.
+                        signature: Signature::uniform(
+                            2,
+                            vec![Float64, Float32],
+                            Volatility::Immutable,
+                        ),
                     }
                 }
             }
@@ -404,36 +417,6 @@ macro_rules! make_math_binary_udf {
                         DataType::Float32 => Ok(DataType::Float32),
                         _ => Ok(DataType::Float64),
                     }
-                }
-
-                fn coerce_types(
-                    &self,
-                    arg_types: &[DataType],
-                ) -> Result<Vec<DataType>> {
-                    let [y, x] = take_function_args(self.name(), arg_types)?;
-
-                    // Evaluate in single precision only when both arguments are
-                    // already Float32. Every other numeric (or null) combination
-                    // is computed in Float64 so that integer inputs are widened
-                    // without losing precision, rather than being rounded to
-                    // Float32.
-                    let coerced = match (y, x) {
-                        (DataType::Float32, DataType::Float32) => DataType::Float32,
-                        (y, x)
-                            if (y.is_numeric() || y.is_null())
-                                && (x.is_numeric() || x.is_null()) =>
-                        {
-                            DataType::Float64
-                        }
-                        (y, x) => {
-                            return plan_err!(
-                                "Function '{}' expects numeric arguments, got {y} and {x}",
-                                self.name()
-                            );
-                        }
-                    };
-
-                    Ok(vec![coerced.clone(), coerced])
                 }
 
                 fn output_ordering(
