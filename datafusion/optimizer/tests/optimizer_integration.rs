@@ -48,7 +48,7 @@ use datafusion_sql::sqlparser::parser::Parser;
 use insta::assert_snapshot;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // enable logging so RUST_LOG works
     let _ = env_logger::try_init();
@@ -136,15 +136,13 @@ fn subquery_filter_with_cast() -> Result<()> {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-    Projection: test.col_int32
-      Inner Join:  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.avg(test.col_int32)
-        TableScan: test projection=[col_int32]
-        SubqueryAlias: __scalar_sq_1
-          Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]
-            Projection: test.col_int32
-              Filter: __common_expr_4 >= Date32("2002-05-08") AND __common_expr_4 <= Date32("2002-05-13")
-                Projection: CAST(test.col_utf8 AS Date32) AS __common_expr_4, test.col_int32
-                  TableScan: test projection=[col_int32, col_utf8]
+    Filter: CAST(test.col_int32 AS Float64) > (<subquery>)
+      Subquery:
+        Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]
+          Projection: test.col_int32
+            Filter: CAST(test.col_utf8 AS Date32) >= Date32("2002-05-08") AND CAST(test.col_utf8 AS Date32) <= Date32("2002-05-13")
+              TableScan: test projection=[col_int32, col_utf8]
+      TableScan: test projection=[col_int32]
     "#
     );
     Ok(())
@@ -826,10 +824,9 @@ fn extension_node_does_not_block_projection_pruning() -> Result<()> {
     OpaqueRequirementsExtension
       Sort: t.a ASC NULLS FIRST, t.ts ASC NULLS FIRST
         Projection: t.a, CAST(t.ts AS Timestamp(ms, "UTC")) AS ts
-          Projection: t.a, t.ts
-            Filter: __common_expr_3 > TimestampMillisecond(1000, Some("UTC")) AND __common_expr_3 < TimestampMillisecond(2000, Some("UTC"))
-              Projection: CAST(t.ts AS Timestamp(ms, "UTC")) AS __common_expr_3, t.a, t.ts
-                TableScan: t projection=[a, ts], partial_filters=[t.ts > TimestampNanosecond(1000000000, None), t.ts < TimestampNanosecond(2000000000, None), CAST(t.ts AS Timestamp(ms, "UTC")) > TimestampMillisecond(1000, Some("UTC")), CAST(t.ts AS Timestamp(ms, "UTC")) < TimestampMillisecond(2000, Some("UTC"))]
+          Filter: __common_expr_3 > TimestampMillisecond(1000, Some("UTC")) AND __common_expr_3 < TimestampMillisecond(2000, Some("UTC"))
+            Projection: CAST(t.ts AS Timestamp(ms, "UTC")) AS __common_expr_3, t.a, t.ts
+              TableScan: t projection=[a, ts], partial_filters=[t.ts > TimestampNanosecond(1000000000, None), t.ts < TimestampNanosecond(2000000000, None), CAST(t.ts AS Timestamp(ms, "UTC")) > TimestampMillisecond(1000, Some("UTC")), CAST(t.ts AS Timestamp(ms, "UTC")) < TimestampMillisecond(2000, Some("UTC"))]
     "#,
     );
 
@@ -881,6 +878,13 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
+    fn get_higher_order_meta(
+        &self,
+        _name: &str,
+    ) -> Option<Arc<dyn datafusion_expr::HigherOrderUDF>> {
+        None
+    }
+
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.udafs.get(name).cloned()
     }
@@ -906,6 +910,10 @@ impl ContextProvider for MyContextProvider {
     }
 
     fn udf_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn higher_order_function_names(&self) -> Vec<String> {
         Vec::new()
     }
 

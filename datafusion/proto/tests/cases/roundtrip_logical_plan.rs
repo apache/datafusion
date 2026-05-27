@@ -68,6 +68,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
@@ -134,7 +135,8 @@ fn roundtrip_expr_test_with_codec(
 ) {
     let proto: protobuf::LogicalExprNode = serialize_expr(&initial_struct, codec)
         .unwrap_or_else(|e| panic!("Error serializing expression: {e:?}"));
-    let round_trip: Expr = from_proto::parse_expr(&proto, &ctx, codec).unwrap();
+    let round_trip: Expr =
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), codec).unwrap();
 
     assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));
 
@@ -272,6 +274,27 @@ async fn roundtrip_custom_memory_tables() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_explain_format_tree() -> Result<()> {
+    let ctx = SessionContext::new();
+    let plan = ctx
+        .state()
+        .create_logical_plan("EXPLAIN FORMAT TREE SELECT 1")
+        .await?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    match logical_round_trip {
+        LogicalPlan::Explain(explain) => {
+            assert_eq!(explain.explain_format, ExplainFormat::Tree);
+        }
+        plan => panic!("expected Explain plan, got {plan:?}"),
+    }
 
     Ok(())
 }
@@ -2571,7 +2594,8 @@ fn roundtrip_scalar_udf_extension_codec() {
     let ctx = SessionContext::new();
     let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
     let round_trip =
-        from_proto::parse_expr(&proto, &ctx, &UDFExtensionCodec).expect("parse expr");
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
+            .expect("parse expr");
 
     assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
@@ -2584,7 +2608,8 @@ fn roundtrip_aggregate_udf_extension_codec() {
     let ctx = SessionContext::new();
     let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
     let round_trip =
-        from_proto::parse_expr(&proto, &ctx, &UDFExtensionCodec).expect("parse expr");
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
+            .expect("parse expr");
 
     assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
@@ -3093,6 +3118,143 @@ async fn roundtrip_mixed_case_table_reference() -> Result<()> {
         format!("{}", client_logical_plan.display_indent_schema()),
         format!("{}", server_logical_plan.display_indent_schema())
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_empty_table_scan() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
+        &schema,
+    )));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(
+        format!("{}", plan.display_indent_schema()),
+        format!("{}", restored.display_indent_schema()),
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::clone(
+        &schema,
+    )));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let plan = ctx
+        .table("empty")
+        .await?
+        .select_columns(&["name"])?
+        .into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(
+        format!("{}", plan.display_indent_schema()),
+        format!("{}", restored.display_indent_schema()),
+    );
+    Ok(())
+}
+
+// Regression test for https://github.com/apache/datafusion/issues/22065:
+// the decoder must preserve `null_aware = true` (NOT IN semantics)
+// across a to_proto -> from_proto round trip. `null_equality` is at
+// its default (`NullEqualsNothing`).
+#[tokio::test]
+async fn roundtrip_join_null_aware() -> Result<()> {
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_expr::JoinType;
+
+    let ctx = SessionContext::new();
+    let sql = "
+        SELECT id
+        FROM (VALUES (1), (2), (3)) AS t1(id)
+        WHERE id NOT IN (
+            SELECT bad_id
+            FROM (VALUES (CAST(1 AS INT)), (CAST(NULL AS INT))) AS excludes(bad_id)
+        )
+    ";
+
+    let df = ctx.sql(sql).await?;
+    let plan = ctx.state().optimize(df.logical_plan())?;
+
+    let mut found_null_aware = false;
+    plan.apply(|n| {
+        if let LogicalPlan::Join(j) = n
+            && j.join_type == JoinType::LeftAnti
+            && j.null_aware
+        {
+            found_null_aware = true;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert!(found_null_aware);
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+// Regression test for `null_equality` round-trip (related to #22065):
+// the decoder must preserve a non-default `null_equality`
+// (`NullEqualsNull`) across a to_proto -> from_proto round trip.
+// `null_aware` is at its default (`false`).
+#[tokio::test]
+async fn roundtrip_join_null_equality() -> Result<()> {
+    use datafusion_common::NullEquality;
+    use datafusion_expr::JoinType;
+    use datafusion_expr::logical_plan::{Join, JoinConstraint};
+
+    let ctx = SessionContext::new();
+
+    let left_schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let right_schema =
+        Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+    ctx.register_table(
+        "t1",
+        Arc::new(datafusion::datasource::empty::EmptyTable::new(left_schema)),
+    )?;
+    ctx.register_table(
+        "t2",
+        Arc::new(datafusion::datasource::empty::EmptyTable::new(right_schema)),
+    )?;
+    let left = ctx.table("t1").await?.into_optimized_plan()?;
+    let right = ctx.table("t2").await?.into_optimized_plan()?;
+
+    let join = LogicalPlan::Join(Join::try_new(
+        Arc::new(left),
+        Arc::new(right),
+        vec![(col("t1.a"), col("t2.b"))],
+        None,
+        JoinType::Inner,
+        JoinConstraint::On,
+        NullEquality::NullEqualsNull,
+        false,
+    )?);
+
+    let bytes = logical_plan_to_bytes(&join)?;
+    let rt = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{join:?}"), format!("{rt:?}"));
 
     Ok(())
 }

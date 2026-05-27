@@ -176,5 +176,15 @@ select list_empty(arrow_cast(make_array(NULL), 'LargeList(Int64)'));
 ----
 false
 
+query B
+select empty(arrow_cast([1], 'ListView(Int64)'));
+----
+false
+
+query B
+select empty(arrow_cast([1], 'LargeListView(Int64)'));
+----
+false
+
 
 include ./cleanup.slt.part

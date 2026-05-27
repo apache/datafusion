@@ -476,7 +476,7 @@ impl TableProvider for IndexTableProvider {
             .partitioned_file()
             // provide the starting access plan to the DataSourceExec by
             // storing it as  "extensions" on PartitionedFile
-            .with_extensions(Arc::new(access_plan) as _);
+            .with_extension(access_plan);
 
         // Prepare for scanning
         let schema = self.schema();

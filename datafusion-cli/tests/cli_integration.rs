@@ -121,7 +121,7 @@ async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String>
 }
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for tests
     let _ = env_logger::try_init();
@@ -219,7 +219,7 @@ fn test_cli_top_memory_consumers<'a>(
     let _bound = bind_to_settings(snapshot_name);
 
     let mut cmd = cli();
-    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1 desc;";
     cmd.args(["--memory-limit", "10M", "--command", sql]);
     cmd.args(top_memory_consumers);
 
@@ -237,7 +237,7 @@ fn test_cli_top_memory_consumers_with_mem_pool_type<'a>(
     let _bound = bind_to_settings(snapshot_name);
 
     let mut cmd = cli();
-    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1 desc;";
     cmd.args([
         "--memory-limit",
         "10M",

@@ -35,7 +35,6 @@ use arrow::array::{RecordBatch, UInt32Array};
 use arrow::compute::{BatchCoalescer, take_record_batch};
 use arrow::datatypes::SchemaRef;
 use arrow::row::{OwnedRow, RowConverter};
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{HashMap, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -332,17 +331,6 @@ impl ExecutionPlan for PartitionedTopKExec {
         )?))
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
-    }
-
     fn execute(
         &self,
         partition: usize,
@@ -495,6 +483,8 @@ async fn do_partitioned_topk(
             topk.insert_batch(sub_batch)?;
         }
     }
+    // Release the input pipeline now that accumulation is complete.
+    drop(input);
 
     // ---------- Emit phase ----------
     // Sort partition keys so output is ordered by (partition_keys, order_keys).

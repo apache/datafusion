@@ -21,9 +21,11 @@ use std::mem;
 use std::sync::Arc;
 
 use datafusion_catalog::Session;
-use datafusion_common::{HashMap, Result, ScalarValue, assert_or_internal_err};
-use datafusion_datasource::ListingTableUrl;
+use datafusion_common::{
+    HashMap, Result, ScalarValue, TableReference, assert_or_internal_err,
+};
 use datafusion_datasource::PartitionedFile;
+use datafusion_datasource::{FileExtensions, ListingTableUrl};
 use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
 use arrow::{
@@ -85,12 +87,26 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         | Expr::ScalarSubquery(_)
         | Expr::SetComparison(_)
         | Expr::GroupingSet(_)
-        | Expr::Case(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::Case(_)
+        | Expr::Lambda(_)
+        | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
 
         Expr::ScalarFunction(scalar_function) => {
             match scalar_function.func.signature().volatility {
                 Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
                 // TODO: Stable functions could be `applicable`, but that would require access to the context
+                // https://github.com/apache/datafusion/issues/21690
+                Volatility::Stable | Volatility::Volatile => {
+                    is_applicable = false;
+                    Ok(TreeNodeRecursion::Stop)
+                }
+            }
+        }
+        Expr::HigherOrderFunction(hof) => {
+            match hof.func.signature().volatility {
+                Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
+                // TODO: Stable functions could be `applicable`, but that would require access to the context
+                // https://github.com/apache/datafusion/issues/21690
                 Volatility::Stable | Volatility::Volatile => {
                     is_applicable = false;
                     Ok(TreeNodeRecursion::Stop)
@@ -102,6 +118,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
         // - Can `Wildcard` be considered as a `Literal`?
         // - ScalarVariable could be `applicable`, but that would require access to the context
+        //   https://github.com/apache/datafusion/issues/21690
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         Expr::AggregateFunction { .. }
@@ -252,14 +269,15 @@ fn populate_partition_values<'a>(
         match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(Column { name, .. }), Expr::Literal(val, _))
-                | (Expr::Literal(val, _), Expr::Column(Column { name, .. })) => {
+                | (Expr::Literal(val, _), Expr::Column(Column { name, .. }))
                     if partition_values
                         .insert(name, PartitionValue::Single(val.to_string()))
-                        .is_some()
-                    {
-                        partition_values.insert(name, PartitionValue::Multi);
-                    }
+                        .is_some() =>
+                {
+                    partition_values.insert(name, PartitionValue::Multi);
                 }
+                (Expr::Column(Column { .. }), Expr::Literal(_, _))
+                | (Expr::Literal(_, _), Expr::Column(Column { .. })) => {}
                 _ => {}
             },
             Operator::And => {
@@ -367,6 +385,7 @@ fn try_into_partitioned_file(
 
     let mut pf: PartitionedFile = object_meta.into();
     pf.partition_values = partition_values;
+    pf.table_reference.clone_from(table_path.get_table_ref());
 
     Ok(Some(pf))
 }
@@ -401,8 +420,15 @@ pub async fn pruned_partition_list<'a>(
             table_path
         );
 
-        // if no partition col => simply list all the files
-        Ok(objects.map_ok(|object_meta| object_meta.into()).boxed())
+        // if no partition col => list all the files
+        Ok(objects
+            .try_filter_map(|object_meta| {
+                futures::future::ready(object_meta_to_partitioned_file(
+                    object_meta,
+                    table_path.get_table_ref(),
+                ))
+            })
+            .boxed())
     } else {
         let df_schema = DFSchema::from_unqualified_fields(
             partition_cols
@@ -425,6 +451,22 @@ pub async fn pruned_partition_list<'a>(
             })
             .boxed())
     }
+}
+
+fn object_meta_to_partitioned_file(
+    object_meta: ObjectMeta,
+    table_ref: &Option<TableReference>,
+) -> Result<Option<PartitionedFile>> {
+    Ok(Some(PartitionedFile {
+        object_meta,
+        partition_values: vec![],
+        range: None,
+        statistics: None,
+        ordering: None,
+        extensions: FileExtensions::new(),
+        metadata_size_hint: None,
+        table_reference: table_ref.clone(),
+    }))
 }
 
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
