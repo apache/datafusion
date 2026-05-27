@@ -18,7 +18,7 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{Result, not_impl_err};
+use datafusion_common::{Result, not_impl_err, utils::split_vec_min_alloc};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,13 +45,7 @@ impl EmitTo {
                 // Take the entire vector, leave new (empty) vector
                 std::mem::take(v)
             }
-            Self::First(n) => {
-                // get end n+1,.. values into t
-                let mut t = v.split_off(*n);
-                // leave n+1,.. in v
-                std::mem::swap(v, &mut t);
-                t
-            }
+            Self::First(n) => split_vec_min_alloc(v, *n),
         }
     }
 }
