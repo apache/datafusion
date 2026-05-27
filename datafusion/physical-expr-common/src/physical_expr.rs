@@ -556,6 +556,24 @@ pub mod proto_encode {
         ) -> Result<PhysicalExprNode> {
             self.encoder.encode(expr)
         }
+
+        /// Encode a sequence of child expressions, preserving order.
+        ///
+        /// Convenience wrapper over [`Self::encode_child`] for expressions
+        /// holding a `repeated` proto field (e.g. the `list` of an `InList`).
+        /// The first encode error short-circuits.
+        pub fn encode_children_expressions<'b, I>(
+            &self,
+            exprs: I,
+        ) -> Result<Vec<PhysicalExprNode>>
+        where
+            I: IntoIterator<Item = &'b Arc<dyn PhysicalExpr>>,
+        {
+            exprs
+                .into_iter()
+                .map(|expr| self.encode_child(expr))
+                .collect()
+        }
     }
 
     /// Internal dispatch trait. Implementors live in `datafusion-proto` and
@@ -635,6 +653,43 @@ pub mod proto_decode {
         /// [`PhysicalExtensionCodec::try_decode_expr`]: https://docs.rs/datafusion-proto/latest/datafusion_proto/physical_plan/trait.PhysicalExtensionCodec.html#method.try_decode_expr
         pub fn decode(&self, node: &PhysicalExprNode) -> Result<Arc<dyn PhysicalExpr>> {
             self.decoder.decode(node, self.schema)
+        }
+
+        /// Decode a required child node, erroring if it is absent.
+        ///
+        /// Proto child expressions are encoded as `Option<Box<PhysicalExprNode>>`;
+        /// pass the field directly (e.g. `node.expr.as_deref()`). `expr_name`
+        /// is the expression being decoded (e.g. `"InListExpr"`) and `field`
+        /// the proto field (e.g. `"expr"`); both are woven into the error so
+        /// it names *where* the missing field is, without each author
+        /// hand-rolling the string.
+        pub fn decode_required_expression(
+            &self,
+            node: Option<&PhysicalExprNode>,
+            expr_name: &str,
+            field: &str,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            let node = node.ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "{expr_name} is missing required field '{field}'"
+                )
+            })?;
+            self.decode(node)
+        }
+
+        /// Decode a sequence of child nodes, preserving order.
+        ///
+        /// Convenience wrapper over [`Self::decode`] for expressions holding a
+        /// `repeated` proto field (e.g. the `list` of an `InList`). The first
+        /// decode error short-circuits.
+        pub fn decode_children_expressions<'b, I>(
+            &self,
+            nodes: I,
+        ) -> Result<Vec<Arc<dyn PhysicalExpr>>>
+        where
+            I: IntoIterator<Item = &'b PhysicalExprNode>,
+        {
+            nodes.into_iter().map(|node| self.decode(node)).collect()
         }
     }
 
@@ -870,6 +925,12 @@ pub fn snapshot_generation(expr: &Arc<dyn PhysicalExpr>) -> u64 {
 /// Check if the given `PhysicalExpr` is dynamic.
 /// Internally this calls [`snapshot_generation`] to check if the generation is non-zero,
 /// any dynamic `PhysicalExpr` should have a non-zero generation.
+#[deprecated(
+    since = "55.0.0",
+    note = "Downcast to `DynamicFilterPhysicalExpr`, or use \
+    `DynamicFilterTracking::classify(expr).contains_dynamic_filter()` from \
+    `datafusion_physical_expr`"
+)]
 pub fn is_dynamic_physical_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     // If the generation is non-zero, then this `PhysicalExpr` is dynamic.
     snapshot_generation(expr) != 0
