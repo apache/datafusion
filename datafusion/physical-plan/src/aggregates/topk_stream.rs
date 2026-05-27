@@ -28,7 +28,8 @@ use crate::aggregates::{
 use crate::metrics::BaselineMetrics;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
-use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::array::{Array, ArrayRef, RecordBatch, new_null_array};
+use arrow::compute::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::print_batches;
 use datafusion_common::Result;
@@ -46,6 +47,7 @@ pub struct GroupedTopKAggregateStream {
     partition: usize,
     row_count: usize,
     started: bool,
+    done: bool,
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
@@ -53,6 +55,8 @@ pub struct GroupedTopKAggregateStream {
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     group_by: Arc<PhysicalGroupBy>,
     priority_map: PriorityMap,
+    /// Whether a NULL group key has been seen (only tracked for DISTINCT queries)
+    null_group_seen: bool,
 }
 
 impl GroupedTopKAggregateStream {
@@ -109,6 +113,7 @@ impl GroupedTopKAggregateStream {
         Ok(GroupedTopKAggregateStream {
             partition,
             started: false,
+            done: false,
             row_count: 0,
             schema: agg_schema,
             input,
@@ -117,6 +122,7 @@ impl GroupedTopKAggregateStream {
             aggregate_arguments,
             group_by,
             priority_map,
+            null_group_seen: false,
         })
     }
 }
@@ -128,6 +134,10 @@ impl RecordBatchStream for GroupedTopKAggregateStream {
 }
 
 impl GroupedTopKAggregateStream {
+    fn is_distinct(&self) -> bool {
+        self.aggregate_arguments.is_empty()
+    }
+
     fn intern(&mut self, ids: &ArrayRef, vals: &ArrayRef) -> Result<()> {
         let _timer = self.group_by_metrics.time_calculating_group_ids.timer();
 
@@ -138,6 +148,9 @@ impl GroupedTopKAggregateStream {
         let has_nulls = vals.null_count() > 0;
         for row_idx in 0..len {
             if has_nulls && vals.is_null(row_idx) {
+                if self.is_distinct() {
+                    self.null_group_seen = true;
+                }
                 continue;
             }
             self.priority_map.insert(row_idx)?;
@@ -153,6 +166,9 @@ impl Stream for GroupedTopKAggregateStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        if self.done {
+            return Poll::Ready(None);
+        }
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let emitting_time = self.group_by_metrics.emitting_time.clone();
         while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
@@ -209,17 +225,32 @@ impl Stream for GroupedTopKAggregateStream {
                     // Release the input pipeline's resources before emitting.
                     let input_schema = self.input.schema();
                     self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-                    if self.priority_map.is_empty() {
+                    if self.priority_map.is_empty() && !self.null_group_seen {
                         trace!("partition {} emit None", self.partition);
+                        self.done = true;
                         return Poll::Ready(None);
                     }
                     let batch = {
                         let _timer = emitting_time.timer();
-                        let mut cols = self.priority_map.emit()?;
+                        let mut cols = if self.priority_map.is_empty() {
+                            vec![]
+                        } else {
+                            self.priority_map.emit()?
+                        };
                         // For DISTINCT case (no aggregate expressions), only use the group key column
                         // since the schema only has one field and key/value are the same
-                        if self.aggregate_arguments.is_empty() {
+                        if self.is_distinct() {
                             cols.truncate(1);
+                            if self.null_group_seen {
+                                let dt = self.schema.field(0).data_type();
+                                let null_arr = new_null_array(dt, 1);
+                                if cols.is_empty() {
+                                    cols.push(null_arr);
+                                } else {
+                                    cols[0] =
+                                        concat(&[cols[0].as_ref(), null_arr.as_ref()])?;
+                                }
+                            }
                         }
                         RecordBatch::try_new(Arc::clone(&self.schema), cols)?
                     };
@@ -232,6 +263,7 @@ impl Stream for GroupedTopKAggregateStream {
                     if log::log_enabled!(Level::Trace) {
                         print_batches(std::slice::from_ref(&batch))?;
                     }
+                    self.done = true;
                     return Poll::Ready(Some(Ok(batch)));
                 }
                 // inner had error, return to caller
