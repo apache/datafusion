@@ -223,3 +223,58 @@ where
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
     }
 }
+
+#[cfg(test)]
+impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
+    fn values_capacity(&self) -> usize {
+        self.values.capacity()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::types::Int32Type;
+    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::datatypes::DataType;
+    use datafusion_expr::EmitTo;
+    use std::sync::Arc;
+
+    /// Mirror of the `EmitTo::take_needed` regression test, applied to the
+    /// concrete `GroupValuesPrimitive` accumulator.
+    ///
+    /// When `n` is small, the old `split_off(n) + swap` pattern used inside
+    /// `emit(EmitTo::First(n))` left `self.values` with a small fresh allocation
+    /// and returned the emitted prefix carrying the original large backing.
+    ///
+    /// With `split_vec_min_alloc` and `n * 2 <= len`, the drain branch is taken:
+    /// the emitted prefix gets a compact allocation and `self.values` retains the
+    /// original large one.
+    #[test]
+    fn emit_first_small_n_allocates_minimally() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+
+        // Intern 20 distinct values; `new()` pre-allocates capacity 128 for `values`.
+        let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..20i32));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+        let capacity_before = gv.values_capacity(); // 128
+
+        // n=4, n*2=8 <= len=20 -> drain branch
+        let emitted = gv.emit(EmitTo::First(4))?;
+
+        assert_eq!(emitted[0].len(), 4);
+
+        // `self.values` must retain its original large allocation.
+        // Old split_off+swap left it with a fresh small allocation (~16).
+        assert_eq!(
+            gv.values_capacity(),
+            capacity_before,
+            "self.values capacity {} should equal original {} after small First(n) emit",
+            gv.values_capacity(),
+            capacity_before,
+        );
+
+        Ok(())
+    }
+}
