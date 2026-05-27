@@ -4224,6 +4224,33 @@ impl ScalarValue {
         cast_options: &CastOptions<'static>,
     ) -> Result<Self> {
         let source_type = self.data_type();
+
+        // Fast path: an identical target type needs no conversion at all.
+        if &source_type == target_type {
+            return Ok(self.clone());
+        }
+
+        // Fast path: conversions among the string types (`Utf8`, `LargeUtf8`,
+        // `Utf8View`) are value-preserving, so we can rewrap the string
+        // directly instead of building a single-row array and invoking the
+        // arrow cast kernel.
+        if matches!(
+            (&source_type, target_type),
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+            )
+        ) {
+            // `self` is one of the string types, so `try_as_str` returns `Some`
+            let value = self.try_as_str().flatten().map(|s| s.to_string());
+            return Ok(match target_type {
+                DataType::Utf8 => ScalarValue::Utf8(value),
+                DataType::LargeUtf8 => ScalarValue::LargeUtf8(value),
+                DataType::Utf8View => ScalarValue::Utf8View(value),
+                _ => unreachable!("matched a string target type above"),
+            });
+        }
+
         if let Some(multiplier) = date_to_timestamp_multiplier(&source_type, target_type)
             && let Some(value) = self.date_scalar_value_as_i64()
         {
@@ -8802,6 +8829,80 @@ mod tests {
             ScalarValue::from("larger than 12 bytes string"),
             DataType::Utf8View,
         );
+
+        // Cases also covered by `try_cast_literal_to_type` in datafusion-expr-common
+
+        // identity casts (exercise the no-conversion fast path in `cast_to`)
+        check_scalar_cast(ScalarValue::Int32(Some(5)), DataType::Int32);
+        check_scalar_cast(ScalarValue::from("foo"), DataType::Utf8);
+        check_scalar_cast(ScalarValue::Utf8(None), DataType::Utf8);
+        check_scalar_cast(
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("foo")),
+            ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        );
+
+        // integer widening / narrowing (in range)
+        check_scalar_cast(ScalarValue::Int32(Some(123)), DataType::Int64);
+        check_scalar_cast(ScalarValue::Int64(Some(123)), DataType::Int32);
+        check_scalar_cast(ScalarValue::UInt32(Some(123)), DataType::Int64);
+        check_scalar_cast(ScalarValue::Int32(Some(123)), DataType::UInt64);
+
+        // integer <-> decimal
+        check_scalar_cast(ScalarValue::Int32(Some(123)), DataType::Decimal128(10, 0));
+        check_scalar_cast(ScalarValue::Decimal128(Some(123), 3, 0), DataType::Int64);
+        // decimal rescale
+        check_scalar_cast(
+            ScalarValue::Decimal128(Some(12300), 5, 2),
+            DataType::Decimal128(8, 5),
+        );
+
+        // timestamp unit conversion
+        check_scalar_cast(
+            ScalarValue::TimestampNanosecond(Some(123456), None),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        );
+        // timestamp timezone conversion
+        check_scalar_cast(
+            ScalarValue::TimestampSecond(Some(12345), None),
+            DataType::Timestamp(TimeUnit::Second, Some("+00:00".into())),
+        );
+        // int64 <-> timestamp
+        check_scalar_cast(
+            ScalarValue::Int64(Some(12345)),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
+        check_scalar_cast(
+            ScalarValue::TimestampSecond(Some(12345), Some("+00:00".into())),
+            DataType::Int64,
+        );
+
+        // additional string conversions
+        check_scalar_cast(ScalarValue::from("foo"), DataType::LargeUtf8);
+        check_scalar_cast(ScalarValue::LargeUtf8(Some("foo".into())), DataType::Utf8);
+        check_scalar_cast(
+            ScalarValue::LargeUtf8(Some("foo".into())),
+            DataType::Utf8View,
+        );
+        check_scalar_cast(ScalarValue::Utf8View(Some("foo".into())), DataType::Utf8);
+
+        // dictionary unwrap
+        check_scalar_cast(
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("foo")),
+            ),
+            DataType::Utf8,
+        );
+
+        // binary -> fixed size binary
+        check_scalar_cast(
+            ScalarValue::Binary(Some(vec![1, 2, 3])),
+            DataType::FixedSizeBinary(3),
+        );
+
         check_scalar_cast(
             {
                 let element_field =
@@ -8891,6 +8992,16 @@ mod tests {
         // turn it back to a scalar
         let cast_scalar = ScalarValue::try_from_array(&cast_array, 0).unwrap();
         assert_eq!(cast_scalar.data_type(), desired_type);
+
+        // `ScalarValue::cast_to` (which has array-free fast paths) must produce
+        // exactly the same result as casting through the arrow kernel above.
+        let cast_to_scalar = scalar
+            .cast_to(&desired_type)
+            .expect("Failed to cast_to scalar");
+        assert_eq!(
+            cast_to_scalar, cast_scalar,
+            "cast_to({scalar:?} -> {desired_type:?}) disagreed with the arrow cast kernel"
+        );
 
         // Some time later the "cast" scalar is turned back into an array:
         let array = cast_scalar
