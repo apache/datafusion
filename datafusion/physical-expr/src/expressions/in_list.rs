@@ -35,6 +35,9 @@ use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
 };
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
+use datafusion_physical_expr_common::datum::{
+    normalize_neg_zero_array, normalize_neg_zero_scalar,
+};
 
 mod array_static_filter;
 mod primitive_filter;
@@ -362,6 +365,10 @@ impl PhysicalExpr for InListExpr {
                 // comparator for unsupported types (nested, RunEndEncoded, etc.).
                 let value = value.into_array(num_rows)?;
                 let lhs_supports_arrow_eq = supports_arrow_eq(value.data_type());
+                // Normalize -0.0 to +0.0 in the LHS once up front so SQL equality
+                // semantics (where -0.0 == +0.0) hold against arrow's totalOrder
+                // comparison kernel.
+                let value_normalized = normalize_neg_zero_array(&value);
 
                 // Helper: compare value against a single list expression
                 let compare_one = |expr: &Arc<dyn PhysicalExpr>| -> Result<BooleanArray> {
@@ -370,7 +377,8 @@ impl PhysicalExpr for InListExpr {
                             if lhs_supports_arrow_eq
                                 && supports_arrow_eq(array.data_type())
                             {
-                                Ok(arrow_eq(&value, &array)?)
+                                let rhs = normalize_neg_zero_array(&array);
+                                Ok(arrow_eq(&value_normalized, &rhs)?)
                             } else {
                                 let cmp = make_comparator(
                                     value.as_ref(),
@@ -391,8 +399,9 @@ impl PhysicalExpr for InListExpr {
                                 // If scalar is null, all comparisons return null
                                 Ok(BooleanArray::from(vec![None; num_rows]))
                             } else if lhs_supports_arrow_eq {
-                                let scalar_datum = scalar.to_scalar()?;
-                                Ok(arrow_eq(&value, &scalar_datum)?)
+                                let rhs_scalar = normalize_neg_zero_scalar(&scalar);
+                                let scalar_datum = rhs_scalar.to_scalar()?;
+                                Ok(arrow_eq(&value_normalized, &scalar_datum)?)
                             } else {
                                 // Convert scalar to 1-element array
                                 let array = scalar.to_array()?;

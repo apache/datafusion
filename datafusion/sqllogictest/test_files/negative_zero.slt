@@ -1,0 +1,151 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+## Per IEEE 754, +0.0 and -0.0 compare equal:
+##   -0.0 == 0.0 is true
+##   -0.0 <  0.0 is false
+##   -0.0 >  0.0 is false
+##   -0.0 >= 0.0 is true
+##   -0.0 <= 0.0 is true
+
+# ---- Float64 scalar literals ----
+
+query BBBBB
+SELECT
+  -0.0 =  0.0 AS eq,
+  -0.0 <  0.0 AS lt,
+  -0.0 <= 0.0 AS le,
+  -0.0 >  0.0 AS gt,
+  -0.0 >= 0.0 AS ge;
+----
+true false true false true
+
+# ---- NotEq, IS NOT DISTINCT FROM, NULL interactions ----
+
+query BBBBB
+SELECT
+  -0.0 <> 0.0 AS neq,
+  -0.0 IS NOT DISTINCT FROM 0.0 AS not_distinct,
+  -0.0 = CAST(NULL AS DOUBLE) AS eq_null,
+  -0.0 IS DISTINCT FROM CAST(NULL AS DOUBLE) AS distinct_null,
+  -0.0 IS NOT DISTINCT FROM CAST(NULL AS DOUBLE) AS not_distinct_null;
+----
+false true NULL true false
+
+# ---- Float32 scalar literals ----
+
+query BBBBB
+SELECT
+  CAST(-0.0 AS REAL) =  CAST(0.0 AS REAL) AS eq,
+  CAST(-0.0 AS REAL) <  CAST(0.0 AS REAL) AS lt,
+  CAST(-0.0 AS REAL) <= CAST(0.0 AS REAL) AS le,
+  CAST(-0.0 AS REAL) >  CAST(0.0 AS REAL) AS gt,
+  CAST(-0.0 AS REAL) >= CAST(0.0 AS REAL) AS ge;
+----
+true false true false true
+
+# ---- Negative zero produced by arithmetic on a column ----
+
+statement ok
+CREATE TABLE t AS VALUES (1, CAST(0.0 AS DOUBLE));
+
+query IRRB
+SELECT
+  column1            AS id,
+  column2 * -1       AS neg_zero,
+  (column2 * -1)     AS neg_zero_again,
+  (column2 * -1) >= 0.0 AS cmp
+FROM t;
+----
+1 0 0 true
+
+# The filter below should remove the only row, since
+# `(y * -1) >= 0.0` is true and `IS TRUE` is true.
+query IR
+SELECT column1 AS id, column2 * -1 AS m_0
+FROM t
+WHERE NOT (((column2 * -1) >= 0.0) IS TRUE);
+----
+
+statement ok
+DROP TABLE t;
+
+# ---- Column-vs-column comparison ----
+
+statement ok
+CREATE TABLE t2 AS VALUES (CAST(0.0 AS DOUBLE), CAST(-0.0 AS DOUBLE));
+
+query BBBBB
+SELECT
+  column1 =  column2 AS eq,
+  column1 >= column2 AS ge_left,
+  column2 >= column1 AS ge_right,
+  column1 IS DISTINCT FROM column2 AS distinct_from,
+  column1 IS NOT DISTINCT FROM column2 AS not_distinct_from
+FROM t2;
+----
+true true true false true
+
+statement ok
+DROP TABLE t2;
+
+# ---- IN list with -0.0 / +0.0 ----
+#
+# Constant list -> static-filter path in InListExpr.
+
+query BBBB
+SELECT
+  CAST(0.0 AS DOUBLE) IN (CAST(-0.0 AS DOUBLE), CAST(1.0 AS DOUBLE)) AS in_pos_in_neg,
+  CAST(-0.0 AS DOUBLE) IN (CAST(0.0 AS DOUBLE)) AS in_neg_in_pos,
+  CAST(0.0 AS DOUBLE) NOT IN (CAST(-0.0 AS DOUBLE)) AS not_in_pos_in_neg,
+  CAST(-0.0 AS DOUBLE) NOT IN (CAST(0.0 AS DOUBLE), CAST(1.0 AS DOUBLE)) AS not_in_neg_in_pos;
+----
+true true false false
+
+# Non-constant list (column reference) -> no static filter, exercises the
+# `value_normalized` / per-list-expression normalization path in in_list.rs.
+
+statement ok
+CREATE TABLE t3 AS VALUES (CAST(0.0 AS DOUBLE), CAST(-0.0 AS DOUBLE));
+
+query BB
+SELECT
+  column1 IN (column2) AS in_col,
+  column1 NOT IN (column2) AS not_in_col
+FROM t3;
+----
+true false
+
+statement ok
+DROP TABLE t3;
+
+# ---- NaN: arrow's totalOrder treats NaN == NaN as true (matches PostgreSQL).
+# Normalizing -0.0 does not change NaN handling.
+#
+# Ordering comparisons are pinned here so that any future arrow/datafusion
+# change in NaN ordering is caught by this test rather than silently drifting.
+
+query BBBBBB
+SELECT
+  CAST('NaN' AS DOUBLE) =  CAST('NaN' AS DOUBLE) AS nan_eq,
+  CAST('NaN' AS DOUBLE) <> CAST('NaN' AS DOUBLE) AS nan_neq,
+  CAST('NaN' AS DOUBLE) <  CAST('NaN' AS DOUBLE) AS nan_lt,
+  CAST('NaN' AS DOUBLE) <= CAST('NaN' AS DOUBLE) AS nan_le,
+  CAST('NaN' AS DOUBLE) >  CAST('NaN' AS DOUBLE) AS nan_gt,
+  CAST('NaN' AS DOUBLE) >= CAST('NaN' AS DOUBLE) AS nan_ge;
+----
+true false false true false true

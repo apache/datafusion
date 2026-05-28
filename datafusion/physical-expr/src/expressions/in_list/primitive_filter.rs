@@ -83,10 +83,20 @@ macro_rules! primitive_static_filter {
             $Name,
             $ArrowType,
             <$ArrowType as ArrowPrimitiveType>::Native,
-            |v| v
+            |v| v,
+            |_values, _v| {}
         );
     };
     ($Name:ident, $ArrowType:ty, $SetValueType:ty, $to_set_value:expr) => {
+        primitive_static_filter!(
+            $Name,
+            $ArrowType,
+            $SetValueType,
+            $to_set_value,
+            |_values, _v| {}
+        );
+    };
+    ($Name:ident, $ArrowType:ty, $SetValueType:ty, $to_set_value:expr, $extra_inserts:expr) => {
         pub(super) struct $Name {
             null_count: usize,
             values: HashSet<$SetValueType>,
@@ -103,6 +113,7 @@ macro_rules! primitive_static_filter {
 
                 for v in in_array.iter().flatten() {
                     values.insert(($to_set_value)(v));
+                    ($extra_inserts)(&mut values, v);
                 }
 
                 Ok(Self { null_count, values })
@@ -224,7 +235,18 @@ primitive_static_filter!(UInt64StaticFilter, UInt64Type);
 // Floats require a wrapper type (OrderedFloat*) to implement Hash/Eq due to NaN semantics
 macro_rules! float_static_filter {
     ($Name:ident, $ArrowType:ty, $OrderedType:ty) => {
-        primitive_static_filter!($Name, $ArrowType, $OrderedType, <$OrderedType>::from);
+        primitive_static_filter!(
+            $Name,
+            $ArrowType,
+            $OrderedType,
+            <$OrderedType>::from,
+            |values: &mut HashSet<$OrderedType>,
+             v: <$ArrowType as ArrowPrimitiveType>::Native| {
+                if v == 0.0 {
+                    values.insert(<$OrderedType>::from(-v));
+                }
+            }
+        );
     };
 }
 

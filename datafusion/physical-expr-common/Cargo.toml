@@ -52,6 +52,7 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-proto-models = { workspace = true, optional = true }
+half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
