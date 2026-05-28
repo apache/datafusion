@@ -24,6 +24,7 @@ pub mod floor;
 pub mod hex;
 pub mod modulus;
 pub mod negative;
+pub mod pow;
 pub mod rint;
 pub mod round;
 pub mod trigonometry;
@@ -42,6 +43,7 @@ make_udf_function!(floor::SparkFloor, floor);
 make_udf_function!(hex::SparkHex, hex);
 make_udf_function!(modulus::SparkMod, modulus);
 make_udf_function!(modulus::SparkPmod, pmod);
+make_udf_function!(pow::SparkPow, pow);
 make_udf_function!(rint::SparkRint, rint);
 make_udf_function!(round::SparkRound, round);
 make_udf_function!(unhex::SparkUnhex, unhex);
@@ -66,6 +68,11 @@ pub mod expr_fn {
     export_functions!((hex, "Computes hex value of the given column.", arg1));
     export_functions!((modulus, "Returns the remainder of division of the first argument by the second argument.", arg1 arg2));
     export_functions!((pmod, "Returns the positive remainder of division of the first argument by the second argument.", arg1 arg2));
+    export_functions!((
+        pow,
+        "Returns base raised to the power of exponent. Returns Infinity for pow(0, negative).",
+        arg1 arg2
+    ));
     export_functions!((
         rint,
         "Returns the double value that is closest in value to the argument and is equal to a mathematical integer.",
@@ -102,6 +109,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         hex(),
         modulus(),
         pmod(),
+        pow(),
         rint(),
         round(),
         unhex(),
