@@ -81,3 +81,6 @@ profile.json.gz
 
 # Claude Code personal settings
 .claude/settings.local.json
+
+# macOS Apple Double files
+._*
