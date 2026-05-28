@@ -25,9 +25,7 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{
-    Result, ScalarValue, cast::as_boolean_array, internal_datafusion_err, internal_err,
-};
+use datafusion_common::{Result, ScalarValue, cast::as_boolean_array, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::interval_arithmetic::Interval;
 #[expect(deprecated)]
@@ -217,20 +215,8 @@ impl NotExpr {
             protobuf::physical_expr_node::ExprType::NotExpr,
             "NotExpr",
         );
-        let expr = ctx
-            .decode_required_expression(not_expr.expr.as_deref(), "NotExpr", "expr")
-            .map_err(|err| match err {
-                datafusion_common::DataFusionError::Internal(msg)
-                    if msg.starts_with("NotExpr is missing required field 'expr'") =>
-                {
-                    internal_datafusion_err!(
-                        "NotExpr is missing required field 'expr' (expr_id: {:?}, expr_type: {:?})",
-                        node.expr_id,
-                        &node.expr_type
-                    )
-                }
-                other => other,
-            })?;
+        let expr =
+            ctx.decode_required_expression(not_expr.expr.as_deref(), "NotExpr", "expr")?;
 
         Ok(Arc::new(NotExpr::new(expr)))
     }
@@ -239,53 +225,6 @@ impl NotExpr {
 /// Creates a unary expression NOT
 pub fn not(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(NotExpr::new(arg)))
-}
-
-#[cfg(all(test, feature = "proto"))]
-mod proto_tests {
-    use std::sync::Arc;
-
-    use super::*;
-
-    use arrow::datatypes::Schema;
-    use datafusion_common::DataFusionError;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::{
-        PhysicalExprDecode, PhysicalExprDecodeCtx,
-    };
-    use datafusion_proto_models::protobuf::{
-        PhysicalExprNode, PhysicalNot, physical_expr_node,
-    };
-
-    struct NoopDecoder;
-
-    impl PhysicalExprDecode for NoopDecoder {
-        fn decode(
-            &self,
-            _node: &PhysicalExprNode,
-            _schema: &Schema,
-        ) -> Result<Arc<dyn PhysicalExpr>> {
-            unreachable!("missing child should be rejected before decoding")
-        }
-    }
-
-    #[test]
-    fn test_from_proto_missing_child() {
-        let node = PhysicalExprNode {
-            expr_id: Some(42),
-            expr_type: Some(physical_expr_node::ExprType::NotExpr(Box::new(
-                PhysicalNot { expr: None },
-            ))),
-        };
-        let schema = Schema::empty();
-        let decoder = NoopDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
-
-        let err = NotExpr::try_from_proto(&node, &ctx).unwrap_err();
-        assert!(matches!(err, DataFusionError::Internal(msg)
-                if msg.contains("NotExpr is missing required field 'expr'")
-                    && msg.contains("expr_id: Some(42)")
-                    && msg.contains("expr_type: Some(NotExpr")));
-    }
 }
 
 #[cfg(test)]
@@ -455,5 +394,114 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, true)]))
         });
         Arc::clone(&SCHEMA)
+    }
+}
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::{Column, col};
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalNot, physical_expr_node,
+    };
+
+    /// Build a `NotExpr` proto node with the given child.
+    fn not_node(expr: Option<Box<PhysicalExprNode>>) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::NotExpr(Box::new(
+                PhysicalNot { expr },
+            ))),
+        }
+    }
+
+    /// A `NotExpr` over a boolean column.
+    fn not_fixture() -> NotExpr {
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
+        NotExpr::new(col("a", &schema).unwrap())
+    }
+
+    #[test]
+    fn try_to_proto_encodes_not_expr() {
+        let not = not_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = not
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("NotExpr should encode to Some(node)");
+
+        assert!(node.expr_id.is_none());
+        let not_node = match node.expr_type {
+            Some(physical_expr_node::ExprType::NotExpr(boxed)) => *boxed,
+            other => panic!("expected a NotExpr node, got {other:?}"),
+        };
+        assert!(not_node.expr.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let not = not_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = not.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_not_expr() {
+        let node = not_node(Some(Box::new(column_node("a"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = NotExpr::try_from_proto(&node, &ctx).unwrap();
+        let not = decoded
+            .downcast_ref::<NotExpr>()
+            .expect("decoded expr should be a NotExpr");
+        assert!(not.arg().downcast_ref::<Column>().is_some());
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_not_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = NotExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a NotExpr"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_expr() {
+        let node = not_node(None);
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = NotExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("NotExpr is missing required field 'expr'"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_propagates_expr_decode_error() {
+        let node = not_node(Some(Box::new(column_node("a"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = NotExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
     }
 }
