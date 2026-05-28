@@ -33,12 +33,14 @@ use datafusion_common::tree_node::{
 use datafusion_common::{JoinSide, JoinType, Result};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::projection::{
     ProjectionExec, remove_unnecessary_projections,
 };
+use datafusion_physical_plan::sorts::sort::SortExec;
 
 /// This rule inspects `ProjectionExec`'s in the given physical plan and tries to
 /// remove or swap with its child.
@@ -74,6 +76,10 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
             })
             .map(|t| t.data)?;
 
+        let plan = plan
+            .transform_down(push_topk_below_projection)
+            .map(|t| t.data)?;
+
         plan.transform_down(remove_unnecessary_projections).data()
     }
 
@@ -84,6 +90,60 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Moves a TopK below a projection when its sort expressions are columns in
+/// the projection output. This lets TopK run before computed projection
+/// expressions such as constants.
+fn push_topk_below_projection(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let Some(sort_exec) = plan.downcast_ref::<SortExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    let Some(fetch) = sort_exec.fetch() else {
+        return Ok(Transformed::no(plan));
+    };
+    let Some(projection) = sort_exec.input().downcast_ref::<ProjectionExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    if projection
+        .expr()
+        .iter()
+        .all(|expr| expr.expr.downcast_ref::<Column>().is_some())
+    {
+        return Ok(Transformed::no(plan));
+    }
+    let Some(sort_exprs) =
+        rewrite_sort_exprs_for_projection_input(sort_exec.expr(), projection)
+    else {
+        return Ok(Transformed::no(plan));
+    };
+
+    let new_sort = Arc::new(
+        SortExec::new(sort_exprs, Arc::clone(projection.input()))
+            .with_fetch(Some(fetch))
+            .with_preserve_partitioning(sort_exec.preserve_partitioning()),
+    );
+    let new_projection = ProjectionExec::try_new(projection.expr().to_vec(), new_sort)?;
+
+    Ok(Transformed::yes(Arc::new(new_projection)))
+}
+
+fn rewrite_sort_exprs_for_projection_input(
+    sort_exprs: &LexOrdering,
+    projection: &ProjectionExec,
+) -> Option<LexOrdering> {
+    let exprs = sort_exprs.iter().map(|sort_expr| {
+        let column = sort_expr.expr.downcast_ref::<Column>()?;
+        let projection_expr = projection.expr().get(column.index())?;
+        projection_expr.expr.downcast_ref::<Column>()?;
+        let mut rewritten_sort_expr = sort_expr.clone();
+        rewritten_sort_expr.expr = Arc::clone(&projection_expr.expr);
+        Some(rewritten_sort_expr)
+    });
+
+    LexOrdering::new(exprs.collect::<Option<Vec<_>>>()?)
 }
 
 /// Tries to push down parts of the filter.
@@ -437,10 +497,56 @@ mod test {
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{binary, lit};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use datafusion_physical_plan::displayable;
     use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_physical_plan::projection::ProjectionExpr;
     use insta::assert_snapshot;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn topk_runs_before_computed_projection() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("url", DataType::Utf8, false),
+            Field::new("count", DataType::Int64, false),
+        ]));
+        let input = Arc::new(EmptyExec::new(input_schema)) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: lit(1i64),
+                    alias: "one".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("url", 0)) as Arc<dyn PhysicalExpr>,
+                    alias: "url".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("count", 1)) as Arc<dyn PhysicalExpr>,
+                    alias: "c".to_string(),
+                },
+            ],
+            input,
+        )?;
+        let sort_expr = PhysicalSortExpr::new_default(
+            Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>
+        )
+        .desc();
+        let sort =
+            SortExec::new(LexOrdering::new([sort_expr]).unwrap(), Arc::new(projection))
+                .with_fetch(Some(10));
+
+        let optimizer = ProjectionPushdown::new();
+        let optimized_plan = optimizer.optimize(Arc::new(sort), &Default::default())?;
+
+        let displayable_plan = displayable(optimized_plan.as_ref()).indent(false);
+        assert_snapshot!(displayable_plan.to_string(), @r"
+        ProjectionExec: expr=[1 as one, url@0 as url, count@1 as c]
+          SortExec: TopK(fetch=10), expr=[count@1 DESC], preserve_partitioning=[false]
+            EmptyExec
+        ");
+        Ok(())
+    }
 
     #[tokio::test]
     async fn no_computation_does_not_project() -> Result<()> {
