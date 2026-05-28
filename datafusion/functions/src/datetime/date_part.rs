@@ -175,7 +175,7 @@ impl ScalarUDFImpl for DatePartFunc {
                     .flatten()
                     .filter(|s| !s.is_empty())
                     .map(|part| {
-                        if is_epoch(part) {
+                        if is_epoch(part) || is_fractional_second(part) {
                             Field::new(self.name(), DataType::Float64, nullable)
                         } else if is_nanosecond(part) {
                             // See notes on [seconds_ns] for rationale
@@ -225,8 +225,8 @@ impl ScalarUDFImpl for DatePartFunc {
                 IntervalUnit::Day => date_part(array.as_ref(), DatePart::Day)?,
                 IntervalUnit::Hour => date_part(array.as_ref(), DatePart::Hour)?,
                 IntervalUnit::Minute => date_part(array.as_ref(), DatePart::Minute)?,
-                IntervalUnit::Second => seconds_as_i32(array.as_ref(), Second)?,
-                IntervalUnit::Millisecond => seconds_as_i32(array.as_ref(), Millisecond)?,
+                IntervalUnit::Second => seconds(array.as_ref(), Second)?,
+                IntervalUnit::Millisecond => seconds(array.as_ref(), Millisecond)?,
                 IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
                 IntervalUnit::Nanosecond => seconds_ns(array.as_ref())?,
                 // century and decade are not supported by `DatePart`, although they are supported in postgres
@@ -345,6 +345,12 @@ fn is_epoch(part: &str) -> bool {
 fn is_nanosecond(part: &str) -> bool {
     IntervalUnit::from_str(part_normalization(part))
         .map(|p| matches!(p, IntervalUnit::Nanosecond))
+        .unwrap_or(false)
+}
+
+fn is_fractional_second(part: &str) -> bool {
+    IntervalUnit::from_str(part_normalization(part))
+        .map(|p| matches!(p, IntervalUnit::Second | IntervalUnit::Millisecond))
         .unwrap_or(false)
 }
 
@@ -470,7 +476,8 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     // Special case where there are no nulls.
     if subsecs.null_count() == 0 {
         let r: Float64Array = binary(secs, subsecs, |secs, subsecs| {
-            (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64)) * sf
+            (secs as f64 * sf)
+                + (((subsecs % 1_000_000_000) as f64 * sf) / 1_000_000_000_f64)
         })?;
         Ok(Arc::new(r))
     } else {
@@ -482,8 +489,8 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
             .map(|(secs, subsecs)| {
                 secs.map(|secs| {
                     let subsecs = subsecs.unwrap_or(0);
-                    (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64))
-                        * sf
+                    (secs as f64 * sf)
+                        + (((subsecs % 1_000_000_000) as f64 * sf) / 1_000_000_000_f64)
                 })
             })
             .collect();
