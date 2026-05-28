@@ -182,7 +182,7 @@ fn general_repeat<O: OffsetSizeTrait>(
     let total_repeated_values =
         (0..count_array.len()).try_fold(0usize, |total, idx| {
             total
-                .checked_add(get_count_with_validity(count_array, idx))
+                .checked_add(repeat_count(count_array, idx).unwrap_or_default())
                 .ok_or_else(|| {
                     exec_datafusion_err!(
                         "array_repeat: total repeated values overflowed usize"
