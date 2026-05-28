@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`HigherOrderUDF`] definitions for array_any_match function.
+//! [`datafusion_expr::HigherOrderUDF`] definitions for array_any_match function.
 
 use arrow::{
     array::{Array, AsArray, BooleanArray, BooleanBuilder, new_null_array},

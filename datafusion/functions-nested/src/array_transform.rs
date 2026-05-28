@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`HigherOrderUDF`] definitions for array_transform function.
+//! [`datafusion_expr::HigherOrderUDF`] definitions for array_transform function.
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, LargeListArray, ListArray},

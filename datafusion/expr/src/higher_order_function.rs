@@ -810,7 +810,7 @@ pub trait HigherOrderUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         )
     }
 
-    /// Returns the documentation for this HigherOrderUDF.
+    /// Returns the documentation for this function.
     ///
     /// Documentation can be accessed programmatically as well as generating
     /// publicly facing documentation.

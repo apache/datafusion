@@ -452,7 +452,7 @@ impl HigherOrderFunction {
         self.func.name()
     }
 
-    /// Invokes the inner function [`HigherOrderUDF::lambda_parameters`]
+    /// Invokes the inner function [`crate::HigherOrderUDFImpl::lambda_parameters`]
     /// using the arguments of this invocation. This expression lambda
     /// variables must be already resolved either by coming from the
     /// default sql planner or by calling [Expr::resolve_lambda_variables]

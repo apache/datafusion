@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`HigherOrderUDF`] definitions for array_filter function.
+//! [`datafusion_expr::HigherOrderUDF`] definitions for array_filter function.
 
 use arrow::{
     array::{
