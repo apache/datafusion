@@ -208,11 +208,7 @@ impl PhysicalExpr for HashExpr {
         ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
-        let on_columns = self
-            .on_columns
-            .iter()
-            .map(|e| ctx.encode_child(e))
-            .collect::<Result<Vec<_>>>()?;
+        let on_columns = ctx.encode_children_expressions(&self.on_columns)?;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
@@ -247,11 +243,7 @@ impl HashExpr {
             Some(protobuf::physical_expr_node::ExprType::HashExpr(h)) => h,
             _ => return internal_err!("PhysicalExprNode is not a HashExpr"),
         };
-        let on_columns = hash_expr
-            .on_columns
-            .iter()
-            .map(|e| ctx.decode(e))
-            .collect::<Result<Vec<_>>>()?;
+        let on_columns = ctx.decode_children_expressions(&hash_expr.on_columns)?;
         Ok(Arc::new(HashExpr::new(
             on_columns,
             SeededRandomState::with_seed(hash_expr.seed0),
