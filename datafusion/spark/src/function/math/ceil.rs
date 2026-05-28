@@ -93,7 +93,7 @@ impl ScalarUDFImpl for SparkCeil {
 
         match &arg_types[0] {
             DataType::Decimal128(_, _) if has_scale => {
-                exec_err!("2-argument ceil is not yet supported for decimal inputs")
+                not_impl_err!("2-argument ceil is not yet supported for decimal inputs")
             }
             DataType::Decimal128(p, s) => {
                 if *s > 0 {
