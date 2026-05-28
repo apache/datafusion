@@ -43,6 +43,7 @@ use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::expr_references_scalar_udf;
@@ -684,15 +685,16 @@ impl FileSource for ParquetSource {
             return Ok(Some(Arc::new(source)));
         }
 
-        let (table_schema, row_index_name, row_index_table_idx) =
-            table_schema_with_row_index(self.table_schema());
-        source.table_schema = table_schema;
+        // If we can find a reference to `FileRowIndexFunc`, we add it as a virtual column
+        // or re-use an existing one in the table's schema.
+        let (table_schema, row_index_col) =
+            table_schema_with_row_index_col(self.table_schema());
 
+        source.table_schema = table_schema;
         source.projection = rewrite_file_row_index_projection(
             &self.projection,
             projection,
-            &row_index_name,
-            row_index_table_idx,
+            &row_index_col,
         )?;
 
         Ok(Some(Arc::new(source)))
@@ -977,15 +979,12 @@ impl FileSource for ParquetSource {
             reversed_eq_properties.ordering_satisfy(order.iter().cloned())?;
         let sort_order = LexOrdering::new(order.iter().cloned());
         let column_in_file_schema = sort_order.as_ref().is_some_and(|s| {
-            s.first()
-                .expr
-                .downcast_ref::<datafusion_physical_expr::expressions::Column>()
-                .is_some_and(|col| {
-                    self.table_schema
-                        .file_schema()
-                        .field_with_name(col.name())
-                        .is_ok()
-                })
+            s.first().expr.downcast_ref::<Column>().is_some_and(|col| {
+                self.table_schema
+                    .file_schema()
+                    .field_with_name(col.name())
+                    .is_ok()
+            })
         });
 
         if !column_in_file_schema && !reversed_satisfies {
@@ -1014,9 +1013,7 @@ impl FileSource for ParquetSource {
     }
 }
 
-fn table_schema_with_row_index(
-    table_schema: &TableSchema,
-) -> (TableSchema, String, usize) {
+fn table_schema_with_row_index_col(table_schema: &TableSchema) -> (TableSchema, Column) {
     let virtual_offset = table_schema.file_schema().fields().len()
         + table_schema.table_partition_cols().len();
     if let Some((idx, field)) =
@@ -1032,8 +1029,7 @@ fn table_schema_with_row_index(
     {
         return (
             table_schema.clone(),
-            field.name().clone(),
-            virtual_offset + idx,
+            Column::new(field.name(), virtual_offset + idx),
         );
     }
 
@@ -1057,11 +1053,11 @@ fn table_schema_with_row_index(
         Field::new(&row_index_name, DataType::Int64, true).with_extension_type(RowNumber),
     );
     (
-        table_schema
-            .clone()
-            .with_virtual_columns(vec![row_index_field]),
-        row_index_name,
-        row_index_table_idx,
+        TableSchema::builder(Arc::clone(table_schema.file_schema()))
+            .with_table_partition_cols(table_schema.table_partition_cols().clone())
+            .with_virtual_columns(vec![row_index_field])
+            .build(),
+        Column::new(&row_index_name, row_index_table_idx),
     )
 }
 
@@ -1730,12 +1726,11 @@ mod tests {
                 .or(col("value").eq(logical_lit(4i64))),
             full_schema,
         );
-        let (_, row_index_name, row_index_table_idx) =
-            table_schema_with_row_index(source.table_schema());
+        let (_, row_index_col) = table_schema_with_row_index_col(source.table_schema());
         let row_index = rewrite_file_row_index_expr(
             logical2physical(&file_row_index().gt(logical_lit(2i64)), full_schema),
-            &row_index_name,
-            row_index_table_idx,
+            row_index_col.name(),
+            row_index_col.index(),
         )
         .expect("file_row_index should rewrite to the row_number virtual column");
 

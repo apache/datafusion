@@ -163,21 +163,19 @@ pub fn rewrite_file_row_index_expr(
 pub fn rewrite_file_row_index_projection(
     base_projection: &ProjectionExprs,
     projection: &ProjectionExprs,
-    row_index_name: &str,
-    row_index_table_idx: usize,
+    row_index_col: &Column,
 ) -> Result<ProjectionExprs> {
     let mut base_exprs = base_projection.as_ref().to_vec();
-    let row_index_projection_idx =
-        row_index_projection_idx(&base_exprs, row_index_name, row_index_table_idx);
+    let row_index_projection_idx = row_index_projection_idx(&base_exprs, row_index_col);
     if row_index_projection_idx == base_exprs.len() {
         base_exprs.push(ProjectionExpr {
-            expr: Arc::new(Column::new(row_index_name, row_index_table_idx)),
-            alias: row_index_name.to_string(),
+            expr: Arc::new(row_index_col.clone()),
+            alias: row_index_col.name().to_owned(),
         });
     }
 
     let rewritten_projection = projection.clone().try_map_exprs(|expr| {
-        rewrite_file_row_index_expr(expr, row_index_name, row_index_projection_idx)
+        rewrite_file_row_index_expr(expr, row_index_col.name(), row_index_projection_idx)
     })?;
 
     ProjectionExprs::new(base_exprs).try_merge(&rewritten_projection)
@@ -185,8 +183,7 @@ pub fn rewrite_file_row_index_projection(
 
 fn row_index_projection_idx(
     projection: &[ProjectionExpr],
-    row_index_name: &str,
-    row_index_table_idx: usize,
+    row_index_col: &Column,
 ) -> usize {
     projection
         .iter()
@@ -194,10 +191,7 @@ fn row_index_projection_idx(
             projection
                 .expr
                 .downcast_ref::<Column>()
-                .is_some_and(|column| {
-                    column.name() == row_index_name
-                        && column.index() == row_index_table_idx
-                })
+                .is_some_and(|column| column == row_index_col)
         })
         .unwrap_or(projection.len())
 }

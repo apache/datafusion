@@ -661,7 +661,7 @@ impl ProjectionExprs {
         for proj_expr in self.exprs.iter() {
             let expr = &proj_expr.expr;
             let col_stats = if let Some(col) = expr.downcast_ref::<Column>() {
-                stats.column_statistics[col.index()].clone()
+                column_statistics_at(&stats.column_statistics, col.index())
             } else if let Some(literal) = expr.downcast_ref::<Literal>() {
                 // Handle literal expressions (constants) by calculating proper statistics
                 let data_type = expr.data_type(output_schema)?;
@@ -736,7 +736,7 @@ fn project_column_statistics_through_expr(
     column_stats: &[ColumnStatistics],
 ) -> ColumnStatistics {
     if let Some(col) = expr.downcast_ref::<Column>() {
-        return column_stats[col.index()].clone();
+        return column_statistics_at(column_stats, col.index());
     }
     let Some(cast_expr) = expr.downcast_ref::<CastExpr>() else {
         return ColumnStatistics::new_unknown();
@@ -758,6 +758,16 @@ fn project_column_statistics_through_expr(
         sum_value: Precision::Absent,
         byte_size: Precision::Absent,
     }
+}
+
+fn column_statistics_at(
+    column_stats: &[ColumnStatistics],
+    index: usize,
+) -> ColumnStatistics {
+    column_stats
+        .get(index)
+        .cloned()
+        .unwrap_or_else(ColumnStatistics::new_unknown)
 }
 
 impl<'a> IntoIterator for &'a ProjectionExprs {
@@ -2867,6 +2877,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_project_statistics_duplicate_column() -> Result<()> {
         let input_stats = get_stats();
         let col0 = input_stats.column_statistics[0].clone();
@@ -2913,6 +2924,54 @@ pub(crate) mod tests {
                 byte_size: Precision::Absent,
             }
         );
+=======
+    fn test_project_statistics_missing_column_stats_are_unknown() -> Result<()> {
+        let mut input_stats = get_stats();
+        let input_schema = get_schema();
+        input_stats.column_statistics.truncate(2);
+
+        // The schema has col2, but the statistics do not. This can happen for
+        // source-provided virtual columns that are available at execution time
+        // but not represented in file-level statistics.
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col2", 2)),
+                alias: "virtual_col".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(CastExpr::new(
+                    Arc::new(Column::new("col2", 2)),
+                    DataType::Float64,
+                    None,
+                )),
+                alias: "casted_virtual_col".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col0", 0)),
+                alias: "physical_col".to_string(),
+            },
+        ]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        assert_eq!(output_stats.column_statistics.len(), 3);
+        assert_eq!(
+            output_stats.column_statistics[0],
+            ColumnStatistics::new_unknown()
+        );
+        assert_eq!(
+            output_stats.column_statistics[1],
+            ColumnStatistics::new_unknown()
+        );
+        assert_eq!(
+            output_stats.column_statistics[2].max_value,
+            Precision::Exact(ScalarValue::Int64(Some(21)))
+        );
+
+>>>>>>> b854afd3d (Some updates)
         Ok(())
     }
 
