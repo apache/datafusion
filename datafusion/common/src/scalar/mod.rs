@@ -4216,28 +4216,28 @@ impl ScalarValue {
     /// default [`CastOptions`].
     ///
     /// This is a general-purpose cast with the same semantics as the Arrow
-    /// [`cast_with_options`] kernel, including ones that **lose information**
-    /// -- for example casting floating point values such as `123.45` into the
-    /// integer `123`.
+    /// [`cast_with_options`] kernel and can therefore **lose information** --
+    /// for example casting the floating point value `123.45` to the integer
+    /// `123`.
     ///
     /// Returns an error for casts the Arrow kernel cannot perform.
     ///
-    /// # See also
-    /// - [try_cast_literal_to_type`]: for a *value-preserving* cast
+    /// # See Also
+    /// - [`try_cast_literal_to_type`]: for a *value-preserving* cast
     ///
     /// [`try_cast_literal_to_type`]: https://docs.rs/datafusion/latest/datafusion/logical_expr_common/casts/fn.try_cast_literal_to_type.html
     pub fn cast_to(&self, target_type: &DataType) -> Result<Self> {
         self.cast_to_with_options(target_type, &DEFAULT_CAST_OPTIONS)
     }
 
-    /// Cast this value type `target_type` with the given [`CastOptions`].
+    /// Cast this value to type `target_type` with the given [`CastOptions`].
     ///
     /// # See Also
     /// - [`ScalarValue::cast_to`] for more details.
     /// - [`try_cast_literal_to_type`]: for a *value-preserving* cast
     ///
     /// [`try_cast_literal_to_type`]: https://docs.rs/datafusion/latest/datafusion/logical_expr_common/casts/fn.try_cast_literal_to_type.html
-     pub fn cast_to_with_options(
+    pub fn cast_to_with_options(
         &self,
         target_type: &DataType,
         cast_options: &CastOptions<'static>,
