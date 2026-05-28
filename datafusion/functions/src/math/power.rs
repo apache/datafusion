@@ -474,9 +474,8 @@ impl ScalarUDFImpl for PowerFunc {
                 if value == ScalarValue::new_zero(&exponent_type)? =>
             {
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
-                    &base_type,
-                )?
-                .cast_to(&return_type)?)))
+                    &return_type,
+                )?)))
             }
             Expr::Literal(value, _) if value == ScalarValue::new_one(&exponent_type)? => {
                 let result = if needs_cast(&base_type) {
