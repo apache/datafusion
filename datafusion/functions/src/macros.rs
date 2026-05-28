@@ -245,11 +245,10 @@ macro_rules! make_math_unary_udf {
 
             impl $UDF {
                 pub fn new() -> Self {
-                    use DataType::*;
                     Self {
                         signature: Signature::uniform(
                             1,
-                            vec![Float64, Float32],
+                            vec![DataType::Float64, DataType::Float32],
                             Volatility::Immutable,
                         ),
                     }
@@ -270,7 +269,6 @@ macro_rules! make_math_unary_udf {
 
                     match arg_type {
                         DataType::Float32 => Ok(DataType::Float32),
-                        // For other types (possible values float64/null/int), use Float64
                         _ => Ok(DataType::Float64),
                     }
                 }
@@ -345,8 +343,12 @@ macro_rules! make_math_unary_udf {
 
 /// Macro to create a binary math UDF.
 ///
-/// A binary math function takes two arguments of types Float32 or Float64,
-/// applies a binary floating function to the argument, and returns a value of the same type.
+/// A binary math function takes two numeric arguments. When both arguments are
+/// Float32 the function is evaluated in single precision and returns Float32.
+/// Any other combination of numeric (or null) argument types is coerced to
+/// Float64 and returns Float64; in particular integers are widened to Float64
+/// rather than Float32 so that values needing more than 24 bits of mantissa are
+/// not silently rounded.
 ///
 /// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
 /// $NAME: the name of the function
@@ -365,7 +367,6 @@ macro_rules! make_math_binary_udf {
             use arrow::datatypes::{DataType, Float32Type, Float64Type};
             use datafusion_common::utils::take_function_args;
             use datafusion_common::{Result, ScalarValue, internal_err};
-            use datafusion_expr::TypeSignature;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
                 ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
@@ -379,13 +380,18 @@ macro_rules! make_math_binary_udf {
 
             impl $UDF {
                 pub fn new() -> Self {
-                    use DataType::*;
                     Self {
-                        signature: Signature::one_of(
-                            vec![
-                                TypeSignature::Exact(vec![Float32, Float32]),
-                                TypeSignature::Exact(vec![Float64, Float64]),
-                            ],
+                        // Float64 is listed first so that integer (and other
+                        // non-float) arguments coerce to Float64 rather than
+                        // Float32; genuine Float32 arguments still match
+                        // exactly and stay in single precision. Coercing
+                        // integers to Float64 matters for correctness: Float32
+                        // has only a 24-bit mantissa, so widening a large
+                        // integer to Float32 would round it before the function
+                        // is ever applied.
+                        signature: Signature::uniform(
+                            2,
+                            vec![DataType::Float64, DataType::Float32],
                             Volatility::Immutable,
                         ),
                     }
@@ -402,11 +408,8 @@ macro_rules! make_math_binary_udf {
                 }
 
                 fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-                    let arg_type = &arg_types[0];
-
-                    match arg_type {
-                        DataType::Float32 => Ok(DataType::Float32),
-                        // For other types (possible values float64/null/int), use Float64
+                    match (&arg_types[0], &arg_types[1]) {
+                        (DataType::Float32, DataType::Float32) => Ok(DataType::Float32),
                         _ => Ok(DataType::Float64),
                     }
                 }
