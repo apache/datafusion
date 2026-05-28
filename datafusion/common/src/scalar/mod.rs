@@ -4234,13 +4234,7 @@ impl ScalarValue {
         // `Utf8View`) are value-preserving, so we can rewrap the string
         // directly instead of building a single-row array and invoking the
         // arrow cast kernel.
-        if matches!(
-            (&source_type, target_type),
-            (
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-            )
-        ) {
+        if source_type.is_string() && target_type.is_string() {
             // `self` is one of the string types, so `try_as_str` returns `Some`
             let value = self.try_as_str().flatten().map(|s| s.to_string());
             return Ok(match target_type {
