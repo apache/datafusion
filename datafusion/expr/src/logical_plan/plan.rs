@@ -3335,6 +3335,12 @@ pub struct ExplainOption {
     /// Statement-level override for `datafusion.explain.show_statistics`.
     /// `None` means "fall back to session config".
     pub show_statistics: Option<bool>,
+    /// Statement-level override for `datafusion.explain.analyze_level`.
+    /// `None` means "fall back to session config".
+    pub analyze_level: Option<MetricType>,
+    /// Statement-level override for `datafusion.explain.analyze_categories`.
+    /// `None` means "fall back to session config".
+    pub analyze_categories: Option<ExplainAnalyzeCategories>,
 }
 
 impl Default for ExplainOption {
@@ -3344,6 +3350,8 @@ impl Default for ExplainOption {
             analyze: false,
             format: ExplainFormat::Indent,
             show_statistics: None,
+            analyze_level: None,
+            analyze_categories: None,
         }
     }
 }
@@ -3371,6 +3379,23 @@ impl ExplainOption {
     /// `datafusion.explain.show_statistics`.
     pub fn with_show_statistics(mut self, show_statistics: Option<bool>) -> Self {
         self.show_statistics = show_statistics;
+        self
+    }
+
+    /// Builder-style setter for a statement-level override of
+    /// `datafusion.explain.analyze_level`.
+    pub fn with_analyze_level(mut self, analyze_level: Option<MetricType>) -> Self {
+        self.analyze_level = analyze_level;
+        self
+    }
+
+    /// Builder-style setter for a statement-level override of
+    /// `datafusion.explain.analyze_categories`.
+    pub fn with_analyze_categories(
+        mut self,
+        analyze_categories: Option<ExplainAnalyzeCategories>,
+    ) -> Self {
+        self.analyze_categories = analyze_categories;
         self
     }
 }
