@@ -52,6 +52,12 @@ SELECT list_filter([1, 2, 3, 4, 5], v -> v > 2);
 ----
 [3, 4, 5]
 
+# alias filter works
+query ?
+SELECT filter([1, 2, 3, 4, 5], v -> v > 2);
+----
+[3, 4, 5]
+
 # multiple sublists — t.list rows are [1,50], [4,50], [7,50]
 query ?
 SELECT array_filter(list, v -> v > 40) from t;

@@ -84,7 +84,7 @@ impl ArrayTransform {
                 vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
                 Volatility::Immutable,
             ),
-            aliases: vec![String::from("list_transform")],
+            aliases: vec![String::from("list_transform"), String::from("transform")],
         }
     }
 }

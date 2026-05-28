@@ -46,6 +46,18 @@ SELECT array_transform([1,2,3,4,5], v -> v*2);
 ----
 [2, 4, 6, 8, 10]
 
+# alias list_transform works
+query ?
+SELECT list_transform([1,2,3,4,5], v -> v*2);
+----
+[2, 4, 6, 8, 10]
+
+# alias transform works
+query ?
+SELECT transform([1,2,3,4,5], v -> v*2);
+----
+[2, 4, 6, 8, 10]
+
 query ?
 SELECT array_transform([1,2,3,4,5], v -> repeat("a", v));
 ----

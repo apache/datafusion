@@ -91,7 +91,7 @@ impl ArrayFilter {
                 vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
                 Volatility::Immutable,
             ),
-            aliases: vec![String::from("list_filter")],
+            aliases: vec![String::from("list_filter"), String::from("filter")],
         }
     }
 }
