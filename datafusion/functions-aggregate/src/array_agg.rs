@@ -1008,7 +1008,13 @@ impl OrderSensitiveArrayAggAccumulator {
         } else {
             (0..fields.len())
                 .map(|i| {
-                    let column_values = self.ordering_values.iter().map(|x| x[i].clone());
+                    let column_values: Box<dyn Iterator<Item = ScalarValue>> = if self
+                        .reverse
+                    {
+                        Box::new(self.ordering_values.iter().rev().map(|x| x[i].clone()))
+                    } else {
+                        Box::new(self.ordering_values.iter().map(|x| x[i].clone()))
+                    };
                     ScalarValue::iter_to_array(column_values)
                 })
                 .collect::<Result<_>>()?
@@ -1509,6 +1515,115 @@ mod tests {
         // without compaction, the size is 17112
         assert_eq!(acc.size(), 2224);
 
+        Ok(())
+    }
+
+    // Reproduces the bug where `state()` emits reversed values but non-reversed
+    // orderings when the optimizer sets is_input_pre_ordered=true + reverse=true
+    // (DESC aggregate with ASC pre-sorted input). The partial states are fed into
+    // a final accumulator via merge_batch; without the fix the ordering keys and
+    // values are mismatched so the final sort produces wrong order.
+    #[test]
+    fn desc_order_partial_final_merge_correct() -> Result<()> {
+        use arrow::array::Int64Array;
+        use datafusion_physical_expr::expressions::Column;
+
+        let schema = Schema::new(vec![
+            Field::new("val", DataType::Int64, true),
+            Field::new("ord", DataType::Int64, true),
+        ]);
+        let ord_expr = Arc::new(
+            Column::new_with_schema("ord", &schema).expect("column not in schema"),
+        ) as Arc<dyn PhysicalExpr>;
+
+        // ordering_req for partial = [ord ASC] (reversed, because input is pre-sorted ASC
+        // and the user wants DESC — the optimizer reverses the requirement)
+        let asc_opts = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let desc_opts = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+
+        let asc_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::clone(&ord_expr),
+            asc_opts,
+        )])
+        .unwrap();
+        let desc_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::clone(&ord_expr),
+            desc_opts,
+        )])
+        .unwrap();
+
+        let ordering_dtype = DataType::Int64;
+
+        // Partial acc A: sees rows [0,1,2] arriving in ASC order (pre-ordered).
+        // is_input_pre_ordered=true, reverse=true, ordering_req=[ASC].
+        let mut partial_a = OrderSensitiveArrayAggAccumulator::try_new(
+            &DataType::Int64,
+            std::slice::from_ref(&ordering_dtype),
+            asc_ordering.clone(),
+            /*is_input_pre_ordered=*/ true,
+            /*reverse=*/ true,
+            /*ignore_nulls=*/ false,
+        )?;
+        let vals_a = Arc::new(Int64Array::from(vec![0i64, 1, 2])) as ArrayRef;
+        let ords_a = Arc::new(Int64Array::from(vec![0i64, 1, 2])) as ArrayRef;
+        partial_a.update_batch(&[vals_a, ords_a])?;
+        let state_a = partial_a
+            .state()?
+            .iter()
+            .map(|v| v.to_array())
+            .collect::<Result<Vec<_>>>()?;
+
+        // Partial acc B: sees rows [3,4,5] arriving in ASC order.
+        let mut partial_b = OrderSensitiveArrayAggAccumulator::try_new(
+            &DataType::Int64,
+            std::slice::from_ref(&ordering_dtype),
+            asc_ordering,
+            /*is_input_pre_ordered=*/ true,
+            /*reverse=*/ true,
+            /*ignore_nulls=*/ false,
+        )?;
+        let vals_b = Arc::new(Int64Array::from(vec![3i64, 4, 5])) as ArrayRef;
+        let ords_b = Arc::new(Int64Array::from(vec![3i64, 4, 5])) as ArrayRef;
+        partial_b.update_batch(&[vals_b, ords_b])?;
+        let state_b = partial_b
+            .state()?
+            .iter()
+            .map(|v| v.to_array())
+            .collect::<Result<Vec<_>>>()?;
+
+        // Final acc: not optimized — ordering_req=[DESC], reverse=false.
+        let mut final_acc = OrderSensitiveArrayAggAccumulator::try_new(
+            &DataType::Int64,
+            std::slice::from_ref(&ordering_dtype),
+            desc_ordering,
+            /*is_input_pre_ordered=*/ false,
+            /*reverse=*/ false,
+            /*ignore_nulls=*/ false,
+        )?;
+        final_acc.merge_batch(&state_a)?;
+        final_acc.merge_batch(&state_b)?;
+        let result = final_acc.evaluate()?;
+
+        let ScalarValue::List(list) = result else {
+            return datafusion_common::internal_err!("expected List");
+        };
+        let result_vals: Vec<i64> = list
+            .values()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .iter()
+            .map(|v| v.unwrap())
+            .collect();
+
+        // Expected DESC: [5, 4, 3, 2, 1, 0]
+        assert_eq!(result_vals, vec![5i64, 4, 3, 2, 1, 0]);
         Ok(())
     }
 
