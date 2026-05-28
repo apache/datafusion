@@ -62,7 +62,7 @@ use datafusion_physical_expr::LexOrdering;
 use futures::{Stream, StreamExt};
 use object_store::{GetOptions, GetRange, ObjectStore};
 use object_store::{ObjectMeta, path::Path};
-pub use table_schema::TableSchema;
+pub use table_schema::{TableSchema, TableSchemaBuilder};
 // Remove when add_row_stats is remove
 #[expect(deprecated)]
 pub use statistics::add_row_stats;

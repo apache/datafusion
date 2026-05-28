@@ -40,7 +40,7 @@ pub(crate) struct MockSource {
 impl Default for MockSource {
     fn default() -> Self {
         let table_schema =
-            crate::table_schema::TableSchema::new(Arc::new(Schema::empty()), vec![]);
+            crate::table_schema::TableSchema::from(Arc::new(Schema::empty()));
         Self {
             metrics: ExecutionPlanMetricsSet::new(),
             filter: None,

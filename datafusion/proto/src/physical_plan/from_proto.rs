@@ -24,7 +24,9 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, internal_datafusion_err, not_impl_err,
+};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -48,7 +50,9 @@ use datafusion_physical_plan::expressions::{
 };
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
+use datafusion_physical_plan::{
+    Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, WindowExpr,
+};
 use datafusion_proto_common::common::proto_error;
 use object_store::ObjectMeta;
 use object_store::path::Path;
@@ -313,15 +317,7 @@ pub fn parse_physical_expr_with_converter(
             )?))
         }
         ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
-        ExprType::Negative(e) => {
-            Arc::new(NegativeExpr::new(parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?))
-        }
+        ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Case(e) => Arc::new(CaseExpr::try_new(
             e.expr
@@ -562,6 +558,14 @@ pub fn parse_protobuf_partitioning(
                     proto_converter,
                 )
             }
+            Some(protobuf::partitioning::PartitionMethod::Range(range_partitioning)) => {
+                Ok(Some(parse_protobuf_range_partitioning(
+                    range_partitioning,
+                    ctx,
+                    input_schema,
+                    proto_converter,
+                )?))
+            }
             Some(protobuf::partitioning::PartitionMethod::Unknown(partition_count)) => {
                 Ok(Some(Partitioning::UnknownPartitioning(
                     *partition_count as usize,
@@ -571,6 +575,49 @@ pub fn parse_protobuf_partitioning(
         },
         None => Ok(None),
     }
+}
+
+fn parse_protobuf_range_partitioning(
+    range_partitioning: &protobuf::PhysicalRangePartitioning,
+    ctx: &PhysicalPlanDecodeContext<'_>,
+    input_schema: &Schema,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+) -> Result<Partitioning> {
+    let sort_exprs = parse_physical_sort_exprs(
+        &range_partitioning.sort_expr,
+        ctx,
+        input_schema,
+        proto_converter,
+    )?;
+    let sort_expr_count = sort_exprs.len();
+    let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
+        internal_datafusion_err!("Range partitioning requires non-empty ordering")
+    })?;
+    if ordering.len() != sort_expr_count {
+        return Err(internal_datafusion_err!(
+            "Range partitioning ordering must not contain duplicate expressions"
+        ));
+    }
+    let split_points = range_partitioning
+        .split_point
+        .iter()
+        .map(parse_protobuf_range_split_point)
+        .collect::<Result<_>>()?;
+    Ok(Partitioning::Range(RangePartitioning::try_new(
+        ordering,
+        split_points,
+    )?))
+}
+
+fn parse_protobuf_range_split_point(
+    split_point: &protobuf::PhysicalRangeSplitPoint,
+) -> Result<SplitPoint> {
+    let values = split_point
+        .value
+        .iter()
+        .map(|value| ScalarValue::try_from(value).map_err(Into::into))
+        .collect::<Result<_>>()?;
+    Ok(SplitPoint::new(values))
 }
 
 pub fn parse_protobuf_file_scan_schema(
@@ -607,7 +654,9 @@ pub fn parse_table_schema_from_proto(
         .with_metadata(schema.metadata.clone()),
     );
 
-    Ok(TableSchema::new(file_schema, table_partition_cols))
+    Ok(TableSchema::builder(file_schema)
+        .with_table_partition_cols(table_partition_cols)
+        .build())
 }
 
 pub fn parse_protobuf_file_scan_config(
