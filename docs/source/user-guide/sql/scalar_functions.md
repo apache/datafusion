@@ -3299,6 +3299,7 @@ _Alias of [current_date](#current_date)._
 - [cosine_distance](#cosine_distance)
 - [dot_product](#dot_product)
 - [empty](#empty)
+- [filter](#filter)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
 - [inner_product](#inner_product)
@@ -3356,6 +3357,7 @@ _Alias of [current_date](#current_date)._
 - [range](#range)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
+- [transform](#transform)
 
 ### `any_match`
 
@@ -3721,6 +3723,7 @@ array_filter(array, x -> x > 2)
 #### Aliases
 
 - list_filter
+- filter
 
 ### `array_has`
 
@@ -4571,6 +4574,7 @@ array_transform(array, x -> x*2)
 #### Aliases
 
 - list_transform
+- transform
 
 ### `array_union`
 
@@ -4722,6 +4726,10 @@ empty(array)
 
 - array_empty
 - list_empty
+
+### `filter`
+
+_Alias of [array_filter](#array_filter)._
 
 ### `flatten`
 
@@ -5103,6 +5111,10 @@ string_to_array(str, delimiter[, null_str])
 ### `string_to_list`
 
 _Alias of [string_to_array](#string_to_array)._
+
+### `transform`
+
+_Alias of [array_transform](#array_transform)._
 
 ## Struct Functions
 
