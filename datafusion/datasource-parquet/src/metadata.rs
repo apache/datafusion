@@ -591,8 +591,17 @@ fn summarize_null_counts(
     }
 
     let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
+
     match sum(&null_counts) {
-        Some(null_count) => Ok(Precision::Exact(null_count as usize)),
+        Some(count) => {
+            // If any row group has a null `null_count` (either because the column chunk doesn't have statistics
+            // or the value itself is null), we report the total as inexact.
+            if null_counts.null_count() > 0 {
+                Ok(Precision::Inexact(count as usize))
+            } else {
+                Ok(Precision::Exact(count as usize))
+            }
+        }
         None => match null_counts.len() {
             // If sum() returned None we either have no rows or all values are null
             0 => Ok(Precision::Exact(0)),
