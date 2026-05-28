@@ -460,15 +460,7 @@ impl ScalarUDFImpl for PowerFunc {
             )));
         }
 
-        // The simplified expression must keep `return_type`'s declared
-        // type. For example, `power(decimal, float)` returns `Float64`,
-        // so rewriting `power(decimal, 0)` to `1::decimal` or
-        // `power(decimal, 1)` to the decimal base would violate that
-        // contract and trip the optimizer's schema-compatibility check.
-        // Wrap simplified forms in a cast to `return_type` when needed.
-        let return_type =
-            self.return_type(&[base_type.clone(), exponent_type.clone()])?;
-        let needs_cast = |t: &DataType| *t != return_type;
+        let return_type = self.return_type(&[base_type, exponent_type.clone()])?;
         match exponent {
             Expr::Literal(value, _)
                 if value == ScalarValue::new_zero(&exponent_type)? =>
@@ -478,19 +470,17 @@ impl ScalarUDFImpl for PowerFunc {
                 )?)))
             }
             Expr::Literal(value, _) if value == ScalarValue::new_one(&exponent_type)? => {
-                let result = if needs_cast(&base_type) {
-                    Expr::Cast(Cast::new(Box::new(base), return_type))
-                } else {
-                    base
-                };
-                Ok(ExprSimplifyResult::Simplified(result))
+                Ok(ExprSimplifyResult::Simplified(base))
             }
             Expr::ScalarFunction(ScalarFunction { func, mut args })
                 if is_log(&func) && args.len() == 2 && base == args[0] =>
             {
+                // The inner `b` may have a different type than the power
+                // call's `return_type` (e.g. `power(int64, log(int64,
+                // uint32))` returns Int64 but `b` is UInt32). Wrap it
+                // in a cast to preserve the optimizer's expected schema.
                 let b = args.pop().unwrap(); // length checked above
-                let b_type = info.get_data_type(&b)?;
-                let result = if needs_cast(&b_type) {
+                let result = if info.get_data_type(&b)? != return_type {
                     Expr::Cast(Cast::new(Box::new(b), return_type))
                 } else {
                     b
