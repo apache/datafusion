@@ -21,7 +21,7 @@ use datafusion::logical_expr::Expr;
 use std::sync::Arc;
 use substrait::proto::expression::FieldReference;
 use substrait::proto::expression::field_reference::ReferenceType::DirectReference;
-use substrait::proto::expression::field_reference::RootType;
+use substrait::proto::expression::field_reference::{LambdaParameterReference, RootType};
 use substrait::proto::expression::reference_segment::ReferenceType::StructField;
 
 pub async fn from_field_reference(
@@ -56,9 +56,9 @@ pub(crate) fn from_substrait_field_reference(
                     Some(RootType::Expression(_)) => not_impl_err!(
                         "Expression root type in field reference is not supported"
                     ),
-                    Some(RootType::LambdaParameterReference(_)) => not_impl_err!(
-                        "Lambda parameter reference in field reference is not yet supported"
-                    ),
+                    Some(RootType::LambdaParameterReference(
+                        LambdaParameterReference { steps_out },
+                    )) => consumer.lambda_variable(*steps_out as usize, field_idx),
                 }
             }
             _ => not_impl_err!(
@@ -84,4 +84,86 @@ fn resolve_outer_reference(
     let (qualifier, field) = outer_schema.qualified_field(field_idx);
     let col = Column::from((qualifier, field));
     Ok(Expr::OuterReferenceColumn(Arc::clone(field), col))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::{
+        common::{DFSchema, assert_contains},
+        prelude::SessionContext,
+    };
+    use substrait::proto::{
+        Type,
+        expression::{
+            FieldReference, ReferenceSegment,
+            field_reference::{self, LambdaParameterReference, RootType},
+            reference_segment::{ReferenceType, StructField},
+        },
+        r#type::{I64, Kind},
+    };
+
+    use crate::{
+        extensions::Extensions,
+        logical_plan::consumer::{
+            DefaultSubstraitConsumer, SubstraitConsumer, from_field_reference,
+        },
+    };
+
+    #[tokio::test]
+    async fn test_lambda_variable_invalid_steps_out() {
+        let lambda_field_ref = lambda_field_ref(0, 99);
+
+        let extensions = Extensions::default();
+        let session_state = SessionContext::new().state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
+
+        let err =
+            from_field_reference(&consumer, &lambda_field_ref, DFSchema::empty_ref())
+                .await
+                .unwrap_err();
+
+        assert_contains!(err.to_string(), "No lambda at 99 steps out, got only 0");
+    }
+
+    #[tokio::test]
+    async fn test_lambda_variable_invalid_field_idx() {
+        let lambda_field_ref = lambda_field_ref(1, 0);
+
+        let extensions = Extensions::default();
+        let session_state = SessionContext::new().state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
+        let _names = consumer
+            .push_lambda_parameters(
+                &[Type {
+                    kind: Some(Kind::I64(I64::default())),
+                }],
+                DFSchema::empty_ref(),
+            )
+            .unwrap();
+
+        let err =
+            from_field_reference(&consumer, &lambda_field_ref, DFSchema::empty_ref())
+                .await
+                .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "At lambda 0 steps out, no field at index 1, got only 1"
+        );
+    }
+
+    fn lambda_field_ref(field: i32, steps_out: u32) -> FieldReference {
+        FieldReference {
+            reference_type: Some(field_reference::ReferenceType::DirectReference(
+                ReferenceSegment {
+                    reference_type: Some(ReferenceType::StructField(Box::new(
+                        StructField { field, child: None },
+                    ))),
+                },
+            )),
+            root_type: Some(RootType::LambdaParameterReference(
+                LambdaParameterReference { steps_out },
+            )),
+        }
+    }
 }

@@ -1287,7 +1287,9 @@ mod tests {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let partition_b = Arc::new(Field::new("b", DataType::Int32, true));
-        let table_schema = TableSchema::new(file_schema, vec![partition_b]);
+        let table_schema = TableSchema::builder(file_schema)
+            .with_table_partition_cols(vec![partition_b])
+            .build();
         let source = ParquetSource::new(table_schema);
 
         // EquivalenceProperties is built on the *full* table schema so

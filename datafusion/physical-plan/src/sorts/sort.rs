@@ -1141,7 +1141,8 @@ impl ExecutionPlan for SortExec {
             vec![Distribution::UnspecifiedDistribution]
         } else {
             // global sort
-            // TODO support RangePartition and OrderedDistribution
+            // TODO support range partitioning and OrderedDistribution.
+            // See https://github.com/apache/datafusion/issues/22395
             vec![Distribution::SinglePartition]
         }
     }

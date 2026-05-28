@@ -25,7 +25,7 @@ use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
-use datafusion_datasource::TableSchema;
+use datafusion_datasource::TableSchemaBuilder;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -1574,10 +1574,13 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
         quote: b'"',
         ..Default::default()
     };
-    let table_schema = TableSchema::new(
-        Arc::clone(&file_schema),
-        vec![Arc::new(Field::new("partition_col", DataType::Utf8, true))],
-    );
+    let table_schema = TableSchemaBuilder::from(&file_schema)
+        .with_table_partition_cols(vec![Arc::new(Field::new(
+            "partition_col",
+            DataType::Utf8,
+            true,
+        ))])
+        .build();
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         Arc::new(CsvSource::new(table_schema).with_csv_options(options)),

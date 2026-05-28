@@ -2254,6 +2254,9 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+    use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Signature, Volatility};
+    use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
@@ -4844,58 +4847,40 @@ mod tests {
     ///
     /// This simulates a tree-reduce pattern:
     ///   Partial -> PartialReduce -> Final
-    #[tokio::test]
-    async fn test_partial_reduce_mode() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::UInt32, false),
-            Field::new("b", DataType::Float64, false),
-        ]));
+    async fn evaluate_partial_reduce(
+        groups: PhysicalGroupBy,
+        aggregates: Vec<Arc<AggregateFunctionExpr>>,
+        partition_1_and_2_batches: [Vec<RecordBatch>; 2],
+    ) -> Result<Vec<RecordBatch>> {
+        let schema = partition_1_and_2_batches
+            .iter()
+            .flatten()
+            .next()
+            .expect("Must have at least 1 batch")
+            .schema();
 
-        // Produce two partitions of input data
-        let batch1 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(UInt32Array::from(vec![1, 2, 3])),
-                Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0])),
-            ],
-        )?;
-        let batch2 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(UInt32Array::from(vec![1, 2, 3])),
-                Arc::new(Float64Array::from(vec![40.0, 50.0, 60.0])),
-            ],
-        )?;
-
-        let groups =
-            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
-        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
-            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("SUM(b)")
-                .build()?,
-        )];
+        let [partition_1, partition_2] = partition_1_and_2_batches;
 
         // Step 1: Partial aggregation on partition 1
         let input1 =
-            TestMemoryExec::try_new_exec(&[vec![batch1]], Arc::clone(&schema), None)?;
+            TestMemoryExec::try_new_exec(&[partition_1], Arc::clone(&schema), None)?;
         let partial1 = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
-            vec![None],
+            vec![None; aggregates.len()],
             input1,
             Arc::clone(&schema),
         )?);
 
         // Step 2: Partial aggregation on partition 2
         let input2 =
-            TestMemoryExec::try_new_exec(&[vec![batch2]], Arc::clone(&schema), None)?;
+            TestMemoryExec::try_new_exec(&[partition_2], Arc::clone(&schema), None)?;
         let partial2 = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
-            vec![None],
+            vec![None; aggregates.len()],
             input2,
             Arc::clone(&schema),
         )?);
@@ -4923,7 +4908,7 @@ mod tests {
             AggregateMode::PartialReduce,
             groups.clone(),
             aggregates.clone(),
-            vec![None],
+            vec![None; aggregates.len()],
             coalesced,
             Arc::clone(&partial_schema),
         )?);
@@ -4947,25 +4932,570 @@ mod tests {
             AggregateMode::Final,
             groups.clone(),
             aggregates.clone(),
-            vec![None],
+            vec![None; aggregates.len()],
             final_input,
             Arc::clone(&partial_schema),
         )?);
 
         let result = crate::collect(final_agg, Arc::clone(&task_ctx)).await?;
 
+        Ok(result)
+    }
+
+    /// Builds the shared `Partial -> PartialReduce -> Final` fixture used by
+    /// the `test_partial_reduce_*` tests below and runs the pipeline against
+    /// the aggregate produced by `build_aggregates`.
+    ///
+    /// Each test only needs to supply the UDAF/alias under test, so the test
+    /// body stays focused on which aggregate shape is being exercised.
+    async fn run_partial_reduce_pipeline<F>(
+        build_aggregates: F,
+    ) -> Result<Vec<RecordBatch>>
+    where
+        F: FnOnce(&Arc<Schema>) -> Result<Vec<Arc<AggregateFunctionExpr>>>,
+    {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        // Two partitions of input data so the Partial stage produces multiple
+        // partial states that PartialReduce must combine.
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0])),
+            ],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(Float64Array::from(vec![40.0, 50.0, 60.0])),
+            ],
+        )?;
+
+        let groups =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregates = build_aggregates(&schema)?;
+
+        evaluate_partial_reduce(groups, aggregates, [vec![batch1], vec![batch2]]).await
+    }
+
+    // -------------------------------------------------------------------
+    // PartialReduce regression coverage.
+    //
+    // Each shape (single state field / single input arg, multi-state /
+    // single-input, more-state-than-input) is covered twice:
+    //   * once against a real UDAF, to round-trip an actual aggregate end
+    //     to end through `Partial -> PartialReduce -> Final`; and
+    //   * once against [`InputTypeAssertingUdaf`], whose input / state /
+    //     output types are deliberately pairwise-disjoint within each test
+    //     so a regression that swapped state-field types for input-field
+    //     types (or vice versa) fails the assertion instead of slipping
+    //     through on a coincidental type match.
+    //
+    // The stub variants do the heavy lifting on the contract; the real
+    // ones make sure no real aggregate is broken by it.
+    // -------------------------------------------------------------------
+
+    /// Real-UDAF round-trip: aggregate with a single state field and a
+    /// single input argument (`SUM(b)` — state and input are both `Float64`).
+    #[tokio::test]
+    async fn test_partial_reduce_with_single_state_field_and_single_input_arg()
+    -> Result<()> {
+        let result = run_partial_reduce_pipeline(|schema| {
+            Ok(vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("b", schema)?])
+                    .schema(Arc::clone(schema))
+                    .alias("SUM(b)")
+                    .build()?,
+            )])
+        })
+        .await?;
+
         // Expected: group 1 -> 10+40=50, group 2 -> 20+50=70, group 3 -> 30+60=90
         assert_snapshot!(batches_to_sort_string(&result), @r"
-            +---+--------+
-            | a | SUM(b) |
-            +---+--------+
-            | 1 | 50.0   |
-            | 2 | 70.0   |
-            | 3 | 90.0   |
-            +---+--------+
+        +---+--------+
+        | a | SUM(b) |
+        +---+--------+
+        | 1 | 50.0   |
+        | 2 | 70.0   |
+        | 3 | 90.0   |
+        +---+--------+
         ");
 
         Ok(())
+    }
+
+    /// Real-UDAF round-trip: aggregate with multiple state fields and a
+    /// single input argument (`AVG(b)` — state is `[sum: Float64, count:
+    /// UInt64]`).
+    #[tokio::test]
+    async fn test_partial_reduce_with_multiple_state_fields_and_single_input_arg()
+    -> Result<()> {
+        let result = run_partial_reduce_pipeline(|schema| {
+            Ok(vec![Arc::new(
+                AggregateExprBuilder::new(avg_udaf(), vec![col("b", schema)?])
+                    .schema(Arc::clone(schema))
+                    .alias("AVG(b)")
+                    .build()?,
+            )])
+        })
+        .await?;
+
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+        +---+--------+
+        | a | AVG(b) |
+        +---+--------+
+        | 1 | 25.0   |
+        | 2 | 35.0   |
+        | 3 | 45.0   |
+        +---+--------+
+        ");
+
+        Ok(())
+    }
+
+    /// Real-UDAF round-trip: aggregate whose state has more fields than the
+    /// input has arguments (`approx_percentile_cont` carries a t-digest).
+    #[tokio::test]
+    async fn test_partial_reduce_with_more_state_fields_than_input_args() -> Result<()> {
+        let result = run_partial_reduce_pipeline(|schema| {
+            Ok(vec![Arc::new(
+                AggregateExprBuilder::new(
+                    approx_percentile_cont_udaf(),
+                    vec![col("b", schema)?, lit(0.75f32)],
+                )
+                .schema(Arc::clone(schema))
+                .alias("approx_percentile_cont(b, 0.75)")
+                .build()?,
+            )])
+        })
+        .await?;
+
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+        +---+---------------------------------+
+        | a | approx_percentile_cont(b, 0.75) |
+        +---+---------------------------------+
+        | 1 | 40.0                            |
+        | 2 | 50.0                            |
+        | 3 | 60.0                            |
+        +---+---------------------------------+
+        ");
+
+        Ok(())
+    }
+
+    /// Stub variant of
+    /// [`test_partial_reduce_with_single_state_field_and_single_input_arg`]
+    /// with disjoint input / state / output types.
+    ///
+    /// - input: `Float64`
+    /// - state: `Int32`
+    /// - output: `Int64`
+    ///
+    /// Any mode that accidentally forwarded state-field types in place of
+    /// input-field types would fail the assertion in
+    /// [`InputTypeAssertingUdaf`] instead of being masked by a coincidental
+    /// type match.
+    #[tokio::test]
+    async fn test_partial_reduce_with_single_state_field_and_single_input_arg_using_unique_types()
+    -> Result<()> {
+        let result = run_partial_reduce_pipeline(|schema| {
+            let udaf = Arc::new(AggregateUDF::from(InputTypeAssertingUdaf::new(
+                vec![DataType::Float64],
+                vec![DataType::Int32],
+                DataType::Int64,
+            )));
+            Ok(vec![Arc::new(
+                AggregateExprBuilder::new(udaf, vec![col("b", schema)?])
+                    .schema(Arc::clone(schema))
+                    .alias("input_type_asserting(b)")
+                    .build()?,
+            )])
+        })
+        .await?;
+
+        // Pipeline completing without error is the real assertion. The
+        // snapshot guards against silent regressions in the row shape.
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+        +---+-------------------------+
+        | a | input_type_asserting(b) |
+        +---+-------------------------+
+        | 1 | 0                       |
+        | 2 | 0                       |
+        | 3 | 0                       |
+        +---+-------------------------+
+        ");
+
+        Ok(())
+    }
+
+    /// Stub variant of
+    /// [`test_partial_reduce_with_multiple_state_fields_and_single_input_arg`]
+    /// with disjoint input / state / output types.
+    ///
+    /// - input: `Float64`
+    /// - state: `[Int32, Utf8]`
+    /// - output: `Int64`
+    #[tokio::test]
+    async fn test_partial_reduce_with_multiple_state_fields_and_single_input_arg_using_unique_types()
+    -> Result<()> {
+        let result = run_partial_reduce_pipeline(|schema| {
+            let udaf = Arc::new(AggregateUDF::from(InputTypeAssertingUdaf::new(
+                vec![DataType::Float64],
+                vec![DataType::Int32, DataType::Utf8],
+                DataType::Int64,
+            )));
+            Ok(vec![Arc::new(
+                AggregateExprBuilder::new(udaf, vec![col("b", schema)?])
+                    .schema(Arc::clone(schema))
+                    .alias("input_type_asserting(b)")
+                    .build()?,
+            )])
+        })
+        .await?;
+
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+        +---+-------------------------+
+        | a | input_type_asserting(b) |
+        +---+-------------------------+
+        | 1 | 0                       |
+        | 2 | 0                       |
+        | 3 | 0                       |
+        +---+-------------------------+
+        ");
+
+        Ok(())
+    }
+
+    /// Stub variant of
+    /// [`test_partial_reduce_with_more_state_fields_than_input_args`] with
+    /// disjoint input / state / output types — and with multiple input
+    /// arguments to exercise the multi-arg path explicitly.
+    ///
+    /// - input: `[Float64, Date32]`
+    /// - state: `[Int32, Utf8, Boolean]`
+    /// - output: `Int64`
+    #[tokio::test]
+    async fn test_partial_reduce_with_more_state_fields_than_input_args_using_unique_types()
+    -> Result<()> {
+        let result = run_partial_reduce_pipeline(|schema| {
+            let udaf = Arc::new(AggregateUDF::from(InputTypeAssertingUdaf::new(
+                vec![DataType::Float64, DataType::Date32],
+                vec![DataType::Int32, DataType::Utf8, DataType::Boolean],
+                DataType::Int64,
+            )));
+            Ok(vec![Arc::new(
+                AggregateExprBuilder::new(
+                    udaf,
+                    vec![col("b", schema)?, lit(ScalarValue::Date32(Some(1)))],
+                )
+                .schema(Arc::clone(schema))
+                .alias("input_type_asserting(b, lit)")
+                .build()?,
+            )])
+        })
+        .await?;
+
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+        +---+------------------------------+
+        | a | input_type_asserting(b, lit) |
+        +---+------------------------------+
+        | 1 | 0                            |
+        | 2 | 0                            |
+        | 3 | 0                            |
+        +---+------------------------------+
+        ");
+
+        Ok(())
+    }
+
+    /// Stub test: many input args, few state fields (5 inputs / 2 state).
+    ///
+    /// All eight types involved are pairwise-disjoint:
+    ///   - input:  `[Float64, Date32, UInt16, Boolean, Int32]`
+    ///   - state:  `[Utf8, Int64]`
+    ///   - output: `Float32`
+    #[tokio::test]
+    async fn test_partial_reduce_with_5_input_args_and_2_state_fields_using_unique_types()
+    -> Result<()> {
+        let result = run_partial_reduce_pipeline(|schema| {
+            let udaf = Arc::new(AggregateUDF::from(InputTypeAssertingUdaf::new(
+                vec![
+                    DataType::Float64,
+                    DataType::Date32,
+                    DataType::UInt16,
+                    DataType::Boolean,
+                    DataType::Int32,
+                ],
+                vec![DataType::Utf8, DataType::Int64],
+                DataType::Float32,
+            )));
+            Ok(vec![Arc::new(
+                AggregateExprBuilder::new(
+                    udaf,
+                    vec![
+                        col("b", schema)?,
+                        lit(ScalarValue::Date32(Some(1))),
+                        lit(ScalarValue::UInt16(Some(1))),
+                        lit(ScalarValue::Boolean(Some(false))),
+                        lit(ScalarValue::Int32(Some(1))),
+                    ],
+                )
+                .schema(Arc::clone(schema))
+                .alias("input_type_asserting(b, l1, l2, l3, l4)")
+                .build()?,
+            )])
+        })
+        .await?;
+
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+        +---+-----------------------------------------+
+        | a | input_type_asserting(b, l1, l2, l3, l4) |
+        +---+-----------------------------------------+
+        | 1 | 0.0                                     |
+        | 2 | 0.0                                     |
+        | 3 | 0.0                                     |
+        +---+-----------------------------------------+
+        ");
+
+        Ok(())
+    }
+
+    /// Stub test: few input args, many state fields (2 inputs / 5 state).
+    ///
+    /// All eight types involved are pairwise-disjoint:
+    ///   - input:  `[Float64, Date32]`
+    ///   - state:  `[Boolean, Int32, Utf8, Int64, UInt16]`
+    ///   - output: `Float32`
+    #[tokio::test]
+    async fn test_partial_reduce_with_2_input_args_and_5_state_fields_using_unique_types()
+    -> Result<()> {
+        let result = run_partial_reduce_pipeline(|schema| {
+            let udaf = Arc::new(AggregateUDF::from(InputTypeAssertingUdaf::new(
+                vec![DataType::Float64, DataType::Date32],
+                vec![
+                    DataType::Boolean,
+                    DataType::Int32,
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::UInt16,
+                ],
+                DataType::Float32,
+            )));
+            Ok(vec![Arc::new(
+                AggregateExprBuilder::new(
+                    udaf,
+                    vec![col("b", schema)?, lit(ScalarValue::Date32(Some(1)))],
+                )
+                .schema(Arc::clone(schema))
+                .alias("input_type_asserting(b, lit)")
+                .build()?,
+            )])
+        })
+        .await?;
+
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+        +---+------------------------------+
+        | a | input_type_asserting(b, lit) |
+        +---+------------------------------+
+        | 1 | 0.0                          |
+        | 2 | 0.0                          |
+        | 3 | 0.0                          |
+        +---+------------------------------+
+        ");
+
+        Ok(())
+    }
+
+    /// Test-only aggregate whose `return_type`, `state_fields`, and
+    /// `accumulator` hooks all assert that they receive the originally-
+    /// declared input types; the companion accumulator further asserts
+    /// `update_batch` sees inputs and `merge_batch` sees state.
+    ///
+    /// Each test instantiates it with input / state / output types that
+    /// are pairwise-disjoint, so a regression that forwarded the wrong
+    /// types fails on type mismatch rather than passing by accident.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct InputTypeAssertingUdaf {
+        signature: Signature,
+        input_types: Vec<DataType>,
+        state_types: Vec<DataType>,
+        output_type: DataType,
+    }
+
+    fn assert_data_types(
+        what: &str,
+        expected: &[DataType],
+        actual: &[DataType],
+    ) -> Result<()> {
+        if actual != expected {
+            return internal_err!(
+                "InputTypeAssertingUdaf: {} expected types {:?} but got {:?} — a regression is leaking the wrong types into the accumulator contract",
+                what,
+                expected,
+                actual
+            );
+        }
+        Ok(())
+    }
+
+    /// Produce a zeroed [`ScalarValue`] for `dt`. Only the data types the
+    /// tests above plug into [`InputTypeAssertingUdaf`] are listed; adding
+    /// a new type to a test requires extending this match.
+    fn zero_scalar_for(dt: &DataType) -> Result<ScalarValue> {
+        match dt {
+            DataType::Boolean => Ok(ScalarValue::Boolean(Some(false))),
+            DataType::Int32 => Ok(ScalarValue::Int32(Some(0))),
+            DataType::Int64 => Ok(ScalarValue::Int64(Some(0))),
+            DataType::UInt16 => Ok(ScalarValue::UInt16(Some(0))),
+            DataType::Float32 => Ok(ScalarValue::Float32(Some(0.0))),
+            DataType::Utf8 => Ok(ScalarValue::Utf8(Some(String::new()))),
+            other => internal_err!(
+                "InputTypeAssertingUdaf: no zero ScalarValue registered for {other:?} \
+                 — extend `zero_scalar_for` when adding a new state/output type"
+            ),
+        }
+    }
+
+    impl InputTypeAssertingUdaf {
+        fn new(
+            input_types: Vec<DataType>,
+            state_types: Vec<DataType>,
+            output_type: DataType,
+        ) -> Self {
+            // Within-test type-disjointness is enforced by construction so
+            // a future test author can't quietly reintroduce overlap.
+            assert!(
+                all_pairwise_distinct(&input_types, &state_types, &output_type),
+                "InputTypeAssertingUdaf::new: input ({input_types:?}), state \
+                 ({state_types:?}), and output ({output_type:?}) types must be \
+                 pairwise-disjoint to avoid accidental passes",
+            );
+            Self {
+                signature: Signature::exact(input_types.clone(), Volatility::Immutable),
+                input_types,
+                state_types,
+                output_type,
+            }
+        }
+    }
+
+    /// True iff every type in `inputs ∪ states ∪ {output}` is unique.
+    fn all_pairwise_distinct(
+        inputs: &[DataType],
+        states: &[DataType],
+        output: &DataType,
+    ) -> bool {
+        let mut seen = HashSet::new();
+        for dt in inputs
+            .iter()
+            .chain(states.iter())
+            .chain(std::iter::once(output))
+        {
+            if !seen.insert(dt) {
+                return false;
+            }
+        }
+        true
+    }
+
+    impl AggregateUDFImpl for InputTypeAssertingUdaf {
+        fn name(&self) -> &str {
+            "input_type_asserting"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            assert_data_types("return_type(arg_types)", &self.input_types, arg_types)?;
+            Ok(self.output_type.clone())
+        }
+
+        fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            let actual: Vec<DataType> = args
+                .input_fields
+                .iter()
+                .map(|f| f.data_type().clone())
+                .collect();
+            assert_data_types(
+                "state_fields(args.input_fields)",
+                &self.input_types,
+                &actual,
+            )?;
+            Ok(self
+                .state_types
+                .iter()
+                .enumerate()
+                .map(|(i, dt)| {
+                    Field::new(format!("{}[s{i}]", args.name), dt.clone(), true).into()
+                })
+                .collect())
+        }
+
+        fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+            let actual: Vec<DataType> = acc_args
+                .expr_fields
+                .iter()
+                .map(|f| f.data_type().clone())
+                .collect();
+            assert_data_types(
+                "accumulator(acc_args.expr_fields)",
+                &self.input_types,
+                &actual,
+            )?;
+            Ok(Box::new(InputTypeAssertingAccumulator {
+                input_types: self.input_types.clone(),
+                state_types: self.state_types.clone(),
+                output_type: self.output_type.clone(),
+            }))
+        }
+    }
+
+    /// Companion accumulator for [`InputTypeAssertingUdaf`].
+    ///
+    /// - `update_batch` must always receive arrays of the original input
+    ///   types.
+    /// - `merge_batch` must always receive arrays of the declared state
+    ///   types.
+    ///
+    /// Anything else means a non-input mode is calling the wrong path.
+    #[derive(Debug)]
+    struct InputTypeAssertingAccumulator {
+        input_types: Vec<DataType>,
+        state_types: Vec<DataType>,
+        output_type: DataType,
+    }
+
+    impl Accumulator for InputTypeAssertingAccumulator {
+        fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+            let actual: Vec<DataType> =
+                values.iter().map(|a| a.data_type().clone()).collect();
+            assert_data_types("update_batch(values)", &self.input_types, &actual)
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            zero_scalar_for(&self.output_type)
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self)
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            self.state_types.iter().map(zero_scalar_for).collect()
+        }
+
+        fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+            let actual: Vec<DataType> =
+                states.iter().map(|a| a.data_type().clone()).collect();
+            assert_data_types("merge_batch(states)", &self.state_types, &actual)
+        }
     }
 
     /// Test that [`AggregateExec::with_dynamic_filter_expr`] overrides the existing dynamic filter

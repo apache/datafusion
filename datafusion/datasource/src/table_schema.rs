@@ -17,7 +17,7 @@
 
 //! Helper struct to manage table schemas with partition columns
 
-use arrow::datatypes::{FieldRef, SchemaBuilder, SchemaRef};
+use arrow::datatypes::{FieldRef, Fields, SchemaBuilder, SchemaRef};
 use std::sync::Arc;
 
 /// The overall schema for potentially partitioned data sources.
@@ -70,7 +70,11 @@ pub struct TableSchema {
     ///
     /// These columns are NOT present in the data files but are appended to each
     /// row during query execution based on the file's location.
-    table_partition_cols: Arc<Vec<FieldRef>>,
+    ///
+    /// Stored as [`Fields`] (an immutable `Arc<[FieldRef]>`) so that cloning a
+    /// `TableSchema` is cheap and the partition columns can be shared zero-copy
+    /// with an existing schema.
+    table_partition_cols: Fields,
 
     /// The complete table schema: file_schema columns followed by partition columns.
     ///
@@ -80,20 +84,12 @@ pub struct TableSchema {
 }
 
 impl TableSchema {
-    /// Create a new TableSchema from a file schema and partition columns.
+    /// Start building a [`TableSchema`] from its (required) file schema.
     ///
-    /// The table schema is automatically computed by appending the partition columns
-    /// to the file schema.
-    ///
-    /// You should prefer calling this method over
-    /// chaining [`TableSchema::from_file_schema`] and [`TableSchema::with_table_partition_cols`]
-    /// if you have both the file schema and partition columns available at construction time
-    /// since it avoids re-computing the table schema.
-    ///
-    /// # Arguments
-    ///
-    /// * `file_schema` - Schema of the data files (without partition columns)
-    /// * `table_partition_cols` - Partition columns to append to each row
+    /// Partition columns are optional and added with
+    /// [`TableSchemaBuilder::with_table_partition_cols`]; the full table schema
+    /// is computed once by [`TableSchemaBuilder::build`]. This is the preferred
+    /// way to construct a `TableSchema`.
     ///
     /// # Example
     ///
@@ -106,50 +102,53 @@ impl TableSchema {
     ///     Field::new("amount", DataType::Float64, false),
     /// ]));
     ///
-    /// let partition_cols = vec![
-    ///     Arc::new(Field::new("date", DataType::Utf8, false)),
-    ///     Arc::new(Field::new("region", DataType::Utf8, false)),
-    /// ];
-    ///
-    /// let table_schema = TableSchema::new(file_schema, partition_cols);
+    /// let table_schema = TableSchema::builder(file_schema)
+    ///     .with_table_partition_cols(vec![
+    ///         Arc::new(Field::new("date", DataType::Utf8, false)),
+    ///         Arc::new(Field::new("region", DataType::Utf8, false)),
+    ///     ])
+    ///     .build();
     ///
     /// // Table schema will have 4 columns: user_id, amount, date, region
     /// assert_eq!(table_schema.table_schema().fields().len(), 4);
     /// ```
+    pub fn builder(file_schema: SchemaRef) -> TableSchemaBuilder {
+        TableSchemaBuilder::new(file_schema)
+    }
+
+    /// Create a new TableSchema from a file schema and partition columns.
+    ///
+    /// This is a convenience for
+    /// `TableSchema::builder(file_schema).with_table_partition_cols(cols).build()`.
+    #[deprecated(
+        since = "55.0.0",
+        note = "use TableSchema::builder(file_schema).with_table_partition_cols(cols).build() (or TableSchema::from(file_schema) for no partition columns)"
+    )]
     pub fn new(file_schema: SchemaRef, table_partition_cols: Vec<FieldRef>) -> Self {
-        let mut builder = SchemaBuilder::from(file_schema.as_ref());
-        builder.extend(table_partition_cols.iter().cloned());
-        Self {
-            file_schema,
-            table_partition_cols: Arc::new(table_partition_cols),
-            table_schema: Arc::new(builder.finish()),
-        }
+        TableSchemaBuilder::new(file_schema)
+            .with_table_partition_cols(table_partition_cols)
+            .build()
     }
 
     /// Create a new TableSchema with no partition columns.
-    ///
-    /// You should prefer calling [`TableSchema::new`] if you have partition columns at
-    /// construction time since it avoids re-computing the table schema.
+    #[deprecated(
+        since = "55.0.0",
+        note = "use TableSchema::from(file_schema) / file_schema.into()"
+    )]
     pub fn from_file_schema(file_schema: SchemaRef) -> Self {
-        Self::new(file_schema, vec![])
+        TableSchemaBuilder::new(file_schema).build()
     }
 
-    /// Add partition columns to an existing TableSchema, returning a new instance.
-    ///
-    /// You should prefer calling [`TableSchema::new`] instead of chaining [`TableSchema::from_file_schema`]
-    /// into [`TableSchema::with_table_partition_cols`] if you have partition columns at construction time
-    /// since it avoids re-computing the table schema.
-    pub fn with_table_partition_cols(mut self, partition_cols: Vec<FieldRef>) -> Self {
-        // Append to existing partition columns. `Arc::make_mut` copies the
-        // inner `Vec` if the `Arc` is shared (e.g. with a clone of this
-        // `TableSchema`) and otherwise mutates in place. The previous
-        // `Arc::get_mut().expect()` panicked whenever the `Arc` was shared:
-        // owning `self` does not imply sole ownership of the inner `Arc`.
-        Arc::make_mut(&mut self.table_partition_cols).extend(partition_cols);
-        let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
-        builder.extend(self.table_partition_cols.iter().cloned());
-        self.table_schema = Arc::new(builder.finish());
-        self
+    /// Return a new `TableSchema` with `partition_cols` as its partition columns,
+    /// replacing any existing ones.
+    #[deprecated(
+        since = "55.0.0",
+        note = "use TableSchema::builder(file_schema).with_table_partition_cols(cols).build()"
+    )]
+    pub fn with_table_partition_cols(self, partition_cols: Vec<FieldRef>) -> Self {
+        TableSchemaBuilder::new(self.file_schema)
+            .with_table_partition_cols(partition_cols)
+            .build()
     }
 
     /// Get the file schema (without partition columns).
@@ -163,7 +162,7 @@ impl TableSchema {
     ///
     /// These are the columns derived from the directory structure that
     /// will be appended to each row during query execution.
-    pub fn table_partition_cols(&self) -> &Vec<FieldRef> {
+    pub fn table_partition_cols(&self) -> &Fields {
         &self.table_partition_cols
     }
 
@@ -178,13 +177,87 @@ impl TableSchema {
 
 impl From<SchemaRef> for TableSchema {
     fn from(schema: SchemaRef) -> Self {
-        Self::from_file_schema(schema)
+        TableSchemaBuilder::new(schema).build()
+    }
+}
+
+impl From<&SchemaRef> for TableSchema {
+    fn from(schema: &SchemaRef) -> Self {
+        TableSchemaBuilder::new(Arc::clone(schema)).build()
+    }
+}
+
+/// Builder for [`TableSchema`].
+///
+/// The file schema is the only required input; partition columns are optional.
+/// Unlike calling [`TableSchema`]'s setters repeatedly, the builder computes the
+/// concatenated table schema exactly once, in [`TableSchemaBuilder::build`].
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::datatypes::{Schema, Field, DataType};
+/// # use datafusion_datasource::TableSchemaBuilder;
+/// # let file_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+/// let table_schema = TableSchemaBuilder::new(file_schema)
+///     .with_table_partition_cols(vec![Arc::new(Field::new("date", DataType::Utf8, false))])
+///     .build();
+/// assert_eq!(table_schema.table_partition_cols().len(), 1);
+/// ```
+#[derive(Debug, Clone)]
+pub struct TableSchemaBuilder {
+    file_schema: SchemaRef,
+    table_partition_cols: Fields,
+}
+
+impl TableSchemaBuilder {
+    /// Create a builder for a `TableSchema` over the given file schema, with no
+    /// partition columns yet.
+    pub fn new(file_schema: SchemaRef) -> Self {
+        Self {
+            file_schema,
+            table_partition_cols: Fields::empty(),
+        }
+    }
+
+    /// Set the partition columns, replacing any previously set.
+    ///
+    /// Accepts anything convertible into [`Fields`] (e.g. `Vec<FieldRef>` or an
+    /// existing schema's `Fields`, which is shared zero-copy).
+    pub fn with_table_partition_cols(
+        mut self,
+        table_partition_cols: impl Into<Fields>,
+    ) -> Self {
+        self.table_partition_cols = table_partition_cols.into();
+        self
+    }
+
+    /// Build the [`TableSchema`], computing the full `file + partition` schema once.
+    pub fn build(self) -> TableSchema {
+        let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
+        builder.extend(self.table_partition_cols.iter().cloned());
+        TableSchema {
+            file_schema: self.file_schema,
+            table_partition_cols: self.table_partition_cols,
+            table_schema: Arc::new(builder.finish()),
+        }
+    }
+}
+
+impl From<SchemaRef> for TableSchemaBuilder {
+    fn from(schema: SchemaRef) -> Self {
+        TableSchemaBuilder::new(schema)
+    }
+}
+
+impl From<&SchemaRef> for TableSchemaBuilder {
+    fn from(schema: &SchemaRef) -> Self {
+        TableSchemaBuilder::new(Arc::clone(schema))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TableSchema;
+    use super::{TableSchema, TableSchemaBuilder};
     use arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
 
@@ -200,7 +273,9 @@ mod tests {
             Arc::new(Field::new("region", DataType::Utf8, false)),
         ];
 
-        let table_schema = TableSchema::new(file_schema.clone(), partition_cols.clone());
+        let table_schema = TableSchema::builder(file_schema.clone())
+            .with_table_partition_cols(partition_cols.clone())
+            .build();
 
         // Verify file schema
         assert_eq!(table_schema.file_schema().as_ref(), file_schema.as_ref());
@@ -222,84 +297,99 @@ mod tests {
     }
 
     #[test]
-    fn test_add_multiple_partition_columns() {
+    fn test_builder_with_partition_cols() {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
 
-        let initial_partition_cols =
-            vec![Arc::new(Field::new("country", DataType::Utf8, false))];
+        let table_schema = TableSchemaBuilder::new(Arc::clone(&file_schema))
+            .with_table_partition_cols(vec![
+                Arc::new(Field::new("country", DataType::Utf8, false)),
+                Arc::new(Field::new("year", DataType::Int32, false)),
+            ])
+            .build();
 
-        let table_schema = TableSchema::new(file_schema.clone(), initial_partition_cols);
+        // File schema is preserved and the partition columns are appended.
+        assert_eq!(table_schema.file_schema().as_ref(), file_schema.as_ref());
+        assert_eq!(table_schema.table_partition_cols().len(), 2);
+        assert_eq!(table_schema.table_partition_cols()[0].name(), "country");
+        assert_eq!(table_schema.table_partition_cols()[1].name(), "year");
 
-        let additional_partition_cols = vec![
-            Arc::new(Field::new("city", DataType::Utf8, false)),
-            Arc::new(Field::new("year", DataType::Int32, false)),
-        ];
-
-        let updated_table_schema =
-            table_schema.with_table_partition_cols(additional_partition_cols);
-
-        // Verify file schema remains unchanged
-        assert_eq!(
-            updated_table_schema.file_schema().as_ref(),
-            file_schema.as_ref()
-        );
-
-        // Verify partition columns
-        assert_eq!(updated_table_schema.table_partition_cols().len(), 3);
-        assert_eq!(
-            updated_table_schema.table_partition_cols()[0].name(),
-            "country"
-        );
-        assert_eq!(
-            updated_table_schema.table_partition_cols()[1].name(),
-            "city"
-        );
-        assert_eq!(
-            updated_table_schema.table_partition_cols()[2].name(),
-            "year"
-        );
-
-        // Verify full table schema
-        let expected_fields = vec![
+        let expected_schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("country", DataType::Utf8, false),
-            Field::new("city", DataType::Utf8, false),
             Field::new("year", DataType::Int32, false),
-        ];
-        let expected_schema = Schema::new(expected_fields);
-        assert_eq!(
-            updated_table_schema.table_schema().as_ref(),
-            &expected_schema
-        );
+        ]);
+        assert_eq!(table_schema.table_schema().as_ref(), &expected_schema);
     }
 
     #[test]
-    fn test_with_table_partition_cols_after_clone_does_not_panic() {
-        // `TableSchema` is cheaply cloneable because its partition columns are
-        // stored behind an `Arc`. Appending more partition columns to a clone
-        // must not panic just because the `Arc` is shared, and must not mutate
-        // the other clone (copy-on-write isolation).
+    fn test_builder_with_table_partition_cols_replaces() {
+        // Calling the setter more than once replaces rather than appends.
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
-        let original = TableSchema::new(
-            file_schema,
-            vec![Arc::new(Field::new("country", DataType::Utf8, false))],
-        );
 
-        let cloned = original.clone();
-        let extended = cloned.with_table_partition_cols(vec![Arc::new(Field::new(
-            "city",
-            DataType::Utf8,
-            false,
-        ))]);
+        let table_schema = TableSchemaBuilder::new(file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "country",
+                DataType::Utf8,
+                false,
+            ))])
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "city",
+                DataType::Utf8,
+                false,
+            ))])
+            .build();
 
-        // The extended schema sees both partition columns...
-        assert_eq!(extended.table_partition_cols().len(), 2);
-        assert_eq!(extended.table_partition_cols()[0].name(), "country");
-        assert_eq!(extended.table_partition_cols()[1].name(), "city");
+        assert_eq!(table_schema.table_partition_cols().len(), 1);
+        assert_eq!(table_schema.table_partition_cols()[0].name(), "city");
+    }
 
-        // ...while the original clone is left untouched.
+    #[test]
+    fn test_builder_accepts_fields_zero_copy() {
+        // `with_table_partition_cols` accepts an existing schema's `Fields`
+        // directly (shared via `Arc`, no `Vec` round-trip).
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let partition_schema =
+            Schema::new(vec![Field::new("date", DataType::Utf8, false)]);
+
+        let table_schema = TableSchemaBuilder::new(file_schema)
+            .with_table_partition_cols(partition_schema.fields().clone())
+            .build();
+
+        assert_eq!(table_schema.table_partition_cols().len(), 1);
+        assert_eq!(table_schema.table_partition_cols()[0].name(), "date");
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn test_deprecated_with_table_partition_cols_replaces() {
+        // The deprecated setter still works and replaces the partition columns.
+        // It is safe on a shared clone because partition columns are immutable.
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let original = TableSchema::builder(file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "country",
+                DataType::Utf8,
+                false,
+            ))])
+            .build();
+
+        let replaced =
+            original
+                .clone()
+                .with_table_partition_cols(vec![Arc::new(Field::new(
+                    "city",
+                    DataType::Utf8,
+                    false,
+                ))]);
+
+        assert_eq!(replaced.table_partition_cols().len(), 1);
+        assert_eq!(replaced.table_partition_cols()[0].name(), "city");
+
+        // The original is untouched.
         assert_eq!(original.table_partition_cols().len(), 1);
         assert_eq!(original.table_partition_cols()[0].name(), "country");
     }

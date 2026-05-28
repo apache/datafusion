@@ -30,6 +30,8 @@ use datafusion_common::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 
+use datafusion_common::utils::split_vec_min_alloc;
+
 /// Accumulator for MIN/MAX operations on Struct data types.
 ///
 /// This accumulator tracks the minimum or maximum struct value encountered
@@ -282,7 +284,7 @@ impl MinMaxStructState {
                 )
             }
             EmitTo::First(n) => {
-                let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
+                let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
                 let first_data_capacity: usize = first_min_maxes
                     .iter()
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
