@@ -237,44 +237,56 @@ impl TopK {
         let baseline = self.metrics.baseline.clone();
         let _timer = baseline.elapsed_compute().timer();
 
+        let mut selected_rows = None;
+        let num_rows = batch.num_rows();
+
+        // If a filter is provided, update it with the new rows
+        let filter = self.filter.read().expr.current()?;
+        let filtered = filter.evaluate(&batch)?;
+        match filtered {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {}
+            ColumnarValue::Scalar(ScalarValue::Boolean(_)) => {
+                // Nothing can pass this batch, so avoid evaluating sort keys.
+                return Ok(());
+            }
+            filtered => {
+                let array = filtered.into_array(num_rows)?;
+                let mut filter = array.as_boolean().clone();
+                if !filter.has_true() {
+                    // nothing to filter, so no need to update
+                    return Ok(());
+                }
+                // only update the keys / rows if the filter does not match all rows
+                if filter.null_count() > 0 || filter.has_false() {
+                    // Indices in `set_indices` should be correct if filter contains nulls
+                    // So we prepare the filter here. Note this is also done in the `FilterBuilder`
+                    // so there is no overhead to do this here.
+                    if filter.nulls().is_some() {
+                        filter = prep_null_mask_filter(&filter);
+                    }
+
+                    selected_rows = Some(filter);
+                }
+            }
+        }
+
         let mut sort_keys: Vec<ArrayRef> = self
             .expr
             .iter()
             .map(|expr| {
                 let value = expr.expr.evaluate(&batch)?;
-                value.into_array(batch.num_rows())
+                value.into_array(num_rows)
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut selected_rows = None;
-
-        // If a filter is provided, update it with the new rows
-        let filter = self.filter.read().expr.current()?;
-        let filtered = filter.evaluate(&batch)?;
-        let num_rows = batch.num_rows();
-        let array = filtered.into_array(num_rows)?;
-        let mut filter = array.as_boolean().clone();
-        if !filter.has_true() {
-            // nothing to filter, so no need to update
-            return Ok(());
-        }
-        // only update the keys / rows if the filter does not match all rows
-        if filter.null_count() > 0 || filter.has_false() {
-            // Indices in `set_indices` should be correct if filter contains nulls
-            // So we prepare the filter here. Note this is also done in the `FilterBuilder`
-            // so there is no overhead to do this here.
-            if filter.nulls().is_some() {
-                filter = prep_null_mask_filter(&filter);
-            }
-
-            let filter_predicate = FilterBuilder::new(&filter);
+        if let Some(filter) = &selected_rows {
+            let filter_predicate = FilterBuilder::new(filter);
             let filter_predicate = if sort_keys.len() > 1 {
                 // Optimize filter when it has multiple sort keys
                 filter_predicate.optimize().build()
             } else {
                 filter_predicate.build()
             };
-            selected_rows = Some(filter);
             sort_keys = sort_keys
                 .iter()
                 .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
@@ -1240,6 +1252,41 @@ mod tests {
         // After emit is called, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
         dynamic_filter_clone.wait_complete().await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_topk_scalar_false_dynamic_filter_skips_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let sort_expr = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+
+        let runtime = Arc::new(RuntimeEnv::default());
+        let metrics = ExecutionPlanMetricsSet::new();
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(false)));
+
+        let mut topk = TopK::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![],
+            LexOrdering::from([sort_expr]),
+            2,
+            10,
+            runtime,
+            &metrics,
+            Arc::new(RwLock::new(TopKDynamicFilters::new(dynamic_filter))),
+        )?;
+
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(1), Some(2)]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array])?;
+        topk.insert_batch(batch)?;
+
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert!(results.is_empty());
 
         Ok(())
     }
