@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Float64Array};
+use arrow::array::{Array, ArrayRef, Float64Array};
 use arrow::datatypes::DataType;
 
 use datafusion_common::utils::take_function_args;
@@ -79,11 +79,15 @@ impl ScalarUDFImpl for SparkPow {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        // Only Float64 needs the Spark override.
-        // Decimal / integer paths are delegated to the standard PowerFunc which
-        // already handles them correctly (decimal can't represent Infinity anyway).
-        if !matches!(args.args[0].data_type(), DataType::Float64) {
-            return self.inner.invoke_with_args(args);
+        // Only Float64 × Float64 needs the Spark override.
+        // Decimal / integer / mixed-type paths are delegated to the standard
+        // PowerFunc which already handles them correctly (decimal can't
+        // represent Infinity anyway).
+        match args.args.as_slice() {
+            [base, exponent]
+                if matches!(base.data_type(), DataType::Float64)
+                    && matches!(exponent.data_type(), DataType::Float64) => {}
+            _ => return self.inner.invoke_with_args(args),
         }
 
         let num_rows = args.number_rows;
@@ -97,7 +101,6 @@ impl ScalarUDFImpl for SparkPow {
         {
             // b and e are &Option<f64>; Option<f64> is Copy.
             let result = (*b).zip(*e).map(|(b, e)| {
-                // Spark: 0^negative = +Infinity (covers both 0.0 and -0.0)
                 if b == 0.0 && e < 0.0 {
                     f64::INFINITY
                 } else {
@@ -122,9 +125,9 @@ impl ScalarUDFImpl for SparkPow {
             .downcast_ref::<Float64Array>()
             .expect("exponent must be Float64Array");
 
-        // b.powf(e) follows IEEE 754: 0.0_f64.powf(-1.0) == f64::INFINITY.
-        // No explicit guard needed — the default Rust behaviour is exactly
-        // what Spark requires.
+        // Spark: 0^negative = +Infinity (covers both 0.0 and -0.0)
+        // IEEE 754: 0.0^-1.0 = +Infinity, -0.0^-1.0 = -Infinity
+        // Thus we need an explicit guard for b == 0.0 to ensure +Infinity.
         let result: Float64Array = base_f64
             .iter()
             .zip(exp_f64.iter())
@@ -191,5 +194,61 @@ mod tests {
         assert_eq!(call_scalar_pow(2.0, -1.0), 0.5);
         assert_eq!(call_scalar_pow(4.0, 0.5), 2.0);
         assert_eq!(call_scalar_pow(0.0, 0.0), 1.0);
+    }
+
+    #[test]
+    fn test_spark_pow_array_and_mixed() {
+        let udf = SparkPow::new();
+        let arg_fields = vec![
+            Arc::new(Field::new("base", DataType::Float64, true)),
+            Arc::new(Field::new("exponent", DataType::Float64, true)),
+        ];
+        let return_field = Arc::new(Field::new("pow", DataType::Float64, true));
+
+        // Test Array x Array
+        let base_arr = Arc::new(Float64Array::from(vec![Some(0.0), Some(2.0), None]));
+        let exp_arr = Arc::new(Float64Array::from(vec![Some(-1.0), Some(3.0), Some(1.0)]));
+
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(base_arr),
+                ColumnarValue::Array(exp_arr),
+            ],
+            arg_fields: arg_fields.clone(),
+            number_rows: 3,
+            return_field: return_field.clone(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = udf.invoke_with_args(args).unwrap();
+        if let ColumnarValue::Array(arr) = result {
+            let result_arr = arr.as_any().downcast_ref::<Float64Array>().unwrap();
+            assert_eq!(result_arr.value(0), f64::INFINITY);
+            assert_eq!(result_arr.value(1), 8.0);
+            assert!(result_arr.is_null(2));
+        } else {
+            panic!("Expected array result");
+        }
+
+        // Test Scalar x Array
+        let args_mixed = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(0.0))),
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![Some(-1.0), Some(2.0)]))),
+            ],
+            arg_fields,
+            number_rows: 2,
+            return_field,
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result_mixed = udf.invoke_with_args(args_mixed).unwrap();
+        if let ColumnarValue::Array(arr) = result_mixed {
+            let result_arr = arr.as_any().downcast_ref::<Float64Array>().unwrap();
+            assert_eq!(result_arr.value(0), f64::INFINITY);
+            assert_eq!(result_arr.value(1), 0.0);
+        } else {
+            panic!("Expected array result for mixed input");
+        }
     }
 }
