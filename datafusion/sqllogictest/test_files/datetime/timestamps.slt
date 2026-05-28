@@ -5345,6 +5345,13 @@ SELECT to_timestamp_millis(arrow_cast(-1.9, 'Float64'));
 ----
 1969-12-31T23:59:59.999
 
+# Regression test for https://github.com/apache/datafusion/issues/22214
+query error .*out of range after truncating to year
+SELECT date_trunc(
+  'year',
+  arrow_cast(TIMESTAMP '1677-09-22 00:00:00', 'Timestamp(Nanosecond, None)')
+);
+
 
 ##########
 ## Common timestamp data
