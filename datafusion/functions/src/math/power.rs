@@ -92,8 +92,7 @@ impl PowerFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(vec![decimal.clone(), integer]),
-                    TypeSignature::Coercible(vec![decimal.clone(), float.clone()]),
+                    TypeSignature::Coercible(vec![decimal, integer]),
                     TypeSignature::Coercible(vec![float; 2]),
                 ],
                 Volatility::Immutable,
@@ -368,24 +367,6 @@ fn pow_decimal256_float_fallback(
     Ok(i256::from_i128(result_i128))
 }
 
-/// Compute `power(decimal_base, float_exponent)` by casting the base to
-/// `Float64` and running `pow` in float space; returns `Float64`.
-fn pow_decimal_via_float64(
-    base: &ColumnarValue,
-    exponent: &ColumnarValue,
-    num_rows: usize,
-) -> Result<ColumnarValue> {
-    let base_f64 = base
-        .cast_to(&DataType::Float64, None)?
-        .into_array(num_rows)?;
-    let result = calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
-        &base_f64,
-        exponent,
-        float64_power_checked,
-    )?;
-    Ok(ColumnarValue::Array(result))
-}
-
 impl ScalarUDFImpl for PowerFunc {
     fn name(&self) -> &str {
         "power"
@@ -400,14 +381,10 @@ impl ScalarUDFImpl for PowerFunc {
         // coercion, we have to handle the following cases:
         //
         //   - NULL on either side -> Float64 (typed NULL)
-        //   - (Decimal, Float64)  -> Float64
         //   - (Decimal, Int64)    -> the base's Decimal type
         //   - (Float64, Float64)  -> Float64
         let [base, exponent] = take_function_args(self.name(), arg_types)?;
         if base.is_null() || exponent.is_null() {
-            return Ok(DataType::Float64);
-        }
-        if base.is_decimal() && exponent.is_floating() {
             return Ok(DataType::Float64);
         }
         Ok(base.clone())
@@ -419,13 +396,6 @@ impl ScalarUDFImpl for PowerFunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [base, exponent] = take_function_args(self.name(), &args.args)?;
-
-        // No native kernel exists for `(Decimal, Float64)`; bridge by casting
-        // the base to Float64.
-        if base.data_type().is_decimal() && exponent.data_type().is_floating() {
-            return pow_decimal_via_float64(base, exponent, args.number_rows);
-        }
-
         let base = base.to_array(args.number_rows)?;
 
         macro_rules! decimal_pow_arm {
