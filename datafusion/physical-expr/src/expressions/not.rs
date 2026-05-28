@@ -209,14 +209,16 @@ impl NotExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
 
-        let protobuf::PhysicalNot { expr } = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::NotExpr(e)) => e.as_ref(),
-            _ => return internal_err!("PhysicalExprNode is not a NotExpr"),
-        };
+        let not_expr = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::NotExpr,
+            "NotExpr",
+        );
         let expr = ctx
-            .decode_required_expression(expr.as_deref(), "NotExpr", "expr")
+            .decode_required_expression(not_expr.expr.as_deref(), "NotExpr", "expr")
             .map_err(|err| match err {
                 datafusion_common::DataFusionError::Internal(msg)
                     if msg.starts_with("NotExpr is missing required field 'expr'") =>
