@@ -64,6 +64,7 @@ ORDER BY column1
 3 40
 4 50
 
+# Filter on file_row_index without having it in projection
 
 query TT
 EXPLAIN SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
@@ -75,11 +76,9 @@ logical_plan
 04)------Projection: file_row_index() AS __datafusion_extracted_1, parquet_table.column1
 05)--------TableScan: parquet_table projection=[column1]
 physical_plan
-01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
-02)--SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as __datafusion_extracted_1, column1], file_type=parquet, predicate=file_row_index() > 2
+01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as __datafusion_extracted_1, column1], file_type=parquet
 
 query I
 SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
@@ -87,10 +86,42 @@ SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
 40
 50
 
+# Filter on file_row_index without projecting it, while enabling filter pushdown
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query TT
+EXPLAIN SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
+----
+logical_plan
+01)Sort: parquet_table.column1 ASC NULLS LAST
+02)--Projection: parquet_table.column1
+03)----Filter: __datafusion_extracted_1 > Int64(2)
+04)------Projection: file_row_index() AS __datafusion_extracted_1, parquet_table.column1
+05)--------TableScan: parquet_table projection=[column1]
+physical_plan
+01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as __datafusion_extracted_1, column1], file_type=parquet
+
+query I
+SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
+----
+40
+50
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
+# Without the rewrite in ParquetSource, `file_row_index()` is just NULL
+
 query I
 SELECT file_row_index()
 ----
 NULL
+
+# Testing a table with two files.
 
 statement ok
 COPY  (VALUES (10), (20))
