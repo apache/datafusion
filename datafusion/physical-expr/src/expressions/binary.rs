@@ -177,6 +177,116 @@ fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
     )
 }
 
+/// Apply PostgreSQL-compatible `time +/- interval` arithmetic.
+///
+/// Arrow's kernels currently coerce these expressions through `Interval`,
+/// which can produce values outside the 24-hour time-of-day domain. SQL `time`
+/// values should remain times, wrapping around midnight.
+fn apply_time_interval_arithmetic(
+    lhs: &ColumnarValue,
+    op: &Operator,
+    rhs: &ColumnarValue,
+) -> Result<Option<ColumnarValue>> {
+    let (time, interval, subtract) = match (lhs.data_type(), op, rhs.data_type()) {
+        (
+            DataType::Time32(_) | DataType::Time64(_),
+            Operator::Plus,
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ) => (lhs, rhs, false),
+        (
+            DataType::Time32(_) | DataType::Time64(_),
+            Operator::Minus,
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ) => (lhs, rhs, true),
+        (
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            Operator::Plus,
+            DataType::Time32(_) | DataType::Time64(_),
+        ) => (rhs, lhs, false),
+        _ => return Ok(None),
+    };
+
+    let is_scalar = matches!(
+        (time, interval),
+        (ColumnarValue::Scalar(_), ColumnarValue::Scalar(_))
+    );
+
+    let arrays = ColumnarValue::values_to_arrays(&[time.clone(), interval.clone()])?;
+    let result = apply_time_interval_arrays(&arrays[0], &arrays[1], subtract)?;
+
+    if is_scalar {
+        Ok(Some(ColumnarValue::Scalar(ScalarValue::try_from_array(
+            result.as_ref(),
+            0,
+        )?)))
+    } else {
+        Ok(Some(ColumnarValue::Array(result)))
+    }
+}
+
+fn apply_time_interval_arrays(
+    time: &ArrayRef,
+    interval: &ArrayRef,
+    subtract: bool,
+) -> Result<ArrayRef> {
+    macro_rules! apply_time_unit {
+        ($time_type:ty, $native:ty, $units_per_day:expr, $nanos_per_unit:expr) => {{
+            let time = time.as_primitive::<$time_type>();
+            let interval = interval.as_primitive::<IntervalMonthDayNanoType>();
+            let result = (0..time.len())
+                .map(|i| {
+                    if time.is_null(i) || interval.is_null(i) {
+                        None
+                    } else {
+                        Some(wrap_time_value(
+                            time.value(i) as i64,
+                            interval.value(i),
+                            subtract,
+                            $units_per_day,
+                            $nanos_per_unit,
+                        ) as $native)
+                    }
+                })
+                .collect::<PrimitiveArray<$time_type>>();
+            Ok(Arc::new(result) as ArrayRef)
+        }};
+    }
+
+    match time.data_type() {
+        DataType::Time32(TimeUnit::Second) => {
+            apply_time_unit!(Time32SecondType, i32, 86_400, 1_000_000_000)
+        }
+        DataType::Time32(TimeUnit::Millisecond) => {
+            apply_time_unit!(Time32MillisecondType, i32, 86_400_000, 1_000_000)
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            apply_time_unit!(Time64MicrosecondType, i64, 86_400_000_000, 1_000)
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            apply_time_unit!(Time64NanosecondType, i64, 86_400_000_000_000, 1)
+        }
+        other => internal_err!("Unexpected time data type for time arithmetic: {other}"),
+    }
+}
+
+fn wrap_time_value(
+    time_value: i64,
+    interval: IntervalMonthDayNano,
+    subtract: bool,
+    units_per_day: i64,
+    nanos_per_unit: i64,
+) -> i64 {
+    // Month and day interval fields are whole-day-or-larger components, so
+    // they have no effect after wrapping to a 24-hour time-of-day value.
+    let nanos_per_unit = nanos_per_unit as i128;
+    let nanos_per_day = units_per_day as i128 * nanos_per_unit;
+    let delta = (interval.nanoseconds as i128).rem_euclid(nanos_per_day);
+    let signed_delta = if subtract { -delta } else { delta };
+
+    ((time_value as i128 * nanos_per_unit + signed_delta).rem_euclid(nanos_per_day)
+        / nanos_per_unit) as i64
+}
+
 /// Computes the difference between two dates and returns the result as Int64 (days)
 /// This aligns with PostgreSQL, DuckDB, and MySQL behavior where date - date returns an integer
 ///
@@ -336,6 +446,10 @@ impl PhysicalExpr for BinaryExpr {
 
         let schema = batch.schema();
         let input_schema = schema.as_ref();
+
+        if let Some(result) = apply_time_interval_arithmetic(&lhs, self.op(), &rhs)? {
+            return Ok(result);
+        }
 
         match self.op {
             Operator::Plus if self.fail_on_overflow => return apply(&lhs, &rhs, add),

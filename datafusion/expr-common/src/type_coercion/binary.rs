@@ -260,6 +260,30 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             })
         }
+        Plus if is_time_interval(lhs, rhs) => {
+            let time_type = if is_time(lhs) { lhs } else { rhs };
+            let interval_type = Interval(MonthDayNano);
+            if is_time(lhs) {
+                return Ok(Signature {
+                    lhs: time_type.clone(),
+                    rhs: interval_type,
+                    ret: time_type.clone(),
+                });
+            } else {
+                return Ok(Signature {
+                    lhs: interval_type,
+                    rhs: time_type.clone(),
+                    ret: time_type.clone(),
+                });
+            }
+        }
+        Minus if is_time(lhs) && is_interval(rhs) => {
+            return Ok(Signature {
+                lhs: lhs.clone(),
+                rhs: Interval(MonthDayNano),
+                ret: lhs.clone(),
+            });
+        }
         Minus if is_date_minus_date(lhs, rhs) => {
             return Ok(Signature {
                 lhs: lhs.clone(),
@@ -360,6 +384,18 @@ fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
         (lhs, rhs),
         (DataType::Date32, DataType::Date32) | (DataType::Date64, DataType::Date64)
     )
+}
+
+fn is_time(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Time32(_) | DataType::Time64(_))
+}
+
+fn is_interval(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Interval(_))
+}
+
+fn is_time_interval(lhs: &DataType, rhs: &DataType) -> bool {
+    (is_time(lhs) && is_interval(rhs)) || (is_interval(lhs) && is_time(rhs))
 }
 
 /// Coercion rules for mathematics operators between decimal and non-decimal types.
@@ -1983,13 +2019,6 @@ fn temporal_math_coercion(
         }
         // time - time -> Interval
         (Time32(_) | Time64(_), Time32(_) | Time64(_)) => {
-            Some((Interval(MonthDayNano), Interval(MonthDayNano)))
-        }
-        // time + interval -> Interval
-        (Time32(_) | Time64(_), Interval(_)) => {
-            Some((Interval(MonthDayNano), Interval(MonthDayNano)))
-        }
-        (Interval(_), Time32(_) | Time64(_)) => {
             Some((Interval(MonthDayNano), Interval(MonthDayNano)))
         }
         // Interval * number => Interval
