@@ -32,6 +32,7 @@ all-features = true
 
 [dependencies]
 arrow = { workspace = true }
+arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store", "parquet"] }
