@@ -52,7 +52,7 @@ use datafusion::{
 };
 use datafusion_spark::SessionStateBuilderSpark;
 
-use crate::is_spark_path;
+use crate::{is_spark_dialect_path, is_spark_path};
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
@@ -125,6 +125,14 @@ impl TestContext {
         let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
+
+        if is_spark_dialect_path(relative_path) {
+            test_ctx
+                .session_ctx()
+                .sql("SET datafusion.sql_parser.dialect = 'spark'")
+                .await
+                .expect("failed to set Spark dialect on session context");
+        }
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {

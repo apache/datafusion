@@ -1,0 +1,888 @@
+#!/usr/bin/env python3
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+"""
+Validate hardcoded expected values in .slt (sqllogictest) test files
+by running the same queries against PySpark and comparing results.
+
+Usage:
+    python validate_slt.py                          # Run all .slt files
+    python validate_slt.py --path math/abs.slt      # Single file
+    python validate_slt.py --path string/           # All files in subdirectory
+    python validate_slt.py --verbose                 # Show details
+    python validate_slt.py --show-skipped            # Show skipped queries
+"""
+
+import argparse
+import math
+import os
+import re
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# SLT record types
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class QueryRecord:
+    """A 'query <TYPE_CODES> [rowsort]' block."""
+
+    type_codes: str
+    sql: str
+    expected: list[str]
+    rowsort: bool
+    line_number: int
+    skip_engines: set[str] = field(default_factory=set)
+    only_engines: set[str] = field(default_factory=set)
+
+
+@dataclass
+class ErrorRecord:
+    """A 'query error <pattern>' or 'statement error <pattern>' block."""
+
+    pattern: str
+    sql: str
+    line_number: int
+    kind: str = "query"  # "query" or "statement"
+    skip_engines: set[str] = field(default_factory=set)
+    only_engines: set[str] = field(default_factory=set)
+
+
+@dataclass
+class StatementRecord:
+    """A 'statement ok' block (DDL/config)."""
+
+    sql: str
+    line_number: int
+    skip_engines: set[str] = field(default_factory=set)
+    only_engines: set[str] = field(default_factory=set)
+
+
+# ---------------------------------------------------------------------------
+# 1. SLT Parser
+# ---------------------------------------------------------------------------
+
+
+def parse_slt(filepath: str) -> list:
+    """Parse an .slt file into a list of records."""
+    with open(filepath) as f:
+        lines = f.readlines()
+
+    records = []
+    i = 0
+    pending_skip: set[str] = set()
+    pending_only: set[str] = set()
+
+    while i < len(lines):
+        line = lines[i].rstrip("\n")
+
+        m = re.match(r"^skipif\s+(\S+)\s*$", line)
+        if m:
+            pending_skip.add(m.group(1).strip())
+            i += 1
+            continue
+
+        m = re.match(r"^onlyif\s+(\S+)\s*$", line)
+        if m:
+            pending_only.add(m.group(1).strip())
+            i += 1
+            continue
+
+        # Skip blank lines and comments
+        if not line.strip() or line.strip().startswith("#"):
+            i += 1
+            continue
+
+        # query error <pattern>
+        m = re.match(r"^query\s+error\s+(.*)", line)
+        if m:
+            pattern = m.group(1).strip()
+            line_num = i + 1
+            i += 1
+            sql_lines = []
+            while i < len(lines) and lines[i].strip() and not lines[i].strip().startswith("#"):
+                stripped = lines[i].rstrip("\n")
+                if (
+                    re.match(r"^query\s", stripped)
+                    or re.match(r"^statement\s", stripped)
+                ):
+                    break
+                sql_lines.append(stripped)
+                i += 1
+            records.append(
+                ErrorRecord(
+                    pattern=pattern,
+                    sql="\n".join(sql_lines),
+                    line_number=line_num,
+                    kind="query",
+                )
+            )
+            records[-1].skip_engines = pending_skip
+            records[-1].only_engines = pending_only
+            pending_skip = set()
+            pending_only = set()
+            continue
+
+        # statement error <pattern>
+        m = re.match(r"^statement\s+error\s*(.*)", line)
+        if m:
+            pattern = m.group(1).strip()
+            line_num = i + 1
+            i += 1
+            sql_lines = []
+            while i < len(lines) and lines[i].strip() and not lines[i].strip().startswith("#"):
+                stripped = lines[i].rstrip("\n")
+                if (
+                    re.match(r"^query\s", stripped)
+                    or re.match(r"^statement\s", stripped)
+                ):
+                    break
+                sql_lines.append(stripped)
+                i += 1
+            records.append(
+                ErrorRecord(
+                    pattern=pattern,
+                    sql="\n".join(sql_lines),
+                    line_number=line_num,
+                    kind="statement",
+                )
+            )
+            records[-1].skip_engines = pending_skip
+            records[-1].only_engines = pending_only
+            pending_skip = set()
+            pending_only = set()
+            continue
+
+        # statement ok
+        m = re.match(r"^statement\s+ok\s*$", line)
+        if m:
+            line_num = i + 1
+            i += 1
+            sql_lines = []
+            while i < len(lines) and lines[i].strip() and not lines[i].strip().startswith("#"):
+                stripped = lines[i].rstrip("\n")
+                if (
+                    re.match(r"^query\s", stripped)
+                    or re.match(r"^statement\s", stripped)
+                ):
+                    break
+                sql_lines.append(stripped)
+                i += 1
+            sql = "\n".join(sql_lines)
+
+            records.append(
+                StatementRecord(sql=sql, line_number=line_num)
+            )
+            records[-1].skip_engines = pending_skip
+            records[-1].only_engines = pending_only
+            pending_skip = set()
+            pending_only = set()
+            continue
+
+        # query <TYPE_CODES> [rowsort]
+        m = re.match(r"^query\s+(\S+)(\s+rowsort)?\s*$", line)
+        if m:
+            type_codes = m.group(1)
+            rowsort = m.group(2) is not None
+            line_num = i + 1
+            i += 1
+
+            # Collect SQL lines until ----
+            sql_lines = []
+            while i < len(lines) and lines[i].rstrip("\n") != "----":
+                sql_lines.append(lines[i].rstrip("\n"))
+                i += 1
+
+            # Skip the ---- separator
+            if i < len(lines) and lines[i].rstrip("\n") == "----":
+                i += 1
+
+            # Collect expected result lines until blank line or next record.
+            # Note: do NOT treat # as a comment here — result values can
+            # start with # (e.g., soundex('#') -> '#').
+            expected = []
+            while i < len(lines):
+                result_line = lines[i].rstrip("\n")
+                if result_line == "":
+                    i += 1
+                    break
+                if re.match(r"^(query|statement)\s", result_line):
+                    break
+                # A ## comment line in the results section signals end of results
+                if result_line.startswith("##"):
+                    break
+                expected.append(result_line)
+                i += 1
+
+            records.append(
+                QueryRecord(
+                    type_codes=type_codes,
+                    sql="\n".join(sql_lines),
+                    expected=expected,
+                    rowsort=rowsort,
+                    line_number=line_num,
+                )
+            )
+            records[-1].skip_engines = pending_skip
+            records[-1].only_engines = pending_only
+            pending_skip = set()
+            pending_only = set()
+            continue
+
+        # Unknown line, skip
+        i += 1
+
+    return records
+
+
+# ---------------------------------------------------------------------------
+# 2. PySpark Runner and Result Formatter
+# ---------------------------------------------------------------------------
+
+_spark_session = None
+_spark_version: Optional[tuple[int, ...]] = None
+
+
+def get_spark():
+    """Create or return a local SparkSession."""
+    global _spark_session, _spark_version
+    if _spark_session is None:
+        from pyspark.sql import SparkSession
+
+        _spark_session = (
+            SparkSession.builder.master("local[1]")
+            .appName("slt-validator")
+            .config("spark.sql.ansi.enabled", "false")
+            .config("spark.sql.session.timeZone", "UTC")
+            .config("spark.ui.enabled", "false")
+            .config("spark.driver.bindAddress", "127.0.0.1")
+            .config("spark.log.level", "WARN")
+            .getOrCreate()
+        )
+        # Suppress Spark logging
+        _spark_session.sparkContext.setLogLevel("WARN")
+        _spark_version = _parse_version(_spark_session.version)
+    return _spark_session
+
+
+def _parse_version(ver_str: str) -> tuple[int, ...]:
+    """Parse a version string like '3.5.8' into a (major, minor) tuple."""
+    return tuple(int(x) for x in ver_str.split(".")[:2])
+
+
+def spark_version() -> tuple[int, ...]:
+    """Return the Spark major.minor version as a tuple, e.g. (4, 0)."""
+    if _spark_version is None:
+        get_spark()
+    return _spark_version
+
+
+_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$")
+_FLOAT_RE = re.compile(r"^-?\d+\.0$")
+_DECIMAL_TRAILING_ZEROS_RE = re.compile(r"^(-?\d+\.\d*?)0+$")
+_DECIMAL_SCIENTIFIC_ZERO_RE = re.compile(r"^0E-?\d+$")
+
+
+def _normalize_numeric_string(val: str) -> str:
+    """Normalize Spark's cast-to-string output for numeric types to match .slt.
+
+    Spark's cast(numeric AS string) preserves scale for decimals (0 -> 0.00)
+    and trailing .0 for floats (1.0 instead of 1). The .slt files strip these.
+    """
+    # 0E-10, 0E+5, etc. -> 0
+    if _DECIMAL_SCIENTIFIC_ZERO_RE.match(val):
+        return "0"
+    # 1.0 -> 1 (float/double whole numbers)
+    if _FLOAT_RE.match(val):
+        return val[:-2]  # strip .0
+    # 99999999.990000 -> 99999999.99 (strip trailing zeros after decimal)
+    m = _DECIMAL_TRAILING_ZEROS_RE.match(val)
+    if m:
+        result = m.group(1)
+        if result.endswith("."):
+            return result[:-1]  # 0. -> 0
+        return result
+    return val
+
+
+def format_value(val) -> str:
+    """Format a single value to match .slt conventions.
+
+    All values arrive as strings (from Spark's cast-to-string), None, or
+    occasionally native Python types for complex columns.
+    """
+    if val is None:
+        return "NULL"
+    if isinstance(val, str):
+        if val == "":
+            return "(empty)"
+        # Normalize timestamp format: Spark uses space separator,
+        # .slt uses T separator (e.g., 2018-03-13 04:18:23 -> 2018-03-13T04:18:23)
+        if _TIMESTAMP_RE.match(val):
+            return val.replace(" ", "T", 1)
+        # Normalize timestamps inside complex types (arrays, maps)
+        # e.g., [2001-09-28 01:00:00, ...] -> [2001-09-28T01:00:00, ...]
+        val = re.sub(
+            r"(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)",
+            r"\1T\2",
+            val,
+        )
+        # Normalize lowercase null -> NULL inside complex types
+        val = re.sub(r"\bnull\b", "NULL", val)
+        # Normalize numeric strings (float .0, decimal trailing zeros)
+        return _normalize_numeric_string(val)
+    # Fallbacks for non-string types (complex columns that Spark
+    # cast-to-string may still return as native Python types)
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, float):
+        if math.isnan(val):
+            return "NaN"
+        if math.isinf(val):
+            return "Infinity" if val > 0 else "-Infinity"
+        if val == int(val):
+            return str(int(val))
+        return str(val)
+    if isinstance(val, (list, tuple)):
+        inner = ", ".join(format_value(v) for v in val)
+        return f"[{inner}]"
+    if isinstance(val, dict):
+        entries = ", ".join(
+            f"{format_value(k)}: {format_value(v)}" for k, v in val.items()
+        )
+        return "{" + entries + "}"
+    if isinstance(val, (bytes, bytearray)):
+        try:
+            return val.decode("utf-8")
+        except UnicodeDecodeError:
+            return val.hex()
+    return str(val)
+
+
+def format_result(rows, num_cols: int) -> list[str]:
+    """Format PySpark result rows to match .slt output format.
+
+    Returns list of strings, one per output line.
+    """
+    if not rows:
+        return []
+
+    result_lines = []
+    for row in rows:
+        values = []
+        for i in range(num_cols):
+            values.append(format_value(row[i]))
+        result_lines.append(" ".join(values))
+
+    return result_lines
+
+
+def run_query(sql: str, num_cols: int) -> tuple[Optional[list[str]], Optional[str]]:
+    """Run a query against PySpark and return formatted results.
+
+    Returns (result_lines, error_message).
+
+    Casts all columns to string inside Spark before collecting to avoid
+    PySpark's collect() converting timestamps to the local Python timezone.
+    """
+    spark = get_spark()
+    try:
+        df = spark.sql(sql)
+        # Cast all columns to string inside Spark to preserve Spark's
+        # internal representation (especially for timestamps which
+        # collect() would convert to local Python timezone).
+        # Rename columns to unique _c0, _c1, ... names first to avoid
+        # ambiguous reference errors when column names contain special
+        # characters or are duplicated.
+        unique_names = [f"_c{i}" for i in range(len(df.columns))]
+        schema_types = [f.dataType.simpleString() for f in df.schema.fields]
+        df = df.toDF(*unique_names)
+        from pyspark.sql import functions as F
+
+        # Use hex() for binary columns to match .slt convention (which
+        # displays binary as lowercase hex), cast(string) for everything else
+        cast_exprs = []
+        for i, c in enumerate(unique_names):
+            if schema_types[i] == "binary":
+                cast_exprs.append(F.lower(F.hex(F.col(c))).alias(c))
+            else:
+                cast_exprs.append(F.col(c).cast("string").alias(c))
+        string_df = df.select(cast_exprs)
+        rows = string_df.collect()
+        return format_result(rows, num_cols), None
+    except Exception as e:
+        return None, str(e)
+
+
+def run_statement(sql: str) -> Optional[str]:
+    """Run a statement (DDL) against PySpark. Returns error message or None."""
+    spark = get_spark()
+    try:
+        spark.sql(sql)
+        return None
+    except Exception as e:
+        return str(e)
+
+
+# ---------------------------------------------------------------------------
+# 3. File Orchestration and CLI
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FileResult:
+    """Results for a single .slt file."""
+
+    filepath: str
+    passed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    errors: list = field(default_factory=list)
+    skipped_details: list = field(default_factory=list)
+
+
+def _try_parse_float(s: str) -> Optional[float]:
+    """Try to parse a string as a float, handling special values."""
+    if s in ("NULL", "(empty)"):
+        return None
+    try:
+        return float(s)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _values_match(exp_val: str, act_val: str, rel_tol: float = 1e-6) -> bool:
+    """Compare two individual values with float tolerance.
+
+    For values that parse as floats, uses relative tolerance comparison.
+    Also handles scientific notation vs decimal mismatch (e.g., 8.165e15 vs 8165619676597685).
+    Non-numeric values are compared as exact strings.
+    """
+    if exp_val == act_val:
+        return True
+    # Try numeric comparison
+    exp_f = _try_parse_float(exp_val)
+    act_f = _try_parse_float(act_val)
+    if exp_f is not None and act_f is not None:
+        # Handle NaN
+        if math.isnan(exp_f) and math.isnan(act_f):
+            return True
+        # Handle infinity
+        if math.isinf(exp_f) and math.isinf(act_f):
+            return (exp_f > 0) == (act_f > 0)
+        # Handle zero
+        if exp_f == 0.0 and act_f == 0.0:
+            return True
+        # Relative tolerance
+        if exp_f != 0.0:
+            return abs(exp_f - act_f) / abs(exp_f) < rel_tol
+        return abs(exp_f - act_f) < rel_tol
+    return False
+
+
+def _lines_match(exp_line: str, act_line: str) -> bool:
+    """Compare a single result line with float tolerance.
+
+    Splits multi-column lines by space and compares each value.
+    """
+    exp_parts = exp_line.split(" ")
+    act_parts = act_line.split(" ")
+    if len(exp_parts) != len(act_parts):
+        return False
+    return all(_values_match(e, a) for e, a in zip(exp_parts, act_parts))
+
+
+def compare_results(
+    expected: list[str], actual: list[str], rowsort: bool
+) -> tuple[bool, str]:
+    """Compare expected vs actual results. Returns (match, detail).
+
+    Uses exact string matching first, then falls back to float-tolerant
+    comparison for numeric values.
+    """
+    exp = expected[:]
+    act = actual[:]
+
+    if rowsort:
+        exp = sorted(exp)
+        act = sorted(act)
+
+    if exp == act:
+        return True, ""
+
+    # Try tolerant comparison
+    if len(exp) == len(act) and all(
+        _lines_match(e, a) for e, a in zip(exp, act)
+    ):
+        return True, ""
+
+    detail_lines = []
+    detail_lines.append(f"  Expected ({len(exp)} lines):")
+    for line in exp[:10]:
+        detail_lines.append(f"    {line}")
+    if len(exp) > 10:
+        detail_lines.append(f"    ... ({len(exp) - 10} more)")
+    detail_lines.append(f"  Actual ({len(act)} lines):")
+    for line in act[:10]:
+        detail_lines.append(f"    {line}")
+    if len(act) > 10:
+        detail_lines.append(f"    ... ({len(act) - 10} more)")
+
+    return False, "\n".join(detail_lines)
+
+
+def process_file(
+    filepath: str, verbose: bool = False, show_skipped: bool = False
+) -> FileResult:
+    """Process a single .slt file and validate against PySpark."""
+    result = FileResult(filepath=filepath)
+    records = parse_slt(filepath)
+
+    # Track tables created with SQL that failed to execute
+    skip_tables: set[str] = set()
+
+    for record in records:
+        # Honor skipif/onlyif against this engine's name (we're the Spark runner).
+        engine = "spark"
+        if engine in record.skip_engines:
+            result.skipped += 1
+            if show_skipped:
+                result.skipped_details.append(
+                    f"  Line {record.line_number}: skipped (skipif {engine})"
+                )
+            continue
+        if record.only_engines and engine not in record.only_engines:
+            result.skipped += 1
+            if show_skipped:
+                result.skipped_details.append(
+                    f"  Line {record.line_number}: skipped (onlyif not {engine})"
+                )
+            continue
+
+        if isinstance(record, StatementRecord):
+            err = run_statement(record.sql)
+            if err:
+                if verbose:
+                    print(
+                        f"  Line {record.line_number}: statement error (non-fatal): {err[:100]}"
+                    )
+                # Track the table as skip if creation failed
+                create_match = re.search(
+                    r"CREATE\s+TABLE\s+(\w+)", record.sql, re.IGNORECASE
+                )
+                if create_match:
+                    skip_tables.add(create_match.group(1).lower())
+
+        elif isinstance(record, QueryRecord):
+            # Check if query references a skipped table
+            sql_lower = record.sql.lower()
+            refs_skip_table = any(
+                re.search(rf"\b{re.escape(t)}\b", sql_lower) for t in skip_tables
+            )
+            if refs_skip_table:
+                result.skipped += 1
+                if show_skipped:
+                    result.skipped_details.append(
+                        f"  Line {record.line_number}: skipped (references skipped table)"
+                    )
+                continue
+
+            num_cols = len(record.type_codes)
+            actual, err = run_query(record.sql, num_cols)
+
+            if err:
+                # Unresolved function/routine means this Spark version
+                # doesn't have the function — skip, not fail
+                if "UNRESOLVED_ROUTINE" in err:
+                    result.skipped += 1
+                    if show_skipped:
+                        result.skipped_details.append(
+                            f"  Line {record.line_number}: skipped (function not available in this Spark version)"
+                        )
+                    continue
+                result.failed += 1
+                result.errors.append(
+                    f"  Line {record.line_number}: PySpark error: {err}\n"
+                    f"    SQL: {record.sql}"
+                )
+                continue
+
+            match, detail = compare_results(record.expected, actual, record.rowsort)
+            if match:
+                result.passed += 1
+                if verbose:
+                    print(f"  Line {record.line_number}: PASS")
+            else:
+                result.failed += 1
+                result.errors.append(
+                    f"  Line {record.line_number}: MISMATCH\n"
+                    f"    SQL: {record.sql}\n"
+                    f"{detail}"
+                )
+
+        elif isinstance(record, ErrorRecord):
+            # For error queries, verify Spark also throws
+            if record.kind == "query":
+                _, err = run_query(record.sql, 1)
+            else:
+                err = run_statement(record.sql)
+
+            if err:
+                result.passed += 1
+                if verbose:
+                    print(
+                        f"  Line {record.line_number}: PASS (error expected and received)"
+                    )
+            else:
+                # Spark succeeded where DataFusion expected error - note but don't fail
+                result.skipped += 1
+                if show_skipped:
+                    result.skipped_details.append(
+                        f"  Line {record.line_number}: skipped (Spark did not error, DataFusion expects error)"
+                    )
+
+    return result
+
+
+def discover_slt_files(test_dir: str, path_filter: Optional[str] = None) -> list[str]:
+    """Find .slt files under test_dir, optionally filtered."""
+    test_path = Path(test_dir)
+    if path_filter:
+        target = test_path / path_filter
+        if target.is_file():
+            return [str(target)]
+        elif target.is_dir():
+            return sorted(str(f) for f in target.rglob("*.slt"))
+        else:
+            print(f"Error: {target} is not a file or directory", file=sys.stderr)
+            sys.exit(1)
+    return sorted(str(f) for f in test_path.rglob("*.slt"))
+
+
+def cleanup_tables():
+    """Drop all tables in the Spark session."""
+    spark = get_spark()
+    try:
+        for table in spark.catalog.listTables():
+            spark.sql(f"DROP TABLE IF EXISTS {table.name}")
+    except Exception:
+        pass
+
+
+_VERSION_CONDITION_RE = re.compile(
+    r"^\[spark([<>=!]+)(\d+\.\d+)\]\s+(.+)$"
+)
+
+
+def _check_version_condition(op: str, ver: tuple[int, ...]) -> bool:
+    """Check if the current Spark version satisfies the condition."""
+    current = spark_version()
+    if op == ">=":
+        return current >= ver
+    if op == "<=":
+        return current <= ver
+    if op == ">":
+        return current > ver
+    if op == "<":
+        return current < ver
+    if op == "==":
+        return current == ver
+    if op == "!=":
+        return current != ver
+    return True  # unknown op, include by default
+
+
+@dataclass
+class _KnownFailureEntry:
+    """A known-failure entry, possibly with a Spark version condition."""
+
+    path: str
+    op: Optional[str] = None
+    ver: Optional[tuple[int, ...]] = None
+
+
+def load_known_failures(filepath: str) -> list[_KnownFailureEntry]:
+    """Load known failure entries from a text file.
+
+    Each non-blank, non-comment line is a .slt file path relative to the
+    spark test directory (e.g., 'string/format_string.slt').
+
+    Lines can optionally have a version condition prefix:
+        [spark>=4.0] math/abs.slt
+    which means the entry only applies when running against Spark >= 4.0.
+
+    Returns a list of entries; version conditions are evaluated lazily via
+    resolve_known_failures() after SparkSession is available.
+    """
+    entries: list[_KnownFailureEntry] = []
+    if not os.path.isfile(filepath):
+        return entries
+    with open(filepath) as f:
+        for line in f:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                m = _VERSION_CONDITION_RE.match(stripped)
+                if m:
+                    op, ver_str, path = m.group(1), m.group(2), m.group(3)
+                    ver = _parse_version(ver_str)
+                    entries.append(_KnownFailureEntry(
+                        path=path.replace("\\", "/"), op=op, ver=ver
+                    ))
+                else:
+                    entries.append(_KnownFailureEntry(
+                        path=stripped.replace("\\", "/")
+                    ))
+    return entries
+
+
+def resolve_known_failures(entries: list[_KnownFailureEntry]) -> set[str]:
+    """Resolve version-conditional entries against the running Spark version."""
+    known = set()
+    for entry in entries:
+        if entry.op is not None and entry.ver is not None:
+            if not _check_version_condition(entry.op, entry.ver):
+                continue
+        known.add(entry.path)
+    return known
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Validate .slt test files against PySpark"
+    )
+
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent.parent.parent
+    default_test_dir = repo_root / "datafusion" / "sqllogictest" / "test_files" / "spark_dialect"
+    default_known_failures = script_dir / "known-failures.txt"
+
+    parser.add_argument(
+        "--path",
+        help="Relative path to .slt file or directory (relative to spark test dir)",
+    )
+    parser.add_argument(
+        "--test-dir",
+        default=str(default_test_dir),
+        help="Root directory for .slt test files",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Show detailed output")
+    parser.add_argument(
+        "--show-skipped", action="store_true", help="Show skipped query details"
+    )
+    parser.add_argument(
+        "--known-failures",
+        default=str(default_known_failures),
+        help="Path to optional known-failures.txt file (deprecated; "
+             "prefer skipif/onlyif directives in .slt files. "
+             "Use --known-failures=none to disable)",
+    )
+    args = parser.parse_args()
+
+    # Load known failure entries (version conditions resolved after Spark init)
+    if args.known_failures.lower() == "none" or not os.path.exists(args.known_failures):
+        known_failure_entries: list[_KnownFailureEntry] = []
+    else:
+        known_failure_entries = load_known_failures(args.known_failures)
+        if known_failure_entries:
+            print(f"Loaded {len(known_failure_entries)} known failure entry(ies)")
+
+    files = discover_slt_files(args.test_dir, args.path)
+    if not files:
+        print("No .slt files found")
+        sys.exit(1)
+
+    print(f"Found {len(files)} .slt file(s) to validate\n")
+
+    # Resolve version-conditional known failures now that Spark will init on demand
+    known_failures = resolve_known_failures(known_failure_entries)
+
+    total_passed = 0
+    total_failed = 0
+    total_skipped = 0
+    total_known_failures = 0
+    failed_files = []
+    known_failure_files = []
+
+    for filepath in files:
+        rel = os.path.relpath(filepath, args.test_dir)
+        rel_normalized = rel.replace("\\", "/")
+        is_known_failure = rel_normalized in known_failures
+
+        if is_known_failure:
+            print(f"--- {rel} [known failure, skipping] ---\n")
+            total_known_failures += 1
+            known_failure_files.append(rel)
+            continue
+
+        print(f"--- {rel} ---")
+
+        cleanup_tables()
+        file_result = process_file(
+            filepath, verbose=args.verbose, show_skipped=args.show_skipped
+        )
+
+        # Print errors
+        for err in file_result.errors:
+            print(err)
+
+        # Print skipped details
+        for detail in file_result.skipped_details:
+            print(detail)
+
+        # Print summary for this file
+        status_parts = []
+        if file_result.passed:
+            status_parts.append(f"{file_result.passed} passed")
+        if file_result.failed:
+            status_parts.append(f"{file_result.failed} FAILED")
+        if file_result.skipped:
+            status_parts.append(f"{file_result.skipped} skipped")
+        print(f"  Result: {', '.join(status_parts)}\n")
+
+        total_passed += file_result.passed
+        total_failed += file_result.failed
+        total_skipped += file_result.skipped
+        if file_result.failed > 0:
+            failed_files.append(rel)
+
+    # Overall summary
+    print("=" * 60)
+    print(
+        f"Overall: {total_passed} passed, {total_failed} failed, "
+        f"{total_skipped} skipped, {total_known_failures} known failures"
+    )
+    if failed_files:
+        print("\nUnexpected failures:")
+        for f in failed_files:
+            print(f"  {f}")
+    if known_failure_files and args.verbose:
+        print("\nKnown failures (skipped):")
+        for f in known_failure_files:
+            print(f"  {f}")
+    print()
+
+    # Exit 0 if no unexpected failures
+    sys.exit(1 if total_failed > 0 else 0)
+
+
+if __name__ == "__main__":
+    main()

@@ -439,7 +439,7 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                      Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks, Spark."
             )
         })?;
 
@@ -488,7 +488,7 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                          Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks, Spark."
             )
         })?;
 
@@ -2558,6 +2558,19 @@ mod tests {
             .build();
         assert!(session_state.table_factories().get("test").is_some());
 
+        Ok(())
+    }
+
+    #[test]
+    fn sql_to_statement_accepts_spark_dialect() -> Result<()> {
+        let state = SessionStateBuilder::new()
+            .with_config(SessionConfig::new())
+            .with_default_features()
+            .build();
+        // DIV is a Spark-specific integer-division operator that GenericDialect rejects.
+        let stmt = state.sql_to_statement("SELECT 10 DIV 3", &Dialect::Spark)?;
+        // If parsing succeeded, we got a valid statement back — that's the proof.
+        drop(stmt);
         Ok(())
     }
 
