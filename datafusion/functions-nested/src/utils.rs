@@ -276,6 +276,57 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
     }
 }
 
+/// Shared `coerce_types` impl for array-math UDFs whose kernels expect
+/// `List<Float64>` / `LargeList<Float64>` (e.g. `array_add`, `cosine_distance`,
+/// `inner_product`, `array_normalize`).
+///
+/// Each input must be `Null`, `List`, `LargeList`, or `FixedSizeList`; otherwise
+/// returns a plan error naming `name`. `FixedSizeList` is widened to `List`,
+/// `Null` is coerced to a list of `Float64`, and if any input is `LargeList`
+/// the rest are widened to `LargeList` so the runtime sees a homogeneous pair.
+pub(crate) fn coerce_array_math_arg_types(
+    name: &str,
+    arg_types: &[DataType],
+) -> Result<Vec<DataType>> {
+    use DataType::{FixedSizeList, LargeList, List, Null};
+    use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
+
+    let coercion = Some(&ListCoercion::FixedSizedListToList);
+
+    for arg_type in arg_types {
+        if !matches!(arg_type, Null | List(_) | LargeList(_) | FixedSizeList(..)) {
+            return plan_err!("{name} does not support type {arg_type}");
+        }
+    }
+
+    // If any input is `LargeList`, both sides must be widened to `LargeList`
+    // so the runtime dispatch in `inner_product_inner` sees a homogeneous
+    // pair. Follows the pattern in `ArrayConcat::coerce_types`.
+    let any_large_list = arg_types.iter().any(|t| matches!(t, LargeList(_)));
+
+    let coerced = arg_types
+        .iter()
+        .map(|arg_type| {
+            if matches!(arg_type, Null) {
+                let field = Arc::new(Field::new_list_field(DataType::Float64, true));
+                return if any_large_list {
+                    LargeList(field)
+                } else {
+                    List(field)
+                };
+            }
+            let coerced =
+                coerced_type_with_base_type_only(arg_type, &DataType::Float64, coercion);
+            match coerced {
+                List(field) if any_large_list => LargeList(field),
+                other => other,
+            }
+        })
+        .collect();
+
+    Ok(coerced)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
