@@ -30,7 +30,7 @@ runs:
       run: |
         RETRY=("ci/scripts/retry" timeout 120)
         "${RETRY[@]}" apt-get update
-        "${RETRY[@]}" apt-get install -y protobuf-compiler
+        "${RETRY[@]}" apt-get install -y clang protobuf-compiler
     - name: Setup Rust toolchain
       shell: bash
       # rustfmt is needed for the substrait build script
@@ -40,8 +40,17 @@ runs:
         "${RETRY[@]}" rustup toolchain install ${{ inputs.rust-version }}
         "${RETRY[@]}" rustup default ${{ inputs.rust-version }}
         "${RETRY[@]}" rustup component add rustfmt
+    - name: Install wild linker
+      shell: bash
+      run: cargo install --locked --version 0.9.0 wild-linker
     - name: Configure rust runtime env
       uses: ./.github/actions/setup-rust-runtime
+    - name: Use wild linker
+      shell: bash
+      # Wild is invoked through clang because gcc only supports arbitrary
+      # linker paths starting with version 16.1.
+      run: |
+        echo "RUSTFLAGS=-C debuginfo=line-tables-only -C incremental=false -C linker=clang -C link-args=--ld-path=wild" >> $GITHUB_ENV
     - name: Fixup git permissions
       # https://github.com/actions/checkout/issues/766
       shell: bash
