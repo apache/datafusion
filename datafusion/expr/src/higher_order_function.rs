@@ -825,14 +825,6 @@ pub trait HigherOrderUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
 /// regular value arguments. This struct contains the information DataFusion
 /// needs to plan and invoke functions you supply such as name, type signature,
 /// return type, and actual implementation.
-///
-/// For advanced use cases, implement [`HigherOrderUDFImpl`] which provides the
-/// full API.
-///
-/// # API Note
-///
-/// This is a separate struct from [`HigherOrderUDFImpl`] to mirror the
-/// `ScalarUDF` / `ScalarUDFImpl` pattern.
 #[derive(Debug, Clone)]
 pub struct HigherOrderUDF {
     inner: Arc<dyn HigherOrderUDFImpl>,
