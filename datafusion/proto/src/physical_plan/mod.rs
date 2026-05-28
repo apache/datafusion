@@ -26,6 +26,7 @@ use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::display::StringifiedPlan;
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::{
     DataFusionError, JoinType, NullEquality, Result, internal_datafusion_err,
     internal_err, not_impl_err,
@@ -1962,6 +1963,19 @@ pub trait PhysicalPlanNodeExt: Sized {
         } else {
             None
         };
+        let pb_format =
+            protobuf::ExplainFormat::try_from(analyze.format).map_err(|_| {
+                DataFusionError::Internal(format!(
+                    "Received an AnalyzeExecNode message with unknown ExplainFormat {}",
+                    analyze.format
+                ))
+            })?;
+        let format = match pb_format {
+            protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
+            protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
+            protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
+            protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
+        };
         Ok(Arc::new(
             AnalyzeExec::builder(
                 analyze.verbose,
@@ -1970,6 +1984,7 @@ pub trait PhysicalPlanNodeExt: Sized {
                 Arc::new(convert_required!(analyze.schema)?),
             )
             .with_metric_categories(metric_categories)
+            .with_format(format)
             .build(),
         ))
     }
@@ -2465,6 +2480,12 @@ pub trait PhysicalPlanNodeExt: Sized {
             Some(cats) => (true, cats.iter().map(|c| c.to_string()).collect()),
             None => (false, vec![]),
         };
+        let format = match exec.format() {
+            ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
+            ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
+            ExplainFormat::PostgresJSON => protobuf::ExplainFormat::Pgjson,
+            ExplainFormat::Graphviz => protobuf::ExplainFormat::Graphviz,
+        } as i32;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Analyze(Box::new(
                 protobuf::AnalyzeExecNode {
@@ -2474,6 +2495,7 @@ pub trait PhysicalPlanNodeExt: Sized {
                     schema: Some(exec.schema().as_ref().try_into()?),
                     has_metric_categories,
                     metric_categories,
+                    format,
                 },
             ))),
         })
