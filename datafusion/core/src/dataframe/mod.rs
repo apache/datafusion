@@ -980,8 +980,13 @@ impl DataFrame {
 
     /// Return a new `DataFrame` that has statistics for a DataFrame.
     ///
-    /// Only summarizes numeric datatypes at the moment and returns nulls for
-    /// non numeric datatypes. The output format is modeled after pandas
+    /// The summary contains the `count`, `null_count`, `mean`, `std`, `min`,
+    /// `max`, and `median` of each column. `count` and `null_count` are
+    /// computed for every column; `min` and `max` for every column except
+    /// `Boolean`; and `mean`, `std`, and `median` only for numeric columns
+    /// (other columns report `null` for these). `min`/`max` of binary columns
+    /// (`Binary`, `LargeBinary`, `BinaryView`, `FixedSizeBinary`) are rendered
+    /// as lowercase hex. The output format is modeled after pandas
     ///
     /// # Example
     /// ```
