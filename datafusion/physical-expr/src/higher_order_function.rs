@@ -200,7 +200,7 @@ impl HigherOrderFunctionExpr {
     }
 
     /// Resolve every lambda's parameter list. Returns an empty `Vec` when
-    /// there are no lambdas, avoiding the [`HigherOrderUDFImpl::lambda_parameters`]
+    /// there are no lambdas, avoiding the [`datafusion_expr::HigherOrderUDFImpl::lambda_parameters`]
     /// virtual call entirely.
     fn resolve_lambda_parameters(
         &self,
