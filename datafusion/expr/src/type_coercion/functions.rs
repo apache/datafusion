@@ -166,7 +166,7 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn value_fields_with_higher_order_udf<L: Clone>(
     current_fields: &[ValueOrLambda<FieldRef, L>],
-    func: &dyn HigherOrderUDF,
+    func: &HigherOrderUDF,
 ) -> Result<Vec<ValueOrLambda<FieldRef, L>>> {
     match func.signature().type_signature {
         HigherOrderTypeSignature::UserDefined => {
@@ -319,7 +319,7 @@ pub fn value_fields_with_higher_order_udf<L: Clone>(
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn value_fields_with_higher_order_udf_and_lambdas(
     current_fields: &[ValueOrLambda<FieldRef, FieldRef>],
-    func: &dyn HigherOrderUDF,
+    func: &HigherOrderUDF,
 ) -> Result<Vec<ValueOrLambda<FieldRef, FieldRef>>> {
     let mut new_fields = value_fields_with_higher_order_udf(current_fields, func)?;
 
@@ -1169,7 +1169,7 @@ fn coerced_from<'a>(
 mod tests {
     use crate::{
         HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
-        Volatility,
+        HigherOrderUDFImpl, Volatility,
     };
 
     use super::*;
@@ -1901,7 +1901,7 @@ mod tests {
         coerced_value_types: Vec<DataType>,
     }
 
-    impl HigherOrderUDF for MockHigherOrderUDF {
+    impl HigherOrderUDFImpl for MockHigherOrderUDF {
         fn name(&self) -> &str {
             "mock_higher_order_function"
         }
@@ -1962,10 +1962,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_user_defined_type_coercion() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::user_defined(Volatility::Immutable),
             coerced_value_types: vec![DataType::new_large_list(DataType::Int32, false)],
-        };
+        });
 
         let new_fields = value_fields_with_higher_order_udf(
             &[
@@ -1996,10 +1996,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_coerce_values_for_lambdas() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
             coerced_value_types: vec![],
-        };
+        });
 
         let new_fields = value_fields_with_higher_order_udf_and_lambdas(
             &[
@@ -2032,10 +2032,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_user_defined_type_coercion_bad_args() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::user_defined(Volatility::Immutable),
             coerced_value_types: vec![DataType::Int32],
-        };
+        });
 
         let err = value_fields_with_higher_order_udf::<()>(&[], &fun).unwrap_err();
 
@@ -2047,10 +2047,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_faulty_user_defined_type_coercion() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::user_defined(Volatility::Immutable),
             coerced_value_types: vec![DataType::Int32, DataType::Int32],
-        };
+        });
 
         let err = value_fields_with_higher_order_udf::<()>(
             &[ValueOrLambda::Value(Arc::new(Field::new(
@@ -2070,10 +2070,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_any_signature() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::any(1, Volatility::Immutable),
             coerced_value_types: vec![],
-        };
+        });
 
         let new_fields =
             value_fields_with_higher_order_udf(&[ValueOrLambda::Lambda(())], &fun)
@@ -2085,10 +2085,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_any_signature_bad_args() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::any(1, Volatility::Immutable),
             coerced_value_types: vec![],
-        };
+        });
 
         let err = value_fields_with_higher_order_udf::<()>(&[], &fun).unwrap_err();
 
@@ -2100,13 +2100,13 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_exact_signature() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::exact(
                 vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
                 Volatility::Immutable,
             ),
             coerced_value_types: vec![DataType::new_large_list(DataType::Int32, false)],
-        };
+        });
 
         let new_fields = value_fields_with_higher_order_udf(
             &[
@@ -2137,13 +2137,13 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_exact_signature_wrong_value_count() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::exact(
                 vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
                 Volatility::Immutable,
             ),
             coerced_value_types: vec![],
-        };
+        });
 
         let err = value_fields_with_higher_order_udf::<()>(
             &[ValueOrLambda::Lambda(()), ValueOrLambda::Lambda(())],
@@ -2159,13 +2159,13 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_exact_signature_wrong_lambda_count() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::exact(
                 vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
                 Volatility::Immutable,
             ),
             coerced_value_types: vec![],
-        };
+        });
 
         let err = value_fields_with_higher_order_udf::<()>(
             &[

@@ -69,7 +69,7 @@ enum ArgSlot {
 /// Physical expression of a higher order function
 pub struct HigherOrderFunctionExpr {
     /// A shared instance of the higher-order function
-    fun: Arc<dyn HigherOrderUDF>,
+    fun: Arc<HigherOrderUDF>,
     /// The name of the higher-order function
     name: String,
     /// List of expressions to feed to the function as arguments
@@ -125,7 +125,7 @@ impl HigherOrderFunctionExpr {
     /// Note that lambda arguments must be present directly in args as [LambdaExpr],
     /// and not as a wrapped child of any arg
     pub fn try_new_with_schema(
-        fun: Arc<dyn HigherOrderUDF>,
+        fun: Arc<HigherOrderUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         schema: &Schema,
         config_options: Arc<ConfigOptions>,
@@ -172,7 +172,7 @@ impl HigherOrderFunctionExpr {
     }
 
     /// Get the higher order function implementation
-    pub fn fun(&self) -> &dyn HigherOrderUDF {
+    pub fn fun(&self) -> &HigherOrderUDF {
         self.fun.as_ref()
     }
 
@@ -200,7 +200,7 @@ impl HigherOrderFunctionExpr {
     }
 
     /// Resolve every lambda's parameter list. Returns an empty `Vec` when
-    /// there are no lambdas, avoiding the [`HigherOrderUDF::lambda_parameters`]
+    /// there are no lambdas, avoiding the [`HigherOrderUDFImpl::lambda_parameters`]
     /// virtual call entirely.
     fn resolve_lambda_parameters(
         &self,
@@ -519,7 +519,7 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_common::assert_contains;
     use datafusion_expr::{
-        HigherOrderFunctionArgs, HigherOrderSignature, HigherOrderUDF,
+        HigherOrderFunctionArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
     };
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -531,7 +531,7 @@ mod tests {
         signature: HigherOrderSignature,
     }
 
-    impl HigherOrderUDF for MockHigherOrderUDF {
+    impl HigherOrderUDFImpl for MockHigherOrderUDF {
         fn name(&self) -> &str {
             "mock_function"
         }
@@ -578,14 +578,14 @@ mod tests {
     #[test]
     fn test_higher_order_function_volatile_node() {
         // Create a volatile UDF
-        let volatile_udf = Arc::new(MockHigherOrderUDF {
+        let volatile_udf = Arc::new(HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::variadic_any(Volatility::Volatile),
-        });
+        }));
 
         // Create a non-volatile UDF
-        let stable_udf = Arc::new(MockHigherOrderUDF {
+        let stable_udf = Arc::new(HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::variadic_any(Volatility::Stable),
-        });
+        }));
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
         let args = vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>];
@@ -620,9 +620,9 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_wrapped_lambda() {
-        let fun = Arc::new(MockHigherOrderUDF {
+        let fun = Arc::new(HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::variadic_any(Volatility::Stable),
-        });
+        }));
 
         let expected = ScalarValue::Int32(Some(42));
 
@@ -657,9 +657,9 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_badly_wrapped_lambda() {
-        let fun = Arc::new(MockHigherOrderUDF {
+        let fun = Arc::new(HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::variadic_any(Volatility::Stable),
-        });
+        }));
 
         let hof = HigherOrderFunctionExpr::try_new_with_schema(
             fun,
@@ -694,9 +694,9 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_unexpected_lambda() {
-        let fun = Arc::new(MockHigherOrderUDF {
+        let fun = Arc::new(HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::variadic_any(Volatility::Stable),
-        });
+        }));
 
         let hof = HigherOrderFunctionExpr::try_new_with_schema(
             fun,

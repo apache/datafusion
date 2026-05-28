@@ -163,7 +163,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
         &self,
         name: &str,
         _buf: &[u8],
-    ) -> Result<Arc<dyn HigherOrderUDF>> {
+    ) -> Result<Arc<HigherOrderUDF>> {
         not_impl_err!(
             "LogicalExtensionCodec is not provided for higher order function {name}"
         )
@@ -171,7 +171,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
 
     fn try_encode_higher_order_function(
         &self,
-        _node: &dyn HigherOrderUDF,
+        _node: &HigherOrderUDF,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         Ok(())

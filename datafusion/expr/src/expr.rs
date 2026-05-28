@@ -437,14 +437,14 @@ pub enum Expr {
 #[derive(Clone, Eq, PartialOrd, Debug)]
 pub struct HigherOrderFunction {
     /// The function
-    pub func: Arc<dyn HigherOrderUDF>,
+    pub func: Arc<HigherOrderUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
 }
 
 impl HigherOrderFunction {
     /// Create a new `HigherOrderFunction` from a [`HigherOrderUDF`]
-    pub fn new(func: Arc<dyn HigherOrderUDF>, args: Vec<Expr>) -> Self {
+    pub fn new(func: Arc<HigherOrderUDF>, args: Vec<Expr>) -> Self {
         Self { func, args }
     }
 
