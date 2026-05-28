@@ -64,7 +64,7 @@ use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
-use datafusion_physical_plan::analyze::{AnalyzeExec, AnalyzeExecBuilder};
+use datafusion_physical_plan::analyze::AnalyzeExec;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
 use datafusion_physical_plan::buffer::BufferExec;
 #[expect(deprecated)]

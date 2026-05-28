@@ -29,8 +29,11 @@ use crate::metrics::{MetricCategory, MetricType};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::instant::Instant;
-use datafusion_common::{DataFusionError, Result, assert_eq_or_internal_err};
+use datafusion_common::{
+    DataFusionError, Result, assert_eq_or_internal_err, internal_err,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -48,6 +51,8 @@ pub struct AnalyzeExec {
     metric_types: Vec<MetricType>,
     /// Optional filter by semantic category (rows / bytes / timing).
     metric_categories: Option<Vec<MetricCategory>>,
+    /// Output format for the rendered plan + metrics.
+    format: ExplainFormat,
     /// The input plan (the plan being analyzed)
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
@@ -61,6 +66,7 @@ pub struct AnalyzeExec {
 /// Optional (all have sensible defaults):
 /// - `metric_types` — defaults to `[Summary, Dev]`
 /// - `metric_categories` — defaults to `None` (all categories)
+/// - `format` — defaults to [`ExplainFormat::Indent`]
 pub struct AnalyzeExecBuilder {
     verbose: bool,
     show_statistics: bool,
@@ -68,6 +74,7 @@ pub struct AnalyzeExecBuilder {
     schema: SchemaRef,
     metric_types: Vec<MetricType>,
     metric_categories: Option<Vec<MetricCategory>>,
+    format: ExplainFormat,
 }
 
 impl AnalyzeExecBuilder {
@@ -84,6 +91,7 @@ impl AnalyzeExecBuilder {
             schema,
             metric_types: vec![MetricType::Summary, MetricType::Dev],
             metric_categories: None,
+            format: ExplainFormat::Indent,
         }
     }
 
@@ -100,6 +108,11 @@ impl AnalyzeExecBuilder {
         self
     }
 
+    pub fn with_format(mut self, format: ExplainFormat) -> Self {
+        self.format = format;
+        self
+    }
+
     pub fn build(self) -> AnalyzeExec {
         let cache =
             AnalyzeExec::compute_properties(&self.input, Arc::clone(&self.schema));
@@ -108,6 +121,7 @@ impl AnalyzeExecBuilder {
             show_statistics: self.show_statistics,
             metric_types: self.metric_types,
             metric_categories: self.metric_categories,
+            format: self.format,
             input: self.input,
             schema: self.schema,
             cache: Arc::new(cache),
@@ -141,11 +155,17 @@ impl AnalyzeExec {
         self.metric_categories.as_deref()
     }
 
+    /// Access to format
+    pub fn format(&self) -> &ExplainFormat {
+        &self.format
+    }
+
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
 
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
@@ -208,6 +228,7 @@ impl ExecutionPlan for AnalyzeExec {
             )
             .with_metric_types(self.metric_types.clone())
             .with_metric_categories(self.metric_categories.clone())
+            .with_format(self.format.clone())
             .build(),
         ))
     }
@@ -246,6 +267,7 @@ impl ExecutionPlan for AnalyzeExec {
         let show_statistics = self.show_statistics;
         let metric_types = self.metric_types.clone();
         let metric_categories = self.metric_categories.clone();
+        let format = self.format.clone();
 
         // future that gathers the results from all the tasks in the
         // JoinSet that computes the overall row count and final
@@ -268,6 +290,7 @@ impl ExecutionPlan for AnalyzeExec {
                 &captured_schema,
                 &metric_types,
                 metric_categories.as_deref(),
+                &format,
             )
         };
 
@@ -289,39 +312,59 @@ fn create_output_batch(
     schema: &SchemaRef,
     metric_types: &[MetricType],
     metric_categories: Option<&[MetricCategory]>,
+    format: &ExplainFormat,
 ) -> Result<RecordBatch> {
     let mut type_builder = StringBuilder::with_capacity(1, 1024);
     let mut plan_builder = StringBuilder::with_capacity(1, 1024);
 
-    // TODO use some sort of enum rather than strings?
-    type_builder.append_value("Plan with Metrics");
-
-    let annotated_plan = DisplayableExecutionPlan::with_metrics(input.as_ref())
-        .set_metric_types(metric_types.to_vec())
-        .set_metric_categories(metric_categories.map(|c| c.to_vec()))
-        .set_show_statistics(show_statistics)
-        .indent(verbose)
-        .to_string();
-    plan_builder.append_value(annotated_plan);
-
-    // Verbose output
-    // TODO make this more sophisticated
-    if verbose {
-        type_builder.append_value("Plan with Full Metrics");
-
-        let annotated_plan = DisplayableExecutionPlan::with_full_metrics(input.as_ref())
-            .set_metric_types(metric_types.to_vec())
-            .set_metric_categories(metric_categories.map(|c| c.to_vec()))
-            .set_show_statistics(show_statistics)
-            .indent(verbose)
-            .to_string();
-        plan_builder.append_value(annotated_plan);
-
-        type_builder.append_value("Output Rows");
-        plan_builder.append_value(total_rows.to_string());
-
-        type_builder.append_value("Duration");
-        plan_builder.append_value(format!("{duration:?}"));
+    match format {
+        ExplainFormat::Indent => {
+            // TODO use some sort of enum rather than strings?
+            type_builder.append_value("Plan with Metrics");
+            let annotated_plan = DisplayableExecutionPlan::with_metrics(input.as_ref())
+                .set_metric_types(metric_types.to_vec())
+                .set_metric_categories(metric_categories.map(|c| c.to_vec()))
+                .set_show_statistics(show_statistics)
+                .indent(verbose)
+                .to_string();
+            plan_builder.append_value(annotated_plan);
+            // Verbose output
+            // TODO make this more sophisticated
+            if verbose {
+                type_builder.append_value("Plan with Full Metrics");
+                let annotated_plan =
+                    DisplayableExecutionPlan::with_full_metrics(input.as_ref())
+                        .set_metric_types(metric_types.to_vec())
+                        .set_metric_categories(metric_categories.map(|c| c.to_vec()))
+                        .set_show_statistics(show_statistics)
+                        .indent(verbose)
+                        .to_string();
+                plan_builder.append_value(annotated_plan);
+                type_builder.append_value("Output Rows");
+                plan_builder.append_value(total_rows.to_string());
+                type_builder.append_value("Duration");
+                plan_builder.append_value(format!("{duration:?}"));
+            }
+        }
+        ExplainFormat::PostgresJSON => {
+            type_builder.append_value("Plan with Metrics");
+            let mut displayable = if verbose {
+                DisplayableExecutionPlan::with_full_metrics(input.as_ref())
+            } else {
+                DisplayableExecutionPlan::with_metrics(input.as_ref())
+            };
+            displayable = displayable
+                .set_metric_types(metric_types.to_vec())
+                .set_metric_categories(metric_categories.map(|c| c.to_vec()))
+                .set_show_statistics(show_statistics);
+            if verbose {
+                displayable = displayable.set_summary(Some(total_rows), Some(duration));
+            }
+            plan_builder.append_value(displayable.pgjson(verbose).to_string());
+        }
+        ExplainFormat::Tree | ExplainFormat::Graphviz => {
+            return internal_err!("AnalyzeExec does not support {format} output format");
+        }
     }
 
     RecordBatch::try_new(
