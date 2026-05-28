@@ -65,7 +65,9 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave};
 use datafusion_physical_plan::windows::WindowAggExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, get_best_fitting_window};
-use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
+use datafusion_physical_plan::{
+    Distribution, ExecutionPlan, Partitioning, with_new_children_if_necessary,
+};
 
 use itertools::izip;
 
@@ -1362,7 +1364,16 @@ pub fn ensure_distribution(
         //           Data
         Arc::new(InterleaveExec::try_new(children_plans)?)
     } else {
-        plan.with_new_children(children_plans)?
+        // Route through `with_new_children_if_necessary` so the common
+        // case where no child was replaced above skips the expensive
+        // `with_new_children` rebuild. For nodes like `ProjectionExec`,
+        // `with_new_children` recomputes schema / equivalence properties /
+        // output ordering via `try_new` even when the input Arcs are
+        // identical, which dominates `ensure_distribution` time on deep
+        // projection stacks over plans where no distribution change
+        // applies (point queries with no join / aggregate / unmet
+        // ordering).
+        with_new_children_if_necessary(plan, children_plans)?
     };
 
     Ok(Transformed::yes(DistributionContext::new(
