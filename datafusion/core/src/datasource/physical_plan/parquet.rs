@@ -62,7 +62,7 @@ mod tests {
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{Expr, col, lit, when};
     use datafusion_physical_expr::planner::logical2physical;
-    use datafusion_physical_plan::analyze::AnalyzeExec;
+    use datafusion_physical_plan::analyze::AnalyzeExecBuilder;
     use datafusion_physical_plan::collect;
     use datafusion_physical_plan::metrics::{
         ExecutionPlanMetricsSet, MetricType, MetricValue, MetricsSet,
@@ -231,21 +231,22 @@ mod tests {
             let parquet_exec =
                 self.build_parquet_exec(file_group.clone(), Arc::clone(&parquet_source));
 
-            let analyze_exec = Arc::new(AnalyzeExec::new(
-                false,
-                false,
-                vec![MetricType::Summary, MetricType::Dev],
-                None,
-                // use a new ParquetSource to avoid sharing execution metrics
-                self.build_parquet_exec(
-                    file_group.clone(),
-                    self.build_file_source(Arc::clone(table_schema)),
-                ),
-                Arc::new(Schema::new(vec![
-                    Field::new("plan_type", DataType::Utf8, true),
-                    Field::new("plan", DataType::Utf8, true),
-                ])),
-            ));
+            let analyze_exec = Arc::new(
+                AnalyzeExecBuilder::new(
+                    false,
+                    false,
+                    // use a new ParquetSource to avoid sharing execution metrics
+                    self.build_parquet_exec(
+                        file_group.clone(),
+                        self.build_file_source(Arc::clone(table_schema)),
+                    ),
+                    Arc::new(Schema::new(vec![
+                        Field::new("plan_type", DataType::Utf8, true),
+                        Field::new("plan", DataType::Utf8, true),
+                    ])),
+                )
+                .build(),
+            );
 
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();

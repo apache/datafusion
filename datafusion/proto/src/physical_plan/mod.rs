@@ -64,7 +64,7 @@ use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
-use datafusion_physical_plan::analyze::AnalyzeExec;
+use datafusion_physical_plan::analyze::{AnalyzeExec, AnalyzeExecBuilder};
 use datafusion_physical_plan::async_func::AsyncFuncExec;
 use datafusion_physical_plan::buffer::BufferExec;
 #[expect(deprecated)]
@@ -1962,14 +1962,16 @@ pub trait PhysicalPlanNodeExt: Sized {
         } else {
             None
         };
-        Ok(Arc::new(AnalyzeExec::new(
-            analyze.verbose,
-            analyze.show_statistics,
-            vec![MetricType::Summary, MetricType::Dev],
-            metric_categories,
-            input,
-            Arc::new(convert_required!(analyze.schema)?),
-        )))
+        Ok(Arc::new(
+            AnalyzeExec::builder(
+                analyze.verbose,
+                analyze.show_statistics,
+                input,
+                Arc::new(convert_required!(analyze.schema)?),
+            )
+            .with_metric_categories(metric_categories)
+            .build(),
+        ))
     }
 
     fn try_into_json_sink_physical_plan(

@@ -55,26 +55,75 @@ pub struct AnalyzeExec {
     cache: Arc<PlanProperties>,
 }
 
-impl AnalyzeExec {
-    /// Create a new AnalyzeExec
+/// Builder for [`AnalyzeExec`].
+///
+/// Required: `verbose`, `show_statistics`, `input`, `schema`.
+/// Optional (all have sensible defaults):
+/// - `metric_types` — defaults to `[Summary, Dev]`
+/// - `metric_categories` — defaults to `None` (all categories)
+pub struct AnalyzeExecBuilder {
+    verbose: bool,
+    show_statistics: bool,
+    input: Arc<dyn ExecutionPlan>,
+    schema: SchemaRef,
+    metric_types: Vec<MetricType>,
+    metric_categories: Option<Vec<MetricCategory>>,
+}
+
+impl AnalyzeExecBuilder {
     pub fn new(
         verbose: bool,
         show_statistics: bool,
-        metric_types: Vec<MetricType>,
-        metric_categories: Option<Vec<MetricCategory>>,
         input: Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> Self {
-        let cache = Self::compute_properties(&input, Arc::clone(&schema));
-        AnalyzeExec {
+        Self {
             verbose,
             show_statistics,
-            metric_types,
-            metric_categories,
             input,
             schema,
+            metric_types: vec![MetricType::Summary, MetricType::Dev],
+            metric_categories: None,
+        }
+    }
+
+    pub fn with_metric_types(mut self, metric_types: Vec<MetricType>) -> Self {
+        self.metric_types = metric_types;
+        self
+    }
+
+    pub fn with_metric_categories(
+        mut self,
+        metric_categories: Option<Vec<MetricCategory>>,
+    ) -> Self {
+        self.metric_categories = metric_categories;
+        self
+    }
+
+    pub fn build(self) -> AnalyzeExec {
+        let cache =
+            AnalyzeExec::compute_properties(&self.input, Arc::clone(&self.schema));
+        AnalyzeExec {
+            verbose: self.verbose,
+            show_statistics: self.show_statistics,
+            metric_types: self.metric_types,
+            metric_categories: self.metric_categories,
+            input: self.input,
+            schema: self.schema,
             cache: Arc::new(cache),
         }
+    }
+}
+
+impl AnalyzeExec {
+    /// Returns a builder for constructing an [`AnalyzeExec`].
+    pub fn builder(
+        verbose: bool,
+        show_statistics: bool,
+        input: Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> AnalyzeExecBuilder {
+        AnalyzeExecBuilder::new(verbose, show_statistics, input, schema)
     }
 
     /// Access to verbose
@@ -97,7 +146,6 @@ impl AnalyzeExec {
         &self.input
     }
 
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
@@ -151,14 +199,17 @@ impl ExecutionPlan for AnalyzeExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self::new(
-            self.verbose,
-            self.show_statistics,
-            self.metric_types.clone(),
-            self.metric_categories.clone(),
-            children.pop().unwrap(),
-            Arc::clone(&self.schema),
-        )))
+        Ok(Arc::new(
+            AnalyzeExec::builder(
+                self.verbose,
+                self.show_statistics,
+                children.pop().unwrap(),
+                Arc::clone(&self.schema),
+            )
+            .with_metric_types(self.metric_types.clone())
+            .with_metric_categories(self.metric_categories.clone())
+            .build(),
+        ))
     }
 
     fn execute(
@@ -305,14 +356,8 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let analyze_exec = Arc::new(AnalyzeExec::new(
-            true,
-            false,
-            vec![MetricType::Summary, MetricType::Dev],
-            None,
-            blocking_exec,
-            schema,
-        ));
+        let analyze_exec =
+            Arc::new(AnalyzeExec::builder(true, false, blocking_exec, schema).build());
 
         let fut = collect(analyze_exec, task_ctx);
         let mut fut = fut.boxed();
