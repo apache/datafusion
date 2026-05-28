@@ -360,17 +360,7 @@ pub fn parse_physical_expr_with_converter(
                 })
                 .transpose()?,
         )?),
-        ExprType::Cast(e) => Arc::new(CastExpr::new(
-            parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?,
-            convert_required!(e.arrow_type)?,
-            None,
-        )),
+        ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
             parse_required_physical_expr(
                 e.expr.as_deref(),
