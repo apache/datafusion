@@ -663,6 +663,12 @@ fn collect_all_equality_filters(
         extract_qualified_equality_conditions(&filter.predicate, out);
     }
 
+    if let LogicalPlan::Join(join) = plan
+        && let Some(filter) = &join.filter
+    {
+        extract_qualified_equality_conditions(filter, out);
+    }
+
     for input in plan.inputs() {
         collect_all_equality_filters(input, cte_name, out);
     }
