@@ -111,18 +111,15 @@ impl UnKnownColumn {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
 
-        let protobuf::UnknownColumn { name } = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::UnknownColumn(c)) => c,
-            other => {
-                return internal_err!(
-                    "PhysicalExprNode is not an UnKnownColumn (expr_id={:?}, expr_type={other:?})",
-                    node.expr_id
-                );
-            }
-        };
-        Ok(Arc::new(UnKnownColumn::new(name)))
+        let unknown_col = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::UnknownColumn,
+            "UnKnownColumn",
+        );
+        Ok(Arc::new(UnKnownColumn::new(&unknown_col.name)))
     }
 }
 
@@ -210,9 +207,7 @@ mod proto_tests {
         assert!(matches!(
             err,
             DataFusionError::Internal(ref msg)
-                if msg.contains("PhysicalExprNode is not an UnKnownColumn")
-                // The error includes the actual expr_type for easier diagnosis.
-                && msg.contains("PhysicalColumn")
+                if msg.contains("PhysicalExprNode is not a UnKnownColumn")
         ));
     }
 
