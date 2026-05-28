@@ -219,10 +219,10 @@ impl NotExpr {
             .decode_required_expression(expr.as_deref(), "NotExpr", "expr")
             .map_err(|err| match err {
                 datafusion_common::DataFusionError::Internal(msg)
-                    if msg == "NotExpr is missing required field 'expr'" =>
+                    if msg.starts_with("NotExpr is missing required field 'expr'") =>
                 {
                     internal_datafusion_err!(
-                        "{msg} (expr_id: {:?}, expr_type: {:?})",
+                        "NotExpr is missing required field 'expr' (expr_id: {:?}, expr_type: {:?})",
                         node.expr_id,
                         &node.expr_type
                     )
