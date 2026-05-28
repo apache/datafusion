@@ -770,7 +770,7 @@ impl FileSource for ParquetSource {
         let filters: Vec<PushedDownPredicate> = filters
             .into_iter()
             .map(|filter| {
-                if can_expr_be_pushed_down_with_schemas(&filter, &pushable_schema) {
+                if can_expr_be_pushed_down_with_schemas(&filter, pushable_schema) {
                     PushedDownPredicate::supported(filter)
                 } else {
                     PushedDownPredicate::unsupported(filter)
