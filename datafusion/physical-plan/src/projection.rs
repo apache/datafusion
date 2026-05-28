@@ -30,7 +30,7 @@ use crate::column_rewriter::PhysicalColumnRewriter;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, FilterRemapper, PushedDownPredicate,
+    FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr, check_if_same_properties};
@@ -45,11 +45,12 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{DataFusionError, JoinSide, Result, internal_err};
+use datafusion_common::{JoinSide, Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr,
@@ -205,18 +206,14 @@ impl ProjectionExec {
         &self,
     ) -> Result<datafusion_common::HashMap<Column, Arc<dyn PhysicalExpr>>> {
         let mut alias_map = datafusion_common::HashMap::new();
-        for projection in self.projection_expr().iter() {
-            let (aliased_index, _output_field) = self
-                .projector
-                .output_schema()
-                .column_with_name(&projection.alias)
-                .ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "Expr {} with alias {} not found in output schema",
-                        projection.expr, projection.alias
-                    ))
-                })?;
-            let aliased_col = Column::new(&projection.alias, aliased_index);
+        // Use the enumerate index directly rather than `column_with_name`,
+        // because the output schema columns are ordered identically to the
+        // projection expressions.  `column_with_name` returns the *first*
+        // column with a given name, which silently produces duplicate HashMap
+        // keys (and overwrites earlier entries) when the projection contains
+        // same-named columns from different join sides.
+        for (idx, projection) in self.projection_expr().iter().enumerate() {
+            let aliased_col = Column::new(&projection.alias, idx);
             alias_map.insert(aliased_col, Arc::clone(&projection.expr));
         }
         Ok(alias_map)
@@ -385,16 +382,22 @@ impl ExecutionPlan for ProjectionExec {
     ) -> Result<FilterDescription> {
         // expand alias column to original expr in parent filters
         let invert_alias_map = self.collect_reverse_alias()?;
-        let output_schema = self.schema();
-        let remapper = FilterRemapper::new(output_schema);
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
 
         for filter in parent_filters {
-            // Check that column exists in child, then reassign column indices to match child schema
-            if let Some(reassigned) = remapper.try_remap(&filter)? {
-                // rewrite filter expression using invert alias map
+            // Validate that every column referenced by the filter exists in
+            // the reverse-alias map (keyed by exact (name, index) pair).
+            // We must NOT use FilterRemapper::try_remap here because its
+            // index_of lookup returns the *first* column with a given name,
+            // which silently re-targets the filter to the wrong column when
+            // the projection output contains duplicate column names (e.g.
+            // after a join where both sides have an `id` column).
+            let columns = collect_columns(&filter);
+            let all_in_alias_map =
+                columns.iter().all(|col| invert_alias_map.contains_key(col));
+            if all_in_alias_map {
                 let mut rewriter = PhysicalColumnRewriter::new(&invert_alias_map);
-                let rewritten = reassigned.rewrite(&mut rewriter)?.data;
+                let rewritten = filter.rewrite(&mut rewriter)?.data;
                 child_parent_filters.push(PushedDownPredicate::supported(rewritten));
             } else {
                 child_parent_filters.push(PushedDownPredicate::unsupported(filter));
