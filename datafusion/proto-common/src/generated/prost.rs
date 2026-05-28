@@ -1014,6 +1014,18 @@ pub struct ColumnStats {
     #[prost(message, optional, tag = "6")]
     pub byte_size: ::core::option::Option<Precision>,
 }
+/// Wire encoding for `datafusion_common::format::ExplainAnalyzeCategories`.
+///
+/// If `all` is true, every category is shown (the `only` list is ignored).
+/// If `all` is false, only the categories listed in `only` are shown — an
+/// empty `only` means "plan only", i.e. suppress all metrics.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExplainAnalyzeCategoriesNode {
+    #[prost(bool, tag = "1")]
+    pub all: bool,
+    #[prost(enumeration = "MetricCategory", repeated, tag = "2")]
+    pub only: ::prost::alloc::vec::Vec<i32>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum JoinType {
@@ -1356,6 +1368,68 @@ impl ExplainFormat {
             "EXPLAIN_FORMAT_TREE" => Some(Self::Tree),
             "EXPLAIN_FORMAT_PGJSON" => Some(Self::Pgjson),
             "EXPLAIN_FORMAT_GRAPHVIZ" => Some(Self::Graphviz),
+            _ => None,
+        }
+    }
+}
+/// Verbosity level for `EXPLAIN ANALYZE`. Mirrors
+/// `datafusion_common::format::MetricType`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum MetricType {
+    Summary = 0,
+    Dev = 1,
+}
+impl MetricType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Summary => "METRIC_TYPE_SUMMARY",
+            Self::Dev => "METRIC_TYPE_DEV",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "METRIC_TYPE_SUMMARY" => Some(Self::Summary),
+            "METRIC_TYPE_DEV" => Some(Self::Dev),
+            _ => None,
+        }
+    }
+}
+/// Category of an `EXPLAIN ANALYZE` metric. Mirrors
+/// `datafusion_common::format::MetricCategory`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum MetricCategory {
+    Rows = 0,
+    Bytes = 1,
+    Timing = 2,
+    Uncategorized = 3,
+}
+impl MetricCategory {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Rows => "METRIC_CATEGORY_ROWS",
+            Self::Bytes => "METRIC_CATEGORY_BYTES",
+            Self::Timing => "METRIC_CATEGORY_TIMING",
+            Self::Uncategorized => "METRIC_CATEGORY_UNCATEGORIZED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "METRIC_CATEGORY_ROWS" => Some(Self::Rows),
+            "METRIC_CATEGORY_BYTES" => Some(Self::Bytes),
+            "METRIC_CATEGORY_TIMING" => Some(Self::Timing),
+            "METRIC_CATEGORY_UNCATEGORIZED" => Some(Self::Uncategorized),
             _ => None,
         }
     }
