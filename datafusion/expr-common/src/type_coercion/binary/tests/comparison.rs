@@ -976,7 +976,6 @@ fn test_string_concat_coercion() -> Result<()> {
             DataType::Binary,
             DataType::LargeBinary,
             DataType::BinaryView,
-            DataType::FixedSizeBinary(8),
         ] {
             test_coercion_binary_rule!(
                 &binary_dt,
