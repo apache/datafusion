@@ -27,6 +27,7 @@ use crate::enforce_sorting::EnforceSorting;
 use crate::ensure_coop::EnsureCooperative;
 use crate::filter_pushdown::FilterPushdown;
 use crate::join_selection::JoinSelection;
+use crate::late_materialization::LateMaterialization;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
@@ -223,6 +224,10 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // Late materialization for simple TopK scans. Run before sort
+            // pushdown so hidden row numbers continue to reference the scan's
+            // original file order.
+            Arc::new(LateMaterialization::new()),
             // PushdownSort: Detect sorts that can be pushed down to data sources.
             Arc::new(PushdownSort::new()),
             Arc::new(EnsureCooperative::new()),

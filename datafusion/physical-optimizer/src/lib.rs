@@ -32,6 +32,7 @@ pub mod enforce_sorting;
 pub mod ensure_coop;
 pub mod filter_pushdown;
 pub mod join_selection;
+pub mod late_materialization;
 pub mod limit_pushdown;
 pub mod limit_pushdown_past_window;
 pub mod limited_distinct_aggregation;

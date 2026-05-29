@@ -36,8 +36,8 @@ use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::metrics::{MetricValue, MetricsSet};
 
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::{FileRowsSelection, file_scan_config::FileScanConfigBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::properties::WriterProperties;
@@ -129,6 +129,35 @@ async fn selection_scan() {
 }
 
 #[tokio::test]
+async fn file_rows_selection() {
+    TestFull {
+        access_plan: None,
+        file_rows_selection: Some(FileRowsSelection::new(vec![1, 5, 6, 9])),
+        expected_rows: 4,
+        predicate: None,
+    }
+    .run()
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn file_rows_selection_intersects_access_plan() {
+    TestFull {
+        access_plan: Some(ParquetAccessPlan::new(vec![
+            RowGroupAccess::Scan,
+            RowGroupAccess::Skip,
+        ])),
+        file_rows_selection: Some(FileRowsSelection::new(vec![1, 5, 6, 9])),
+        expected_rows: 1,
+        predicate: None,
+    }
+    .run()
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn skip_scan() {
     let plans = vec![
         // skip one row group, scan the toehr
@@ -170,6 +199,7 @@ async fn plan_and_filter() {
     // initial
     let parquet_metrics = TestFull {
         access_plan,
+        file_rows_selection: None,
         expected_rows: 0,
         predicate: Some(predicate),
     }
@@ -227,6 +257,7 @@ async fn bad_row_groups() {
             RowGroupAccess::Skip,
             RowGroupAccess::Scan,
         ])),
+        file_rows_selection: None,
         expected_rows: 0,
         predicate: None,
     }
@@ -249,6 +280,7 @@ async fn bad_selection() {
             ])),
             RowGroupAccess::Skip,
         ])),
+        file_rows_selection: None,
         // expects that we hit an error, this should not be run
         expected_rows: 10000,
         predicate: None,
@@ -300,6 +332,7 @@ impl Test {
         } = self;
         TestFull {
             access_plan,
+            file_rows_selection: None,
             expected_rows,
             predicate: None,
         }
@@ -317,6 +350,7 @@ impl Test {
 /// 4. Returns the statistics from running the plan
 struct TestFull {
     access_plan: Option<ParquetAccessPlan>,
+    file_rows_selection: Option<FileRowsSelection>,
     expected_rows: usize,
     predicate: Option<Expr>,
 }
@@ -327,6 +361,7 @@ impl TestFull {
 
         let Self {
             access_plan,
+            file_rows_selection,
             expected_rows,
             predicate,
         } = self;
@@ -350,6 +385,9 @@ impl TestFull {
         // add the access plan, if any, as an extension
         if let Some(access_plan) = access_plan {
             partitioned_file = partitioned_file.with_extension(access_plan);
+        }
+        if let Some(file_rows_selection) = file_rows_selection {
+            partitioned_file = partitioned_file.with_extension(file_rows_selection);
         }
 
         // Create a DataSourceExec to read the file

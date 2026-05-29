@@ -88,7 +88,8 @@ in multiple phases.
 | 16    | `LimitPushdown`                | -                       | Moves physical limits into child operators or fetch-enabled variants to cut data early.                      |
 | 17    | `TopKRepartition`              | -                       | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.                       |
 | 18    | `ProjectionPushdown`           | late pass               | Runs projection pushdown again after limit and TopK rewrites expose new pruning opportunities.               |
-| 19    | `PushdownSort`                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                            |
-| 20    | `EnsureCooperative`            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                         |
-| 21    | `FilterPushdown(Post)`         | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                        |
-| 22    | `SanityCheckPlan`              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements. |
+| 19    | `LateMaterialization`          | -                       | Rewrites simple TopK plans to sort a narrow key-only input before materializing full rows by row number.     |
+| 20    | `PushdownSort`                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                            |
+| 21    | `EnsureCooperative`            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                         |
+| 22    | `FilterPushdown(Post)`         | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                        |
+| 23    | `SanityCheckPlan`              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements. |

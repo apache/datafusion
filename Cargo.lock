@@ -2393,6 +2393,7 @@ version = "53.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
+ "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-expr-common",
@@ -2402,6 +2403,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-pruning",
+ "futures",
  "insta",
  "itertools 0.14.0",
  "recursive",

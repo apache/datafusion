@@ -1124,6 +1124,12 @@ config_namespace! {
         /// into the file scan phase.
         pub enable_topk_dynamic_filter_pushdown: bool, default = true
 
+        /// When set to true, the physical optimizer will try to evaluate
+        /// simple ORDER BY ... LIMIT queries over a narrow key-only input first,
+        /// carrying hidden row numbers and materializing the full rows only
+        /// after the TopK has been computed.
+        pub enable_row_number_topk_late_materialization: bool, default = true
+
         /// When set to true, the optimizer will attempt to push down Join dynamic filters
         /// into the file scan phase.
         pub enable_join_dynamic_filter_pushdown: bool, default = true

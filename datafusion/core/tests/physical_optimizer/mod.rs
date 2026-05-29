@@ -26,6 +26,7 @@ mod enforce_sorting;
 mod enforce_sorting_monotonicity;
 mod filter_pushdown;
 mod join_selection;
+mod late_materialization;
 #[expect(clippy::needless_pass_by_value)]
 mod limit_pushdown;
 mod limited_distinct_aggregation;

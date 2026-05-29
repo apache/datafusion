@@ -49,7 +49,7 @@ use arrow::datatypes::{SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, ScalarValue, Statistics, exec_err};
-use datafusion_datasource::{PartitionedFile, TableSchema};
+use datafusion_datasource::{FileRowsSelection, PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -70,11 +70,12 @@ use log::debug;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
 
 /// Stateless Parquet morselizer implementation.
 ///
@@ -896,7 +897,7 @@ impl FiltersPreparedParquetOpen {
         let mut row_groups = RowGroupAccessPlanFilter::new(create_initial_plan(
             &prepared.file_name,
             &prepared.extensions,
-            rg_metadata.len(),
+            rg_metadata,
         )?);
 
         // If there is a range restricting what parts of the file to read
@@ -1343,8 +1344,9 @@ fn constant_value_from_stats(
 fn create_initial_plan(
     file_name: &str,
     extensions: &datafusion_datasource::FileExtensions,
-    row_group_count: usize,
+    row_group_meta_data: &[RowGroupMetaData],
 ) -> Result<ParquetAccessPlan> {
+    let row_group_count = row_group_meta_data.len();
     if let Some(access_plan) = extensions.get::<ParquetAccessPlan>() {
         let plan_len = access_plan.len();
         if plan_len != row_group_count {
@@ -1352,11 +1354,126 @@ fn create_initial_plan(
                 "Invalid ParquetAccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
             );
         }
-        return Ok(access_plan.clone());
+        let mut access_plan = access_plan.clone();
+        if let Some(file_rows_selection) = extensions.get::<FileRowsSelection>() {
+            apply_file_rows_selection(
+                &mut access_plan,
+                file_rows_selection,
+                row_group_meta_data,
+            )?;
+        }
+        return Ok(access_plan);
     }
 
     // default to scanning all row groups
-    Ok(ParquetAccessPlan::new_all(row_group_count))
+    let mut access_plan = ParquetAccessPlan::new_all(row_group_count);
+    if let Some(file_rows_selection) = extensions.get::<FileRowsSelection>() {
+        apply_file_rows_selection(
+            &mut access_plan,
+            file_rows_selection,
+            row_group_meta_data,
+        )?;
+    }
+    Ok(access_plan)
+}
+
+fn apply_file_rows_selection(
+    access_plan: &mut ParquetAccessPlan,
+    file_rows_selection: &FileRowsSelection,
+    row_group_meta_data: &[RowGroupMetaData],
+) -> Result<()> {
+    let mut selected_rows = file_rows_selection.row_indices().iter().copied().peekable();
+    let mut row_group_start = 0_u64;
+    let mut last_selected_row = None;
+
+    for (row_group_index, row_group_metadata) in row_group_meta_data.iter().enumerate() {
+        let row_group_rows =
+            u64::try_from(row_group_metadata.num_rows()).map_err(|_| {
+                datafusion_common::DataFusionError::Internal(
+                    "Parquet row group row count overflowed u64".to_string(),
+                )
+            })?;
+        let row_group_end = row_group_start + row_group_rows;
+        let mut row_group_offsets = Vec::new();
+
+        while let Some(row_index) = selected_rows.peek().copied() {
+            if row_index < row_group_start {
+                return exec_err!(
+                    "Invalid FileRowsSelection. Row indices must be sorted in ascending order"
+                );
+            }
+            if row_index >= row_group_end {
+                break;
+            }
+            if last_selected_row.is_some_and(|last| row_index <= last) {
+                return exec_err!(
+                    "Invalid FileRowsSelection. Row indices must be sorted in ascending order and unique"
+                );
+            }
+            last_selected_row = Some(row_index);
+            row_group_offsets.push(
+                usize::try_from(row_index - row_group_start).map_err(|_| {
+                    datafusion_common::DataFusionError::Internal(
+                        "selected Parquet row offset overflowed usize".to_string(),
+                    )
+                })?,
+            );
+            selected_rows.next();
+        }
+
+        if row_group_offsets.is_empty() {
+            access_plan.skip(row_group_index);
+        } else {
+            let row_selection = row_selection_from_offsets(
+                &row_group_offsets,
+                usize::try_from(row_group_rows).map_err(|_| {
+                    datafusion_common::DataFusionError::Internal(
+                        "Parquet row group row count overflowed usize".to_string(),
+                    )
+                })?,
+            );
+            access_plan.scan_selection(row_group_index, row_selection);
+        }
+
+        row_group_start = row_group_end;
+    }
+
+    if let Some(row_index) = selected_rows.next() {
+        return exec_err!(
+            "Invalid FileRowsSelection. Row index {row_index} is outside file row count {row_group_start}"
+        );
+    }
+
+    Ok(())
+}
+
+fn row_selection_from_offsets(offsets: &[usize], row_group_rows: usize) -> RowSelection {
+    let mut selectors = Vec::new();
+    let mut position = 0_usize;
+    let mut offset_index = 0_usize;
+
+    while offset_index < offsets.len() {
+        let range_start = offsets[offset_index];
+        if range_start > position {
+            selectors.push(RowSelector::skip(range_start - position));
+        }
+
+        let mut range_end = range_start + 1;
+        offset_index += 1;
+        while offset_index < offsets.len() && offsets[offset_index] == range_end {
+            range_end += 1;
+            offset_index += 1;
+        }
+
+        selectors.push(RowSelector::select(range_end - range_start));
+        position = range_end;
+    }
+
+    if position < row_group_rows {
+        selectors.push(RowSelector::skip(row_group_rows - position));
+    }
+
+    RowSelection::from(selectors)
 }
 
 /// Build a page pruning predicate from an optional predicate expression.

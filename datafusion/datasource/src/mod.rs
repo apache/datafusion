@@ -165,6 +165,33 @@ pub struct PartitionedFile {
     pub table_reference: Option<TableReference>,
 }
 
+/// Row indices to scan from a single [`PartitionedFile`].
+///
+/// File sources that support row-level pruning can use this extension to avoid
+/// decoding rows that are known to be unnecessary. Indices are zero-based
+/// within the file and must be sorted in ascending order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileRowsSelection {
+    row_indices: Vec<u64>,
+}
+
+impl FileRowsSelection {
+    /// Create a new file row selection.
+    pub fn new(row_indices: Vec<u64>) -> Self {
+        Self { row_indices }
+    }
+
+    /// Return the selected row indices.
+    pub fn row_indices(&self) -> &[u64] {
+        &self.row_indices
+    }
+
+    /// Return true if no rows are selected.
+    pub fn is_empty(&self) -> bool {
+        self.row_indices.is_empty()
+    }
+}
+
 impl PartitionedFile {
     /// Create a simple file without metadata or partition
     pub fn new(path: impl Into<String>, size: u64) -> Self {
