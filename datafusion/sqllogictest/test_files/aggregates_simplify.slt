@@ -270,13 +270,14 @@ logical_plan
 04)------Aggregate: groupBy=[[sum_simplify_t.column2]], aggr=[[sum(sum_simplify_t.column1), count(sum_simplify_t.column1)]]
 05)--------TableScan: sum_simplify_t projection=[column1, column2]
 physical_plan
-01)SortPreservingMergeExec: [column2@0 DESC NULLS LAST]
-02)--SortExec: expr=[column2@0 DESC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[column2@0 as column2, sum(sum_simplify_t.column1)@1 + count(sum_simplify_t.column1)@2 as sum(sum_simplify_t.column1 + Int64(1)), sum(sum_simplify_t.column1)@1 + 2 * count(sum_simplify_t.column1)@2 as sum(sum_simplify_t.column1 + Int64(2))]
-04)------AggregateExec: mode=FinalPartitioned, gby=[column2@0 as column2], aggr=[sum(sum_simplify_t.column1), count(sum_simplify_t.column1)]
-05)--------RepartitionExec: partitioning=Hash([column2@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[column2@1 as column2], aggr=[sum(sum_simplify_t.column1), count(sum_simplify_t.column1)]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[column2@1 as column2, sum(sum_simplify_t.column1)@2 + __common_expr_1@0 as sum(sum_simplify_t.column1 + Int64(1)), sum(sum_simplify_t.column1)@2 + 2 * __common_expr_1@0 as sum(sum_simplify_t.column1 + Int64(2))]
+02)--SortPreservingMergeExec: [column2@1 DESC NULLS LAST]
+03)----SortExec: expr=[column2@1 DESC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[count(sum_simplify_t.column1)@2 as __common_expr_1, column2@0 as column2, sum(sum_simplify_t.column1)@1 as sum(sum_simplify_t.column1)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[column2@0 as column2], aggr=[sum(sum_simplify_t.column1), count(sum_simplify_t.column1)]
+06)----------RepartitionExec: partitioning=Hash([column2@0], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[column2@1 as column2], aggr=[sum(sum_simplify_t.column1), count(sum_simplify_t.column1)]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Checks commutative forms of equivalent aggregate arguments are simplified consistently.
 query II

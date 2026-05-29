@@ -1427,8 +1427,8 @@ logical_plan
 02)--Projection: annotated_data_finite2.a, annotated_data_finite2.a + annotated_data_finite2.b
 03)----TableScan: annotated_data_finite2 projection=[a, b]
 physical_plan
-01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[a@0 as a, a@0 + b@1 as annotated_data_finite2.a + annotated_data_finite2.b]
+01)ProjectionExec: expr=[a@0 as a, a@0 + b@1 as annotated_data_finite2.a + annotated_data_finite2.b]
+02)--SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
@@ -1963,7 +1963,7 @@ SELECT COUNT(*) FROM t0 AS tt0 WHERE (4==(3/0));
 
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

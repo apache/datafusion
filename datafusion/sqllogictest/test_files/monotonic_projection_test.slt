@@ -60,8 +60,8 @@ logical_plan
 02)--Projection: multiple_ordered_table.a, CAST(multiple_ordered_table.a AS Int64) AS a_big, multiple_ordered_table.b
 03)----TableScan: multiple_ordered_table projection=[a, b]
 physical_plan
-01)SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@2 ASC NULLS LAST]
-02)--ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as a_big, b@1 as b]
+01)ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as a_big, b@1 as b]
+02)--SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
 03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 

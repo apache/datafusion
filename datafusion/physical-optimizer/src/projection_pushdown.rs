@@ -41,6 +41,7 @@ use datafusion_physical_plan::projection::{
     ProjectionExec, remove_unnecessary_projections,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 /// This rule inspects `ProjectionExec`'s in the given physical plan and tries to
 /// remove or swap with its child.
@@ -77,7 +78,7 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
             .map(|t| t.data)?;
 
         let plan = plan
-            .transform_down(push_topk_below_projection)
+            .transform_down(push_sort_below_projection)
             .map(|t| t.data)?;
 
         plan.transform_down(remove_unnecessary_projections).data()
@@ -92,40 +93,51 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
     }
 }
 
-/// Moves a TopK below a projection when its sort expressions are columns in
-/// the projection output. This lets TopK run before computed projection
-/// expressions such as constants.
-fn push_topk_below_projection(
+/// Moves a SortExec or SortPreservingMergeExec below a projection when its sort
+/// expressions are columns in the projection output. This lets sorting run
+/// before computed projection expressions such as constants.
+fn push_sort_below_projection(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let Some(sort_exec) = plan.downcast_ref::<SortExec>() else {
-        return Ok(Transformed::no(plan));
-    };
-    let Some(fetch) = sort_exec.fetch() else {
-        return Ok(Transformed::no(plan));
-    };
-    let Some(projection) = sort_exec.input().downcast_ref::<ProjectionExec>() else {
-        return Ok(Transformed::no(plan));
-    };
-    if projection
-        .expr()
-        .iter()
-        .all(|expr| expr.expr.downcast_ref::<Column>().is_some())
-    {
-        return Ok(Transformed::no(plan));
+    if let Some(sort_exec) = plan.downcast_ref::<SortExec>() {
+        let Some(projection) = sort_exec.input().downcast_ref::<ProjectionExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+        let Some(sort_exprs) =
+            rewrite_sort_exprs_for_projection_input(sort_exec.expr(), projection)
+        else {
+            return Ok(Transformed::no(plan));
+        };
+
+        let new_sort = Arc::new(
+            SortExec::new(sort_exprs, Arc::clone(projection.input()))
+                .with_fetch(sort_exec.fetch())
+                .with_preserve_partitioning(sort_exec.preserve_partitioning()),
+        );
+        let new_projection =
+            ProjectionExec::try_new(projection.expr().to_vec(), new_sort)?;
+
+        return Ok(Transformed::yes(Arc::new(new_projection)));
     }
+
+    let Some(spm_exec) = plan.downcast_ref::<SortPreservingMergeExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    let Some(projection) = spm_exec.input().downcast_ref::<ProjectionExec>() else {
+        return Ok(Transformed::no(plan));
+    };
     let Some(sort_exprs) =
-        rewrite_sort_exprs_for_projection_input(sort_exec.expr(), projection)
+        rewrite_sort_exprs_for_projection_input(spm_exec.expr(), projection)
     else {
         return Ok(Transformed::no(plan));
     };
 
-    let new_sort = Arc::new(
-        SortExec::new(sort_exprs, Arc::clone(projection.input()))
-            .with_fetch(Some(fetch))
-            .with_preserve_partitioning(sort_exec.preserve_partitioning()),
+    let new_spm = Arc::new(
+        SortPreservingMergeExec::new(sort_exprs, Arc::clone(projection.input()))
+            .with_fetch(spm_exec.fetch())
+            .with_round_robin_repartition(spm_exec.enable_round_robin_repartition()),
     );
-    let new_projection = ProjectionExec::try_new(projection.expr().to_vec(), new_sort)?;
+    let new_projection = ProjectionExec::try_new(projection.expr().to_vec(), new_spm)?;
 
     Ok(Transformed::yes(Arc::new(new_projection)))
 }
@@ -134,6 +146,14 @@ fn rewrite_sort_exprs_for_projection_input(
     sort_exprs: &LexOrdering,
     projection: &ProjectionExec,
 ) -> Option<LexOrdering> {
+    if projection
+        .expr()
+        .iter()
+        .all(|expr| expr.expr.downcast_ref::<Column>().is_some())
+    {
+        return None;
+    }
+
     let exprs = sort_exprs.iter().map(|sort_expr| {
         let column = sort_expr.expr.downcast_ref::<Column>()?;
         let projection_expr = projection.expr().get(column.index())?;
@@ -543,6 +563,103 @@ mod test {
         assert_snapshot!(displayable_plan.to_string(), @r"
         ProjectionExec: expr=[1 as one, url@0 as url, count@1 as c]
           SortExec: TopK(fetch=10), expr=[count@1 DESC], preserve_partitioning=[false]
+            EmptyExec
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sort_runs_before_computed_projection() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("url", DataType::Utf8, false),
+            Field::new("count", DataType::Int64, false),
+        ]));
+        let input = Arc::new(EmptyExec::new(input_schema)) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: lit(1i64),
+                    alias: "one".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("url", 0)) as Arc<dyn PhysicalExpr>,
+                    alias: "url".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("count", 1)) as Arc<dyn PhysicalExpr>,
+                    alias: "c".to_string(),
+                },
+            ],
+            input,
+        )?;
+        let sort_expr = PhysicalSortExpr::new_default(
+            Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>
+        )
+        .desc();
+        let sort =
+            SortExec::new(LexOrdering::new([sort_expr]).unwrap(), Arc::new(projection));
+
+        let optimizer = ProjectionPushdown::new();
+        let optimized_plan = optimizer.optimize(Arc::new(sort), &Default::default())?;
+
+        let displayable_plan = displayable(optimized_plan.as_ref()).indent(false);
+        assert_snapshot!(displayable_plan.to_string(), @r"
+        ProjectionExec: expr=[1 as one, url@0 as url, count@1 as c]
+          SortExec: expr=[count@1 DESC], preserve_partitioning=[false]
+            EmptyExec
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sort_preserving_merge_runs_before_computed_projection() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("url", DataType::Utf8, false),
+            Field::new("count", DataType::Int64, false),
+        ]));
+        let input = Arc::new(EmptyExec::new(input_schema)) as Arc<dyn ExecutionPlan>;
+        let projection = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: lit(1i64),
+                    alias: "one".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("url", 0)) as Arc<dyn PhysicalExpr>,
+                    alias: "url".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("count", 1)) as Arc<dyn PhysicalExpr>,
+                    alias: "c".to_string(),
+                },
+            ],
+            input,
+        )?;
+        let sort_expr = PhysicalSortExpr::new_default(
+            Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>
+        )
+        .desc();
+        let spm = SortPreservingMergeExec::new(
+            LexOrdering::new([sort_expr]).unwrap(),
+            Arc::new(projection),
+        )
+        .with_round_robin_repartition(false);
+
+        let optimizer = ProjectionPushdown::new();
+        let optimized_plan = optimizer.optimize(Arc::new(spm), &Default::default())?;
+        let optimized_projection = optimized_plan
+            .downcast_ref::<ProjectionExec>()
+            .expect("optimized plan is a projection");
+        let optimized_spm = optimized_projection
+            .input()
+            .downcast_ref::<SortPreservingMergeExec>()
+            .expect("projection input is a sort preserving merge");
+        assert!(!optimized_spm.enable_round_robin_repartition());
+
+        let displayable_plan = displayable(optimized_plan.as_ref()).indent(false);
+        assert_snapshot!(displayable_plan.to_string(), @r"
+        ProjectionExec: expr=[1 as one, url@0 as url, count@1 as c]
+          SortPreservingMergeExec: [count@1 DESC]
             EmptyExec
         ");
         Ok(())

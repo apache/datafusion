@@ -3415,9 +3415,9 @@ logical_plan
 04)------SubqueryAlias: s
 05)--------TableScan: sales_global_with_pk projection=[sn, amount]
 physical_plan
-01)SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
-02)--SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[sn@0 as sn, amount@1 as amount, 2 * CAST(sn@0 AS Int64) as Int64(2) * s.sn]
+01)ProjectionExec: expr=[sn@0 as sn, amount@1 as amount, 2 * CAST(sn@0 AS Int64) as Int64(2) * s.sn]
+02)--SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
+03)----SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
 05)--------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
 06)----------AggregateExec: mode=Partial, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
@@ -5634,7 +5634,7 @@ physical_plan
 statement ok
 reset datafusion.execution.batch_size;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

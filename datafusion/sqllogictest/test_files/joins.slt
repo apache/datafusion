@@ -4101,8 +4101,8 @@ logical_plan
 10)--------------Filter: exchange_rates.currency_to = Utf8View("USD")
 11)----------------TableScan: exchange_rates projection=[ts, currency_from, currency_to, rate]
 physical_plan
-01)SortExec: expr=[sn@1 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[ts@1 as ts, sn@0 as sn, amount@2 as amount, currency@3 as currency, CAST(amount@2 AS Float32) * last_value(e.rate)@4 as amount_usd]
+01)ProjectionExec: expr=[ts@1 as ts, sn@0 as sn, amount@2 as amount, currency@3 as currency, CAST(amount@2 AS Float32) * last_value(e.rate)@4 as amount_usd]
+02)--SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----AggregateExec: mode=Single, gby=[sn@1 as sn, ts@0 as ts, amount@2 as amount, currency@3 as currency], aggr=[last_value(e.rate)]
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@3, currency_from@1)], filter=ts@0 >= ts@1, projection=[ts@0, sn@1, amount@2, currency@3, rate@6]
 05)--------DataSourceExec: partitions=1, partition_sizes=[0]

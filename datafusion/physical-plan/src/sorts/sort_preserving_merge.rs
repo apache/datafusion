@@ -154,6 +154,11 @@ impl SortPreservingMergeExec {
         self.fetch
     }
 
+    /// Whether round-robin repartitioning is enabled for rows with equal sort keys
+    pub fn enable_round_robin_repartition(&self) -> bool {
+        self.enable_round_robin_repartition
+    }
+
     /// Creates the cache object that stores the plan properties
     /// such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
@@ -305,7 +310,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
         check_if_same_properties!(self, children);
         Ok(Arc::new(
             SortPreservingMergeExec::new(self.expr.clone(), children.swap_remove(0))
-                .with_fetch(self.fetch),
+                .with_fetch(self.fetch)
+                .with_round_robin_repartition(self.enable_round_robin_repartition),
         ))
     }
 
