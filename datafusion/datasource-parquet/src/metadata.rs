@@ -594,9 +594,9 @@ fn summarize_null_counts(
 
     match sum(&null_counts) {
         Some(count) => {
-           // If any row group has an unknown null_count, either because column
-           // statistics are absent or because the null_count field is omitted,
-           // report the aggregate as inexact.
+            // If any row group has an unknown null_count, either because column
+            // statistics are absent or because the null_count field is omitted,
+            // report the aggregate as inexact.
             if null_counts.null_count() > 0 {
                 Ok(Precision::Inexact(count as usize))
             } else {
