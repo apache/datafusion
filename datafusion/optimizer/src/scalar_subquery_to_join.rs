@@ -1215,7 +1215,6 @@ mod tests {
             .build()?;
 
         let mut options = ConfigOptions::default();
-        options.optimizer.filter_null_join_keys = true;
         options
             .optimizer
             .enable_physical_uncorrelated_scalar_subquery = false;
