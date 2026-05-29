@@ -881,7 +881,7 @@ impl ContextProvider for MyContextProvider {
     fn get_higher_order_meta(
         &self,
         _name: &str,
-    ) -> Option<Arc<dyn datafusion_expr::HigherOrderUDF>> {
+    ) -> Option<Arc<datafusion_expr::HigherOrderUDF>> {
         None
     }
 
