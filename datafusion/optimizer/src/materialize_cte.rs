@@ -83,8 +83,7 @@ impl OptimizerRule for InlineCte {
                 return Ok(Transformed::no(node));
             };
 
-            let Some(producer) =
-                ext.as_any().downcast_ref::<MaterializedCteProducer>()
+            let Some(producer) = ext.as_any().downcast_ref::<MaterializedCteProducer>()
             else {
                 return Ok(Transformed::no(node));
             };
@@ -163,8 +162,10 @@ fn count_readers_in_plan(plan: &LogicalPlan, cte_name: &str) -> usize {
     let mut count = 0;
     plan.apply(|node| {
         if let LogicalPlan::Extension(Extension { node: ext }) = node
-            && let Some(reader) =
-                ext.as_any().downcast_ref::<datafusion_expr::logical_plan::MaterializedCteReader>()
+            && let Some(reader) = ext
+                .as_any()
+                .downcast_ref::<datafusion_expr::logical_plan::MaterializedCteReader>(
+            )
             && reader.name == cte_name
         {
             count += 1;
@@ -183,15 +184,14 @@ fn inline_cte_readers(
 ) -> Result<LogicalPlan> {
     plan.transform_down(|node| {
         if let LogicalPlan::Extension(Extension { node: ext }) = &node
-            && let Some(reader) =
-                ext.as_any().downcast_ref::<datafusion_expr::logical_plan::MaterializedCteReader>()
+            && let Some(reader) = ext
+                .as_any()
+                .downcast_ref::<datafusion_expr::logical_plan::MaterializedCteReader>(
+            )
             && reader.name == cte_name
         {
             // Replace reader with a SubqueryAlias wrapping the CTE body
-            let alias = SubqueryAlias::try_new(
-                Arc::new(cte_plan.clone()),
-                cte_name,
-            )?;
+            let alias = SubqueryAlias::try_new(Arc::new(cte_plan.clone()), cte_name)?;
             return Ok(Transformed::yes(LogicalPlan::SubqueryAlias(alias)));
         }
         Ok(Transformed::no(node))
@@ -317,7 +317,8 @@ fn subtree_contains_reader(plan: &LogicalPlan, cte_name: &str) -> bool {
         if let LogicalPlan::Extension(Extension { node: ext }) = node
             && let Some(reader) = ext
                 .as_any()
-                .downcast_ref::<datafusion_expr::logical_plan::MaterializedCteReader>()
+                .downcast_ref::<datafusion_expr::logical_plan::MaterializedCteReader>(
+            )
             && reader.name == cte_name
         {
             found = true;
@@ -336,9 +337,9 @@ fn collect_all_equality_filters(
 ) {
     // Stop at readers for this CTE
     if let LogicalPlan::Extension(Extension { node: ext }) = plan
-        && let Some(reader) = ext
-            .as_any()
-            .downcast_ref::<datafusion_expr::logical_plan::MaterializedCteReader>()
+        && let Some(reader) =
+            ext.as_any()
+                .downcast_ref::<datafusion_expr::logical_plan::MaterializedCteReader>()
         && reader.name == cte_name
     {
         return;

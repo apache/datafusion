@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType, collect_partitioned};
+use crate::joins::utils::{OnceAsync, OnceFut};
 use crate::memory::MemoryStream;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::operator_statistics::StatisticsRegistry;
@@ -39,16 +40,17 @@ use datafusion_common::{Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use futures::TryStreamExt;
-use tokio::sync::OnceCell;
 
 /// A shared cache that stores the materialized CTE results.
-/// The cache uses a `OnceCell` to ensure the CTE is only computed once.
+/// The cache uses [`OnceAsync`] to ensure the CTE is only computed once,
+/// while allowing multiple consumers to await the result concurrently.
 #[derive(Debug)]
 pub struct MaterializedCteCache {
     /// Name of the CTE (for debugging)
+    #[expect(dead_code)]
     name: String,
-    /// The cached batches, populated once by the producer
-    batches: OnceCell<Vec<Vec<RecordBatch>>>,
+    /// The shared one-time async computation of the CTE batches
+    once: OnceAsync<Vec<Vec<RecordBatch>>>,
 }
 
 impl MaterializedCteCache {
@@ -56,32 +58,18 @@ impl MaterializedCteCache {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            batches: OnceCell::new(),
+            once: OnceAsync::default(),
         }
     }
 
-    /// Store batches into the cache. Returns error if already populated.
-    pub fn store(&self, batches: Vec<Vec<RecordBatch>>) -> Result<()> {
-        self.batches.set(batches).map_err(|_| {
-            datafusion_common::DataFusionError::Internal(format!(
-                "MaterializedCteCache '{}' was already populated",
-                self.name
-            ))
-        })
-    }
-
-    /// Get the cached batches. Returns None if not yet populated.
-    pub fn get(&self) -> Option<&Vec<Vec<RecordBatch>>> {
-        self.batches.get()
-    }
-
-    /// Get the cached batches, computing and storing them once if needed.
-    pub async fn get_or_try_init<F, Fut>(&self, f: F) -> Result<&Vec<Vec<RecordBatch>>>
+    /// Get or initialize the cached batches via `OnceAsync::try_once`.
+    /// The first caller triggers computation; subsequent callers share the result.
+    pub(crate) fn try_once<F, Fut>(&self, f: F) -> Result<OnceFut<Vec<Vec<RecordBatch>>>>
     where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Vec<Vec<RecordBatch>>>>,
+        F: FnOnce() -> Result<Fut>,
+        Fut: Future<Output = Result<Vec<Vec<RecordBatch>>>> + Send + 'static,
     {
-        self.batches.get_or_try_init(f).await
+        self.once.try_once(f)
     }
 }
 
@@ -190,41 +178,38 @@ impl ExecutionPlan for MaterializedCteExec {
             );
         }
 
-        let cache = Arc::clone(&self.cache);
         let cte_plan = Arc::clone(&self.cte_plan);
         let continuation = Arc::clone(&self.continuation);
         let name = self.name.clone();
         let ctx = Arc::clone(&context);
         let schema = Arc::clone(&self.continuation.schema());
 
+        // Use OnceAsync to ensure the CTE is materialized exactly once,
+        // even when multiple partitions call execute() concurrently.
+        let mut once_fut = self.cache.try_once(move || {
+            Ok(async move {
+                let partitions = collect_partitioned(cte_plan, ctx).await?;
+
+                let num_partitions = partitions.len();
+                let num_batches: usize = partitions.iter().map(Vec::len).sum();
+                let num_rows: usize =
+                    partitions.iter().flatten().map(|b| b.num_rows()).sum();
+                log::info!(
+                    "Materializing CTE '{name}': {num_partitions} partitions, {num_batches} batches, {num_rows} rows"
+                );
+
+                Ok(partitions)
+            })
+        })?;
+
+        let ctx = Arc::clone(&context);
         let fut = async move {
-            // Materialize the CTE if not already done
-            let materialize_ctx = Arc::clone(&ctx);
-            cache
-                .get_or_try_init(|| async move {
-                    let partitions =
-                        collect_partitioned(cte_plan, materialize_ctx).await?;
-
-                    let num_partitions = partitions.len();
-                    let num_batches: usize = partitions.iter().map(Vec::len).sum();
-                    let num_rows: usize = partitions
-                        .iter()
-                        .flatten()
-                        .map(|b| b.num_rows())
-                        .sum();
-                    log::info!(
-                        "Materializing CTE '{name}': {num_partitions} partitions, {num_batches} batches, {num_rows} rows"
-                    );
-
-                    Ok(partitions)
-                })
-                .await?;
-
+            // Wait for the CTE to be materialized
+            std::future::poll_fn(|cx| once_fut.get_shared(cx)).await?;
+            // Now execute the continuation
             continuation.execute(partition, ctx)
         };
 
-        // Use futures::stream::once to create a stream from the future,
-        // then flatten it to get a stream of RecordBatches
         let stream = futures::stream::once(fut).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
@@ -340,23 +325,42 @@ impl ExecutionPlan for MaterializedCteReaderExec {
             );
         }
 
-        let batches = self.cache.get().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(format!(
-                "MaterializedCteReaderExec: cache for CTE '{}' is not yet populated. \
-                 The producer must execute before the reader.",
-                self.name
-            ))
-        })?;
+        let schema = Arc::clone(&self.schema);
+        let name = self.name.clone();
 
-        let partition_batches = if output_partitions == 1 {
-            batches.iter().flatten().cloned().collect()
-        } else {
-            batches.get(partition).cloned().unwrap_or_default()
+        // Get a OnceFut handle to the shared computation. The producer
+        // (MaterializedCteExec) triggers the actual work; here we just
+        // await the result which will be ready immediately if the producer
+        // has already finished.
+        let mut once_fut =
+            self.cache.try_once(move || -> Result<std::future::Ready<_>> {
+                internal_err!(
+                    "MaterializedCteReaderExec: cache for CTE '{}' was never initialized by the producer.",
+                    name
+                )
+            })?;
+
+        let schema_for_stream = Arc::clone(&schema);
+        let fut = async move {
+            let batches = std::future::poll_fn(|cx| once_fut.get_shared(cx)).await?;
+
+            let partition_batches = if output_partitions == 1 {
+                batches.iter().flatten().cloned().collect()
+            } else {
+                batches.get(partition).cloned().unwrap_or_default()
+            };
+
+            let stream = MemoryStream::try_new(partition_batches, schema, None)?;
+            Ok::<_, datafusion_common::DataFusionError>(
+                Box::pin(cooperative(stream)) as SendableRecordBatchStream
+            )
         };
 
-        let stream =
-            MemoryStream::try_new(partition_batches, Arc::clone(&self.schema), None)?;
-        Ok(Box::pin(cooperative(stream)))
+        let stream = futures::stream::once(fut).try_flatten();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            schema_for_stream,
+            stream,
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -439,29 +443,51 @@ mod tests {
         Arc::new(Statistics::new_unknown(schema).with_num_rows(Precision::Exact(rows)))
     }
 
-    #[test]
-    fn test_cache_store_and_get() {
+    /// Helper: pre-populate the cache by triggering `try_once` with a ready value.
+    fn prepopulate_cache(cache: &MaterializedCteCache, batches: Vec<Vec<RecordBatch>>) {
+        cache
+            .try_once(move || Ok(async move { Ok(batches) }))
+            .expect("try_once should succeed on first call");
+    }
+
+    #[tokio::test]
+    async fn test_cache_try_once_populates() {
         let cache = MaterializedCteCache::new("test".into());
-        assert!(cache.get().is_none());
 
         let schema = test_schema();
         let batch = test_batch(&schema);
-        cache.store(vec![vec![batch.clone()]]).unwrap();
+        let data = vec![vec![batch.clone()]];
+        let mut once_fut = cache.try_once(move || Ok(async move { Ok(data) })).unwrap();
 
-        let cached = cache.get().unwrap();
+        let cached = std::future::poll_fn(|cx| once_fut.get_shared(cx))
+            .await
+            .unwrap();
         assert_eq!(cached.len(), 1);
         assert_eq!(cached[0].len(), 1);
         assert_eq!(cached[0][0].num_rows(), 3);
     }
 
-    #[test]
-    fn test_cache_double_store_fails() {
+    #[tokio::test]
+    async fn test_cache_try_once_returns_same_result() {
         let cache = MaterializedCteCache::new("test".into());
         let schema = test_schema();
         let batch = test_batch(&schema);
 
-        cache.store(vec![vec![batch.clone()]]).unwrap();
-        assert!(cache.store(vec![vec![batch]]).is_err());
+        let data = vec![vec![batch.clone()]];
+        // First call populates
+        let mut fut1 = cache.try_once(move || Ok(async move { Ok(data) })).unwrap();
+        let result1 = std::future::poll_fn(|cx| fut1.get_shared(cx))
+            .await
+            .unwrap();
+
+        // Second call returns the same result (closure is never invoked)
+        let mut fut2 = cache.try_once(|| Ok(async move { Ok(vec![]) })).unwrap();
+        let result2 = std::future::poll_fn(|cx| fut2.get_shared(cx))
+            .await
+            .unwrap();
+
+        assert_eq!(result1.len(), result2.len());
+        assert_eq!(result1[0][0].num_rows(), result2[0][0].num_rows());
     }
 
     #[tokio::test]
@@ -469,7 +495,7 @@ mod tests {
         let schema = test_schema();
         let batch = test_batch(&schema);
         let cache = Arc::new(MaterializedCteCache::new("test".into()));
-        cache.store(vec![vec![batch.clone()]]).unwrap();
+        prepopulate_cache(&cache, vec![vec![batch.clone()]]);
 
         let reader = MaterializedCteReaderExec::new(
             "test".into(),
@@ -494,9 +520,7 @@ mod tests {
         let schema = test_schema();
         let batch = test_batch(&schema);
         let cache = Arc::new(MaterializedCteCache::new("test".into()));
-        cache
-            .store(vec![vec![batch.clone()], vec![batch.clone()]])
-            .unwrap();
+        prepopulate_cache(&cache, vec![vec![batch.clone()], vec![batch.clone()]]);
 
         let reader = MaterializedCteReaderExec::new(
             "test".into(),
@@ -530,7 +554,7 @@ mod tests {
         )
         .unwrap();
         let cache = Arc::new(MaterializedCteCache::new("test".into()));
-        cache.store(vec![vec![], vec![batch.clone()]]).unwrap();
+        prepopulate_cache(&cache, vec![vec![], vec![batch.clone()]]);
 
         let reader = MaterializedCteReaderExec::new(
             "test".into(),
@@ -568,6 +592,11 @@ mod tests {
 
         let context = Arc::new(TaskContext::default());
         let result = reader.execute(0, context);
+        // With OnceAsync, the error is returned from try_once when the
+        // producer closure returns an error. The reader's closure produces
+        // an internal_err if no producer has initialized the cache first.
+        // However, since try_once returns the FIRST caller's result, and
+        // the reader IS the first caller here, the error closure fires.
         assert!(result.is_err());
     }
 }

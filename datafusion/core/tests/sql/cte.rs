@@ -372,13 +372,7 @@ async fn volatile_cte_is_materialized() -> Result<()> {
         .await?
         .collect()
         .await?;
-    let expected = [
-        "+------+",
-        "| same |",
-        "+------+",
-        "| true |",
-        "+------+",
-    ];
+    let expected = ["+------+", "| same |", "+------+", "| true |", "+------+"];
     assert_batches_eq!(expected, &results);
 
     Ok(())
