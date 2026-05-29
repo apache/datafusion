@@ -826,6 +826,31 @@ mod tests {
         DateBinFunc::new().invoke_with_args(args)
     }
 
+    fn assert_null_scalar(value: ColumnarValue, expected_type: DataType) {
+        let ColumnarValue::Scalar(value) = value else {
+            panic!("expected scalar, got {value:?}");
+        };
+        assert_eq!(value.data_type(), expected_type);
+        assert!(value.is_null(), "expected NULL, got {value:?}");
+    }
+
+    fn assert_array_null_then_valid(value: ColumnarValue, expected_type: DataType) {
+        let ColumnarValue::Array(array) = value else {
+            panic!("expected array, got {value:?}");
+        };
+        assert_eq!(array.data_type(), &expected_type);
+        assert!(array.is_null(0), "expected NULL at row 0");
+        assert!(array.is_valid(1), "expected valid value at row 1");
+    }
+
+    fn assert_overflow_error(result: Result<ColumnarValue, DataFusionError>) {
+        let err = result.expect_err("expected overflow error");
+        assert!(
+            err.strip_backtrace().contains("overflows i64"),
+            "unexpected error: {err}"
+        );
+    }
+
     #[test]
     fn test_date_bin() {
         let return_field = &Arc::new(Field::new(
@@ -1362,36 +1387,28 @@ mod tests {
             ScalarValue::TimestampMicrosecond(Some(i64::MAX), None),
         ];
         for source in scalar_cases {
+            let expected_type = source.data_type();
             let args = vec![
                 ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
-                ColumnarValue::Scalar(source.clone()),
+                ColumnarValue::Scalar(source),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(0), None)),
             ];
             let result = invoke_date_bin_with_args(args, 1, return_field)
-                .unwrap_or_else(|e| panic!("expected Ok for {source:?}, got {e:?}"));
-            match result {
-                ColumnarValue::Scalar(
-                    ScalarValue::TimestampSecond(v, _)
-                    | ScalarValue::TimestampMillisecond(v, _)
-                    | ScalarValue::TimestampMicrosecond(v, _),
-                ) => {
-                    assert!(v.is_none(), "expected NULL for {source:?}, got {v:?}");
-                }
-                other => panic!("unexpected result for {source:?}: {other:?}"),
-            }
+                .unwrap_or_else(|e| panic!("expected Ok for {expected_type}, got {e:?}"));
+            assert_null_scalar(result, expected_type);
         }
 
-        let second_arr =
-            Arc::new(TimestampSecondArray::from(vec![Some(i64::MAX), Some(0)]));
-        let milli_arr = Arc::new(TimestampMillisecondArray::from(vec![
-            Some(i64::MAX),
-            Some(0),
-        ]));
-        let micro_arr = Arc::new(TimestampMicrosecondArray::from(vec![
-            Some(i64::MAX),
-            Some(0),
-        ]));
-        let array_cases: Vec<ArrayRef> = vec![second_arr, milli_arr, micro_arr];
+        let array_cases: Vec<ArrayRef> = vec![
+            Arc::new(TimestampSecondArray::from(vec![Some(i64::MAX), Some(0)])),
+            Arc::new(TimestampMillisecondArray::from(vec![
+                Some(i64::MAX),
+                Some(0),
+            ])),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(i64::MAX),
+                Some(0),
+            ])),
+        ];
         for array in array_cases {
             let dt = array.data_type().clone();
             let args = vec![
@@ -1401,85 +1418,48 @@ mod tests {
             ];
             let result = invoke_date_bin_with_args(args, 2, return_field)
                 .unwrap_or_else(|e| panic!("expected Ok for {dt:?}, got {e:?}"));
-            let ColumnarValue::Array(out) = result else {
-                panic!("expected array result for {dt:?}");
-            };
-            assert!(out.is_null(0), "expected NULL at row 0 for {dt:?}");
-            assert!(out.is_valid(1), "expected valid value at row 1 for {dt:?}");
+            assert_array_null_then_valid(result, dt);
         }
     }
 
     #[test]
-    fn test_date_bin_time64_micro_scale_overflow_returns_null() {
+    fn test_date_bin_time64_micro_overflow_handling() {
         // Time64(Microsecond) can hold out-of-range values after reinterpret casts.
         use arrow::array::Time64MicrosecondArray;
 
-        let return_field = &Arc::new(Field::new(
-            "f",
-            DataType::Time64(TimeUnit::Microsecond),
-            true,
-        ));
+        let data_type = DataType::Time64(TimeUnit::Microsecond);
+        let return_field = &Arc::new(Field::new("f", data_type.clone(), true));
         let stride = || ColumnarValue::Scalar(ScalarValue::new_interval_dt(0, 1000));
         let origin = || ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(0)));
 
+        // Out-of-range source values are per-row data, so they become NULL.
         let args = vec![
             stride(),
             ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(i64::MAX))),
             origin(),
         ];
         let result = invoke_date_bin_with_args(args, 1, return_field).unwrap();
-        let ColumnarValue::Scalar(ScalarValue::Time64Microsecond(v)) = result else {
-            panic!("expected Time64Microsecond scalar, got {result:?}");
-        };
-        assert!(
-            v.is_none(),
-            "expected NULL for overflowing scalar, got {v:?}"
-        );
+        assert_null_scalar(result, data_type.clone());
 
         let array = Arc::new(Time64MicrosecondArray::from(vec![Some(i64::MAX), Some(0)]));
         let args = vec![stride(), ColumnarValue::Array(array), origin()];
         let result = invoke_date_bin_with_args(args, 2, return_field).unwrap();
-        let ColumnarValue::Array(out) = result else {
-            panic!("expected array result, got {result:?}");
-        };
-        assert!(out.is_null(0), "expected NULL at row 0");
-        assert!(out.is_valid(1), "expected valid value at row 1");
-    }
+        assert_array_null_then_valid(result, data_type);
 
-    #[test]
-    fn test_date_bin_time64_micro_origin_scale_overflow_errors() {
-        // Out-of-range TIME origins should error before row evaluation.
-        use arrow::array::Time64MicrosecondArray;
-
-        let return_field = &Arc::new(Field::new(
-            "f",
-            DataType::Time64(TimeUnit::Microsecond),
-            true,
-        ));
-        let stride = || ColumnarValue::Scalar(ScalarValue::new_interval_dt(0, 1000));
         let bad_origin =
             || ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(i64::MAX)));
 
+        // Out-of-range origins are shared inputs, so they return an error.
         let args = vec![
             stride(),
             ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(0))),
             bad_origin(),
         ];
-        let err = invoke_date_bin_with_args(args, 1, return_field)
-            .expect_err("expected Err for overflowing origin (scalar source)");
-        assert!(
-            err.strip_backtrace().contains("overflows i64"),
-            "unexpected error: {err}"
-        );
+        assert_overflow_error(invoke_date_bin_with_args(args, 1, return_field));
 
         let array = Arc::new(Time64MicrosecondArray::from(vec![Some(0), Some(1)]));
         let args = vec![stride(), ColumnarValue::Array(array), bad_origin()];
-        let err = invoke_date_bin_with_args(args, 2, return_field)
-            .expect_err("expected Err for overflowing origin (array source)");
-        assert!(
-            err.strip_backtrace().contains("overflows i64"),
-            "unexpected error: {err}"
-        );
+        assert_overflow_error(invoke_date_bin_with_args(args, 2, return_field));
     }
 
     #[test]
