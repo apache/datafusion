@@ -219,16 +219,53 @@ impl OptimizerRule for EliminateCrossJoin {
 }
 
 /// Returns `true` if `plan` contains at least one [`LogicalPlan::Join`]
-/// node anywhere in its tree.
+/// node, either directly in its tree *or* inside an embedded subquery
+/// plan reachable through `Expr::ScalarSubquery` / `Expr::InSubquery`
+/// / `Expr::Exists` / `Expr::SetComparison`.
 ///
 /// Used as a fast-path gate at the top of [`EliminateCrossJoin::rewrite`]
-/// so that join-free plans skip the full recursive rewrite — read-only
-/// `apply` walk with early stop on first match, no allocations.
+/// so that join-free plans skip the full recursive rewrite. The
+/// expression-side recursion is required because `rewrite_children`
+/// also dives into uncorrelated subqueries via
+/// `map_uncorrelated_subqueries`; ignoring them here would skip
+/// optimizing a `CROSS JOIN` that sits only inside an
+/// `IN (SELECT ... FROM a, b)`-style predicate.
+///
+/// Read-only `apply` walk with early stop on first match, no
+/// allocations.
 fn plan_has_joins(plan: &LogicalPlan) -> bool {
     let mut found = false;
     let _ = plan.apply(|node| {
         if matches!(node, LogicalPlan::Join(_)) {
             found = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        // Recurse into subquery plans referenced from this node's
+        // expressions. `LogicalPlan::apply` does not descend into the
+        // subquery plan, so we have to do it explicitly.
+        let _ = node.apply_expressions(|expr| {
+            if found {
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            let _ = expr.apply(|e| {
+                let subquery_plan = match e {
+                    Expr::ScalarSubquery(sq) => Some(sq.subquery.as_ref()),
+                    Expr::InSubquery(in_sq) => Some(in_sq.subquery.subquery.as_ref()),
+                    Expr::Exists(exists) => Some(exists.subquery.subquery.as_ref()),
+                    Expr::SetComparison(sc) => Some(sc.subquery.subquery.as_ref()),
+                    _ => None,
+                };
+                if let Some(sub) = subquery_plan
+                    && plan_has_joins(sub)
+                {
+                    found = true;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+                Ok(TreeNodeRecursion::Continue)
+            });
+            Ok(TreeNodeRecursion::Continue)
+        });
+        if found {
             Ok(TreeNodeRecursion::Stop)
         } else {
             Ok(TreeNodeRecursion::Continue)
@@ -1482,6 +1519,36 @@ mod tests {
             .project(vec![col("a"), col("b")])?
             .build()?;
         assert!(!plan_has_joins(&plan));
+        Ok(())
+    }
+
+    /// `plan_has_joins` walks into embedded subquery plans — e.g. an
+    /// outer `Filter` whose predicate is `IN (SELECT ... FROM a, b)`
+    /// where the inner plan contains a `CROSS JOIN`. Without this the
+    /// fast-path would silently skip optimizing joins-in-subqueries
+    /// because `LogicalPlan::apply` doesn't descend into subquery
+    /// plan trees.
+    #[test]
+    fn plan_has_joins_detects_join_inside_subquery() -> Result<()> {
+        use datafusion_expr::in_subquery;
+
+        // Subquery plan that itself contains a join.
+        let subquery_plan =
+            LogicalPlanBuilder::from(test_table_scan_with_name("sub_t1")?)
+                .cross_join(test_table_scan_with_name("sub_t2")?)?
+                .project(vec![col("sub_t1.a")])?
+                .build()?;
+
+        // Outer plan with NO direct Join — only the IN subquery reaches one.
+        let outer = LogicalPlanBuilder::from(test_table_scan_with_name("t1")?)
+            .filter(in_subquery(col("a"), Arc::new(subquery_plan)))?
+            .project(vec![col("a")])?
+            .build()?;
+
+        assert!(
+            plan_has_joins(&outer),
+            "plan_has_joins must descend into subquery plans"
+        );
         Ok(())
     }
 
