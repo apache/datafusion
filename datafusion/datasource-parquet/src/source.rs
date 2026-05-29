@@ -26,6 +26,7 @@ use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::opener::build_virtual_columns_state;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
+use arrow_schema::Fields;
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, Field};
 use datafusion_common::config::ConfigOptions;
@@ -1055,7 +1056,14 @@ fn table_schema_with_row_index_col(table_schema: &TableSchema) -> (TableSchema, 
     (
         TableSchema::builder(Arc::clone(table_schema.file_schema()))
             .with_table_partition_cols(table_schema.table_partition_cols().clone())
-            .with_virtual_columns(vec![row_index_field])
+            .with_virtual_columns(
+                table_schema
+                    .virtual_columns()
+                    .iter()
+                    .cloned()
+                    .chain([row_index_field])
+                    .collect::<Fields>(),
+            )
             .build(),
         Column::new(&row_index_name, row_index_table_idx),
     )
