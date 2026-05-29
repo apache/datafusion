@@ -2620,6 +2620,7 @@ dependencies = [
  "chrono",
  "clap",
  "datafusion",
+ "datafusion-datasource",
  "datafusion-spark",
  "datafusion-substrait",
  "env_logger",

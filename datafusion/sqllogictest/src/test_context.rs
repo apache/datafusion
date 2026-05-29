@@ -53,6 +53,8 @@ use datafusion::{
 use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
+use range_partitioning::register_range_partitioned_table;
+
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
@@ -60,6 +62,8 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
+
+mod range_partitioning;
 
 /// Context for running tests
 pub struct TestContext {
@@ -166,6 +170,10 @@ impl TestContext {
                 register_partition_table(&mut test_ctx).await;
                 info!("Registering table with many types");
                 register_table_with_many_types(test_ctx.session_ctx()).await;
+            }
+            "range_partitioning.slt" => {
+                info!("Registering range partitioned table");
+                register_range_partitioned_table(test_ctx.session_ctx());
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");

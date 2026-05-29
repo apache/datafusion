@@ -171,6 +171,11 @@ impl Display for Partitioning {
 /// Values equal to split point `i` belong to partition `i + 1`, so interior
 /// partitions are lower-inclusive and upper-exclusive.
 ///
+/// Like other user-specified data properties such as sortedness, if a source
+/// declares range partitioning, it is responsible for placing each row in the
+/// partition described by the split points. DataFusion will not validate this is
+/// upheld.
+///
 /// For a single range key:
 ///
 /// ```text
