@@ -123,12 +123,13 @@
 //! ```
 pub mod bytes;
 pub mod common;
-pub mod generated;
+pub mod convert;
 pub mod logical_plan;
 pub mod physical_plan;
 
+pub use convert::{FromProto, TryFromProto};
+
 pub mod protobuf {
-    pub use crate::generated::datafusion::*;
     pub use datafusion_proto_common::common::proto_error;
     pub use datafusion_proto_common::protobuf_common::{
         ArrowFormat, ArrowOptions, ArrowType, AvroFormat, AvroOptions, CsvFormat,
@@ -136,6 +137,40 @@ pub mod protobuf {
         ScalarValue, Schema,
     };
     pub use datafusion_proto_common::{FromProtoError, ToProtoError};
+    // Re-export every type from `datafusion-proto-models`'s generated module
+    // so the existing `datafusion_proto::protobuf::Foo` paths keep resolving.
+    // Going through the deeper `generated::datafusion` path (rather than
+    // `datafusion_proto_models::protobuf`, which is itself a `pub use ::*`)
+    // avoids a double wildcard re-export that some tools (cargo-semver-checks)
+    // don't follow.
+    pub use datafusion_proto_models::generated::datafusion::*;
+}
+
+/// Backwards-compatible re-export of the moved generated types.
+///
+/// The prost-generated structs now live in `datafusion-proto-models`;
+/// this module preserves the legacy `datafusion_proto::generated::*` paths
+/// for downstream callers. Prefer the [`protobuf`] module (or
+/// [`datafusion_proto_models`] directly) in new code.
+#[deprecated(
+    since = "53.1.0",
+    note = "use `datafusion_proto::protobuf` (or `datafusion_proto_models::protobuf`) instead"
+)]
+pub mod generated {
+    /// Re-export of the prost-generated types defined in `datafusion.proto`.
+    #[deprecated(
+        since = "53.1.0",
+        note = "use `datafusion_proto::protobuf` (or `datafusion_proto_models::protobuf`) instead"
+    )]
+    pub use datafusion_proto_models::generated::datafusion;
+
+    /// Re-export of the prost-generated common types defined in
+    /// `datafusion_common.proto`.
+    #[deprecated(
+        since = "53.1.0",
+        note = "use `datafusion_proto_common::protobuf_common` instead"
+    )]
+    pub use datafusion_proto_models::generated::datafusion_common;
 }
 
 #[cfg(doctest)]

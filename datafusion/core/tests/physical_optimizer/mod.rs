@@ -24,6 +24,7 @@ mod combine_partial_final_agg;
 mod enforce_distribution;
 mod enforce_sorting;
 mod enforce_sorting_monotonicity;
+mod ensure_requirements;
 mod filter_pushdown;
 mod join_selection;
 mod late_materialization;

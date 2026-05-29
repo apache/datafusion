@@ -15,17 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! EnforceDistribution optimizer rule inspects the physical plan with respect
-//! to distribution requirements and adds [`RepartitionExec`]s to satisfy them
-//! when necessary. If increasing parallelism is beneficial (and also desirable
-//! according to the configuration), this rule increases partition counts in
-//! the physical plan.
+//! Distribution enforcement helpers. The standalone `EnforceDistribution`
+//! rule that previously lived here has been retired in favour of
+//! `EnsureRequirements` (which composes distribution and sorting
+//! enforcement into a single idempotent pass). The helpers in this
+//! module — `adjust_input_keys_ordering`, `reorder_join_keys_to_inputs`,
+//! `DistributionContext`, `ensure_distribution`, …  — are used directly
+//! by `EnsureRequirements`.
+//!
+//! These helpers inspect the physical plan with respect to distribution
+//! requirements and add [`RepartitionExec`]s to satisfy them when necessary.
+//! If increasing parallelism is beneficial (and also desirable according to
+//! configuration), they increase partition counts in the physical plan.
 
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::optimizer::PhysicalOptimizerRule;
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
@@ -36,7 +42,7 @@ use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::logical_plan::{Aggregate, JoinType};
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
@@ -59,178 +65,17 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave};
 use datafusion_physical_plan::windows::WindowAggExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, get_best_fitting_window};
-use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
+use datafusion_physical_plan::{
+    Distribution, ExecutionPlan, Partitioning, with_new_children_if_necessary,
+};
 
 use itertools::izip;
 
-/// The `EnforceDistribution` rule ensures that distribution requirements are
-/// met. In doing so, this rule will increase the parallelism in the plan by
-/// introducing repartitioning operators to the physical plan.
-///
-/// For example, given an input such as:
-///
-///
-/// ```text
-/// ┌─────────────────────────────────┐
-/// │                                 │
-/// │          ExecutionPlan          │
-/// │                                 │
-/// └─────────────────────────────────┘
-///             ▲         ▲
-///             │         │
-///       ┌─────┘         └─────┐
-///       │                     │
-///       │                     │
-///       │                     │
-/// ┌───────────┐         ┌───────────┐
-/// │           │         │           │
-/// │ batch A1  │         │ batch B1  │
-/// │           │         │           │
-/// ├───────────┤         ├───────────┤
-/// │           │         │           │
-/// │ batch A2  │         │ batch B2  │
-/// │           │         │           │
-/// ├───────────┤         ├───────────┤
-/// │           │         │           │
-/// │ batch A3  │         │ batch B3  │
-/// │           │         │           │
-/// └───────────┘         └───────────┘
-///
-///      Input                 Input
-///        A                     B
-/// ```
-///
-/// This rule will attempt to add a `RepartitionExec` to increase parallelism
-/// (to 3, in this case) and create the following arrangement:
-///
-/// ```text
-///     ┌─────────────────────────────────┐
-///     │                                 │
-///     │          ExecutionPlan          │
-///     │                                 │
-///     └─────────────────────────────────┘
-///               ▲      ▲       ▲            Input now has 3
-///               │      │       │             partitions
-///       ┌───────┘      │       └───────┐
-///       │              │               │
-///       │              │               │
-/// ┌───────────┐  ┌───────────┐   ┌───────────┐
-/// │           │  │           │   │           │
-/// │ batch A1  │  │ batch A3  │   │ batch B3  │
-/// │           │  │           │   │           │
-/// ├───────────┤  ├───────────┤   ├───────────┤
-/// │           │  │           │   │           │
-/// │ batch B2  │  │ batch B1  │   │ batch A2  │
-/// │           │  │           │   │           │
-/// └───────────┘  └───────────┘   └───────────┘
-///       ▲              ▲               ▲
-///       │              │               │
-///       └─────────┐    │    ┌──────────┘
-///                 │    │    │
-///                 │    │    │
-///     ┌─────────────────────────────────┐   batches are
-///     │       RepartitionExec(3)        │   repartitioned
-///     │           RoundRobin            │
-///     │                                 │
-///     └─────────────────────────────────┘
-///                 ▲         ▲
-///                 │         │
-///           ┌─────┘         └─────┐
-///           │                     │
-///           │                     │
-///           │                     │
-///     ┌───────────┐         ┌───────────┐
-///     │           │         │           │
-///     │ batch A1  │         │ batch B1  │
-///     │           │         │           │
-///     ├───────────┤         ├───────────┤
-///     │           │         │           │
-///     │ batch A2  │         │ batch B2  │
-///     │           │         │           │
-///     ├───────────┤         ├───────────┤
-///     │           │         │           │
-///     │ batch A3  │         │ batch B3  │
-///     │           │         │           │
-///     └───────────┘         └───────────┘
-///
-///
-///      Input                 Input
-///        A                     B
-/// ```
-///
-/// The `EnforceDistribution` rule
-/// - is idempotent; i.e. it can be applied multiple times, each time producing
-///   the same result.
-/// - always produces a valid plan in terms of distribution requirements. Its
-///   input plan can be valid or invalid with respect to distribution requirements,
-///   but the output plan will always be valid.
-/// - produces a valid plan in terms of ordering requirements, *if* its input is
-///   a valid plan in terms of ordering requirements. If the input plan is invalid,
-///   this rule does not attempt to fix it as doing so is the responsibility of the
-///   `EnforceSorting` rule.
-///
-/// Note that distribution requirements are met in the strictest way. This may
-/// result in more than strictly necessary [`RepartitionExec`]s in the plan, but
-/// meeting the requirements in the strictest way may help avoid possible data
-/// skew in joins.
-///
-/// For example for a hash join with keys (a, b, c), the required Distribution(a, b, c)
-/// can be satisfied by several alternative partitioning ways: (a, b, c), (a, b),
-/// (a, c), (b, c), (a), (b), (c) and ( ).
-///
-/// This rule only chooses the exact match and satisfies the Distribution(a, b, c)
-/// by a HashPartition(a, b, c).
-#[derive(Default, Debug)]
-pub struct EnforceDistribution {}
-
-impl EnforceDistribution {
-    #[expect(missing_docs)]
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl PhysicalOptimizerRule for EnforceDistribution {
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
-
-        let adjusted = if top_down_join_key_reordering {
-            // Run a top-down process to adjust input key ordering recursively
-            let plan_requirements = PlanWithKeyRequirements::new_default(plan);
-            let adjusted = plan_requirements
-                .transform_down(adjust_input_keys_ordering)
-                .data()?;
-            adjusted.plan
-        } else {
-            // Run a bottom-up process
-            plan.transform_up(|plan| {
-                Ok(Transformed::yes(reorder_join_keys_to_inputs(plan)?))
-            })
-            .data()?
-        };
-
-        let distribution_context = DistributionContext::new_default(adjusted);
-        // Distribution enforcement needs to be applied bottom-up.
-        let distribution_context = distribution_context
-            .transform_up(|distribution_context| {
-                ensure_distribution(distribution_context, config)
-            })
-            .data()?;
-        Ok(distribution_context.plan)
-    }
-
-    fn name(&self) -> &str {
-        "EnforceDistribution"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
+// The `EnforceDistribution` rule was retired in favour of `EnsureRequirements`,
+// which composes distribution and sorting enforcement into a single idempotent
+// pass. The helper functions below (`adjust_input_keys_ordering`,
+// `reorder_join_keys_to_inputs`, `DistributionContext`, `ensure_distribution`,
+// etc.) remain — `EnsureRequirements` calls into them directly.
 
 #[derive(Debug, Clone)]
 struct JoinKeyPairs {
@@ -970,7 +815,10 @@ fn preserving_order_enables_streaming(
 ///
 /// Updated node with an execution plan, where the desired single distribution
 /// requirement is satisfied.
-fn add_merge_on_top(input: DistributionContext) -> DistributionContext {
+fn add_merge_on_top(
+    input: DistributionContext,
+    fetch: Option<usize>,
+) -> DistributionContext {
     // Apply only when the partition count is larger than one.
     if input.plan.output_partitioning().partition_count() > 1 {
         // When there is an existing ordering, we preserve ordering
@@ -979,14 +827,20 @@ fn add_merge_on_top(input: DistributionContext) -> DistributionContext {
         // - Preserving ordering is not helpful in terms of satisfying ordering requirements
         // - Usage of order preserving variants is not desirable
         // (determined by flag `config.optimizer.prefer_existing_sort`)
-        let new_plan = if let Some(req) = input.plan.output_ordering() {
-            Arc::new(SortPreservingMergeExec::new(
-                req.clone(),
-                Arc::clone(&input.plan),
-            )) as _
+        let new_plan: Arc<dyn ExecutionPlan> = if let Some(req) =
+            input.plan.output_ordering()
+        {
+            let mut spm =
+                SortPreservingMergeExec::new(req.clone(), Arc::clone(&input.plan));
+            if let Some(f) = fetch {
+                spm = spm.with_fetch(Some(f));
+            }
+            Arc::new(spm)
         } else {
             // If there is no input order, we can simply coalesce partitions:
-            Arc::new(CoalescePartitionsExec::new(Arc::clone(&input.plan))) as _
+            Arc::new(
+                CoalescePartitionsExec::new(Arc::clone(&input.plan)).with_fetch(fetch),
+            )
         };
 
         DistributionContext::new(new_plan, true, vec![input])
@@ -1012,20 +866,41 @@ fn add_merge_on_top(input: DistributionContext) -> DistributionContext {
 /// ```text
 /// "DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
+/// Returned by [`remove_dist_changing_operators`] to carry the fetch value
+/// that may have been on a removed `SortPreservingMergeExec` or `CoalescePartitionsExec`.
+struct RemovedDistOps {
+    context: DistributionContext,
+    /// The fetch value from the removed SPM/Coalesce, if any.
+    /// Must be re-applied when distribution operators are re-inserted.
+    removed_fetch: Option<usize>,
+}
+
 fn remove_dist_changing_operators(
     mut distribution_context: DistributionContext,
-) -> Result<DistributionContext> {
+) -> Result<RemovedDistOps> {
+    let mut removed_fetch = None;
     while is_repartition(&distribution_context.plan)
         || is_coalesce_partitions(&distribution_context.plan)
         || is_sort_preserving_merge(&distribution_context.plan)
     {
+        // Preserve fetch from SPM or CoalescePartitions before removing (#14150).
+        if let Some(fetch) = distribution_context.plan.fetch() {
+            removed_fetch = Some(
+                removed_fetch
+                    .map(|existing: usize| existing.min(fetch))
+                    .unwrap_or(fetch),
+            );
+        }
         // All of above operators have a single child. First child is only child.
         // Remove any distribution changing operators at the beginning:
         distribution_context = distribution_context.children.swap_remove(0);
         // Note that they will be re-inserted later on if necessary or helpful.
     }
 
-    Ok(distribution_context)
+    Ok(RemovedDistOps {
+        context: distribution_context,
+        removed_fetch,
+    })
 }
 
 /// Updates the [`DistributionContext`] if preserving ordering while changing partitioning is not helpful or desirable.
@@ -1219,11 +1094,16 @@ pub fn ensure_distribution(
     let order_preserving_variants_desirable =
         unbounded_and_pipeline_friendly || config.optimizer.prefer_existing_sort;
 
-    // Remove unnecessary repartition from the physical plan if any
-    let DistributionContext {
-        mut plan,
-        data,
-        children,
+    // Remove unnecessary repartition from the physical plan if any.
+    // Preserve fetch from removed SPM/Coalesce (#14150).
+    let RemovedDistOps {
+        context:
+            DistributionContext {
+                mut plan,
+                data,
+                children,
+            },
+        removed_fetch,
     } = remove_dist_changing_operators(dist_context)?;
 
     if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
@@ -1359,7 +1239,7 @@ pub fn ensure_distribution(
             // Satisfy the distribution requirement if it is unmet.
             match &requirement {
                 Distribution::SinglePartition => {
-                    child = add_merge_on_top(child);
+                    child = add_merge_on_top(child, removed_fetch);
                 }
                 Distribution::HashPartitioned(exprs) => {
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
@@ -1484,7 +1364,16 @@ pub fn ensure_distribution(
         //           Data
         Arc::new(InterleaveExec::try_new(children_plans)?)
     } else {
-        plan.with_new_children(children_plans)?
+        // Route through `with_new_children_if_necessary` so the common
+        // case where no child was replaced above skips the expensive
+        // `with_new_children` rebuild. For nodes like `ProjectionExec`,
+        // `with_new_children` recomputes schema / equivalence properties /
+        // output ordering via `try_new` even when the input Arcs are
+        // identical, which dominates `ensure_distribution` time on deep
+        // projection stacks over plans where no distribution change
+        // applies (point queries with no join / aggregate / unmet
+        // ordering).
+        with_new_children_if_necessary(plan, children_plans)?
     };
 
     Ok(Transformed::yes(DistributionContext::new(

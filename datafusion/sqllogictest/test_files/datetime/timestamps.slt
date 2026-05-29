@@ -595,6 +595,12 @@ SELECT to_timestamp(arrow_cast(123456789.123456789, 'Decimal128(18,9)')) as c1, 
 ----
 1973-11-29T21:33:09.123456784 1970-01-01T00:00:00.123456789 1970-01-01T00:00:00.123456789
 
+# Regression test for https://github.com/apache/datafusion/issues/22213
+query error .*overflows timestamp nanoseconds
+SELECT to_timestamp(
+  arrow_cast('99999999999999999999999999999999999999', 'Decimal128(38,0)')
+);
+
 
 # from_unixtime
 
@@ -5338,6 +5344,13 @@ query P
 SELECT to_timestamp_millis(arrow_cast(-1.9, 'Float64'));
 ----
 1969-12-31T23:59:59.999
+
+# Regression test for https://github.com/apache/datafusion/issues/22214
+query error .*out of range after truncating to year
+SELECT date_trunc(
+  'year',
+  arrow_cast(TIMESTAMP '1677-09-22 00:00:00', 'Timestamp(Nanosecond, None)')
+);
 
 
 ##########

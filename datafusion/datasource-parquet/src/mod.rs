@@ -26,6 +26,7 @@
 
 pub mod access_plan;
 mod bloom_filter;
+mod decoder_projection;
 pub mod file_format;
 pub mod metadata;
 mod metrics;
@@ -42,6 +43,7 @@ pub mod source;
 mod supported_predicates;
 #[cfg(test)]
 mod test_util;
+mod virtual_column;
 mod writer;
 
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
@@ -59,4 +61,5 @@ pub use schema_coercion::{
     transform_binary_to_string, transform_schema_to_view,
 };
 pub use sink::ParquetSink;
+pub use virtual_column::ParquetVirtualColumn;
 pub use writer::plan_to_parquet;

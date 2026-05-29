@@ -203,6 +203,7 @@ impl TreeNode for LogicalPlan {
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded,
+                show_statistics,
             }) => plan.map_elements(f)?.update_data(|plan| {
                 LogicalPlan::Explain(Explain {
                     verbose,
@@ -211,17 +212,22 @@ impl TreeNode for LogicalPlan {
                     stringified_plans,
                     schema,
                     logical_optimization_succeeded,
+                    show_statistics,
                 })
             }),
             LogicalPlan::Analyze(Analyze {
                 verbose,
                 input,
                 schema,
+                analyze_level,
+                analyze_categories,
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Analyze(Analyze {
                     verbose,
                     input,
                     schema,
+                    analyze_level,
+                    analyze_categories,
                 })
             }),
             LogicalPlan::Dml(DmlStatement {
@@ -615,6 +621,7 @@ impl LogicalPlan {
                 projected_schema,
                 filters,
                 fetch,
+                statistics_requests,
             }) => filters.map_elements(f)?.update_data(|filters| {
                 LogicalPlan::TableScan(TableScan {
                     table_name,
@@ -623,6 +630,7 @@ impl LogicalPlan {
                     projected_schema,
                     filters,
                     fetch,
+                    statistics_requests,
                 })
             }),
             LogicalPlan::Distinct(Distinct::On(DistinctOn {

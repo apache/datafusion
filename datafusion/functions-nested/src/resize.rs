@@ -203,7 +203,7 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     let mut max_extra: usize = 0;
     let mut output_values_len: usize = 0;
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
-        if array.is_null(row_index) {
+        if array.is_null(row_index) || count_array.is_null(row_index) {
             continue;
         }
         let target_count = count_array.value(row_index).to_usize().ok_or_else(|| {
@@ -308,7 +308,7 @@ where
     let mut null_builder = NullBufferBuilder::new(array.len());
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
-        if array.is_null(row_index) {
+        if array.is_null(row_index) || count_array.is_null(row_index) {
             null_builder.append_null();
             offsets.push(offsets[row_index]);
             continue;
@@ -340,4 +340,37 @@ where
         arrow::array::make_array(data),
         null_builder.finish(),
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::array_resize_inner;
+    use arrow::array::{ArrayRef, AsArray, Int64Array, ListArray};
+    use arrow::buffer::{NullBuffer, ScalarBuffer};
+    use arrow::datatypes::Int32Type;
+    use datafusion_common::Result;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_array_resize_null_size_returns_null() -> Result<()> {
+        let array: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![Some(4), Some(5)]),
+            ]));
+        let size: ArrayRef = Arc::new(Int64Array::new(
+            ScalarBuffer::from(vec![2, 1]),
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+
+        let result = array_resize_inner(&[array, size])?;
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+        ]);
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
+    }
 }

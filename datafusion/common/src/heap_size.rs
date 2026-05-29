@@ -15,6 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Estimating the heap-allocated memory owned by a value.
+//!
+//! The [`DFHeapSize`] trait reports the number of bytes a value owns on the
+//! heap, **excluding** the stack size of the value itself.
+//!
+//! Implementations need to use [`DFHeapSizeCtx`] that is pushed through every
+//! nested call. The context records which allocations have already been measured
+//! so they are only counted once.
+//!
+//! # Example
+//!
+//! ```
+//! use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
+//! use std::sync::Arc;
+//!
+//! let shared: Arc<String> = Arc::new("hello".to_string());
+//! let alias = Arc::clone(&shared);
+//!
+//! let mut ctx = DFHeapSizeCtx::default();
+//! // The shared allocation is counted once even when reached twice.
+//! let total = shared.heap_size(&mut ctx) + alias.heap_size(&mut ctx);
+//! assert_eq!(total, shared.heap_size(&mut DFHeapSizeCtx::default()));
+//! ```
+
 use crate::stats::Precision;
 use crate::{ColumnStatistics, ScalarValue, Statistics, TableReference};
 use arrow::array::{
@@ -32,12 +56,15 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-/// This is a temporary solution until <https://github.com/apache/datafusion/pull/19599> and
-/// <https://github.com/apache/arrow-rs/pull/9138> are resolved.
-/// Trait for calculating the size of various containers
+/// Trait for computing how many bytes a value has allocated on the heap.
+///
+/// Implementations need to use [`DFHeapSizeCtx`] that is pushed through every
+/// nested call. The context records which allocations have already been measured
+/// so they are only counted once.
+///
 pub trait DFHeapSize {
-    /// Return the size of any bytes allocated on the heap by this object,
-    /// including heap memory in those structures
+    /// Return the number of bytes this value has allocated on the heap,
+    /// including heap memory owned transitively by nested values.
     ///
     /// Note that the size of the type itself is not included in the result --
     /// instead, that size is added by the caller (e.g. container).
@@ -370,6 +397,7 @@ impl DFHeapSize for String {
 
 impl DFHeapSize for str {
     fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
+        // Internal accounting helper for owners like Arc<str>
         self.len()
     }
 }
@@ -521,6 +549,10 @@ impl DFHeapSize for usize {
 mod tests {
     use super::*;
 
+    fn size<T: DFHeapSize + ?Sized>(v: &T) -> usize {
+        v.heap_size(&mut DFHeapSizeCtx::default())
+    }
+
     #[test]
     fn test_heap_size_arc_avoid_double_accounting() {
         let a1 = Arc::new(vec![1, 2, 3]);
@@ -557,5 +589,173 @@ mod tests {
             + a4.heap_size(&mut ctx);
 
         assert_eq!(heap_size, heap_size_with_clones);
+    }
+
+    #[test]
+    fn test_arc_dyn() {
+        let a1: Arc<dyn DFHeapSize> = Arc::new(String::from("hello"));
+        let baseline = size(&a1);
+
+        let a2 = Arc::clone(&a1);
+        let mut ctx = DFHeapSizeCtx::default();
+        let with_clones = a1.heap_size(&mut ctx) + a2.heap_size(&mut ctx);
+        assert_eq!(baseline, with_clones);
+    }
+
+    #[test]
+    fn test_primitives() {
+        assert_eq!(size(&true), 0);
+        assert_eq!(size(&0u8), 0);
+        assert_eq!(size(&0u16), 0);
+        assert_eq!(size(&0u32), 0);
+        assert_eq!(size(&0u64), 0);
+        assert_eq!(size(&0usize), 0);
+        assert_eq!(size(&0i8), 0);
+        assert_eq!(size(&0i16), 0);
+        assert_eq!(size(&0i32), 0);
+        assert_eq!(size(&0i64), 0);
+        assert_eq!(size(&0i128), 0);
+        assert_eq!(size(&i256::ZERO), 0);
+        assert_eq!(size(&0f32), 0);
+        assert_eq!(size(&0f64), 0);
+        assert_eq!(size(&f16::from_f32(0.0)), 0);
+    }
+
+    #[test]
+    fn test_string() {
+        let mut s = String::with_capacity(32);
+        s.push_str("hello");
+        assert_eq!(size(&s), 32);
+
+        let empty = String::new();
+        assert_eq!(size(&empty), 0);
+    }
+
+    #[test]
+    fn test_owned_str() {
+        let a: Arc<str> = Arc::from("Hello");
+        assert!(size(&a) > 0);
+    }
+
+    #[test]
+    fn test_option() {
+        let some: Option<String> = Some(String::from("hi"));
+        assert_eq!(size(&some), some.as_ref().unwrap().capacity());
+
+        let none: Option<String> = None;
+        assert_eq!(size(&none), 0);
+    }
+
+    #[test]
+    fn test_vec() {
+        let v: Vec<i32> = vec![1, 2, 3];
+        assert!(size(&v) > 0);
+
+        let strings = vec![String::from("ab"), String::from("cdef")];
+        assert!(size(&strings) > 0);
+
+        let empty: Vec<i32> = Vec::new();
+        assert_eq!(size(&empty), 0);
+    }
+
+    #[test]
+    fn test_box() {
+        let b: Box<i32> = Box::new(42);
+        assert!(size(&b) > 0);
+
+        let b: Box<String> = Box::new(String::from("hello"));
+        assert!(size(&b) > 0);
+    }
+
+    #[test]
+    fn test_tuple() {
+        let zero = (1i32, 2i64);
+        assert_eq!(size(&zero), 0);
+
+        let t = (String::from("hello"), String::from("world"));
+        assert!(size(&t) > 0);
+    }
+
+    #[test]
+    fn test_hashmap() {
+        let m: HashMap<i32, i32> = HashMap::new();
+        assert_eq!(size(&m), 0);
+
+        let mut m: HashMap<String, String> = HashMap::new();
+        m.insert("key".into(), "value".into());
+
+        assert!(size(&m) > 0);
+    }
+
+    #[test]
+    fn test_precision() {
+        let exact: Precision<usize> = Precision::Exact(42);
+        assert_eq!(size(&exact), 0);
+
+        let inexact: Precision<usize> = Precision::Inexact(99);
+        assert_eq!(size(&inexact), 0);
+
+        let absent: Precision<usize> = Precision::Absent;
+        assert_eq!(size(&absent), 0);
+    }
+
+    #[test]
+    fn test_scalar_values() {
+        assert_eq!(size(&ScalarValue::Null), 0);
+        assert_eq!(size(&ScalarValue::Int32(Some(42))), 0);
+        assert_eq!(size(&ScalarValue::Boolean(Some(true))), 0);
+        assert_eq!(size(&ScalarValue::Float64(None)), 0);
+
+        let sv = ScalarValue::Utf8(Some(String::from("hello")));
+        assert_eq!(size(&sv), "hello".len());
+
+        let sv = ScalarValue::Utf8(None);
+        assert_eq!(size(&sv), 0);
+    }
+
+    #[test]
+    fn test_data_type_primitives() {
+        assert_eq!(size(&DataType::Int32), 0);
+        assert_eq!(size(&DataType::Utf8), 0);
+        assert_eq!(size(&DataType::Boolean), 0);
+        assert_eq!(size(&DataType::Null), 0);
+    }
+
+    #[test]
+    fn test_data_type_with_field() {
+        let list = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(size(&list) > 0);
+    }
+
+    #[test]
+    fn test_table_references() {
+        let tr = TableReference::bare("users");
+        // Arc<str> overhead (two usize counts) plus the bytes of "users".
+        assert!(size(&tr) > 0);
+        let tr = TableReference::full("cat", "schema", "users");
+        assert!(size(&tr) > 0);
+    }
+
+    #[test]
+    fn test_column_statistics() {
+        let mut col = ColumnStatistics::new_unknown();
+        col.max_value = Precision::Exact(ScalarValue::Utf8(Some("hello".into())));
+        col.min_value = Precision::Exact(ScalarValue::Utf8(Some("ab".into())));
+        assert_eq!(size(&col), "hello".len() + "ab".len());
+
+        let mut col = ColumnStatistics::new_unknown();
+        col.max_value = Precision::Exact(ScalarValue::Utf8(Some("hello".into())));
+        let stats = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![col],
+        };
+        assert!(size(&stats) > 0);
+    }
+
+    #[test]
+    fn test_field() {
+        let field = Field::new("temperature", DataType::Float64, true);
+        assert!(size(&field) > 0);
     }
 }

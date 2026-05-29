@@ -31,7 +31,7 @@ use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     DataFusionError,
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
-    exec_err,
+    exec_datafusion_err, exec_err,
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -178,7 +178,15 @@ where
         if let Some(b) = v {
             let bytes = b.as_ref();
             buffer.clear();
-            buffer.reserve(bytes.len() * 2);
+            let additional = bytes
+                .len()
+                .checked_mul(2)
+                .ok_or_else(|| exec_datafusion_err!("hex output size overflow"))?;
+            buffer.try_reserve(additional).map_err(|e| {
+                exec_datafusion_err!(
+                    "failed to reserve {additional} bytes for hex output: {e}"
+                )
+            })?;
             for &byte in bytes {
                 buffer.extend_from_slice(&lookup[byte as usize]);
             }
