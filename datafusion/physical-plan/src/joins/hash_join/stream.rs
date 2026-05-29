@@ -178,6 +178,7 @@ impl ProcessProbeBatchState {
 /// guarantees the coordinator saw it, so `Drop` must still cancel a `Scheduled`
 /// partition — otherwise sibling partitions can wait forever for a report that
 /// never runs.
+#[derive(Debug, PartialEq, Eq)]
 enum BuildReportState {
     NotReported,
     Scheduled,
@@ -230,7 +231,7 @@ impl BuildReportHandle {
         self.state = BuildReportState::Scheduled;
     }
 
-    fn wait_for_delivery(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<()>> {
+    fn poll_delivery(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<()>> {
         if let Some(ref mut fut) = self.waiter {
             ready!(fut.get_shared(cx))?;
             if !matches!(self.state, BuildReportState::Delivered) {
@@ -241,7 +242,7 @@ impl BuildReportHandle {
         Poll::Ready(Ok(()))
     }
 
-    fn cancel_if_pending(&mut self) {
+    fn cancel_pending(&mut self) {
         if matches!(
             self.state,
             BuildReportState::Delivered
@@ -264,11 +265,16 @@ impl BuildReportHandle {
     fn finalize(&mut self) {
         self.state = BuildReportState::Finalized;
     }
+
+    #[cfg(test)]
+    fn state(&self) -> &BuildReportState {
+        &self.state
+    }
 }
 
 impl Drop for BuildReportHandle {
     fn drop(&mut self) {
-        self.cancel_if_pending();
+        self.cancel_pending();
     }
 }
 
@@ -618,7 +624,7 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        ready!(self.build_report.wait_for_delivery(cx))?;
+        ready!(self.build_report.poll_delivery(cx))?;
         let build_side = self.build_side.try_as_ready()?;
         self.state =
             Self::state_after_build_ready(self.join_type, build_side.left_data.as_ref());
@@ -1067,6 +1073,7 @@ mod tests {
         {
             let mut handle = partitioned_handle(&acc);
             handle.schedule(empty_build_data(0));
+            assert_eq!(handle.state(), &BuildReportState::Scheduled);
         }
 
         assert_eq!(completed_partitions_for_test(&acc), 1);
@@ -1080,24 +1087,33 @@ mod tests {
             let mut handle = partitioned_handle(&acc);
             handle.schedule(empty_build_data(0));
             let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
-            assert!(matches!(
-                handle.wait_for_delivery(&mut cx),
-                Poll::Ready(Ok(()))
-            ));
+            assert!(matches!(handle.poll_delivery(&mut cx), Poll::Ready(Ok(()))));
+            assert_eq!(handle.state(), &BuildReportState::Delivered);
         }
 
         assert_eq!(completed_partitions_for_test(&acc), 1);
     }
 
     #[test]
-    fn build_report_handle_cancel_if_pending_is_idempotent() {
+    fn build_report_handle_cancel_pending_is_idempotent() {
         let acc = Arc::new(make_partitioned_accumulator_for_test(2));
         let mut handle = partitioned_handle(&acc);
         handle.schedule(empty_build_data(0));
 
-        handle.cancel_if_pending();
-        handle.cancel_if_pending();
+        handle.cancel_pending();
+        handle.cancel_pending();
 
+        assert_eq!(handle.state(), &BuildReportState::Canceled);
         assert_eq!(completed_partitions_for_test(&acc), 1);
+    }
+
+    #[test]
+    fn build_report_handle_no_accumulator_finalizes() {
+        let mut handle = BuildReportHandle::new(0, PartitionMode::Partitioned, None);
+
+        handle.schedule(empty_build_data(0));
+        handle.cancel_pending();
+
+        assert_eq!(handle.state(), &BuildReportState::Finalized);
     }
 }
