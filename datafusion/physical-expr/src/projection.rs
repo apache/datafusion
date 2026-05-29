@@ -2877,7 +2877,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn test_project_statistics_duplicate_column() -> Result<()> {
         let input_stats = get_stats();
         let col0 = input_stats.column_statistics[0].clone();
@@ -2924,7 +2923,10 @@ pub(crate) mod tests {
                 byte_size: Precision::Absent,
             }
         );
-=======
+
+        Ok(())
+    }
+
     fn test_project_statistics_missing_column_stats_are_unknown() -> Result<()> {
         let mut input_stats = get_stats();
         let input_schema = get_schema();
@@ -2971,7 +2973,6 @@ pub(crate) mod tests {
             Precision::Exact(ScalarValue::Int64(Some(21)))
         );
 
->>>>>>> b854afd3d (Some updates)
         Ok(())
     }
 

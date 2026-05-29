@@ -74,7 +74,6 @@ use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_functions::core::getfield::GetFieldFunc;
-use datafusion_physical_expr_adapter::expr_references_scalar_udf;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::file::metadata::ParquetMetaData;
@@ -490,7 +489,9 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
             return Ok(recursion);
         }
 
-        if expr_references_scalar_udf::<FileRowIndexFunc>(node) {
+        if ScalarFunctionExpr::try_downcast_func::<FileRowIndexFunc>(node.as_ref())
+            .is_some()
+        {
             self.has_unpushable_udfs = true;
             return Ok(TreeNodeRecursion::Jump);
         }
