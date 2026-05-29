@@ -587,7 +587,7 @@ mod tests {
             }
             fn higher_order_functions(
                 &self,
-            ) -> &HashMap<String, Arc<dyn datafusion_expr::HigherOrderUDF>> {
+            ) -> &HashMap<String, Arc<datafusion_expr::HigherOrderUDF>> {
                 unimplemented!()
             }
             fn aggregate_functions(

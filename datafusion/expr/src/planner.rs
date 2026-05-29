@@ -104,7 +104,7 @@ pub trait ContextProvider {
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
 
     /// Return the higher order function with a given name, if any
-    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<dyn HigherOrderUDF>>;
+    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<HigherOrderUDF>>;
 
     /// Return the aggregate function with a given name, if any
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
