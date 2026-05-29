@@ -713,14 +713,11 @@ impl PreparedParquetOpen {
         // unnecessary I/O. We decide later if it is needed to evaluate the
         // pruning predicates. Thus default to not requesting it from the
         // underlying reader.
-        let options = {
-            let mut options =
-                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
-            if let Some(schema) = self.partitioned_file.arrow_schema.as_ref() {
-                options = options.with_schema(schema.to_owned());
-            }
-            options
-        };
+        let mut options =
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
+        if let Some(schema) = self.partitioned_file.arrow_schema.as_ref() {
+            options = options.with_schema(Arc::clone(schema));
+        }
         #[cfg(feature = "parquet_encryption")]
         let mut options = options;
         #[cfg(feature = "parquet_encryption")]
