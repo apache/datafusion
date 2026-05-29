@@ -464,6 +464,17 @@ explain analyze format tree select 1;
 query error DataFusion error: Error during planning: EXPLAIN ANALYZE with FORMAT graphviz is not supported
 explain analyze format graphviz select 1;
 
+# ---- pgjson does not render statistics yet, so reject show_statistics ----
+
+statement ok
+set datafusion.explain.show_statistics = true;
+
+query error DataFusion error: Error during planning: EXPLAIN ANALYZE with FORMAT pgjson does not support show_statistics
+explain analyze format pgjson select 1;
+
+statement ok
+reset datafusion.explain.show_statistics;
+
 # --- Teardown ---
 
 statement ok

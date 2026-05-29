@@ -2067,7 +2067,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         if analyze {
             match &format {
-                ExplainFormat::Indent | ExplainFormat::PostgresJSON => {}
+                ExplainFormat::Indent => {}
+                ExplainFormat::PostgresJSON => {
+                    // The pgjson renderer does not emit statistics yet, so
+                    // reject the combination rather than silently ignoring it.
+                    if options.explain.show_statistics {
+                        return plan_err!(
+                            "EXPLAIN ANALYZE with FORMAT pgjson does not support show_statistics"
+                        );
+                    }
+                }
                 ExplainFormat::Tree | ExplainFormat::Graphviz => {
                     return plan_err!(
                         "EXPLAIN ANALYZE with FORMAT {format} is not supported"

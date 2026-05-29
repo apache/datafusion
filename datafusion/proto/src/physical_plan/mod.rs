@@ -83,7 +83,7 @@ use datafusion_physical_plan::joins::{
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
-use datafusion_physical_plan::metrics::{MetricCategory, MetricType};
+use datafusion_physical_plan::metrics::MetricCategory;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;

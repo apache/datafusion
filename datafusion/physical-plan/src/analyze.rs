@@ -347,6 +347,9 @@ fn create_output_batch(
             }
         }
         ExplainFormat::PostgresJSON => {
+            // `show_statistics` is intentionally not forwarded here: the pgjson
+            // renderer does not emit statistics, and the planner rejects the
+            // `show_statistics` + pgjson combination up front.
             type_builder.append_value("Plan with Metrics");
             let mut displayable = if verbose {
                 DisplayableExecutionPlan::with_full_metrics(input.as_ref())
@@ -355,8 +358,7 @@ fn create_output_batch(
             };
             displayable = displayable
                 .set_metric_types(metric_types.to_vec())
-                .set_metric_categories(metric_categories.map(|c| c.to_vec()))
-                .set_show_statistics(show_statistics);
+                .set_metric_categories(metric_categories.map(|c| c.to_vec()));
             if verbose {
                 displayable = displayable.set_summary(Some(total_rows), Some(duration));
             }

@@ -65,7 +65,7 @@ mod tests {
     use datafusion_physical_plan::analyze::AnalyzeExecBuilder;
     use datafusion_physical_plan::collect;
     use datafusion_physical_plan::metrics::{
-        ExecutionPlanMetricsSet, MetricType, MetricValue, MetricsSet,
+        ExecutionPlanMetricsSet, MetricValue, MetricsSet,
     };
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 

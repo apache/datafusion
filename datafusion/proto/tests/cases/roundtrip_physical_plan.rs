@@ -74,7 +74,6 @@ use datafusion::physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
