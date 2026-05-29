@@ -739,30 +739,19 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 }
 
 #[cfg(test)]
-fn partitioned_state_for_test(
-    acc: &SharedBuildAccumulator,
-) -> (Vec<PartitionStatus>, usize) {
-    let guard = acc.inner.lock();
-    let AccumulatedBuildData::Partitioned {
-        partitions,
-        completed_partitions,
-    } = &guard.data
-    else {
-        panic!("expected partitioned accumulator");
-    };
-    (partitions.clone(), *completed_partitions)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_partitioned_accumulator(num_partitions: usize) -> SharedBuildAccumulator {
-        make_partitioned_accumulator_for_test(num_partitions)
-    }
-
     fn partitioned_state(acc: &SharedBuildAccumulator) -> (Vec<PartitionStatus>, usize) {
-        partitioned_state_for_test(acc)
+        let guard = acc.inner.lock();
+        let AccumulatedBuildData::Partitioned {
+            partitions,
+            completed_partitions,
+        } = &guard.data
+        else {
+            panic!("expected partitioned accumulator");
+        };
+        (partitions.clone(), *completed_partitions)
     }
 
     // Regression guard for the build-report lifecycle fix: on `Drop`, a stream
@@ -775,7 +764,7 @@ mod tests {
     // `Reported`. This test pins that invariant.
     #[test]
     fn report_canceled_partition_is_noop_after_report() {
-        let acc = make_partitioned_accumulator(2);
+        let acc = make_partitioned_accumulator_for_test(2);
 
         {
             let mut guard = acc.inner.lock();
@@ -807,7 +796,7 @@ mod tests {
     // which is what unblocks sibling partitions waiting on the coordinator.
     #[test]
     fn report_canceled_partition_marks_pending_partition_canceled() {
-        let acc = make_partitioned_accumulator(2);
+        let acc = make_partitioned_accumulator_for_test(2);
 
         acc.report_canceled_partition(0);
         let (partitions, completed) = partitioned_state(&acc);

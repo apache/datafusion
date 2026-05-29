@@ -216,6 +216,8 @@ impl BuildReportHandle {
 
     fn schedule(&mut self, build_data: PartitionBuildData) {
         let Some(build_accumulator) = &self.build_accumulator else {
+            // Defensive no-op terminal state; current callers avoid scheduling
+            // unless an accumulator is present.
             self.finalize();
             return;
         };
@@ -1054,16 +1056,16 @@ mod tests {
         }
     }
 
+    fn partitioned_handle(acc: &Arc<SharedBuildAccumulator>) -> BuildReportHandle {
+        BuildReportHandle::new(0, PartitionMode::Partitioned, Some(Arc::clone(acc)))
+    }
+
     #[test]
     fn build_report_handle_cancels_scheduled_partition_on_drop() {
         let acc = Arc::new(make_partitioned_accumulator_for_test(2));
 
         {
-            let mut handle = BuildReportHandle::new(
-                0,
-                PartitionMode::Partitioned,
-                Some(Arc::clone(&acc)),
-            );
+            let mut handle = partitioned_handle(&acc);
             handle.schedule(empty_build_data(0));
         }
 
@@ -1075,14 +1077,9 @@ mod tests {
         let acc = Arc::new(make_partitioned_accumulator_for_test(1));
 
         {
-            let mut handle = BuildReportHandle::new(
-                0,
-                PartitionMode::Partitioned,
-                Some(Arc::clone(&acc)),
-            );
+            let mut handle = partitioned_handle(&acc);
             handle.schedule(empty_build_data(0));
-            let waker = futures::task::noop_waker_ref();
-            let mut cx = std::task::Context::from_waker(waker);
+            let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
             assert!(matches!(
                 handle.wait_for_delivery(&mut cx),
                 Poll::Ready(Ok(()))
@@ -1095,8 +1092,7 @@ mod tests {
     #[test]
     fn build_report_handle_cancel_if_pending_is_idempotent() {
         let acc = Arc::new(make_partitioned_accumulator_for_test(2));
-        let mut handle =
-            BuildReportHandle::new(0, PartitionMode::Partitioned, Some(Arc::clone(&acc)));
+        let mut handle = partitioned_handle(&acc);
         handle.schedule(empty_build_data(0));
 
         handle.cancel_if_pending();
