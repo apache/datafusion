@@ -819,8 +819,7 @@ from values
 NULL
 
 # There is no variant of `power` that accepts (Decimal, Decimal); type coercion
-# will cast the exponent to `Float64`, and `power(decimal, float)` returns
-# `Float64`.
+# casts both arguments to `Float64`, so the result is `Float64`.
 query RT rowsort
 select
   power(base::decimal(38, 0), exponent::decimal(38, 0)),
