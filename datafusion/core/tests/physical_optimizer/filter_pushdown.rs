@@ -3386,9 +3386,7 @@ fn test_filter_pushdown_through_sort_with_projection() {
 /// completed stage, so this would compound indefinitely without the guard.
 #[test]
 fn post_phase_is_idempotent_on_hash_join() {
-    use crate::physical_optimizer::test_utils::{
-        hash_join_exec, parquet_exec, schema,
-    };
+    use crate::physical_optimizer::test_utils::{hash_join_exec, parquet_exec, schema};
     use datafusion_common::JoinType;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
