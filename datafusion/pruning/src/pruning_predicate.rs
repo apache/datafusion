@@ -41,6 +41,7 @@ use datafusion_common::{
     ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
 };
+use datafusion_expr_common::casts::try_cast_literal_to_type;
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
@@ -1816,6 +1817,13 @@ fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
     None
 }
 
+/// Wrap a string in a `Literal` whose `ScalarValue` matches `target_type`
+fn string_literal_as(value: String, target_type: &DataType) -> Arc<dyn PhysicalExpr> {
+    let utf8 = ScalarValue::Utf8(Some(value));
+    let scalar = try_cast_literal_to_type(&utf8, target_type).unwrap_or(utf8);
+    Arc::new(phys_expr::Literal::new(scalar))
+}
+
 /// Convert `column LIKE literal` where P is a constant prefix of the literal
 /// to a range check on the column: `P <= column && column < P'`, where P' is the
 /// lowest string after all P* strings.
@@ -1835,6 +1843,8 @@ fn build_like_match(
     let min_column_expr = expr_builder.min_column_expr().ok()?;
     let max_column_expr = expr_builder.max_column_expr().ok()?;
     let scalar_expr = expr_builder.scalar_expr();
+    // Synthesized bounds must match the column type (e.g. `Utf8View`).
+    let target_type = expr_builder.field.data_type();
     // check that the scalar is a string literal
     let s = extract_string_literal(scalar_expr)?;
     // ANSI SQL specifies two wildcards: % and _. % matches zero or more characters, _ matches exactly one character.
@@ -1846,18 +1856,12 @@ fn build_like_match(
     }
     let (lower_bound, upper_bound) = if has_wildcard {
         let incremented_prefix = increment_utf8(&decoded_prefix)?;
-        let lower_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            decoded_prefix,
-        ))));
-        let upper_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            incremented_prefix,
-        ))));
+        let lower_bound_lit = string_literal_as(decoded_prefix, target_type);
+        let upper_bound_lit = string_literal_as(incremented_prefix, target_type);
         (lower_bound_lit, upper_bound_lit)
     } else {
         // the like expression is a literal and can be converted into a comparison
-        let bound = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            decoded_prefix,
-        ))));
+        let bound = string_literal_as(decoded_prefix, target_type);
         (Arc::clone(&bound), bound)
     };
     let lower_bound_expr = Arc::new(phys_expr::BinaryExpr::new(

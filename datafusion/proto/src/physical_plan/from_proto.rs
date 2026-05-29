@@ -282,7 +282,7 @@ pub fn parse_physical_expr_with_converter(
         // their own `ExprType` variant — see #21835. This match only routes
         // to the right constructor.
         ExprType::Column(_) => Column::try_from_proto(proto, &decode_ctx)?,
-        ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
+        ExprType::UnknownColumn(_) => UnKnownColumn::try_from_proto(proto, &decode_ctx)?,
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
         ExprType::BinaryExpr(_) => BinaryExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::AggregateExpr(_) => {
@@ -307,15 +307,7 @@ pub fn parse_physical_expr_with_converter(
                 proto_converter,
             )?))
         }
-        ExprType::IsNotNullExpr(e) => {
-            Arc::new(IsNotNullExpr::new(parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?))
-        }
+        ExprType::IsNotNullExpr(_) => IsNotNullExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,

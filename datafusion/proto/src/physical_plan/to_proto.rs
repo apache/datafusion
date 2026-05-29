@@ -36,8 +36,7 @@ use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::{
-    CaseExpr, DynamicFilterPhysicalExpr, IsNotNullExpr, IsNullExpr, Literal, TryCastExpr,
-    UnKnownColumn,
+    CaseExpr, DynamicFilterPhysicalExpr, IsNullExpr, Literal, TryCastExpr,
 };
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
@@ -303,16 +302,7 @@ pub fn serialize_physical_expr_with_converter(
         return Ok(node);
     }
 
-    if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
-                protobuf::UnknownColumn {
-                    name: expr.name().to_string(),
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<CaseExpr>() {
+    if let Some(expr) = expr.downcast_ref::<CaseExpr>() {
         Ok(protobuf::PhysicalExprNode {
             expr_id,
             expr_type: Some(
@@ -360,17 +350,6 @@ pub fn serialize_physical_expr_with_converter(
             expr_id,
             expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
                 Box::new(protobuf::PhysicalIsNull {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.arg(), codec)?,
-                    )),
-                }),
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<IsNotNullExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::IsNotNullExpr(
-                Box::new(protobuf::PhysicalIsNotNull {
                     expr: Some(Box::new(
                         proto_converter.physical_expr_to_proto(expr.arg(), codec)?,
                     )),

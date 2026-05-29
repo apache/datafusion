@@ -224,12 +224,21 @@ message ValuesNode {
 message AnalyzeNode {
   LogicalPlanNode input = 1;
   bool verbose = 2;
+  // Statement-level override for `datafusion.explain.analyze_level`.
+  // Absent means "fall back to session config".
+  optional datafusion_common.MetricType analyze_level = 3;
+  // Statement-level override for `datafusion.explain.analyze_categories`.
+  // Absent means "fall back to session config".
+  optional datafusion_common.ExplainAnalyzeCategoriesNode analyze_categories = 4;
 }
 
 message ExplainNode {
   LogicalPlanNode input = 1;
   bool verbose = 2;
   datafusion_common.ExplainFormat format = 3;
+  // Statement-level override for `datafusion.explain.show_statistics`.
+  // Absent means "fall back to session config".
+  optional bool show_statistics = 4;
 }
 
 message AggregateNode {
