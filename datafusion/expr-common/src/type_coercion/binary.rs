@@ -1632,16 +1632,8 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
             };
             binary_coercion(lhs_type, rhs_type)
         }
-        // Deny other mixed binary + string combinations
-        (
-            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
-            Utf8 | LargeUtf8 | Utf8View,
-        ) => None,
-        (
-            Utf8 | LargeUtf8 | Utf8View,
-            Binary | LargeBinary | BinaryView | FixedSizeBinary(_),
-        ) => None,
-        // Predicate-based coercion rules are following
+        // Predicate-based coercion rules are following,
+        // including mixed binary + string combinations
         (Utf8View, from_type) | (from_type, Utf8View) => {
             string_concat_internal_coercion(from_type, &Utf8View)
         }
