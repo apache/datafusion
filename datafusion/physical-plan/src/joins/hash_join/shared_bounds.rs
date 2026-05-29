@@ -700,42 +700,69 @@ impl fmt::Debug for SharedBuildAccumulator {
 }
 
 #[cfg(test)]
+pub(super) fn make_partitioned_accumulator_for_test(
+    num_partitions: usize,
+) -> SharedBuildAccumulator {
+    let probe_schema = Arc::new(Schema::new(vec![Field::new(
+        "probe_key",
+        DataType::Int32,
+        false,
+    )]));
+    let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+    SharedBuildAccumulator {
+        inner: Mutex::new(AccumulatorState {
+            data: AccumulatedBuildData::Partitioned {
+                partitions: vec![PartitionStatus::Pending; num_partitions],
+                completed_partitions: 0,
+            },
+            completion: CompletionState::Pending,
+        }),
+        completion_notify: Notify::new(),
+        dynamic_filter,
+        on_right: vec![],
+        repartition_random_state: SeededRandomState::with_seed(1),
+        probe_schema,
+    }
+}
+
+#[cfg(test)]
+pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usize {
+    let guard = acc.inner.lock();
+    let AccumulatedBuildData::Partitioned {
+        completed_partitions,
+        ..
+    } = &guard.data
+    else {
+        panic!("expected partitioned accumulator");
+    };
+    *completed_partitions
+}
+
+#[cfg(test)]
+fn partitioned_state_for_test(
+    acc: &SharedBuildAccumulator,
+) -> (Vec<PartitionStatus>, usize) {
+    let guard = acc.inner.lock();
+    let AccumulatedBuildData::Partitioned {
+        partitions,
+        completed_partitions,
+    } = &guard.data
+    else {
+        panic!("expected partitioned accumulator");
+    };
+    (partitions.clone(), *completed_partitions)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn make_partitioned_accumulator(num_partitions: usize) -> SharedBuildAccumulator {
-        let probe_schema = Arc::new(Schema::new(vec![Field::new(
-            "probe_key",
-            DataType::Int32,
-            false,
-        )]));
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
-        SharedBuildAccumulator {
-            inner: Mutex::new(AccumulatorState {
-                data: AccumulatedBuildData::Partitioned {
-                    partitions: vec![PartitionStatus::Pending; num_partitions],
-                    completed_partitions: 0,
-                },
-                completion: CompletionState::Pending,
-            }),
-            completion_notify: Notify::new(),
-            dynamic_filter,
-            on_right: vec![],
-            repartition_random_state: SeededRandomState::with_seed(1),
-            probe_schema,
-        }
+        make_partitioned_accumulator_for_test(num_partitions)
     }
 
     fn partitioned_state(acc: &SharedBuildAccumulator) -> (Vec<PartitionStatus>, usize) {
-        let guard = acc.inner.lock();
-        let AccumulatedBuildData::Partitioned {
-            partitions,
-            completed_partitions,
-        } = &guard.data
-        else {
-            panic!("expected partitioned accumulator");
-        };
-        (partitions.clone(), *completed_partitions)
+        partitioned_state_for_test(acc)
     }
 
     // Regression guard for the build-report lifecycle fix: on `Drop`, a stream
