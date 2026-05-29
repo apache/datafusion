@@ -95,16 +95,16 @@ impl ScalarUDFImpl for SparkPow {
         // ── Scalar × Scalar fast path ────────────────────────────────────────
         // Pattern-match on the slice to avoid any ownership issues.
         if let [
-            ColumnarValue::Scalar(ScalarValue::Float64(b)),
-            ColumnarValue::Scalar(ScalarValue::Float64(e)),
+            ColumnarValue::Scalar(ScalarValue::Float64(base)),
+            ColumnarValue::Scalar(ScalarValue::Float64(exp)),
         ] = args.args.as_slice()
         {
-            // b and e are &Option<f64>; Option<f64> is Copy.
-            let result = (*b).zip(*e).map(|(b, e)| {
-                if b == 0.0 && e < 0.0 {
+            // base and exp are &Option<f64>; Option<f64> is Copy.
+            let result = (*base).zip(*exp).map(|(base, exp)| {
+                if base == 0.0 && exp < 0.0 {
                     f64::INFINITY
                 } else {
-                    b.powf(e)
+                    base.powf(exp)
                 }
             });
             return Ok(ColumnarValue::Scalar(ScalarValue::Float64(result)));
@@ -127,16 +127,16 @@ impl ScalarUDFImpl for SparkPow {
 
         // Spark: 0^negative = +Infinity (covers both 0.0 and -0.0)
         // IEEE 754: 0.0^-1.0 = +Infinity, -0.0^-1.0 = -Infinity
-        // Thus we need an explicit guard for b == 0.0 to ensure +Infinity.
+        // Thus we need an explicit guard for base == 0.0 to ensure +Infinity.
         let result: Float64Array = base_f64
             .iter()
             .zip(exp_f64.iter())
-            .map(|(b, e)| match (b, e) {
-                (Some(b), Some(e)) => {
-                    if b == 0.0 && e < 0.0 {
+            .map(|(base, exp)| match (base, exp) {
+                (Some(base), Some(exp)) => {
+                    if base == 0.0 && exp < 0.0 {
                         Some(f64::INFINITY)
                     } else {
-                        Some(b.powf(e))
+                        Some(base.powf(exp))
                     }
                 }
                 _ => None,
