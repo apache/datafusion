@@ -875,62 +875,6 @@ const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 /// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
 /// 2. Handles both scalar values and array values
 /// 3. For arrays, uses optimized bit counting techniques for boolean arrays
-/// Returns true if any bit in the first `len` positions is set.
-/// Early-exits on the first non-zero word, avoiding a full popcount scan.
-fn any_bit_set(values: &arrow::buffer::BooleanBuffer, len: usize) -> bool {
-    let bytes = values.inner().as_slice();
-    let full_words = len / 64;
-    for i in 0..full_words {
-        let word = u64::from_le_bytes(
-            bytes[i * 8..(i + 1) * 8].try_into().unwrap(),
-        );
-        if word != 0 {
-            return true;
-        }
-    }
-    let remaining = len % 64;
-    if remaining > 0 {
-        let byte_offset = full_words * 8;
-        let mut word = 0u64;
-        for j in 0..((remaining + 7) / 8).min(8) {
-            word |= (bytes[byte_offset + j] as u64) << (j * 8);
-        }
-        let mask = (1u64 << remaining) - 1;
-        if (word & mask) != 0 {
-            return true;
-        }
-    }
-    false
-}
-
-/// Returns true if any bit in the first `len` positions is unset (0).
-/// Early-exits on the first word that is not all-ones.
-fn any_bit_unset(values: &arrow::buffer::BooleanBuffer, len: usize) -> bool {
-    let bytes = values.inner().as_slice();
-    let full_words = len / 64;
-    for i in 0..full_words {
-        let word = u64::from_le_bytes(
-            bytes[i * 8..(i + 1) * 8].try_into().unwrap(),
-        );
-        if word != u64::MAX {
-            return true;
-        }
-    }
-    let remaining = len % 64;
-    if remaining > 0 {
-        let byte_offset = full_words * 8;
-        let mut word = 0u64;
-        for j in 0..((remaining + 7) / 8).min(8) {
-            word |= (bytes[byte_offset + j] as u64) << (j * 8);
-        }
-        let mask = (1u64 << remaining) - 1;
-        if (word & mask) != mask {
-            return true;
-        }
-    }
-    false
-}
-
 fn check_short_circuit<'a>(
     lhs: &'a ColumnarValue,
     op: &Operator,
@@ -961,32 +905,31 @@ fn check_short_circuit<'a>(
                     return ShortCircuitStrategy::None;
                 }
 
-                let values = bool_array.values();
                 if is_and {
                     // For AND, prioritize checking for all-false (short circuit case)
-                    // Early exit: check if any bit is set without full popcount
-                    if !any_bit_set(values, len) {
+                    if !bool_array.has_true() {
                         return ShortCircuitStrategy::ReturnLeft;
                     }
 
                     // If no false values, then all must be true
-                    if !any_bit_unset(values, len) {
+                    if !bool_array.has_false() {
                         return ShortCircuitStrategy::ReturnRight;
                     }
 
                     // Need exact count for pre-selection threshold
+                    let values = bool_array.values();
                     let true_count = values.count_set_bits();
                     if true_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
                         return ShortCircuitStrategy::PreSelection(bool_array);
                     }
                 } else {
                     // For OR, prioritize checking for all-true (short circuit case)
-                    if !any_bit_unset(values, len) {
+                    if !bool_array.has_false() {
                         return ShortCircuitStrategy::ReturnLeft;
                     }
 
                     // If no true values, then all must be false
-                    if !any_bit_set(values, len) {
+                    if !bool_array.has_true() {
                         return ShortCircuitStrategy::ReturnRight;
                     }
                 }
