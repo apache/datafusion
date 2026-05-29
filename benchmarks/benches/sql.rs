@@ -82,7 +82,7 @@ struct EnvParser {
     subgroup: Option<String>,
 
     #[arg(env = "BENCH_QUERY")]
-    query: Option<i32>,
+    query: Option<String>,
 }
 
 pub fn sql(c: &mut Criterion) {
