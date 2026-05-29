@@ -976,11 +976,13 @@ pub mod parquet_options {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CdcOptions {
-    #[prost(uint64, tag = "1")]
-    pub min_chunk_size: u64,
+    #[prost(bool, tag = "1")]
+    pub enabled: bool,
     #[prost(uint64, tag = "2")]
+    pub min_chunk_size: u64,
+    #[prost(uint64, tag = "3")]
     pub max_chunk_size: u64,
-    #[prost(int32, tag = "3")]
+    #[prost(int32, tag = "4")]
     pub norm_level: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

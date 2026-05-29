@@ -919,6 +919,9 @@ impl serde::Serialize for CdcOptions {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
+        if self.enabled {
+            len += 1;
+        }
         if self.min_chunk_size != 0 {
             len += 1;
         }
@@ -929,6 +932,9 @@ impl serde::Serialize for CdcOptions {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CdcOptions", len)?;
+        if self.enabled {
+            struct_ser.serialize_field("enabled", &self.enabled)?;
+        }
         if self.min_chunk_size != 0 {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
@@ -952,6 +958,7 @@ impl<'de> serde::Deserialize<'de> for CdcOptions {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "enabled",
             "min_chunk_size",
             "minChunkSize",
             "max_chunk_size",
@@ -962,6 +969,7 @@ impl<'de> serde::Deserialize<'de> for CdcOptions {
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            Enabled,
             MinChunkSize,
             MaxChunkSize,
             NormLevel,
@@ -986,6 +994,7 @@ impl<'de> serde::Deserialize<'de> for CdcOptions {
                         E: serde::de::Error,
                     {
                         match value {
+                            "enabled" => Ok(GeneratedField::Enabled),
                             "minChunkSize" | "min_chunk_size" => Ok(GeneratedField::MinChunkSize),
                             "maxChunkSize" | "max_chunk_size" => Ok(GeneratedField::MaxChunkSize),
                             "normLevel" | "norm_level" => Ok(GeneratedField::NormLevel),
@@ -1008,11 +1017,18 @@ impl<'de> serde::Deserialize<'de> for CdcOptions {
                 where
                     V: serde::de::MapAccess<'de>,
             {
+                let mut enabled__ = None;
                 let mut min_chunk_size__ = None;
                 let mut max_chunk_size__ = None;
                 let mut norm_level__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
+                        GeneratedField::Enabled => {
+                            if enabled__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("enabled"));
+                            }
+                            enabled__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::MinChunkSize => {
                             if min_chunk_size__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("minChunkSize"));
@@ -1040,6 +1056,7 @@ impl<'de> serde::Deserialize<'de> for CdcOptions {
                     }
                 }
                 Ok(CdcOptions {
+                    enabled: enabled__.unwrap_or_default(),
                     min_chunk_size: min_chunk_size__.unwrap_or_default(),
                     max_chunk_size: max_chunk_size__.unwrap_or_default(),
                     norm_level: norm_level__.unwrap_or_default(),
