@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -31,7 +30,6 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
-    Operator,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, ExprWithAliasAndOrderBy, Ident, LimitClause, Offset, OffsetRows,
@@ -118,15 +116,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Apply CTE materialization to the plan.
     ///
-    /// For each CTE that should be materialized, this replaces SubqueryAlias
-    /// references with MaterializedCteReader nodes and wraps the plan in
-    /// MaterializedCteProducer nodes.
+    /// Materialize ALL multi-referenced CTEs upfront (DuckDB-style).
+    ///
+    /// The SQL planner wraps every multi-ref CTE in MaterializedCteProducer/Reader
+    /// nodes. The `InlineCte` optimizer rule then selectively inlines ones where
+    /// materialization is not beneficial (cheap CTEs, CTEs under LIMIT, etc.).
+    ///
+    /// This approach ensures:
+    /// 1. The optimizer has full context (explicit CTE nodes in the plan)
+    /// 2. The inlining decision can be revisited after other optimizer passes
+    /// 3. DataFrame API users benefit via the optimizer rule
     fn apply_cte_materialization(
         &self,
         plan: LogicalPlan,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // Check if materialized CTEs are enabled
         if !self
             .context_provider
             .options()
@@ -136,41 +140,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(plan);
         }
 
-        // Collect CTE names that should be materialized
         let cte_names: Vec<String> = planner_context.cte_names().cloned().collect();
-        let mut ctes_to_materialize: Vec<(String, LogicalPlan)> = Vec::new();
+        let mut ctes_to_materialize: Vec<(String, LogicalPlan, bool)> = Vec::new();
 
         for cte_name in &cte_names {
-            // Skip recursive CTEs (they have their own execution mechanism)
             if planner_context.is_recursive_cte(cte_name) {
                 continue;
             }
-
-            // Skip CTEs explicitly marked NOT MATERIALIZED
             if planner_context.is_not_materialized_cte(cte_name) {
                 continue;
             }
 
-            // Count references in the plan tree
             let ref_count = count_cte_references(&plan, cte_name);
-            // Determine if we should materialize:
-            // 1. Explicitly marked MATERIALIZED, OR
-            // 2. CTEs referenced more than once.
-            let should_materialize = planner_context.is_materialized_cte(cte_name)
-                || (ref_count > 1 && {
-                    let cte_plan = planner_context.get_cte(cte_name);
-                    cte_plan.is_some_and(|cte_plan| {
-                        should_materialize_multi_reference_cte(
-                            cte_plan, cte_name, &plan, ref_count,
-                        )
-                    })
-                });
+            let force = planner_context.is_materialized_cte(cte_name);
 
-            if should_materialize
-                && ref_count > 0
+            // Materialize all multi-ref CTEs and explicitly MATERIALIZED CTEs.
+            // The optimizer's InlineCte rule will inline ones that don't benefit.
+            if (ref_count > 1 || force)
                 && let Some(cte_plan) = planner_context.get_cte(cte_name)
             {
-                ctes_to_materialize.push((cte_name.clone(), cte_plan.clone()));
+                ctes_to_materialize.push((cte_name.clone(), cte_plan.clone(), force));
             }
         }
 
@@ -178,9 +167,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(plan);
         }
 
-        // Sort CTEs by dependency order: CTEs that depend on other CTEs
-        // should be processed first (wrapped innermost = executed last)
-        ctes_to_materialize.sort_by(|(name_a, _), (name_b, _)| {
+        // Sort by dependency order
+        ctes_to_materialize.sort_by(|(name_a, _, _), (name_b, _, _)| {
             let a_deps_on_b = planner_context
                 .get_cte(name_a)
                 .is_some_and(|p| plan_references_cte(p, name_b));
@@ -196,19 +184,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         });
 
-        // Apply materialization: replace references and wrap plan
         let mut result_plan = plan;
-        for (cte_name, cte_plan) in ctes_to_materialize {
-            // Replace all SubqueryAlias references to this CTE with readers
+        for (cte_name, cte_plan, force) in ctes_to_materialize {
             result_plan =
                 replace_cte_with_reader(result_plan, &cte_name, cte_plan.schema())?;
 
-            // Wrap the plan in a producer
             let producer = MaterializedCteProducer {
                 name: cte_name.clone(),
                 cte_plan: Arc::new(cte_plan),
                 continuation: Arc::new(result_plan.clone()),
                 schema: Arc::clone(result_plan.schema()),
+                force_materialized: force,
             };
             result_plan = LogicalPlan::Extension(Extension {
                 node: Arc::new(producer),
@@ -495,288 +481,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => Ok(plan),
         }
     }
-}
-
-/// Decide whether to materialize a CTE referenced more than once.
-///
-/// Multi-reference CTEs stay materialized by default, but cheap CTEs and CTEs
-/// consumed below a top-level limit are left inline. Aggregate/distinct/window
-/// CTEs and complex CTEs with many base table references stay materialized.
-fn should_materialize_multi_reference_cte(
-    cte_plan: &LogicalPlan,
-    cte_name: &str,
-    continuation_plan: &LogicalPlan,
-    ref_count: usize,
-) -> bool {
-    if ref_count <= 1 || is_cheap_to_inline(cte_plan) {
-        return false;
-    }
-
-    if ends_in_aggregate_distinct_or_window(cte_plan) {
-        if consumers_apply_disjoint_group_key_filters(
-            cte_name,
-            continuation_plan,
-            ref_count,
-        ) {
-            return false;
-        }
-        return true;
-    }
-
-    let base_table_references = count_base_table_references(cte_plan);
-    if base_table_references > 2 && base_table_references * ref_count > 10 {
-        return true;
-    }
-
-    !contains_limit_on_single_child_path(continuation_plan)
-}
-
-fn ends_in_aggregate_distinct_or_window(plan: &LogicalPlan) -> bool {
-    match plan {
-        LogicalPlan::Aggregate(_) => true,
-        LogicalPlan::Distinct(_) => true,
-        LogicalPlan::Window(_) => true,
-        _ => {
-            let inputs = plan.inputs();
-            inputs.len() == 1 && ends_in_aggregate_distinct_or_window(inputs[0])
-        }
-    }
-}
-
-/// Detects Q39-style patterns where each CTE reference is filtered on a different
-/// literal value of a group-by key. In this case inlining is better because the
-/// optimizer can push the filter through the aggregate, specializing each copy.
-fn consumers_apply_disjoint_group_key_filters(
-    cte_name: &str,
-    continuation_plan: &LogicalPlan,
-    ref_count: usize,
-) -> bool {
-    let per_ref_filters = collect_per_reference_filters(continuation_plan, cte_name);
-    if per_ref_filters.len() != ref_count || per_ref_filters.is_empty() {
-        return false;
-    }
-
-    // Collect all column names that appear in any reference's filters.
-    let all_col_names: HashSet<&str> = per_ref_filters
-        .iter()
-        .flat_map(|filters| filters.iter().map(|(col, _)| col.as_str()))
-        .collect();
-
-    // For each column, check if every reference applies an equality filter on it
-    // with a distinct literal value per reference.
-    for col_name in all_col_names {
-        let mut seen_values: HashSet<&str> = HashSet::new();
-        let mut all_have_filter = true;
-        for filters in &per_ref_filters {
-            let mut found = false;
-            for (filter_col, filter_val) in filters {
-                if filter_col == col_name {
-                    seen_values.insert(filter_val.as_str());
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                all_have_filter = false;
-                break;
-            }
-        }
-        if all_have_filter && seen_values.len() == ref_count {
-            return true;
-        }
-    }
-
-    false
-}
-
-/// For each CTE reference in the continuation plan, collect equality filter
-/// conditions (column_name, literal_value) that are attributed to that specific
-/// reference. Uses column qualifiers to match filters to the correct reference.
-fn collect_per_reference_filters(
-    plan: &LogicalPlan,
-    cte_name: &str,
-) -> Vec<Vec<(String, String)>> {
-    // Step 1: Find all CTE reference aliases and any filters on the path.
-    // A CTE reference is SubqueryAlias(cte_name) wrapped by an outer alias.
-    // Example: SubqueryAlias("inv1") → SubqueryAlias("inv") → [CTE body]
-    let mut ref_aliases: Vec<String> = Vec::new();
-    collect_cte_ref_aliases(plan, cte_name, &mut ref_aliases);
-
-    if ref_aliases.is_empty() {
-        return Vec::new();
-    }
-
-    // Step 2: Collect all equality filters from the plan (before the join).
-    // These are qualified like "inv1.d_moy = 4"
-    let mut all_filters: Vec<(Option<String>, String, String)> = Vec::new();
-    collect_all_equality_filters(plan, cte_name, &mut all_filters);
-
-    // Step 3: For each reference alias, find the filters that target it.
-    let mut results = Vec::new();
-    for alias in &ref_aliases {
-        let mut ref_filters = Vec::new();
-        for (qualifier, col_name, value) in &all_filters {
-            if qualifier.as_deref() == Some(alias.as_str()) {
-                ref_filters.push((col_name.clone(), value.clone()));
-            }
-        }
-        results.push(ref_filters);
-    }
-
-    results
-}
-
-/// Find the outer aliases wrapping each CTE reference.
-/// For "FROM inv inv1, inv inv2", finds ["inv1", "inv2"]
-fn collect_cte_ref_aliases(
-    plan: &LogicalPlan,
-    cte_name: &str,
-    aliases: &mut Vec<String>,
-) {
-    if let LogicalPlan::SubqueryAlias(outer_alias) = plan
-        && outer_alias.alias.table() != cte_name
-        && let LogicalPlan::SubqueryAlias(inner) = outer_alias.input.as_ref()
-        && inner.alias.table() == cte_name
-    {
-        aliases.push(outer_alias.alias.table().to_string());
-        return;
-    }
-    for input in plan.inputs() {
-        collect_cte_ref_aliases(input, cte_name, aliases);
-    }
-}
-
-/// Collect equality conditions from Filter nodes, extracting (qualifier, column_name, value).
-/// Also handles simple constant arithmetic (like 4+1).
-fn collect_all_equality_filters(
-    plan: &LogicalPlan,
-    cte_name: &str,
-    out: &mut Vec<(Option<String>, String, String)>,
-) {
-    if let LogicalPlan::SubqueryAlias(alias) = plan
-        && alias.alias.table() == cte_name
-    {
-        return;
-    }
-
-    if let LogicalPlan::Filter(filter) = plan {
-        extract_qualified_equality_conditions(&filter.predicate, out);
-    }
-
-    if let LogicalPlan::Join(join) = plan
-        && let Some(filter) = &join.filter
-    {
-        extract_qualified_equality_conditions(filter, out);
-    }
-
-    for input in plan.inputs() {
-        collect_all_equality_filters(input, cte_name, out);
-    }
-}
-
-fn extract_qualified_equality_conditions(
-    expr: &Expr,
-    out: &mut Vec<(Option<String>, String, String)>,
-) {
-    match expr {
-        Expr::BinaryExpr(binary) if binary.op == Operator::Eq => {
-            match (binary.left.as_ref(), binary.right.as_ref()) {
-                (Expr::Column(col), rhs) => {
-                    if let Some(val) = try_eval_constant(rhs) {
-                        out.push((
-                            col.relation.as_ref().map(|r| r.table().to_string()),
-                            col.name().to_string(),
-                            val,
-                        ));
-                    }
-                }
-                (lhs, Expr::Column(col)) => {
-                    if let Some(val) = try_eval_constant(lhs) {
-                        out.push((
-                            col.relation.as_ref().map(|r| r.table().to_string()),
-                            col.name().to_string(),
-                            val,
-                        ));
-                    }
-                }
-                _ => {}
-            }
-        }
-        Expr::BinaryExpr(binary) if binary.op == Operator::And => {
-            extract_qualified_equality_conditions(&binary.left, out);
-            extract_qualified_equality_conditions(&binary.right, out);
-        }
-        _ => {}
-    }
-}
-
-/// Try to evaluate an expression as a constant value (literal or simple arithmetic).
-fn try_eval_constant(expr: &Expr) -> Option<String> {
-    match expr {
-        Expr::Literal(val, _) => Some(val.to_string()),
-        Expr::BinaryExpr(binary) => {
-            let left = try_eval_constant_i64(&binary.left)?;
-            let right = try_eval_constant_i64(&binary.right)?;
-            let result = match binary.op {
-                Operator::Plus => left.checked_add(right)?,
-                Operator::Minus => left.checked_sub(right)?,
-                Operator::Multiply => left.checked_mul(right)?,
-                _ => return None,
-            };
-            Some(result.to_string())
-        }
-        _ => None,
-    }
-}
-
-fn try_eval_constant_i64(expr: &Expr) -> Option<i64> {
-    match expr {
-        Expr::Literal(val, _) => {
-            use datafusion_common::ScalarValue;
-            match val {
-                ScalarValue::Int8(Some(v)) => Some(*v as i64),
-                ScalarValue::Int16(Some(v)) => Some(*v as i64),
-                ScalarValue::Int32(Some(v)) => Some(*v as i64),
-                ScalarValue::Int64(Some(v)) => Some(*v),
-                ScalarValue::UInt8(Some(v)) => Some(*v as i64),
-                ScalarValue::UInt16(Some(v)) => Some(*v as i64),
-                ScalarValue::UInt32(Some(v)) => Some(*v as i64),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-fn is_cheap_to_inline(plan: &LogicalPlan) -> bool {
-    match plan {
-        LogicalPlan::EmptyRelation(_) => true,
-        _ => {
-            let inputs = plan.inputs();
-            inputs.len() == 1 && is_cheap_to_inline(inputs[0])
-        }
-    }
-}
-
-fn count_base_table_references(plan: &LogicalPlan) -> usize {
-    let mut count = 0;
-    plan.apply(|node| {
-        if let LogicalPlan::TableScan(_) = node {
-            count += 1;
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })
-    .unwrap();
-    count
-}
-
-fn contains_limit_on_single_child_path(plan: &LogicalPlan) -> bool {
-    if matches!(plan, LogicalPlan::Limit(_)) {
-        return true;
-    }
-
-    let inputs = plan.inputs();
-    inputs.len() == 1 && contains_limit_on_single_child_path(inputs[0])
 }
 
 /// Check if a plan contains a SubqueryAlias reference to a given CTE name.

@@ -44,6 +44,9 @@ pub struct MaterializedCteProducer {
     pub continuation: Arc<LogicalPlan>,
     /// The output schema (same as continuation's schema)
     pub schema: DFSchemaRef,
+    /// If true, the CTE was explicitly marked MATERIALIZED and must not be
+    /// inlined by the optimizer.
+    pub force_materialized: bool,
 }
 
 impl PartialEq for MaterializedCteProducer {
@@ -91,6 +94,21 @@ impl UserDefinedLogicalNodeCore for MaterializedCteProducer {
         get_all_columns_from_schema(self.schema())
     }
 
+    fn necessary_children_exprs(
+        &self,
+        output_columns: &[usize],
+    ) -> Option<Vec<Vec<usize>>> {
+        // Child 0 (cte_plan): need all columns because multiple readers in the
+        // continuation may reference different subsets. We cannot safely prune
+        // without inspecting every reader.
+        let cte_all_columns: Vec<usize> =
+            (0..self.cte_plan.schema().fields().len()).collect();
+        // Child 1 (continuation): pass through the requested output columns
+        // since the producer's output schema equals the continuation's output schema.
+        let continuation_columns = output_columns.to_vec();
+        Some(vec![cte_all_columns, continuation_columns])
+    }
+
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MaterializedCteProducer: name={}", self.name)
     }
@@ -131,6 +149,7 @@ impl UserDefinedLogicalNodeCore for MaterializedCteProducer {
             cte_plan: Arc::new(cte_plan),
             schema: Arc::clone(continuation.schema()),
             continuation: Arc::new(continuation),
+            force_materialized: self.force_materialized,
         })
     }
 }
