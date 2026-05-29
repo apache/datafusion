@@ -42,7 +42,7 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use futures::TryStreamExt;
 
 /// A shared cache that stores the materialized CTE results.
-/// The cache uses [`OnceAsync`] to ensure the CTE is only computed once,
+/// The cache uses `OnceAsync` to ensure the CTE is only computed once,
 /// while allowing multiple consumers to await the result concurrently.
 #[derive(Debug)]
 pub struct MaterializedCteCache {
