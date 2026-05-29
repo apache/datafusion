@@ -231,17 +231,12 @@ impl BuildReportHandle {
     fn wait_for_delivery(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<()>> {
         if let Some(ref mut fut) = self.waiter {
             ready!(fut.get_shared(cx))?;
-            self.mark_delivered();
+            if !matches!(self.state, BuildReportState::Delivered) {
+                debug_assert!(matches!(self.state, BuildReportState::Scheduled));
+                self.state = BuildReportState::Delivered;
+            }
         }
         Poll::Ready(Ok(()))
-    }
-
-    fn mark_delivered(&mut self) {
-        if matches!(self.state, BuildReportState::Delivered) {
-            return;
-        }
-        debug_assert!(matches!(self.state, BuildReportState::Scheduled));
-        self.state = BuildReportState::Delivered;
     }
 
     fn cancel_if_pending(&mut self) {
@@ -1043,12 +1038,6 @@ impl Stream for HashJoinStream {
     }
 }
 
-impl Drop for HashJoinStream {
-    fn drop(&mut self) {
-        self.build_report.cancel_if_pending();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1083,7 +1072,7 @@ mod tests {
 
     #[test]
     fn build_report_handle_does_not_cancel_delivered_partition_on_drop() {
-        let acc = Arc::new(make_partitioned_accumulator_for_test(2));
+        let acc = Arc::new(make_partitioned_accumulator_for_test(1));
 
         {
             let mut handle = BuildReportHandle::new(
@@ -1092,10 +1081,15 @@ mod tests {
                 Some(Arc::clone(&acc)),
             );
             handle.schedule(empty_build_data(0));
-            handle.mark_delivered();
+            let waker = futures::task::noop_waker_ref();
+            let mut cx = std::task::Context::from_waker(waker);
+            assert!(matches!(
+                handle.wait_for_delivery(&mut cx),
+                Poll::Ready(Ok(()))
+            ));
         }
 
-        assert_eq!(completed_partitions_for_test(&acc), 0);
+        assert_eq!(completed_partitions_for_test(&acc), 1);
     }
 
     #[test]
