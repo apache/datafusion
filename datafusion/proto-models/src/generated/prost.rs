@@ -344,6 +344,16 @@ pub struct AnalyzeNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(bool, tag = "2")]
     pub verbose: bool,
+    /// Statement-level override for `datafusion.explain.analyze_level`.
+    /// Absent means "fall back to session config".
+    #[prost(enumeration = "super::datafusion_common::MetricType", optional, tag = "3")]
+    pub analyze_level: ::core::option::Option<i32>,
+    /// Statement-level override for `datafusion.explain.analyze_categories`.
+    /// Absent means "fall back to session config".
+    #[prost(message, optional, tag = "4")]
+    pub analyze_categories: ::core::option::Option<
+        super::datafusion_common::ExplainAnalyzeCategoriesNode,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExplainNode {
@@ -353,6 +363,10 @@ pub struct ExplainNode {
     pub verbose: bool,
     #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "3")]
     pub format: i32,
+    /// Statement-level override for `datafusion.explain.show_statistics`.
+    /// Absent means "fall back to session config".
+    #[prost(bool, optional, tag = "4")]
+    pub show_statistics: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateNode {

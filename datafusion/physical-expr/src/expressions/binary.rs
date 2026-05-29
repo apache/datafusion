@@ -653,10 +653,7 @@ impl PhysicalExpr for BinaryExpr {
         // Reverse so operands are ordered from left innermost to right outermost.
         operand_refs.reverse();
 
-        let operands = operand_refs
-            .iter()
-            .map(|e| ctx.encode_child(e))
-            .collect::<Result<Vec<_>>>()?;
+        let operands = ctx.encode_children_expressions(operand_refs)?;
 
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
@@ -690,11 +687,13 @@ impl BinaryExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
-        let node = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::BinaryExpr(b)) => b.as_ref(),
-            _ => return internal_err!("PhysicalExprNode is not a BinaryExpr"),
-        };
+        let node = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::BinaryExpr,
+            "BinaryExpr",
+        );
         let op = Operator::from_proto_name(&node.op).ok_or_else(|| {
             datafusion_common::DataFusionError::Internal(format!(
                 "Unsupported binary operator '{}'",
@@ -705,17 +704,12 @@ impl BinaryExpr {
         if !node.operands.is_empty() {
             // New linearized format: reduce the flat operands list back into
             // a nested binary expression tree.
-            let operands = node
-                .operands
-                .iter()
-                .map(|e| ctx.decode(e))
-                .collect::<Result<Vec<_>>>()?;
+            let operands = ctx.decode_children_expressions(&node.operands)?;
 
             if operands.len() < 2 {
-                return Err(datafusion_common::DataFusionError::Internal(
+                return internal_err!(
                     "A binary expression must always have at least 2 operands"
-                        .to_string(),
-                ));
+                );
             }
 
             Ok(operands
@@ -726,21 +720,11 @@ impl BinaryExpr {
                 .expect("Binary expression could not be reduced to a single expression."))
         } else {
             // Legacy format with l/r fields.
-            let left = node.l.as_deref().ok_or_else(|| {
-                datafusion_common::DataFusionError::Internal(
-                    "BinaryExpr is missing required field 'left'".to_string(),
-                )
-            })?;
-            let right = node.r.as_deref().ok_or_else(|| {
-                datafusion_common::DataFusionError::Internal(
-                    "BinaryExpr is missing required field 'right'".to_string(),
-                )
-            })?;
-            Ok(Arc::new(BinaryExpr::new(
-                ctx.decode(left)?,
-                op,
-                ctx.decode(right)?,
-            )))
+            let left =
+                ctx.decode_required_expression(node.l.as_deref(), "BinaryExpr", "left")?;
+            let right =
+                ctx.decode_required_expression(node.r.as_deref(), "BinaryExpr", "right")?;
+            Ok(Arc::new(BinaryExpr::new(left, op, right)))
         }
     }
 }

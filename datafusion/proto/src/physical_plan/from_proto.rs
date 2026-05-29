@@ -48,7 +48,7 @@ use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
-use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
+use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{
     Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, WindowExpr,
@@ -282,7 +282,7 @@ pub fn parse_physical_expr_with_converter(
         // their own `ExprType` variant — see #21835. This match only routes
         // to the right constructor.
         ExprType::Column(_) => Column::try_from_proto(proto, &decode_ctx)?,
-        ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
+        ExprType::UnknownColumn(_) => UnKnownColumn::try_from_proto(proto, &decode_ctx)?,
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
         ExprType::BinaryExpr(_) => BinaryExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::AggregateExpr(_) => {
@@ -316,13 +316,7 @@ pub fn parse_physical_expr_with_converter(
                 proto_converter,
             )?))
         }
-        ExprType::NotExpr(e) => Arc::new(NotExpr::new(parse_required_physical_expr(
-            e.expr.as_deref(),
-            ctx,
-            "expr",
-            input_schema,
-            proto_converter,
-        )?)),
+        ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Case(e) => Arc::new(CaseExpr::try_new(
@@ -360,17 +354,7 @@ pub fn parse_physical_expr_with_converter(
                 })
                 .transpose()?,
         )?),
-        ExprType::Cast(e) => Arc::new(CastExpr::new(
-            parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?,
-            convert_required!(e.arrow_type)?,
-            None,
-        )),
+        ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
             parse_required_physical_expr(
                 e.expr.as_deref(),
@@ -412,19 +396,7 @@ pub fn parse_physical_expr_with_converter(
             )
         }
         ExprType::LikeExpr(_) => LikeExpr::try_from_proto(proto, &decode_ctx)?,
-        ExprType::HashExpr(hash_expr) => {
-            let on_columns = parse_physical_exprs(
-                &hash_expr.on_columns,
-                ctx,
-                input_schema,
-                proto_converter,
-            )?;
-            Arc::new(HashExpr::new(
-                on_columns,
-                SeededRandomState::with_seed(hash_expr.seed0),
-                hash_expr.description.clone(),
-            ))
-        }
+        ExprType::HashExpr(_) => HashExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::ScalarSubquery(sq) => {
             let data_type: arrow::datatypes::DataType = sq
                 .data_type
