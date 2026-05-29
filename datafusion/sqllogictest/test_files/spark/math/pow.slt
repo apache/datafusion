@@ -47,3 +47,129 @@ query R
 SELECT pow(0.0, -1.0);
 ----
 Infinity
+
+# nulls
+query R
+SELECT pow(CAST(NULL AS DOUBLE), 1.0);
+----
+NULL
+
+query R
+SELECT pow(1.0, CAST(NULL AS DOUBLE));
+----
+NULL
+
+query R
+SELECT pow(CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE));
+----
+NULL
+
+# nans
+query R
+SELECT pow(CAST('NaN' AS DOUBLE), 1.0);
+----
+NaN
+
+query R
+SELECT pow(1.0, CAST('NaN' AS DOUBLE));
+----
+1
+
+query R
+SELECT pow(CAST('NaN' AS DOUBLE), 0.0);
+----
+1
+
+# -0, +0
+query R
+SELECT pow(0.0, 1.0);
+----
+0
+
+query R
+SELECT pow(CAST('-0.0' AS DOUBLE), 1.0);
+----
+0
+
+query R
+SELECT pow(0.0, -1.0);
+----
+Infinity
+
+query R
+SELECT pow(CAST('-0.0' AS DOUBLE), -1.0);
+----
+Infinity
+
+# -inf, +inf
+query R
+SELECT pow(CAST('Infinity' AS DOUBLE), 1.0);
+----
+Infinity
+
+query R
+SELECT pow(CAST('Infinity' AS DOUBLE), -1.0);
+----
+0
+
+query R
+SELECT pow(CAST('-Infinity' AS DOUBLE), 1.0);
+----
+-Infinity
+
+query R
+SELECT pow(CAST('-Infinity' AS DOUBLE), 2.0);
+----
+Infinity
+
+query R
+SELECT pow(2.0, CAST('Infinity' AS DOUBLE));
+----
+Infinity
+
+query R
+SELECT pow(0.5, CAST('Infinity' AS DOUBLE));
+----
+0
+
+query R
+SELECT pow(2.0, CAST('-Infinity' AS DOUBLE));
+----
+0
+
+query R
+SELECT pow(0.5, CAST('-Infinity' AS DOUBLE));
+----
+Infinity
+
+# Test Array x Array
+statement ok
+CREATE TABLE t1(a DOUBLE, b DOUBLE) AS VALUES
+(0.0, -1.0),
+(2.0, 3.0),
+(CAST(NULL AS DOUBLE), 1.0);
+
+query R
+SELECT pow(a, b) FROM t1;
+----
+Infinity
+8
+NULL
+
+statement ok
+DROP TABLE t1;
+
+# Test Scalar x Array
+statement ok
+CREATE TABLE t2(b DOUBLE) AS VALUES
+(-1.0),
+(2.0);
+
+query R
+SELECT pow(0.0, b) FROM t2;
+----
+Infinity
+0
+
+statement ok
+DROP TABLE t2;
