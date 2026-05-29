@@ -594,7 +594,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+        fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
             unimplemented!()
         }
 

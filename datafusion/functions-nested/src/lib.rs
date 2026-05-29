@@ -201,7 +201,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
     ]
 }
 
-pub fn all_default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
+pub fn all_default_higher_order_functions() -> Vec<Arc<HigherOrderUDF>> {
     vec![
         array_any_match::array_any_match_higher_order_function(),
         array_filter::array_filter_higher_order_function(),
@@ -220,7 +220,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         Ok(()) as Result<()>
     })?;
 
-    let functions: Vec<Arc<dyn HigherOrderUDF>> = all_default_higher_order_functions();
+    let functions: Vec<Arc<HigherOrderUDF>> = all_default_higher_order_functions();
     functions.into_iter().try_for_each(|function| {
         let existing_function = registry.register_higher_order_function(function)?;
         if let Some(existing_function) = existing_function {
