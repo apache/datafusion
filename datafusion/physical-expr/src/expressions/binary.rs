@@ -190,19 +190,17 @@ fn apply_date_subtraction(
     rhs: &ColumnarValue,
 ) -> Result<ColumnarValue> {
     match (lhs.data_type(), rhs.data_type()) {
-        (DataType::Date32, DataType::Date32) => subtract_date_to_days::<Date32Type>(
-            lhs,
-            rhs,
-            |l, r| i64::from(l) - i64::from(r),
-        ),
-        (DataType::Date64, DataType::Date64) => subtract_date_to_days::<Date64Type>(
-            lhs,
-            rhs,
-            |l, r| l.wrapping_sub(r) / MILLIS_PER_DAY,
-        ),
-        (_, _) => unreachable!(
-            "apply_date_subtraction called with non-date types"
-        ),
+        (DataType::Date32, DataType::Date32) => {
+            subtract_date_to_days::<Date32Type>(lhs, rhs, |l, r| {
+                i64::from(l) - i64::from(r)
+            })
+        }
+        (DataType::Date64, DataType::Date64) => {
+            subtract_date_to_days::<Date64Type>(lhs, rhs, |l, r| {
+                l.wrapping_sub(r) / MILLIS_PER_DAY
+            })
+        }
+        (_, _) => unreachable!("apply_date_subtraction called with non-date types"),
     }
 }
 
@@ -241,8 +239,7 @@ where
             let left = left.as_primitive::<T>();
             match scalar_to_native::<T>(right)? {
                 Some(right_val) => {
-                    let result: Int64Array =
-                        left.unary(|l| day_diff_fn(l, right_val));
+                    let result: Int64Array = left.unary(|l| day_diff_fn(l, right_val));
                     Ok(ColumnarValue::Array(Arc::new(result)))
                 }
                 None => Ok(ColumnarValue::Array(new_null_array(
@@ -255,8 +252,7 @@ where
             let right = right.as_primitive::<T>();
             match scalar_to_native::<T>(left)? {
                 Some(left_val) => {
-                    let result: Int64Array =
-                        right.unary(|r| day_diff_fn(left_val, r));
+                    let result: Int64Array = right.unary(|r| day_diff_fn(left_val, r));
                     Ok(ColumnarValue::Array(Arc::new(result)))
                 }
                 None => Ok(ColumnarValue::Array(new_null_array(
@@ -269,9 +265,7 @@ where
             let left_val = scalar_to_native::<T>(left)?;
             let right_val = scalar_to_native::<T>(right)?;
             Ok(ColumnarValue::Scalar(ScalarValue::Int64(
-                left_val
-                    .zip(right_val)
-                    .map(|(l, r)| day_diff_fn(l, r)),
+                left_val.zip(right_val).map(|(l, r)| day_diff_fn(l, r)),
             )))
         }
     }
