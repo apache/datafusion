@@ -113,6 +113,33 @@ pub trait FileSource: Any + Send + Sync {
         None
     }
 
+    /// Return a copy of this [`FileSource`] without scan-time filters.
+    ///
+    /// Sources that expose [`Self::filter`] should override this if callers can
+    /// safely rebuild the same scan without predicate pruning or row filtering.
+    fn without_filter(&self) -> Option<Arc<dyn FileSource>> {
+        None
+    }
+
+    /// Return a copy of this [`FileSource`] without scan-time filters and with
+    /// its projection reset to the full table schema.
+    fn without_filter_and_projection(&self) -> Option<Arc<dyn FileSource>> {
+        None
+    }
+
+    /// Return a copy of this [`FileSource`] with an absolute file row-number
+    /// column appended to the table schema and included in its projection.
+    ///
+    /// The returned `usize` is the row-number column index in the returned
+    /// source's unprojected table schema. The row numbers must identify rows
+    /// within each physical file, not within an execution partition.
+    fn with_row_number_column(
+        &self,
+        _column_name: &str,
+    ) -> Result<Option<(Arc<dyn FileSource>, usize)>> {
+        Ok(None)
+    }
+
     /// Return the projection that will be applied to the output stream on top
     /// of [`Self::table_schema`].
     ///

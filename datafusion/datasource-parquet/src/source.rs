@@ -34,7 +34,7 @@ use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::morsel::Morselizer;
 
 use arrow::array::timezone::Tz;
-use arrow::datatypes::TimeUnit;
+use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_datasource::TableSchema;
@@ -60,6 +60,7 @@ use datafusion_execution::parquet_encryption::EncryptionFactory;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
 use object_store::ObjectStore;
+use parquet::arrow::RowNumber;
 #[cfg(feature = "parquet_encryption")]
 use parquet::encryption::decrypt::FileDecryptionProperties;
 
@@ -656,6 +657,67 @@ impl FileSource for ParquetSource {
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.predicate.clone()
+    }
+
+    fn without_filter(&self) -> Option<Arc<dyn FileSource>> {
+        let mut source = self.clone();
+        source.predicate = None;
+        source = source.with_pushdown_filters(false);
+        Some(Arc::new(source))
+    }
+
+    fn without_filter_and_projection(&self) -> Option<Arc<dyn FileSource>> {
+        let mut source = self.clone();
+        source.predicate = None;
+        source = source.with_pushdown_filters(false);
+        let full_schema = source.table_schema.table_schema();
+        let indices = (0..full_schema.fields().len()).collect::<Vec<_>>();
+        source.projection = ProjectionExprs::from_indices(&indices, full_schema);
+        Some(Arc::new(source))
+    }
+
+    fn with_row_number_column(
+        &self,
+        column_name: &str,
+    ) -> datafusion_common::Result<Option<(Arc<dyn FileSource>, usize)>> {
+        if self
+            .table_schema
+            .table_schema()
+            .fields()
+            .iter()
+            .any(|field| field.name() == column_name)
+        {
+            return Ok(None);
+        }
+
+        let mut source = self.clone();
+        source.predicate = None;
+        source = source.with_pushdown_filters(false);
+
+        let row_number_field: FieldRef = Arc::new(
+            Field::new(column_name, DataType::Int64, false)
+                .with_extension_type(RowNumber),
+        );
+        let mut virtual_columns = source
+            .table_schema
+            .virtual_columns()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        virtual_columns.push(row_number_field);
+        source.table_schema =
+            TableSchema::builder(Arc::clone(source.table_schema.file_schema()))
+                .with_table_partition_cols(
+                    source.table_schema.table_partition_cols().clone(),
+                )
+                .with_virtual_columns(virtual_columns)
+                .build();
+
+        let full_schema = source.table_schema.table_schema();
+        let row_number_index = full_schema.fields().len() - 1;
+        let indices = (0..full_schema.fields().len()).collect::<Vec<_>>();
+        source.projection = ProjectionExprs::from_indices(&indices, full_schema);
+        Ok(Some((Arc::new(source), row_number_index)))
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
