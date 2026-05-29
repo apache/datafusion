@@ -18,10 +18,10 @@
 # The sqllogictest harness registers range_partitioned(range_key, non_range_key, value)
 # as an in-memory source with four physical source partitions:
 #
-# partition 0: range_key in [-inf, 10), rows (1, 1, 10), (5, 2, 50)
+# partition 0: range_key in [..., 10), rows (1, 1, 10), (5, 2, 50)
 # partition 1: range_key in [10, 20), rows (10, 1, 100), (15, 2, 150)
 # partition 2: range_key in [20, 30), rows (20, 1, 200), (25, 2, 250)
-# partition 3: range_key in [30, +inf), rows (30, 1, 300), (35, 2, 350)
+# partition 3: range_key in [30, ...), rows (30, 1, 300), (35, 2, 350)
 
 statement ok
 set datafusion.explain.physical_plan_only = true;

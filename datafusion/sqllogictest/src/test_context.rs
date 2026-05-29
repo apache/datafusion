@@ -307,6 +307,8 @@ fn register_strict_schema_provider(ctx: &SessionContext) {
 // Range Partitioned Table (sqllogictest-only)
 // ==============================================================================
 
+/// Simple range-partitioned table for testing before declaring such tables is
+/// supported via SQL.
 #[derive(Debug)]
 struct RangePartitionedTable {
     schema: SchemaRef,
