@@ -639,9 +639,10 @@ message ParquetOptions {
 }
 
 message CdcOptions {
-  uint64 min_chunk_size = 1;
-  uint64 max_chunk_size = 2;
-  int32 norm_level = 3;
+  bool enabled = 1;
+  uint64 min_chunk_size = 2;
+  uint64 max_chunk_size = 3;
+  int32 norm_level = 4;
 }
 
 enum JoinSide {

@@ -97,7 +97,7 @@ async fn cdc_data_round_trip() {
     let batch = make_test_batch(5000);
 
     let mut opts = TableParquetOptions::default();
-    opts.global.use_content_defined_chunking = Some(CdcOptions::default());
+    opts.global.content_defined_chunking = CdcOptions::enabled();
     let props = writer_props(&mut opts, &batch.schema());
 
     let tmp = write_parquet_file(&batch, props);
@@ -145,11 +145,12 @@ async fn cdc_affects_page_boundaries() {
 
     // Write WITH CDC using small chunk sizes to maximize effect
     let mut cdc_opts = TableParquetOptions::default();
-    cdc_opts.global.use_content_defined_chunking = Some(CdcOptions {
+    cdc_opts.global.content_defined_chunking = CdcOptions {
+        enabled: true,
         min_chunk_size: 512,
         max_chunk_size: 2048,
         norm_level: 0,
-    });
+    };
     let cdc_file =
         write_parquet_file(&batch, writer_props(&mut cdc_opts, &batch.schema()));
     let cdc_meta = read_metadata(&cdc_file);
