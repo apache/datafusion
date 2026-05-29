@@ -67,13 +67,17 @@ SELECT concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')), a
 ----
 abc Utf8View
 
-# Mixed Utf8 + Binary is denied
-query error does not support mixed string and binary inputs
-SELECT concat(arrow_cast('hello', 'Utf8'), arrow_cast(' world', 'Binary'));
+# Mixed Utf8 + Binary is allowed; binary is coerced to the widest string type
+query TT
+SELECT concat(arrow_cast('hello', 'Utf8'), arrow_cast(' world', 'Binary')), arrow_typeof(concat(arrow_cast('hello', 'Utf8'), arrow_cast(' world', 'Binary')));
+----
+hello world Utf8
 
-# binary separator is denied for string arguments
-query error does not support mixed string and binary inputs
-SELECT concat_ws(x'7c', 'hello', 'world');
+# binary separator is allowed for string arguments
+query TT
+SELECT concat_ws(x'7c', 'hello', 'world'), arrow_typeof(concat_ws(x'7c', 'hello', 'world'));
+----
+hello|world Utf8
 
 # null separator
 query T

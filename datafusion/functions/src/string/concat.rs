@@ -76,10 +76,9 @@ impl ConcatFunc {
     }
 }
 
-// Logic is matched with pipe operator in the following table.
-// Support only string + string concatenation,
-// or binary + binary concatenation.
-// Mixed string + binary concatenation is rejected,
+// Supports string + string concatenation, binary + binary concatenation,
+// and mixed string + binary concatenation (binary is coerced to the widest
+// string type).
 impl ScalarUDFImpl for ConcatFunc {
     fn name(&self) -> &str {
         "concat"
@@ -283,10 +282,14 @@ pub(crate) fn coerce_arg_types(arg_types: &[DataType]) -> Result<Vec<DataType>> 
     let has_binary = arg_types.iter().any(|dt| dt.is_binary());
     let has_string = arg_types.iter().any(|dt| dt.is_string());
     if has_binary && has_string {
-        plan_err!("function does not support mixed string and binary inputs")
+        // Mixed string+binary: coerce everything to the widest string type
+        // This behaviour is seen for Spark, DuckDB
+        Ok(vec![widest_string_type(arg_types); arg_types.len()])
     } else if has_binary {
+        // Pure binary+binary concatenation: coerce to the widest binary type
         Ok(vec![widest_binary_type(arg_types); arg_types.len()])
     } else {
+        // Pure string+string concatenation: coerce to the widest string type
         Ok(vec![widest_string_type(arg_types); arg_types.len()])
     }
 }
