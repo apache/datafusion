@@ -157,7 +157,7 @@ impl OptimizerRule for CteFilterPusher {
 }
 
 /// Collect filter predicates that sit above each MaterializedCteReader
-/// for the given CTE name. Returns one Vec<Expr> per reader found.
+/// for the given CTE name. Returns one `Vec<Expr>` per reader found.
 fn collect_reader_filters(plan: &LogicalPlan, cte_name: &str) -> Vec<Vec<Expr>> {
     let mut results: Vec<Vec<Expr>> = Vec::new();
     collect_reader_filters_recursive(plan, cte_name, &[], &mut results);

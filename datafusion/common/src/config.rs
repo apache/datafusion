@@ -635,7 +635,7 @@ config_namespace! {
         /// When enabled, CTEs referenced more than once are generally computed
         /// once and cached, except for cheap CTEs and CTEs consumed below a top-level
         /// limit.
-        pub enable_materialized_ctes: bool, default = false
+        pub enable_materialized_ctes: bool, default = true
 
         /// Attempt to eliminate sorts by packing & sorting files with non-overlapping
         /// statistics into the same file groups.

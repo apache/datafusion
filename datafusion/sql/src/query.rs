@@ -159,7 +159,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // The optimizer's InlineCte rule handles further inlining decisions.
             if (ref_count > 1 || force)
                 && let Some(cte_plan) = planner_context.get_cte(cte_name)
-                && (force || !is_cheap_to_inline(cte_plan) || plan_contains_volatile_functions(cte_plan))
+                && (force
+                    || !is_cheap_to_inline(cte_plan)
+                    || plan_contains_volatile_functions(cte_plan))
             {
                 ctes_to_materialize.push((cte_name.clone(), cte_plan.clone(), force));
             }
