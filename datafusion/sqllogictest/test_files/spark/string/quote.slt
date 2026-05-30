@@ -53,7 +53,7 @@ SELECT quote('it''s');
 query T
 SELECT quote('line\nbreak');
 ----
-'line\nbreak'
+'line\\nbreak'
 
 query T
 SELECT quote(NULL);
