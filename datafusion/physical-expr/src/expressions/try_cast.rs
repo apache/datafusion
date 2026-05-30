@@ -119,6 +119,58 @@ impl PhysicalExpr for TryCastExpr {
         self.expr.fmt_sql(f)?;
         write!(f, " AS {:?})", self.cast_type)
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(Box::new(
+                protobuf::PhysicalTryCastNode {
+                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
+                    arrow_type: Some((&self.cast_type).try_into()?),
+                },
+            ))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryCastExpr {
+    /// Reconstruct a [`TryCastExpr`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_common::internal_datafusion_err;
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let try_cast = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::TryCast,
+            "TryCastExpr",
+        );
+        let expr = ctx.decode_required_expression(
+            try_cast.expr.as_deref(),
+            "TryCastExpr",
+            "expr",
+        )?;
+        let cast_type: DataType = try_cast
+            .arrow_type
+            .as_ref()
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "TryCastExpr is missing required field 'arrow_type'"
+                )
+            })?
+            .try_into()?;
+        Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
+    }
 }
 
 /// Return a PhysicalExpression representing `expr` casted to
@@ -591,5 +643,139 @@ mod tests {
         assert_eq!(sql_string, "TRY_CAST(b AS Int32)");
 
         Ok(())
+    }
+}
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::{Column, col};
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        ArrowType, PhysicalExprNode, PhysicalTryCastNode, physical_expr_node,
+    };
+
+    fn try_cast_node(
+        expr: Option<Box<PhysicalExprNode>>,
+        arrow_type: Option<ArrowType>,
+    ) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::TryCast(Box::new(
+                PhysicalTryCastNode {
+                    expr,
+                    arrow_type: arrow_type.map(Box::new),
+                },
+            ))),
+        }
+    }
+
+    fn try_cast_fixture() -> TryCastExpr {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        TryCastExpr::new(col("a", &schema).unwrap(), DataType::Int64)
+    }
+
+    // ── try_to_proto ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn try_to_proto_encodes_try_cast_expr() {
+        let expr = try_cast_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = expr
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("TryCastExpr should encode to Some(node)");
+
+        assert!(node.expr_id.is_none());
+        let inner = match node.expr_type {
+            Some(physical_expr_node::ExprType::TryCast(boxed)) => *boxed,
+            other => panic!("expected a TryCast node, got {other:?}"),
+        };
+        assert!(inner.expr.is_some());
+        assert!(inner.arrow_type.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let expr = try_cast_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = expr.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    // ── try_from_proto ───────────────────────────────────────────────────────
+
+    #[test]
+    fn try_from_proto_decodes_try_cast_expr() {
+        // Int64 arrow type code = 10
+        let arrow_type = ArrowType { arrow_type_enum: Some(datafusion_proto_models::protobuf::arrow_type::ArrowTypeEnum::Int64(datafusion_proto_models::protobuf::EmptyMessage {})) };
+        let node = try_cast_node(Some(Box::new(column_node("a"))), Some(arrow_type));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = TryCastExpr::try_from_proto(&node, &ctx).unwrap();
+        let expr = decoded
+            .downcast_ref::<TryCastExpr>()
+            .expect("decoded expr should be a TryCastExpr");
+        assert!(expr.expr().downcast_ref::<Column>().is_some());
+        assert_eq!(expr.cast_type(), &DataType::Int64);
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_try_cast_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = TryCastExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a TryCastExpr"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_expr() {
+        let arrow_type = ArrowType { arrow_type_enum: Some(datafusion_proto_models::protobuf::arrow_type::ArrowTypeEnum::Int64(datafusion_proto_models::protobuf::EmptyMessage {})) };
+        let node = try_cast_node(None, Some(arrow_type));
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = TryCastExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("TryCastExpr is missing required field 'expr'"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_arrow_type() {
+        let node = try_cast_node(Some(Box::new(column_node("a"))), None);
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = TryCastExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("TryCastExpr is missing required field 'arrow_type'"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_propagates_expr_decode_error() {
+        let arrow_type = ArrowType { arrow_type_enum: Some(datafusion_proto_models::protobuf::arrow_type::ArrowTypeEnum::Int64(datafusion_proto_models::protobuf::EmptyMessage {})) };
+        let node = try_cast_node(Some(Box::new(column_node("a"))), Some(arrow_type));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = TryCastExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
     }
 }
