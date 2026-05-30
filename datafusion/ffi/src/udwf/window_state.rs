@@ -42,8 +42,7 @@ impl TryFrom<WindowAggState> for FFI_WindowAggState {
             window_frame_range: FFI_Range::from(s.window_frame_range.clone()),
             last_calculated_index: s.last_calculated_index,
             offset_pruned_rows: s.offset_pruned_rows,
-            out_col: WrappedArray::try_from(&s.out_col)
-                .map_err(DataFusionError::from)?,
+            out_col: WrappedArray::try_from(&s.out_col).map_err(DataFusionError::from)?,
             n_row_result_missing: s.n_row_result_missing,
             is_end: s.is_end,
         })
@@ -54,9 +53,7 @@ impl TryFrom<FFI_WindowAggState> for WindowAggState {
     type Error = DataFusionError;
 
     fn try_from(s: FFI_WindowAggState) -> Result<Self, Self::Error> {
-        let out_col: ArrayRef = s.out_col
-            .try_into()
-            .map_err(DataFusionError::from)?;
+        let out_col: ArrayRef = s.out_col.try_into().map_err(DataFusionError::from)?;
 
         Ok(WindowAggState {
             window_frame_range: s.window_frame_range.into(),

@@ -27,6 +27,7 @@ use datafusion_expr::PartitionEvaluator;
 use datafusion_expr::window_state::WindowAggState;
 use prost::Message;
 
+use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
 
 use super::range::FFI_Range;
@@ -44,7 +45,7 @@ pub struct FFI_PartitionEvaluator {
     pub memoize: unsafe extern "C" fn(
         evaluator: &mut Self,
         state: FFI_WindowAggState,
-    ) -> FFI_Result<()>,
+    ) -> FFI_Result<FFI_WindowAggState>,
 
     pub evaluate_all: unsafe extern "C" fn(
         evaluator: &mut Self,
@@ -188,11 +189,21 @@ unsafe extern "C" fn evaluate_all_with_rank_fn_wrapper(
 unsafe extern "C" fn memoize_fn_wrapper(
     evaluator: &mut FFI_PartitionEvaluator,
     state: FFI_WindowAggState,
-) -> FFI_Result<()> {
+) -> FFI_Result<FFI_WindowAggState> {
     unsafe {
         let inner = evaluator.inner_mut();
         let mut native_state = sresult_return!(WindowAggState::try_from(state));
-        sresult!(inner.memoize(&mut native_state))
+
+        // Propagate errors from memoize
+        if let Err(e) = inner.memoize(&mut native_state) {
+            return FFI_Result::Err(SString::from(format!("{}", e)));
+        }
+
+        // Convert mutated state back to FFI
+        match FFI_WindowAggState::try_from(native_state) {
+            Ok(ffi_state) => FFI_Result::Ok(ffi_state),
+            Err(e) => FFI_Result::Err(SString::from(format!("{}", e))),
+        }
     }
 }
 
@@ -290,8 +301,17 @@ impl From<FFI_PartitionEvaluator> for Box<dyn PartitionEvaluator> {
 
 impl PartitionEvaluator for ForeignPartitionEvaluator {
     fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
-        let ffi_state = FFI_WindowAggState::try_from(state.to_owned())?;
-        unsafe { (self.evaluator.memoize)(&mut self.evaluator, ffi_state) };
+        let ffi_state = FFI_WindowAggState::try_from(state.clone())?;
+        // Temporarily store the context
+        let saved_ctx = state.window_frame_ctx.take();
+
+        let result = unsafe { (self.evaluator.memoize)(&mut self.evaluator, ffi_state) };
+
+        let updated_ffi_state = df_result!(result)?;
+
+        *state = WindowAggState::try_from(updated_ffi_state)?;
+        state.window_frame_ctx = saved_ctx;
+
         Ok(())
     }
 
@@ -383,6 +403,15 @@ impl PartitionEvaluator for ForeignPartitionEvaluator {
 mod tests {
     use arrow::array::ArrayRef;
     use datafusion::logical_expr::PartitionEvaluator;
+    use datafusion_common::scalar::ScalarValue;
+    use datafusion_expr::{
+        WindowFrame,
+        window_state::{WindowAggState, WindowFrameContext},
+    };
+    use std::ops::Range;
+
+    use arrow::array::Int32Array;
+    use std::sync::Arc;
 
     use crate::udwf::partition_evaluator::{
         FFI_PartitionEvaluator, ForeignPartitionEvaluator,
@@ -427,6 +456,126 @@ mod tests {
             let concrete = &*(foreign_accum.as_ref() as *const dyn PartitionEvaluator
                 as *const ForeignPartitionEvaluator);
             assert!(!concrete.uses_window_frame());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_memoize_state_preservation() -> datafusion_common::Result<()> {
+        // Create a test evaluator that actually modifies state
+        #[derive(Debug)]
+        struct StateModifyingEvaluator;
+
+        impl PartitionEvaluator for StateModifyingEvaluator {
+            fn memoize(
+                &mut self,
+                state: &mut WindowAggState,
+            ) -> datafusion_common::Result<()> {
+                // Modify the window frame range
+                state.window_frame_range.start = state.window_frame_range.end - 1;
+                Ok(())
+            }
+
+            fn evaluate(
+                &mut self,
+                _values: &[ArrayRef],
+                _range: &Range<usize>,
+            ) -> datafusion_common::Result<ScalarValue> {
+                Ok(ScalarValue::Int32(Some(42)))
+            }
+        }
+
+        let evaluator: Box<dyn PartitionEvaluator> = Box::new(StateModifyingEvaluator);
+        let mut ffi: FFI_PartitionEvaluator = evaluator.into();
+
+        // Make it act as foreign
+        ffi.library_marker_id = crate::mock_foreign_marker_id;
+        let mut foreign: Box<dyn PartitionEvaluator> =
+            Box::new(ForeignPartitionEvaluator { evaluator: ffi });
+
+        // Create state with a specific range
+        let mut state = WindowAggState {
+            window_frame_range: 0..10,
+            window_frame_ctx: None,
+            last_calculated_index: 0,
+            offset_pruned_rows: 0,
+            out_col: Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef,
+            n_row_result_missing: 0,
+            is_end: false,
+        };
+
+        // Call memoize
+        foreign.memoize(&mut state)?;
+
+        // Verify state was properly mutated
+        assert_eq!(
+            state.window_frame_range,
+            9..10,
+            "window_frame_range should have been pruned"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_memoize_preserves_window_frame_ctx() -> datafusion_common::Result<()> {
+        #[derive(Debug)]
+        struct CtxAwareEvaluator {
+            // Track whether memoize was called
+            memoize_called: std::cell::Cell<bool>,
+        }
+
+        impl PartitionEvaluator for CtxAwareEvaluator {
+            fn memoize(
+                &mut self,
+                state: &mut WindowAggState,
+            ) -> datafusion_common::Result<()> {
+                self.memoize_called.set(true);
+                // Don't touch window_frame_ctx - just verify it's there
+                state.window_frame_range.start = state.window_frame_range.end - 1;
+                Ok(())
+            }
+        }
+
+        let evaluator: Box<dyn PartitionEvaluator> = Box::new(CtxAwareEvaluator {
+            memoize_called: std::cell::Cell::new(false),
+        });
+        let mut ffi: FFI_PartitionEvaluator = evaluator.into();
+
+        // Force foreign path
+        ffi.library_marker_id = crate::mock_foreign_marker_id;
+        let mut foreign: Box<dyn PartitionEvaluator> =
+            Box::new(ForeignPartitionEvaluator { evaluator: ffi });
+
+        // Create a real WindowFrameContext
+        let window_frame = Arc::new(WindowFrame::new(Some(true)));
+        let original_ctx = WindowFrameContext::new(window_frame, vec![]);
+
+        let mut state = WindowAggState {
+            window_frame_range: 0..10,
+            window_frame_ctx: Some(original_ctx),
+            last_calculated_index: 0,
+            offset_pruned_rows: 0,
+            out_col: Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef,
+            n_row_result_missing: 0,
+            is_end: false,
+        };
+
+        foreign.memoize(&mut state)?;
+
+        assert_eq!(state.window_frame_range, 9..10);
+
+        // Verify that window_frame_ctx isn't lost
+        assert!(
+            state.window_frame_ctx.is_some(),
+            "window_frame_ctx should be Some after memoize"
+        );
+
+        // Verify it's the same variant at least
+        match &state.window_frame_ctx.unwrap() {
+            WindowFrameContext::Rows(_) => {}
+            _ => panic!("Expected Rows variant, got something else"),
         }
 
         Ok(())
