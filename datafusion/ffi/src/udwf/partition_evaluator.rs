@@ -31,6 +31,7 @@ use stabby::vec::Vec as SVec;
 
 use super::range::FFI_Range;
 use crate::arrow_wrappers::WrappedArray;
+use crate::udwf::window_state::FFI_WindowAggState;
 use crate::util::FFI_Result;
 use crate::{df_result, sresult, sresult_return};
 
@@ -40,6 +41,11 @@ use crate::{df_result, sresult, sresult_return};
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_PartitionEvaluator {
+    pub memoize: unsafe extern "C" fn(
+        evaluator: &mut Self,
+        state: FFI_WindowAggState,
+    ) -> FFI_Result<()>,
+
     pub evaluate_all: unsafe extern "C" fn(
         evaluator: &mut Self,
         values: SVec<WrappedArray>,
@@ -179,6 +185,17 @@ unsafe extern "C" fn evaluate_all_with_rank_fn_wrapper(
     }
 }
 
+unsafe extern "C" fn memoize_fn_wrapper(
+    evaluator: &mut FFI_PartitionEvaluator,
+    state: FFI_WindowAggState,
+) -> FFI_Result<()> {
+    unsafe {
+        let inner = evaluator.inner_mut();
+        let mut native_state = sresult_return!(WindowAggState::try_from(state));
+        sresult!(inner.memoize(&mut native_state))
+    }
+}
+
 unsafe extern "C" fn get_range_fn_wrapper(
     evaluator: &FFI_PartitionEvaluator,
     idx: usize,
@@ -221,6 +238,7 @@ impl From<Box<dyn PartitionEvaluator>> for FFI_PartitionEvaluator {
         let private_data = PartitionEvaluatorPrivateData { evaluator };
 
         Self {
+            memoize: memoize_fn_wrapper,
             evaluate: evaluate_fn_wrapper,
             evaluate_all: evaluate_all_fn_wrapper,
             evaluate_all_with_rank: evaluate_all_with_rank_fn_wrapper,
@@ -271,9 +289,9 @@ impl From<FFI_PartitionEvaluator> for Box<dyn PartitionEvaluator> {
 }
 
 impl PartitionEvaluator for ForeignPartitionEvaluator {
-    fn memoize(&mut self, _state: &mut WindowAggState) -> Result<()> {
-        // Exposing `memoize` increases the surface are of the FFI work
-        // so for now we dot support it.
+    fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
+        let ffi_state = FFI_WindowAggState::try_from(state.to_owned())?;
+        unsafe { (self.evaluator.memoize)(&mut self.evaluator, ffi_state) };
         Ok(())
     }
 
