@@ -1,0 +1,81 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query T
+SELECT quote(1:INT);
+----
+1
+
+query T
+SELECT quote(0:INT);
+----
+0
+
+query T
+SELECT quote(-5:INT);
+----
+-5
+
+query T
+SELECT quote('hello');
+----
+'hello'
+
+query T
+SELECT quote('');
+----
+''
+
+query T
+SELECT quote('with space');
+----
+'with space'
+
+query T
+SELECT quote('it''s');
+----
+'it''s'
+
+query T
+SELECT quote('line\nbreak');
+----
+'line\nbreak'
+
+query T
+SELECT quote(NULL);
+----
+NULL
+
+query T
+SELECT quote(TRUE);
+----
+true
+
+query T
+SELECT quote(FALSE);
+----
+false
+
+query T
+SELECT quote(3.14:FLOAT);
+----
+3.14
+
+query T
+SELECT quote(-0.001:FLOAT);
+----
+-0.001
