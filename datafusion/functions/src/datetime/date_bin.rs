@@ -860,7 +860,7 @@ fn date_bin_impl(
                         array.try_unary(|x| {
                             stride_fn(stride, x, origin)
                                 .map(|binned_nanos| binned_nanos % (NANOSECONDS_IN_DAY))
-                                    .map_err(|e| ArrowError::ComputeError(e.to_string()))
+                                .map_err(|e| ArrowError::ComputeError(e.to_string()))
                         })?;
                     ColumnarValue::Array(Arc::new(result))
                 }
