@@ -960,6 +960,12 @@ physical_plan
 01)ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN Int64(2) AND Int64(3)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# regression test: full i64 BETWEEN bounds should not overflow
+query I
+SELECT * FROM (VALUES (1)) AS t(x)
+WHERE x BETWEEN -9223372036854775808 AND 9223372036854775807
+----
+1
 
 # TODO: query_get_indexed_field
 

@@ -31,6 +31,7 @@ use crate::utils::normalize_ident;
 
 use arrow::datatypes::{Field, FieldRef, Fields};
 use datafusion_common::error::_plan_err;
+use datafusion_common::format::ExplainStatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
@@ -227,12 +228,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
-            DFStatement::Explain(ExplainStatement {
-                verbose,
-                analyze,
-                format,
-                statement,
-            }) => self.explain_to_plan(verbose, analyze, format, *statement),
+            DFStatement::Explain(ExplainStatement { options, statement }) => {
+                self.explain_to_plan(options, *statement)
+            }
             DFStatement::Reset(statement) => self.reset_statement_to_plan(statement),
         }
     }
@@ -283,9 +281,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 describe_alias: _,
                 ..
             } => {
-                let format = format.map(|format| format.to_string());
+                let format = format
+                    .map(|format| ExplainFormat::from_str(&format.to_string()))
+                    .transpose()?;
                 let statement = DFStatement::Statement(statement);
-                self.explain_to_plan(verbose, analyze, format, statement)
+                let options = ExplainStatementOptions {
+                    analyze,
+                    verbose,
+                    format,
+                    analyze_level: None,
+                    analyze_categories: None,
+                    show_statistics: None,
+                };
+                self.explain_to_plan(options, statement)
             }
             Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
@@ -2004,9 +2012,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// datafusion `EXPLAIN` statement.
     fn explain_to_plan(
         &self,
-        verbose: bool,
-        analyze: bool,
-        format: Option<String>,
+        opts: ExplainStatementOptions,
         statement: DFStatement,
     ) -> Result<LogicalPlan> {
         let plan = self.statement_to_plan(statement)?;
@@ -2018,8 +2024,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
 
+        let ExplainStatementOptions {
+            analyze,
+            verbose,
+            format,
+            analyze_level,
+            analyze_categories,
+            show_statistics,
+        } = opts;
+
+        // Mutual exclusivity checks
         if verbose && format.is_some() {
             return plan_err!("EXPLAIN VERBOSE with FORMAT is not supported");
+        }
+        if !analyze {
+            if analyze_level.is_some() {
+                return plan_err!("EXPLAIN option LEVEL requires ANALYZE");
+            }
+            if analyze_categories.is_some() {
+                return plan_err!("EXPLAIN option METRICS requires ANALYZE");
+            }
+        }
+        if analyze && show_statistics.is_some() {
+            return plan_err!("EXPLAIN option COSTS cannot be combined with ANALYZE");
         }
 
         if analyze {
@@ -2030,6 +2057,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 verbose,
                 input: plan,
                 schema,
+                analyze_level,
+                analyze_categories,
             }))
         } else {
             let stringified_plans =
@@ -2041,7 +2070,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let format = if verbose {
                 ExplainFormat::Indent
             } else if let Some(format) = format {
-                ExplainFormat::from_str(&format)?
+                format
             } else {
                 options.explain.format.clone()
             };
@@ -2053,6 +2082,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,
+                show_statistics,
             }))
         }
     }

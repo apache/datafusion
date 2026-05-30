@@ -1908,11 +1908,12 @@ mod tests {
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        ColumnarValue, HigherOrderUDF, LambdaParametersProgress, ScalarFunctionArgs,
-        ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda, Volatility, WindowFrame,
-        WindowFunctionDefinition, case, cast, col, cube, exists, grouping_set,
-        interval_datetime_lit, interval_year_month_lit, lambda, lambda_var, lit, not,
-        not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast, when,
+        ColumnarValue, HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda,
+        Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col, cube, exists,
+        grouping_set, interval_datetime_lit, interval_year_month_lit, lambda, lambda_var,
+        lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast,
+        when,
     };
     use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
@@ -1969,7 +1970,7 @@ mod tests {
     #[derive(Debug, Hash, Eq, PartialEq)]
     struct DummyHigherOrderUDF;
 
-    impl HigherOrderUDF for DummyHigherOrderUDF {
+    impl HigherOrderUDFImpl for DummyHigherOrderUDF {
         fn name(&self) -> &str {
             "dummy_higher_order_function"
         }
@@ -2087,7 +2088,7 @@ mod tests {
             ),
             (
                 Expr::HigherOrderFunction(HigherOrderFunction::new(
-                    Arc::new(DummyHigherOrderUDF),
+                    Arc::new(HigherOrderUDF::new_from_impl(DummyHigherOrderUDF)),
                     vec![col("a"), lambda(["v"], -lambda_var("v"))],
                 )),
                 r#"dummy_higher_order_function(a, (v) -> -v)"#,

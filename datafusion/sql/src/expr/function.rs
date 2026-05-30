@@ -370,7 +370,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         if let Some(fm) = self.context_provider.get_higher_order_meta(&name) {
             // plan non-lambda arguments first so we can get theirs datatype and call
-            // HigherOrderUDF::lambda_parameters to then plan the lambda arguments with
+            // HigherOrderUDFImpl::lambda_parameters to then plan the lambda arguments with
             // resolved lambda variables
             enum ExprOrLambda {
                 Expr(Expr),

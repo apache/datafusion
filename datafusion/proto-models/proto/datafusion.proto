@@ -224,12 +224,21 @@ message ValuesNode {
 message AnalyzeNode {
   LogicalPlanNode input = 1;
   bool verbose = 2;
+  // Statement-level override for `datafusion.explain.analyze_level`.
+  // Absent means "fall back to session config".
+  optional datafusion_common.MetricType analyze_level = 3;
+  // Statement-level override for `datafusion.explain.analyze_categories`.
+  // Absent means "fall back to session config".
+  optional datafusion_common.ExplainAnalyzeCategoriesNode analyze_categories = 4;
 }
 
 message ExplainNode {
   LogicalPlanNode input = 1;
   bool verbose = 2;
   datafusion_common.ExplainFormat format = 3;
+  // Statement-level override for `datafusion.explain.show_statistics`.
+  // Absent means "fall back to session config".
+  optional bool show_statistics = 4;
 }
 
 message AggregateNode {
@@ -1399,13 +1408,22 @@ message PhysicalHashRepartition {
   uint64 partition_count = 2;
 }
 
+message PhysicalRangePartitioning {
+  repeated PhysicalSortExprNode sort_expr = 1;
+  repeated PhysicalRangeSplitPoint split_point = 2;
+}
+
+message PhysicalRangeSplitPoint {
+  repeated datafusion_common.ScalarValue value = 1;
+}
+
 message RepartitionExecNode{
   PhysicalPlanNode input = 1;
-  // oneof partition_method {
+  // Legacy direct partitioning fields:
   //   uint64 round_robin = 2;
   //   PhysicalHashRepartition hash = 3;
   //   uint64 unknown = 4;
-  // }
+  // New partitioning variants are stored in `partitioning`.
   Partitioning partitioning = 5;
   bool preserve_order = 6;
 }
@@ -1415,6 +1433,7 @@ message Partitioning {
     uint64 round_robin = 1;
     PhysicalHashRepartition hash = 2;
     uint64 unknown = 3;
+    PhysicalRangePartitioning range = 4;
   }
 }
 

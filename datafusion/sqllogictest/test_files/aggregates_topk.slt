@@ -456,6 +456,127 @@ select count(*) from (select category from values_table group by category order 
 ----
 3
 
+# Test DISTINCT with NULLs and NULLS FIRST ordering (issue #22554)
+statement ok
+create table nullable_vals (v varchar) as values (NULL), (''), ('a'), ('b');
+
+# Verify this regression test exercises the TopK aggregation path
+query TT
+explain select distinct v from nullable_vals order by v asc nulls first limit 1;
+----
+logical_plan
+01)Sort: nullable_vals.v ASC NULLS FIRST, fetch=1
+02)--Aggregate: groupBy=[[nullable_vals.v]], aggr=[[]]
+03)----TableScan: nullable_vals projection=[v]
+physical_plan
+01)SortPreservingMergeExec: [v@0 ASC], fetch=1
+02)--SortExec: TopK(fetch=1), expr=[v@0 ASC], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[v@0 as v], aggr=[], lim=[1]
+04)------RepartitionExec: partitioning=Hash([v@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[v@0 as v], aggr=[], lim=[1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# NULLS FIRST: NULL should be the first row returned by LIMIT
+query T
+select distinct v from nullable_vals order by v asc nulls first limit 1;
+----
+NULL
+
+query T
+select distinct v from nullable_vals order by v asc nulls first limit 2;
+----
+NULL
+(empty)
+
+query T
+select distinct v from nullable_vals order by v asc nulls first limit 3;
+----
+NULL
+(empty)
+a
+
+# NULLS LAST: non-null values come first
+query T
+select distinct v from nullable_vals order by v asc nulls last limit 1;
+----
+(empty)
+
+query T
+select distinct v from nullable_vals order by v asc nulls last limit 4;
+----
+(empty)
+a
+b
+NULL
+
+# DESC NULLS FIRST: NULL comes first
+query T
+select distinct v from nullable_vals order by v desc nulls first limit 1;
+----
+NULL
+
+# DESC NULLS LAST: NULL comes last
+query T
+select distinct v from nullable_vals order by v desc nulls last limit 1;
+----
+b
+
+query T
+select distinct v from nullable_vals order by v desc nulls last limit 4;
+----
+b
+a
+(empty)
+NULL
+
+# Test with integer column containing NULLs
+statement ok
+create table nullable_ints (v int) as values (NULL), (3), (1), (2);
+
+query I
+select distinct v from nullable_ints order by v asc nulls first limit 1;
+----
+NULL
+
+query I
+select distinct v from nullable_ints order by v asc nulls first limit 3;
+----
+NULL
+1
+2
+
+query I
+select distinct v from nullable_ints order by v desc nulls last limit 2;
+----
+3
+2
+
+query I
+select distinct v from nullable_ints order by v asc nulls last limit 4;
+----
+1
+2
+3
+NULL
+
+# Test with all-NULL column
+statement ok
+create table all_nulls (v varchar) as values (NULL), (NULL);
+
+query T
+select distinct v from all_nulls order by v asc nulls first limit 1;
+----
+NULL
+
+statement ok
+drop table nullable_vals;
+
+statement ok
+drop table nullable_ints;
+
+statement ok
+drop table all_nulls;
+
 statement ok
 drop table values_table;
 

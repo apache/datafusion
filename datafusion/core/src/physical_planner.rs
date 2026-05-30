@@ -2597,6 +2597,8 @@ impl DefaultPhysicalPlanner {
 
         let config = &session_state.config_options().explain;
         let explain_format = &e.explain_format;
+        // Statement-level override wins over session config for show_statistics.
+        let show_statistics = e.show_statistics.unwrap_or(config.show_statistics);
 
         if !e.logical_optimization_succeeded {
             return Ok(Arc::new(ExplainExec::new(
@@ -2669,7 +2671,7 @@ impl DefaultPhysicalPlanner {
                     stringified_plans.push(StringifiedPlan::new(
                         InitialPhysicalPlan,
                         displayable(input.as_ref())
-                            .set_show_statistics(config.show_statistics)
+                            .set_show_statistics(show_statistics)
                             .set_show_schema(config.show_schema)
                             .indent(e.verbose)
                             .to_string(),
@@ -2678,7 +2680,7 @@ impl DefaultPhysicalPlanner {
                     // Show statistics + schema in verbose output even if not
                     // explicitly requested
                     if e.verbose {
-                        if !config.show_statistics {
+                        if !show_statistics {
                             stringified_plans.push(StringifiedPlan::new(
                                 InitialPhysicalPlanWithStats,
                                 displayable(input.as_ref())
@@ -2707,7 +2709,7 @@ impl DefaultPhysicalPlanner {
                             stringified_plans.push(StringifiedPlan::new(
                                 plan_type,
                                 displayable(plan)
-                                    .set_show_statistics(config.show_statistics)
+                                    .set_show_statistics(show_statistics)
                                     .set_show_schema(config.show_schema)
                                     .indent(e.verbose)
                                     .to_string(),
@@ -2720,7 +2722,7 @@ impl DefaultPhysicalPlanner {
                             stringified_plans.push(StringifiedPlan::new(
                                 FinalPhysicalPlan,
                                 displayable(input.as_ref())
-                                    .set_show_statistics(config.show_statistics)
+                                    .set_show_statistics(show_statistics)
                                     .set_show_schema(config.show_schema)
                                     .indent(e.verbose)
                                     .to_string(),
@@ -2729,7 +2731,7 @@ impl DefaultPhysicalPlanner {
                             // Show statistics + schema in verbose output even if not
                             // explicitly requested
                             if e.verbose {
-                                if !config.show_statistics {
+                                if !show_statistics {
                                     stringified_plans.push(StringifiedPlan::new(
                                         FinalPhysicalPlanWithStats,
                                         displayable(input.as_ref())
@@ -2783,13 +2785,18 @@ impl DefaultPhysicalPlanner {
         let input = self.create_physical_plan(&a.input, session_state).await?;
         let schema = Arc::clone(a.schema.inner());
         let show_statistics = session_state.config_options().explain.show_statistics;
-        let analyze_level = session_state.config_options().explain.analyze_level;
+        // Statement-level overrides take precedence over the session config.
+        let analyze_level = a
+            .analyze_level
+            .unwrap_or(session_state.config_options().explain.analyze_level);
         let metric_types = analyze_level.included_types();
-        let analyze_categories = session_state
-            .config_options()
-            .explain
-            .analyze_categories
-            .clone();
+        let analyze_categories = a.analyze_categories.clone().unwrap_or_else(|| {
+            session_state
+                .config_options()
+                .explain
+                .analyze_categories
+                .clone()
+        });
         let metric_categories = match analyze_categories {
             ExplainAnalyzeCategories::All => None,
             ExplainAnalyzeCategories::Only(cats) => Some(cats),
@@ -4312,6 +4319,7 @@ mod tests {
             stringified_plans,
             schema: schema.to_dfschema_ref().unwrap(),
             logical_optimization_succeeded: false,
+            show_statistics: None,
         };
         let plan = planner
             .handle_explain(&explain, &ctx.state())

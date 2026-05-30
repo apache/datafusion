@@ -182,11 +182,13 @@ impl Column {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
-        let protobuf::PhysicalColumn { name, index } = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::Column(c)) => c,
-            _ => return internal_err!("PhysicalExprNode is not a Column"),
-        };
+        let protobuf::PhysicalColumn { name, index } = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::Column,
+            "Column",
+        );
         Ok(Arc::new(Column::new(name, *index as usize)))
     }
 }

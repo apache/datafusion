@@ -252,16 +252,14 @@ impl InListExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
 
-        let node = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::InList(n)) => n,
-            _ => {
-                return datafusion_common::internal_err!(
-                    "PhysicalExprNode is not an InList"
-                );
-            }
-        };
+        let node = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::InList,
+            "InList",
+        );
 
         let expr =
             ctx.decode_required_expression(node.expr.as_deref(), "InListExpr", "expr")?;
@@ -3981,7 +3979,7 @@ mod proto_tests {
         let err = InListExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
             err,
-            DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not an InList")
+            DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a InList")
         ));
     }
 
