@@ -1875,7 +1875,134 @@ pub fn update_hash(
     Ok(())
 }
 
+/// A row-wise equality predicate for a single pair of join-key columns,
+/// comparing the build-side row `i` with the probe-side row `j` directly by
+/// index. Built once per batch pair and reused for every candidate row,
+/// avoiding the per-candidate `take` materialization that the array-based
+/// path requires (see <https://github.com/apache/datafusion/issues/12131>).
+type RowEqFn = Box<dyn Fn(usize, usize) -> bool>;
+
+/// Build a row-wise equality closure for one pair of join-key columns.
+///
+/// Returns `None` for data types that are not handled by the fast row-wise
+/// path (nested types, dictionaries, etc.); callers fall back to
+/// [`equal_rows_arr_take`] in that case.
+///
+/// Semantics match the `eq` / `not_distinct` kernels exactly:
+/// - non-null vs non-null: native `==` (so float `NaN != NaN`, as in `eq`);
+/// - one side null: never equal;
+/// - both null: equal only under [`NullEquality::NullEqualsNull`].
+fn build_row_eq_comparator(
+    left: &ArrayRef,
+    right: &ArrayRef,
+    null_equality: NullEquality,
+) -> Option<RowEqFn> {
+    macro_rules! make_eq {
+        ($ty:ty) => {{
+            let l = left.as_any().downcast_ref::<$ty>()?.clone();
+            let r = right.as_any().downcast_ref::<$ty>()?.clone();
+            Some(Box::new(
+                move |i: usize, j: usize| match (l.is_null(i), r.is_null(j)) {
+                    (false, false) => l.value(i) == r.value(j),
+                    (true, true) => null_equality == NullEquality::NullEqualsNull,
+                    _ => false,
+                },
+            ) as RowEqFn)
+        }};
+    }
+
+    match left.data_type() {
+        DataType::Boolean => make_eq!(BooleanArray),
+        DataType::Int8 => make_eq!(Int8Array),
+        DataType::Int16 => make_eq!(Int16Array),
+        DataType::Int32 => make_eq!(Int32Array),
+        DataType::Int64 => make_eq!(Int64Array),
+        DataType::UInt8 => make_eq!(UInt8Array),
+        DataType::UInt16 => make_eq!(UInt16Array),
+        DataType::UInt32 => make_eq!(UInt32Array),
+        DataType::UInt64 => make_eq!(UInt64Array),
+        DataType::Float32 => make_eq!(Float32Array),
+        DataType::Float64 => make_eq!(Float64Array),
+        DataType::Binary => make_eq!(BinaryArray),
+        DataType::BinaryView => make_eq!(BinaryViewArray),
+        DataType::FixedSizeBinary(_) => make_eq!(FixedSizeBinaryArray),
+        DataType::LargeBinary => make_eq!(LargeBinaryArray),
+        DataType::Utf8 => make_eq!(StringArray),
+        DataType::Utf8View => make_eq!(StringViewArray),
+        DataType::LargeUtf8 => make_eq!(LargeStringArray),
+        DataType::Decimal128(..) => make_eq!(Decimal128Array),
+        DataType::Timestamp(time_unit, _) => match time_unit {
+            TimeUnit::Second => make_eq!(TimestampSecondArray),
+            TimeUnit::Millisecond => make_eq!(TimestampMillisecondArray),
+            TimeUnit::Microsecond => make_eq!(TimestampMicrosecondArray),
+            TimeUnit::Nanosecond => make_eq!(TimestampNanosecondArray),
+        },
+        DataType::Date32 => make_eq!(Date32Array),
+        DataType::Date64 => make_eq!(Date64Array),
+        // Nested types, dictionaries, and anything else fall back to the
+        // array-based path which delegates to the eq / not_distinct kernels.
+        _ => None,
+    }
+}
+
 pub(super) fn equal_rows_arr(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Result<(UInt64Array, UInt32Array)> {
+    if left_arrays.is_empty() {
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+    }
+
+    // Try to build a row-wise comparator for every key column. If any column
+    // uses a type the fast path does not support, fall back to the array-based
+    // implementation (which handles nested types, dictionaries, etc.).
+    let mut comparators = Vec::with_capacity(left_arrays.len());
+    for (left, right) in left_arrays.iter().zip(right_arrays.iter()) {
+        match build_row_eq_comparator(left, right, null_equality) {
+            Some(cmp) => comparators.push(cmp),
+            None => {
+                return equal_rows_arr_take(
+                    indices_left,
+                    indices_right,
+                    left_arrays,
+                    right_arrays,
+                    null_equality,
+                );
+            }
+        }
+    }
+
+    // Single pass over candidate (build, probe) index pairs, comparing rows in
+    // place and keeping only the pairs that are equal across all key columns.
+    // The candidate index buffers never contain nulls, so `values()` is safe.
+    let left_idx = indices_left.values();
+    let right_idx = indices_right.values();
+
+    let mut left_filtered: Vec<u64> = Vec::with_capacity(left_idx.len());
+    let mut right_filtered: Vec<u32> = Vec::with_capacity(right_idx.len());
+
+    'rows: for (&l, &r) in left_idx.iter().zip(right_idx.iter()) {
+        let (li, ri) = (l as usize, r as usize);
+        for cmp in &comparators {
+            if !cmp(li, ri) {
+                continue 'rows;
+            }
+        }
+        left_filtered.push(l);
+        right_filtered.push(r);
+    }
+
+    Ok((left_filtered.into(), right_filtered.into()))
+}
+
+/// Array-based fallback for [`equal_rows_arr`], used for key columns whose data
+/// types are not supported by the fast row-wise path. Materializes the
+/// candidate rows with `take` and compares them with the `eq` / `not_distinct`
+/// kernels.
+fn equal_rows_arr_take(
     indices_left: &UInt64Array,
     indices_right: &UInt32Array,
     left_arrays: &[ArrayRef],
