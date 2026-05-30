@@ -40,6 +40,7 @@
 //! [`TypeCoercion`]: analyzer::type_coercion::TypeCoercion
 pub mod analyzer;
 pub mod common_subexpr_eliminate;
+pub mod cte_filter_pusher;
 pub mod decorrelate;
 pub mod decorrelate_lateral_join;
 pub mod decorrelate_predicate_subquery;
@@ -59,6 +60,7 @@ pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod extract_leaf_expressions;
 pub mod filter_null_join_keys;
+pub mod materialize_cte;
 pub mod optimize_projections;
 pub mod optimize_unions;
 pub mod optimizer;

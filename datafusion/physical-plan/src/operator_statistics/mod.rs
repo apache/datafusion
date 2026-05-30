@@ -683,7 +683,11 @@ impl StatisticsProvider for AggregateStatisticsProvider {
             return Ok(StatisticsResult::Delegate);
         }
 
-        if child_stats.is_empty() || agg.group_expr().expr().is_empty() {
+        if agg.group_expr().expr().is_empty() {
+            return computed_with_row_count(plan, Precision::Exact(1));
+        }
+
+        if child_stats.is_empty() {
             return Ok(StatisticsResult::Delegate);
         }
 
@@ -1592,6 +1596,20 @@ mod tests {
         ]);
         let stats = registry.compute(agg.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(500));
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_provider_global_aggregate() -> Result<()> {
+        let source = make_source_with_ndv(100, vec![Some(10)]);
+        let agg = make_aggregate(source, PhysicalGroupBy::default())?;
+
+        let registry = StatisticsRegistry::with_providers(vec![
+            Arc::new(AggregateStatisticsProvider),
+            Arc::new(DefaultStatisticsProvider),
+        ]);
+        let stats = registry.compute(agg.as_ref())?;
+        assert_eq!(stats.base.num_rows, Precision::Exact(1));
         Ok(())
     }
 

@@ -56,12 +56,14 @@ Rule order matters. The default pipeline may change between releases.
 | 17    | `eliminate_outer_join`                    | Rewrites outer joins to inner joins when later filters reject the NULL-extended rows.                                       |
 | 18    | `push_down_limit`                         | Moves literal limits closer to scans and unions and merges adjacent limits.                                                 |
 | 19    | `push_down_filter`                        | Moves filters as early as possible through filter-commutative operators.                                                    |
-| 20    | `single_distinct_aggregation_to_group_by` | Rewrites single-column `DISTINCT` aggregations into two-stage `GROUP BY` plans.                                             |
-| 21    | `eliminate_group_by_constant`             | Removes constant or functionally redundant expressions from `GROUP BY`.                                                     |
-| 22    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
-| 23    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
-| 24    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
-| 25    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
+| 20    | `inline_cte`                              | Inlines materialized CTEs where materialization is not beneficial (cheap, limited, or disjoint-filtered).                   |
+| 21    | `cte_filter_pusher`                       | Pushes OR-combined filters from CTE readers into the materialized CTE body to reduce materialization volume.                |
+| 22    | `single_distinct_aggregation_to_group_by` | Rewrites single-column `DISTINCT` aggregations into two-stage `GROUP BY` plans.                                             |
+| 23    | `eliminate_group_by_constant`             | Removes constant or functionally redundant expressions from `GROUP BY`.                                                     |
+| 24    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
+| 25    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
+| 26    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
+| 27    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
 
 ### Physical Optimizer Rules
 
