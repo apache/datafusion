@@ -136,7 +136,7 @@ SELECT quote(arrow_cast('2024-01-15', 'Date32'));
 '2024-01-15'
 
 query T
-SELECT quote(arrow_cast('2024-01-15 12:30:45', 'Timestamp'));
+SELECT quote(arrow_cast('2024-01-15 12:30:45', 'Timestamp(µs)'));
 ----
 '2024-01-15 12:30:45'
 
