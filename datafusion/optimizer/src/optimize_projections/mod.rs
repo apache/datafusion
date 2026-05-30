@@ -201,51 +201,55 @@ fn optimize_projections(
                 )));
             }
 
-            if new_aggr_expr.is_empty()
-                && let Some(input) =
+            let aggregate_input = Arc::unwrap_or_clone(aggregate.input);
+            let aggregate_input = if new_aggr_expr.is_empty() {
+                let transformed_input =
                     remove_row_preserving_unused_unnest_from_duplicate_insensitive_input(
-                        aggregate.input.as_ref(),
+                        aggregate_input,
                         &new_group_bys,
-                    )?
-            {
-                let aggregate =
-                    Aggregate::try_new(Arc::new(input), new_group_bys, new_aggr_expr)?;
-                return optimize_projections(
-                    LogicalPlan::Aggregate(aggregate),
-                    config,
-                    indices,
-                );
-            }
+                    )?;
+                if transformed_input.transformed {
+                    let aggregate = Aggregate::try_new(
+                        Arc::new(transformed_input.data),
+                        new_group_bys,
+                        Vec::new(),
+                    )?;
+                    return optimize_projections(
+                        LogicalPlan::Aggregate(aggregate),
+                        config,
+                        indices,
+                    );
+                }
+                transformed_input.data
+            } else {
+                aggregate_input
+            };
 
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
-            let schema = aggregate.input.schema();
+            let schema = aggregate_input.schema();
             let necessary_indices =
                 RequiredIndices::new().with_exprs(schema, all_exprs_iter);
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
 
-            return optimize_projections(
-                Arc::unwrap_or_clone(aggregate.input),
-                config,
-                necessary_indices,
-            )?
-            .transform_data(|aggregate_input| {
-                // Simplify the input of the aggregation by adding a projection so
-                // that its input only contains absolutely necessary columns for
-                // the aggregate expressions. Note that necessary_indices refer to
-                // fields in `aggregate.input.schema()`.
-                add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)
-            })?
-            .map_data(|aggregate_input| {
-                // Create a new aggregate plan with the updated input and only the
-                // absolutely necessary fields:
-                Aggregate::try_new(
-                    Arc::new(aggregate_input),
-                    new_group_bys,
-                    new_aggr_expr,
-                )
-                .map(LogicalPlan::Aggregate)
-            })?
-            .transform_data(|plan| optimize_subqueries(plan, config));
+            return optimize_projections(aggregate_input, config, necessary_indices)?
+                .transform_data(|aggregate_input| {
+                    // Simplify the input of the aggregation by adding a projection so
+                    // that its input only contains absolutely necessary columns for
+                    // the aggregate expressions. Note that necessary_indices refer to
+                    // fields in `aggregate.input.schema()`.
+                    add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)
+                })?
+                .map_data(|aggregate_input| {
+                    // Create a new aggregate plan with the updated input and only the
+                    // absolutely necessary fields:
+                    Aggregate::try_new(
+                        Arc::new(aggregate_input),
+                        new_group_bys,
+                        new_aggr_expr,
+                    )
+                    .map(LogicalPlan::Aggregate)
+                })?
+                .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::Window(window) => {
             let input_schema = Arc::clone(window.input.schema());
@@ -504,37 +508,58 @@ fn optimize_projections(
     }
 }
 
+/// Remove an unused, row-preserving [`LogicalPlan::Unnest`] below a duplicate-insensitive
+/// aggregate input.
+///
+/// For example, this plan:
+///
+/// ```text
+/// Aggregate: groupBy=[[id]], aggr=[[]]
+///   Unnest: lists[elem|depth=1] structs[]
+///     Projection: id, List([1, 2]) AS elem
+///       TableScan: t
+/// ```
+///
+/// can be rewritten to group directly on `t.id` because `elem` is unused and
+/// `UNNEST([1, 2])` preserves at least one row per input row. The rewrite is
+/// deliberately conservative: it rejects volatile group expressions, visible
+/// aggregate expressions, referenced unnested outputs, non-literal lists, empty
+/// or null lists, and recursive list unnesting.
 fn remove_row_preserving_unused_unnest_from_duplicate_insensitive_input(
-    input: &LogicalPlan,
+    input: LogicalPlan,
     required_exprs: &[Expr],
-) -> Result<Option<LogicalPlan>> {
+) -> Result<Transformed<LogicalPlan>> {
     if required_exprs.iter().any(Expr::is_volatile) {
-        return Ok(None);
+        return Ok(Transformed::no(input));
     }
 
     match input {
         LogicalPlan::Unnest(unnest)
-            if can_remove_unused_unnest_for_exprs(unnest, required_exprs)? =>
+            if can_remove_unused_unnest_for_exprs(&unnest, required_exprs)? =>
         {
-            Ok(Some(Arc::unwrap_or_clone(Arc::clone(&unnest.input))))
+            Ok(Transformed::yes(Arc::unwrap_or_clone(unnest.input)))
         }
         LogicalPlan::Projection(projection) => {
             let LogicalPlan::Unnest(unnest) = projection.input.as_ref() else {
-                return Ok(None);
+                return Ok(Transformed::no(LogicalPlan::Projection(projection)));
             };
             let required_projection_exprs = RequiredIndices::new()
                 .with_exprs(&projection.schema, required_exprs.iter())
                 .get_at_indices(&projection.expr);
 
             if can_remove_unused_unnest_for_exprs(unnest, &required_projection_exprs)? {
-                Projection::try_new(required_projection_exprs, Arc::clone(&unnest.input))
+                let LogicalPlan::Unnest(unnest) = Arc::unwrap_or_clone(projection.input)
+                else {
+                    unreachable!("projection input was checked to be Unnest")
+                };
+                Projection::try_new(required_projection_exprs, unnest.input)
                     .map(LogicalPlan::Projection)
-                    .map(Some)
+                    .map(Transformed::yes)
             } else {
-                Ok(None)
+                Ok(Transformed::no(LogicalPlan::Projection(projection)))
             }
         }
-        _ => Ok(None),
+        input => Ok(Transformed::no(input)),
     }
 }
 
@@ -555,20 +580,12 @@ fn can_remove_unused_unnest_for_exprs(unnest: &Unnest, exprs: &[Expr]) -> Result
 
     for column in columns {
         let output_index = unnest.schema.index_of_column(&column)?;
-        if is_unnested_input_index(unnest, unnest.dependency_indices[output_index]) {
+        if unnest.is_unnested_input_index(unnest.dependency_indices[output_index]) {
             return Ok(false);
         }
     }
 
     Ok(true)
-}
-
-fn is_unnested_input_index(unnest: &Unnest, input_index: usize) -> bool {
-    unnest
-        .list_type_columns
-        .iter()
-        .any(|(idx, _)| *idx == input_index)
-        || unnest.struct_type_columns.contains(&input_index)
 }
 
 fn unnest_preserves_at_least_one_row_per_input(unnest: &Unnest) -> bool {
@@ -598,39 +615,26 @@ fn literal_non_empty_list(expr: &Expr) -> Option<bool> {
 
     match value {
         ScalarValue::List(array) => {
-            Some(has_valid_non_empty_first_value(array.as_ref(), || {
-                array.value_length(0) > 0
-            }))
+            Some(has_valid_first_value(array.as_ref()) && array.value_length(0) > 0)
         }
         ScalarValue::LargeList(array) => {
-            Some(has_valid_non_empty_first_value(array.as_ref(), || {
-                array.value_length(0) > 0
-            }))
+            Some(has_valid_first_value(array.as_ref()) && array.value_length(0) > 0)
         }
         ScalarValue::FixedSizeList(array) => {
-            Some(has_valid_non_empty_first_value(array.as_ref(), || {
-                array.value_length() > 0
-            }))
+            Some(has_valid_first_value(array.as_ref()) && array.value_length() > 0)
         }
         ScalarValue::ListView(array) => {
-            Some(has_valid_non_empty_first_value(array.as_ref(), || {
-                array.value_sizes()[0] > 0
-            }))
+            Some(has_valid_first_value(array.as_ref()) && array.value_sizes()[0] > 0)
         }
         ScalarValue::LargeListView(array) => {
-            Some(has_valid_non_empty_first_value(array.as_ref(), || {
-                array.value_sizes()[0] > 0
-            }))
+            Some(has_valid_first_value(array.as_ref()) && array.value_sizes()[0] > 0)
         }
         _ => None,
     }
 }
 
-fn has_valid_non_empty_first_value(
-    array: &impl Array,
-    first_value_non_empty: impl FnOnce() -> bool,
-) -> bool {
-    !array.is_empty() && array.is_valid(0) && first_value_non_empty()
+fn has_valid_first_value(array: &impl Array) -> bool {
+    !array.is_empty() && array.is_valid(0)
 }
 
 /// Optimizes uncorrelated subquery plans embedded in expressions of the given
