@@ -303,6 +303,7 @@ impl PartitionEvaluator for ForeignPartitionEvaluator {
     fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
         let ffi_state = FFI_WindowAggState::try_from(state.clone())?;
         // Temporarily store the context
+        // so we are preserving it AS IS for now
         let saved_ctx = state.window_frame_ctx.take();
 
         let result = unsafe { (self.evaluator.memoize)(&mut self.evaluator, ffi_state) };
