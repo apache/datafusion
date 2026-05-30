@@ -1181,7 +1181,7 @@ SELECT * FROM empty_table
 statement ok
 CREATE TABLE case_sensitive_table("INT32" int) AS VALUES (1), (2), (3), (4), (5);
 
-statement error DataFusion error: Schema error: No field named int32\. Did you mean 'case_sensitive_table\."INT32"'\?\nColumn names are case sensitive\. You can use double quotes to refer to the case_sensitive_table\."INT32" column or set the datafusion\.sql_parser\.enable_ident_normalization configuration\.\nValid fields are case_sensitive_table\."INT32"\.
+statement error DataFusion error: Schema error: No field named int32\. Did you mean 'case_sensitive_table\."INT32"'\?\nColumn names are case sensitive\. You can use double quotes to refer to the case_sensitive_table\."INT32" column or disable the datafusion\.sql_parser\.enable_ident_normalization configuration\.\nValid fields are case_sensitive_table\."INT32"\.
 select "int32" from case_sensitive_table
 
 query I

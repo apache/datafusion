@@ -202,17 +202,19 @@ fn case_insensitive_field_match<'a>(
     field: &Column,
     valid_fields: &'a [Column],
 ) -> Option<&'a Column> {
+    let field_name = field.name();
     let field_flat_name = field.flat_name();
-    let field_name_lower = field.name().to_lowercase();
+    let field_name_lower = field_name.to_lowercase();
     let field_flat_name_lower = field_flat_name.to_lowercase();
 
     valid_fields.iter().find(|valid_field| {
+        let valid_field_name = valid_field.name();
         let valid_field_flat_name = valid_field.flat_name();
-        let valid_field_name_lower = valid_field.name().to_lowercase();
+        let valid_field_name_lower = valid_field_name.to_lowercase();
         let valid_field_flat_name_lower = valid_field_flat_name.to_lowercase();
 
-        let name_differs_only_by_case = field_name_lower == valid_field_name_lower
-            && field.name() != valid_field.name();
+        let name_differs_only_by_case =
+            field_name_lower == valid_field_name_lower && field_name != valid_field_name;
         let flat_name_differs_only_by_case = field_flat_name_lower
             == valid_field_flat_name_lower
             && field_flat_name != valid_field_flat_name;
@@ -221,6 +223,8 @@ fn case_insensitive_field_match<'a>(
     })
 }
 
+/// Find the most similar field name based on edit distance.
+/// Returns `None` if all candidate edit distances are too far away.
 fn closest_valid_field<'a>(
     field: &Column,
     valid_fields: &'a [Column],
@@ -241,6 +245,8 @@ fn closest_valid_field<'a>(
             for valid_name in &valid_names {
                 let distance = levenshtein(target, valid_name);
                 let max_len = target.chars().count().max(valid_name.chars().count());
+                // If there are no shared characters, or we would have to edit
+                // more than half of the longer name, don't suggest a potential match.
                 if max_len == 0 || distance * 2 > max_len {
                     continue;
                 }
@@ -285,7 +291,7 @@ impl Display for SchemaError {
                     write!(
                         f,
                         "\nColumn names are case sensitive. You can use double quotes to refer to the {} column \
-                        or set the datafusion.sql_parser.enable_ident_normalization configuration.",
+                        or disable the datafusion.sql_parser.enable_ident_normalization configuration.",
                         case_sensitive_match.quoted_flat_name()
                     )?;
                 }

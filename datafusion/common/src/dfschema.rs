@@ -1481,7 +1481,7 @@ mod tests {
         let expected = "Schema error: No field named url. Did you mean 'hits.\"URL\"'?\n\
             Column names are case sensitive. \
             You can use double quotes to refer to the hits.\"URL\" column \
-            or set the datafusion.sql_parser.enable_ident_normalization configuration.\n\
+            or disable the datafusion.sql_parser.enable_ident_normalization configuration.\n\
             Valid fields are hits.\"WatchID\", hits.\"URL\", hits.\"URLHash\".";
         assert_eq!(err.strip_backtrace(), expected);
         Ok(())
