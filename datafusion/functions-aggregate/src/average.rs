@@ -973,6 +973,23 @@ mod tests {
     use arrow::array::{Array, Float64Array};
     use arrow::datatypes::{Decimal128Type, DurationNanosecondType};
 
+    fn assert_validity(array: &dyn Array, expected: &[bool]) {
+        assert_eq!(array.len(), expected.len());
+        for (idx, expected_valid) in expected.iter().copied().enumerate() {
+            assert_eq!(!array.is_null(idx), expected_valid, "validity at row {idx}");
+        }
+    }
+
+    fn avg_state<T: ArrowPrimitiveType>(
+        state: &[ArrayRef],
+    ) -> (&PrimitiveArray<UInt64Type>, &PrimitiveArray<T>) {
+        assert_eq!(state.len(), 2);
+        (
+            state[0].as_primitive::<UInt64Type>(),
+            state[1].as_primitive::<T>(),
+        )
+    }
+
     fn float64_acc() -> AvgGroupsAccumulator<Float64Type, impl Fn(f64, u64) -> Result<f64>>
     {
         AvgGroupsAccumulator::<Float64Type, _>::new(
@@ -987,6 +1004,7 @@ mod tests {
         AvgGroupsAccumulator::<Decimal128Type, _>::new(
             &DataType::Decimal128(10, 2),
             &DataType::Decimal128(14, 6),
+            // convert_to_state does not evaluate averages, so avg_fn is unused here.
             |sum, _count| Ok(sum),
         )
     }
@@ -1014,17 +1032,10 @@ mod tests {
 
         let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
 
-        let counts = state[0].as_primitive::<UInt64Type>();
-        let sums = state[1].as_primitive::<Float64Type>();
+        let (counts, sums) = avg_state::<Float64Type>(&state);
         assert_eq!(counts.values().as_ref(), &[1, 1, 1, 1]);
-        assert!(!counts.is_null(0));
-        assert!(counts.is_null(1));
-        assert!(counts.is_null(2));
-        assert!(counts.is_null(3));
-        assert!(!sums.is_null(0));
-        assert!(sums.is_null(1));
-        assert!(sums.is_null(2));
-        assert!(sums.is_null(3));
+        assert_validity(counts, &[true, false, false, false]);
+        assert_validity(sums, &[true, false, false, false]);
     }
 
     #[test]
@@ -1041,16 +1052,11 @@ mod tests {
 
         let state = acc.convert_to_state(&values, None).unwrap();
 
-        let counts = state[0].as_primitive::<UInt64Type>();
-        let sums = state[1].as_primitive::<Decimal128Type>();
+        let (counts, sums) = avg_state::<Decimal128Type>(&state);
         assert_eq!(sums.data_type(), &DataType::Decimal128(10, 2));
         assert_eq!(counts.values().as_ref(), &[1, 1, 1]);
-        assert!(!counts.is_null(0));
-        assert!(counts.is_null(1));
-        assert!(!counts.is_null(2));
-        assert!(!sums.is_null(0));
-        assert!(sums.is_null(1));
-        assert!(!sums.is_null(2));
+        assert_validity(counts, &[true, false, true]);
+        assert_validity(sums, &[true, false, true]);
     }
 
     #[test]
@@ -1067,13 +1073,10 @@ mod tests {
 
         let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
 
-        let counts = state[0].as_primitive::<UInt64Type>();
-        let sums = state[1].as_primitive::<DurationNanosecondType>();
+        let (counts, sums) = avg_state::<DurationNanosecondType>(&state);
         assert_eq!(sums.data_type(), &DataType::Duration(TimeUnit::Nanosecond));
         assert_eq!(counts.values().as_ref(), &[1, 1]);
-        assert!(counts.is_null(0));
-        assert!(!counts.is_null(1));
-        assert!(sums.is_null(0));
-        assert!(!sums.is_null(1));
+        assert_validity(counts, &[false, true]);
+        assert_validity(sums, &[false, true]);
     }
 }

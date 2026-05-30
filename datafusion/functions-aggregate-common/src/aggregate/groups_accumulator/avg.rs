@@ -49,25 +49,28 @@ where
 #[cfg(test)]
 mod tests {
     use arrow::array::{Array, BooleanArray, Float64Array};
-    use arrow::datatypes::Float64Type;
+    use arrow::datatypes::{DataType, Float64Type, Int64Type};
 
     use super::convert_to_avg_state;
+
+    type CountType = Int64Type;
+
+    fn assert_validity(array: &dyn Array, expected: &[bool]) {
+        assert_eq!(array.len(), expected.len());
+        for (idx, expected_valid) in expected.iter().copied().enumerate() {
+            assert_eq!(!array.is_null(idx), expected_valid, "validity at row {idx}");
+        }
+    }
 
     #[test]
     fn convert_to_avg_state_applies_input_nulls_to_sum_and_count() {
         let sums = Float64Array::from(vec![Some(1.0), None, Some(3.0)]);
 
-        let (sums, counts) = convert_to_avg_state::<
-            Float64Type,
-            arrow::datatypes::Int64Type,
-        >(sums, 1, None);
+        let (sums, counts) =
+            convert_to_avg_state::<Float64Type, CountType>(sums, 1, None);
 
-        assert!(!sums.is_null(0));
-        assert!(sums.is_null(1));
-        assert!(!sums.is_null(2));
-        assert!(!counts.is_null(0));
-        assert!(counts.is_null(1));
-        assert!(!counts.is_null(2));
+        assert_validity(&sums, &[true, false, true]);
+        assert_validity(&counts, &[true, false, true]);
         assert_eq!(counts.values().as_ref(), &[1, 1, 1]);
     }
 
@@ -76,35 +79,24 @@ mod tests {
         let sums = Float64Array::from(vec![Some(1.0), Some(2.0), Some(3.0), Some(4.0)]);
         let filter = BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
 
-        let (sums, counts) = convert_to_avg_state::<
-            Float64Type,
-            arrow::datatypes::Int64Type,
-        >(sums, 1, Some(&filter));
+        let (sums, counts) =
+            convert_to_avg_state::<Float64Type, CountType>(sums, 1, Some(&filter));
 
         assert_eq!(sums.null_count(), 2);
-        assert!(!sums.is_null(0));
-        assert!(sums.is_null(1));
-        assert!(sums.is_null(2));
-        assert!(!sums.is_null(3));
+        assert_validity(&sums, &[true, false, false, true]);
 
         assert_eq!(counts.null_count(), 2);
-        assert!(!counts.is_null(0));
-        assert!(counts.is_null(1));
-        assert!(counts.is_null(2));
-        assert!(!counts.is_null(3));
+        assert_validity(&counts, &[true, false, false, true]);
         assert_eq!(counts.values().as_ref(), &[1, 1, 1, 1]);
     }
 
     #[test]
     fn convert_to_avg_state_preserves_sum_data_type() {
-        let sums = Float64Array::from(vec![1.0, 2.0])
-            .with_data_type(arrow::datatypes::DataType::Float64);
+        let sums = Float64Array::from(vec![1.0, 2.0]).with_data_type(DataType::Float64);
 
-        let (sums, _counts) = convert_to_avg_state::<
-            Float64Type,
-            arrow::datatypes::Int64Type,
-        >(sums, 1, None);
+        let (sums, _counts) =
+            convert_to_avg_state::<Float64Type, CountType>(sums, 1, None);
 
-        assert_eq!(sums.data_type(), &arrow::datatypes::DataType::Float64);
+        assert_eq!(sums.data_type(), &DataType::Float64);
     }
 }

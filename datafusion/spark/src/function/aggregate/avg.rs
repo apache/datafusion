@@ -383,6 +383,13 @@ mod tests {
         })
     }
 
+    fn assert_validity(array: &dyn Array, expected: &[bool]) {
+        assert_eq!(array.len(), expected.len());
+        for (idx, expected_valid) in expected.iter().copied().enumerate() {
+            assert_eq!(!array.is_null(idx), expected_valid, "validity at row {idx}");
+        }
+    }
+
     #[test]
     fn supports_convert_to_state() {
         assert!(make_acc().supports_convert_to_state());
@@ -418,12 +425,10 @@ mod tests {
         let sums = state[0].as_primitive::<Float64Type>();
         let counts = state[1].as_primitive::<Int64Type>();
 
-        assert!(!sums.is_null(0));
-        assert!(sums.is_null(1));
-        assert!(!sums.is_null(2));
+        assert_validity(sums, &[true, false, true]);
 
         assert_eq!(counts.value(0), 1);
-        assert!(counts.is_null(1));
+        assert_validity(counts, &[true, false, true]);
         assert_eq!(counts.value(2), 1);
     }
 
@@ -438,12 +443,10 @@ mod tests {
         let sums = state[0].as_primitive::<Float64Type>();
         let counts = state[1].as_primitive::<Int64Type>();
 
-        assert!(!sums.is_null(0));
-        assert!(sums.is_null(1));
-        assert!(!sums.is_null(2));
+        assert_validity(sums, &[true, false, true]);
 
         assert_eq!(counts.value(0), 1);
-        assert!(counts.is_null(1));
+        assert_validity(counts, &[true, false, true]);
         assert_eq!(counts.value(2), 1);
     }
 
@@ -458,12 +461,10 @@ mod tests {
         let sums = state[0].as_primitive::<Float64Type>();
         let counts = state[1].as_primitive::<Int64Type>();
 
-        assert!(!sums.is_null(0));
-        assert!(sums.is_null(1));
-        assert!(!sums.is_null(2));
+        assert_validity(sums, &[true, false, true]);
 
         assert_eq!(counts.value(0), 1);
-        assert!(counts.is_null(1));
+        assert_validity(counts, &[true, false, true]);
         assert_eq!(counts.value(2), 1);
     }
 
