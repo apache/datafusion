@@ -154,10 +154,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let ref_count = count_cte_references(&plan, cte_name);
             let force = planner_context.is_materialized_cte(cte_name);
 
-            // Materialize all multi-ref CTEs and explicitly MATERIALIZED CTEs.
-            // The optimizer's InlineCte rule will inline ones that don't benefit.
+            // Materialize multi-ref CTEs and explicitly MATERIALIZED CTEs.
+            // Skip cheap CTEs (literals/empty) — not worth materializing.
+            // The optimizer's InlineCte rule handles further inlining decisions.
             if (ref_count > 1 || force)
                 && let Some(cte_plan) = planner_context.get_cte(cte_name)
+                && (force || !is_cheap_to_inline(cte_plan) || plan_contains_volatile_functions(cte_plan))
             {
                 ctes_to_materialize.push((cte_name.clone(), cte_plan.clone(), force));
             }
@@ -479,6 +481,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 },
             ))),
             _ => Ok(plan),
+        }
+    }
+}
+
+fn plan_contains_volatile_functions(plan: &LogicalPlan) -> bool {
+    let mut has_volatile = false;
+    plan.apply(|node| {
+        for expr in node.expressions() {
+            if expr.is_volatile() {
+                has_volatile = true;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .unwrap();
+    has_volatile
+}
+
+fn is_cheap_to_inline(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::EmptyRelation(_) => true,
+        LogicalPlan::SubqueryAlias(alias) => is_cheap_to_inline(alias.input.as_ref()),
+        _ => {
+            let inputs = plan.inputs();
+            inputs.len() == 1 && is_cheap_to_inline(inputs[0])
         }
     }
 }

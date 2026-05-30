@@ -28,7 +28,9 @@ use datafusion_common::stats::Precision;
 
 #[tokio::test]
 async fn multi_reference_cte_materialization_heuristic() -> Result<()> {
-    let ctx = SessionContext::new();
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.enable_materialized_ctes = true;
+    let ctx = SessionContext::new_with_config(config);
     ctx.sql("CREATE TABLE cte_scan_source AS VALUES (1), (2)")
         .await?
         .collect()
@@ -72,8 +74,9 @@ async fn multi_reference_cte_materialization_heuristic() -> Result<()> {
 
 #[tokio::test]
 async fn materialized_cte_reader_preserves_input_partitions() -> Result<()> {
-    let ctx =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4));
+    let mut config = SessionConfig::new().with_target_partitions(4);
+    config.options_mut().execution.enable_materialized_ctes = true;
+    let ctx = SessionContext::new_with_config(config);
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, false)]));
     let partitions = (0..4)
         .map(|partition| {
@@ -180,7 +183,9 @@ async fn materialized_cte_partitioned_continuation_executes_partitions_once() ->
 
 #[tokio::test]
 async fn materialized_cte_cache_is_per_physical_plan() -> Result<()> {
-    let ctx = SessionContext::new();
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.enable_materialized_ctes = true;
+    let ctx = SessionContext::new_with_config(config);
     ctx.sql("CREATE TABLE cte_cache_source AS VALUES (1), (2)")
         .await?
         .collect()
@@ -217,7 +222,9 @@ async fn materialized_cte_cache_is_per_physical_plan() -> Result<()> {
 
 #[tokio::test]
 async fn materialized_cte_reader_preserves_producer_statistics() -> Result<()> {
-    let ctx = SessionContext::new();
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.enable_materialized_ctes = true;
+    let ctx = SessionContext::new_with_config(config);
     ctx.sql("CREATE TABLE cte_cross_source AS VALUES (1), (2), (3), (4)")
         .await?
         .collect()
@@ -351,7 +358,9 @@ async fn q39_filter_pushdown_regression() -> Result<()> {
 async fn volatile_cte_is_materialized() -> Result<()> {
     // PostgreSQL/DuckDB semantics: volatile CTEs are always materialized
     // so that each reference sees the same result (evaluate once, share).
-    let ctx = SessionContext::new();
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.enable_materialized_ctes = true;
+    let ctx = SessionContext::new_with_config(config);
 
     let df = ctx
         .sql(
