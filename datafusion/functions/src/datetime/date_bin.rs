@@ -606,8 +606,10 @@ fn date_bin_impl(
         }
     }
 
-    fn timestamp_scale_overflow_message(x: i64) -> String {
-        format!("DATE_BIN source timestamp {x} cannot be represented in nanoseconds")
+    fn timestamp_scale_overflow_error(x: i64) -> DataFusionError {
+        DataFusionError::Execution(format!(
+            "DATE_BIN source timestamp {x} cannot be represented in nanoseconds"
+        ))
     }
 
     Ok(match array {
@@ -616,11 +618,9 @@ fn date_bin_impl(
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
                 match *v {
                     Some(val) => {
-                        let scaled = val.checked_mul(scale).ok_or_else(|| {
-                            DataFusionError::Execution(timestamp_scale_overflow_message(
-                                val,
-                            ))
-                        })?;
+                        let scaled = val
+                            .checked_mul(scale)
+                            .ok_or_else(|| timestamp_scale_overflow_error(val))?;
                         match stride_fn(stride, scaled, origin) {
                             Ok(result) => Some(result / scale),
                             Err(_) => None,
@@ -636,11 +636,9 @@ fn date_bin_impl(
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
                 match *v {
                     Some(val) => {
-                        let scaled = val.checked_mul(scale).ok_or_else(|| {
-                            DataFusionError::Execution(timestamp_scale_overflow_message(
-                                val,
-                            ))
-                        })?;
+                        let scaled = val
+                            .checked_mul(scale)
+                            .ok_or_else(|| timestamp_scale_overflow_error(val))?;
                         match stride_fn(stride, scaled, origin) {
                             Ok(result) => Some(result / scale),
                             Err(_) => None,
@@ -656,11 +654,9 @@ fn date_bin_impl(
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
                 match *v {
                     Some(val) => {
-                        let scaled = val.checked_mul(scale).ok_or_else(|| {
-                            DataFusionError::Execution(timestamp_scale_overflow_message(
-                                val,
-                            ))
-                        })?;
+                        let scaled = val
+                            .checked_mul(scale)
+                            .ok_or_else(|| timestamp_scale_overflow_error(val))?;
                         match stride_fn(stride, scaled, origin) {
                             Ok(result) => Some(result / scale),
                             Err(_) => None,
@@ -676,11 +672,9 @@ fn date_bin_impl(
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(
                 match *v {
                     Some(val) => {
-                        let scaled = val.checked_mul(scale).ok_or_else(|| {
-                            DataFusionError::Execution(timestamp_scale_overflow_message(
-                                val,
-                            ))
-                        })?;
+                        let scaled = val
+                            .checked_mul(scale)
+                            .ok_or_else(|| timestamp_scale_overflow_error(val))?;
                         match stride_fn(stride, scaled, origin) {
                             Ok(result) => Some(result / scale),
                             Err(_) => None,
@@ -746,14 +740,6 @@ fn date_bin_impl(
             ColumnarValue::Scalar(ScalarValue::Time64Microsecond(result))
         }
         ColumnarValue::Array(array) => {
-            fn df_to_arrow(e: DataFusionError) -> ArrowError {
-                match e {
-                    DataFusionError::Execution(msg) => ArrowError::ComputeError(msg),
-                    DataFusionError::ArrowError(ae, _) => *ae,
-                    other => ArrowError::ComputeError(other.to_string()),
-                }
-            }
-
             fn transform_array_with_stride<T>(
                 origin: i64,
                 stride: i64,
@@ -771,11 +757,9 @@ fn date_bin_impl(
                     .iter()
                     .map(|val| match val {
                         Some(val) => {
-                            let scaled = val.checked_mul(scale).ok_or_else(|| {
-                                DataFusionError::Execution(
-                                    timestamp_scale_overflow_message(val),
-                                )
-                            })?;
+                            let scaled = val
+                                .checked_mul(scale)
+                                .ok_or_else(|| timestamp_scale_overflow_error(val))?;
                             Ok(stride_fn(stride, scaled, origin)
                                 .ok()
                                 .map(|binned| binned / scale))
@@ -825,7 +809,7 @@ fn date_bin_impl(
                                     let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
                                     (nanos / NANOS_PER_MILLI) as i32
                                 })
-                                .map_err(df_to_arrow)
+                                .map_err(|e| ArrowError::ComputeError(e.to_string()))
                         })?;
                     ColumnarValue::Array(Arc::new(result))
                 }
@@ -843,7 +827,7 @@ fn date_bin_impl(
                                     let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
                                     (nanos / NANOS_PER_SEC) as i32
                                 })
-                                .map_err(df_to_arrow)
+                                .map_err(|e| ArrowError::ComputeError(e.to_string()))
                         })?;
                     ColumnarValue::Array(Arc::new(result))
                 }
@@ -861,7 +845,7 @@ fn date_bin_impl(
                                     let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
                                     nanos / NANOS_PER_MICRO
                                 })
-                                .map_err(df_to_arrow)
+                                .map_err(|e| ArrowError::ComputeError(e.to_string()))
                         })?;
                     ColumnarValue::Array(Arc::new(result))
                 }
@@ -876,7 +860,7 @@ fn date_bin_impl(
                         array.try_unary(|x| {
                             stride_fn(stride, x, origin)
                                 .map(|binned_nanos| binned_nanos % (NANOSECONDS_IN_DAY))
-                                .map_err(df_to_arrow)
+                                    .map_err(|e| ArrowError::ComputeError(e.to_string()))
                         })?;
                     ColumnarValue::Array(Arc::new(result))
                 }
