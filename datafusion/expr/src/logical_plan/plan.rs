@@ -709,8 +709,20 @@ impl LogicalPlan {
             }
             LogicalPlan::Union(Union { inputs, schema }) => {
                 let first_input_schema = inputs[0].schema();
-                if schema.fields().len() == first_input_schema.fields().len() {
-                    // If inputs are not pruned do not change schema
+                // Check field count AND field types AND field names/qualifiers.
+                // A width-only check misses cases where inputs were rewritten with
+                // different types or aliases (e.g. after type-coercion rewrites).
+                let schemas_match = schema.fields().len() == first_input_schema.fields().len()
+                    && (0..schema.fields().len()).all(|i| {
+                        let (q1, f1) = schema.qualified_field(i);
+                        let (q2, f2) = first_input_schema.qualified_field(i);
+                        q1 == q2
+                            && f1.data_type() == f2.data_type()
+                            && f1.name() == f2.name()
+                    });
+                if schemas_match {
+                    // Inputs are structurally identical to the cached schema;
+                    // no recomputation needed.
                     Ok(LogicalPlan::Union(Union { inputs, schema }))
                 } else {
                     // A note on `Union`s constructed via `try_new_by_name`:
@@ -6125,6 +6137,87 @@ mod tests {
             "USING join should have all fields"
         );
         assert_eq!(using_join.join_constraint, JoinConstraint::Using);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_recompute_schema_union_type_mismatch() -> Result<()> {
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let schema_i32 = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema_i64 = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+
+        // Build a Union whose schema starts out as Int32 (matching its inputs).
+        let original = Union::try_new(vec![
+            Arc::new(table_scan(Some("t1"), &schema_i32, None)?.build()?),
+            Arc::new(table_scan(Some("t2"), &schema_i32, None)?.build()?),
+        ])?;
+        assert_eq!(
+            original.schema.field(0).data_type(),
+            &DataType::Int32,
+            "sanity: starting schema is Int32"
+        );
+
+        // Simulate a rewrite pass (e.g. type-coercion) that replaced the inputs
+        // with Int64-typed versions while leaving the Union's cached schema stale.
+        // Same width, different types — this is exactly the bug scenario.
+        let stale = LogicalPlan::Union(Union {
+            inputs: vec![
+                Arc::new(table_scan(Some("t1"), &schema_i64, None)?.build()?),
+                Arc::new(table_scan(Some("t2"), &schema_i64, None)?.build()?),
+            ],
+            schema: Arc::clone(&original.schema),
+        });
+
+        let recomputed = stale.recompute_schema()?;
+
+        assert_eq!(
+            recomputed.schema().field(0).data_type(),
+            &DataType::Int64,
+            "Union schema should track the new Int64 input types after \
+         recompute_schema(), but the width-only check left it stale"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_recompute_schema_union_name_mismatch() -> Result<()> {
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let schema_a = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema_b = Schema::new(vec![Field::new("b", DataType::Int32, false)]);
+
+        // Build a Union whose schema starts out with column "a".
+        let original = Union::try_new(vec![
+            Arc::new(table_scan(Some("t1"), &schema_a, None)?.build()?),
+            Arc::new(table_scan(Some("t2"), &schema_a, None)?.build()?),
+        ])?;
+        assert_eq!(
+            original.schema.field(0).name(),
+            "a",
+            "sanity: starting schema has column name 'a'"
+        );
+
+        // Simulate a rewrite pass that renamed the columns but left
+        // the cached schema stale. Same width and type, different name.
+        let stale = LogicalPlan::Union(Union {
+            inputs: vec![
+                Arc::new(table_scan(Some("t1"), &schema_b, None)?.build()?),
+                Arc::new(table_scan(Some("t2"), &schema_b, None)?.build()?),
+            ],
+            schema: Arc::clone(&original.schema),
+        });
+
+        let recomputed = stale.recompute_schema()?;
+
+        assert_eq!(
+            recomputed.schema().field(0).name(),
+            "b",
+            "Union schema should reflect the renamed column after \
+         recompute_schema(), but the width-only check left it stale"
+        );
 
         Ok(())
     }
