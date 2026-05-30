@@ -2049,12 +2049,43 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return plan_err!("EXPLAIN option COSTS cannot be combined with ANALYZE");
         }
 
+        // Resolve the requested output format.
+        //
+        // Verbose mode only supports indent format, and for EXPLAIN ANALYZE
+        // only `Indent` and `PostgresJSON` are supported today — `Tree` and
+        // `Graphviz` require additional work to render with live metrics.
+        let options = self.context_provider.options();
+        let format = if verbose {
+            ExplainFormat::Indent
+        } else if let Some(format) = format {
+            format
+        } else if analyze {
+            ExplainFormat::Indent
+        } else {
+            options.explain.format.clone()
+        };
+
         if analyze {
-            if format.is_some() {
-                return plan_err!("EXPLAIN ANALYZE with FORMAT is not supported");
+            match &format {
+                ExplainFormat::Indent => {}
+                ExplainFormat::PostgresJSON => {
+                    // The pgjson renderer does not emit statistics yet, so
+                    // reject the combination rather than silently ignoring it.
+                    if options.explain.show_statistics {
+                        return plan_err!(
+                            "EXPLAIN ANALYZE with FORMAT pgjson does not support show_statistics"
+                        );
+                    }
+                }
+                ExplainFormat::Tree | ExplainFormat::Graphviz => {
+                    return plan_err!(
+                        "EXPLAIN ANALYZE with FORMAT {format} is not supported"
+                    );
+                }
             }
             Ok(LogicalPlan::Analyze(Analyze {
                 verbose,
+                format,
                 input: plan,
                 schema,
                 analyze_level,
@@ -2063,17 +2094,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             let stringified_plans =
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
-
-            // default to configuration value
-            // verbose mode only supports indent format
-            let options = self.context_provider.options();
-            let format = if verbose {
-                ExplainFormat::Indent
-            } else if let Some(format) = format {
-                format
-            } else {
-                options.explain.format.clone()
-            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
