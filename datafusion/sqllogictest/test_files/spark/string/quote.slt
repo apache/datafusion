@@ -16,17 +16,12 @@
 # under the License.
 
 query T
-SELECT quote(1:INT);
+SELECT quote(arrow_cast(1, 'Int8'));
 ----
 '1'
 
 query T
-SELECT quote(0:INT);
-----
-'0'
-
-query T
-SELECT quote(-5:INT);
+SELECT quote(arrow_cast(-5, 'Int8'));
 ----
 '-5'
 

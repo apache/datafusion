@@ -27,7 +27,7 @@ use datafusion_functions::utils::make_scalar_function;
 
 use std::sync::Arc;
 
-// Spark-compatible `quote` expression
+/// Spark-compatible `quote` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#quote>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkQuote {
