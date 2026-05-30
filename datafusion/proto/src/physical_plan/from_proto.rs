@@ -552,6 +552,12 @@ pub fn parse_protobuf_file_scan_config(
         )?;
         output_ordering.extend(LexOrdering::new(sort_exprs));
     }
+    let output_partitioning = parse_protobuf_partitioning(
+        proto.output_partitioning.as_ref(),
+        ctx,
+        &schema,
+        proto_converter,
+    )?;
 
     // Parse projection expressions if present and apply to file source
     let file_source = if let Some(proto_projection_exprs) = &proto.projection_exprs {
@@ -580,15 +586,18 @@ pub fn parse_protobuf_file_scan_config(
         file_source
     };
 
-    let config = FileScanConfigBuilder::new(object_store_url, file_source)
+    let mut config_builder = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_output_ordering(output_ordering)
-        .with_batch_size(proto.batch_size.map(|s| s as usize))
-        .with_partitioned_by_file_group(proto.partitioned_by_file_group.unwrap_or(false))
-        .build();
+        .with_output_partitioning(output_partitioning)
+        .with_batch_size(proto.batch_size.map(|s| s as usize));
+    if proto.partitioned_by_file_group.unwrap_or(false) {
+        config_builder = config_builder.with_partitioned_by_file_group(true);
+    }
+    let config = config_builder.build();
     Ok(config)
 }
 

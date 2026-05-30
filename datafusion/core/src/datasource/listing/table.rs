@@ -143,7 +143,7 @@ mod tests {
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::statistics::StatisticsArgs;
-    use datafusion_physical_plan::{ExecutionPlanProperties, collect};
+    use datafusion_physical_plan::{ExecutionPlanProperties, Partitioning, collect};
     use std::collections::HashMap;
     use std::io::Write;
     use std::sync::Arc;
@@ -1285,6 +1285,38 @@ mod tests {
                 .await?;
             }
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_files_uses_declared_output_partitioning_count() -> Result<()> {
+        let files = ["bucket/key-prefix/file0", "bucket/key-prefix/file1"];
+
+        let ctx = SessionContext::new();
+        register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
+
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_target_partitions(1)
+            .with_output_partitioning(Some(Partitioning::RoundRobinBatch(4)));
+
+        let table_path = ListingTableUrl::parse("test:///bucket/key-prefix/")?;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(schema);
+        let table = ListingTable::try_new(config)?;
+
+        let result = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let group_sizes = result
+            .file_groups
+            .iter()
+            .map(|group| group.len())
+            .collect::<Vec<_>>();
+
+        assert_eq!(group_sizes, vec![1, 1, 0, 0]);
 
         Ok(())
     }

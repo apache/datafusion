@@ -1802,6 +1802,8 @@ pub struct FileScanExecConf {
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
     #[prost(bool, optional, tag = "14")]
     pub partitioned_by_file_group: ::core::option::Option<bool>,
+    #[prost(message, optional, tag = "15")]
+    pub output_partitioning: ::core::option::Option<Partitioning>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {

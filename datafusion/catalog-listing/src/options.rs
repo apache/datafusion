@@ -21,6 +21,7 @@ use datafusion_common::plan_err;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_expr::SortExpr;
+use datafusion_physical_expr::Partitioning;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -53,6 +54,17 @@ pub struct ListingOptions {
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
     pub file_sort_order: Vec<Vec<SortExpr>>,
+    /// Optional declared output partitioning for this table.
+    ///
+    /// Expressions are specified against the full table schema. When set,
+    /// [`ListingTable`](crate::ListingTable) creates one scan file group per
+    /// declared output partition instead of the scan-time target partition
+    /// count. Empty file groups are added when needed to preserve that count.
+    ///
+    /// Files are sorted by path before grouping. DataFusion does not validate
+    /// that rows match the declaration, so callers must ensure file group `i`
+    /// contains only rows for declared output partition `i`.
+    pub output_partitioning: Option<Partitioning>,
 }
 
 impl ListingOptions {
@@ -66,6 +78,7 @@ impl ListingOptions {
             format,
             table_partition_cols: vec![],
             file_sort_order: vec![],
+            output_partitioning: None,
         }
     }
 
@@ -110,6 +123,18 @@ impl ListingOptions {
         if let Some(file_extension) = file_extension {
             self.file_extension = file_extension.into();
         }
+        self
+    }
+
+    /// Set declared output partitioning on [`ListingOptions`] and returns self.
+    ///
+    /// See [`Self::output_partitioning`]. Empty file groups are added when
+    /// needed to preserve the declared partition count.
+    pub fn with_output_partitioning(
+        mut self,
+        output_partitioning: Option<Partitioning>,
+    ) -> Self {
+        self.output_partitioning = output_partitioning;
         self
     }
 

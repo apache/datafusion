@@ -4080,10 +4080,26 @@ fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
     Ok(())
 }
 
+fn roundtrip_file_scan_config(scan_config: FileScanConfig) -> Result<FileScanConfig> {
+    let exec_plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let result_plan =
+        roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
+
+    let data_source_exec = result_plan
+        .downcast_ref::<DataSourceExec>()
+        .expect("Expected DataSourceExec");
+    let file_scan_config = data_source_exec
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("Expected FileScanConfig");
+    Ok(file_scan_config.clone())
+}
+
 #[test]
 fn roundtrip_parquet_exec_partitioned_by_file_group() -> Result<()> {
-    use datafusion::datasource::physical_plan::FileScanConfig;
-
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
     let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
@@ -4096,34 +4112,65 @@ fn roundtrip_parquet_exec_partitioned_by_file_group() -> Result<()> {
             .with_partitioned_by_file_group(true)
             .build();
 
-    assert!(scan_config.partitioned_by_file_group);
+    assert!(roundtrip_file_scan_config(scan_config)?.partitioned_by_file_group);
+    Ok(())
+}
 
-    let exec_plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
+#[test]
+fn roundtrip_parquet_exec_output_partitioning() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let output_partitioning =
+        Partitioning::Hash(vec![Arc::new(Column::new("col", 0))], 1);
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .with_output_partitioning(Some(output_partitioning.clone()))
+            .build();
 
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
-    let bytes = physical_plan_to_bytes_with_proto_converter(
-        Arc::clone(&exec_plan),
-        &codec,
-        &proto_converter,
-    )?;
-    let result_plan = physical_plan_from_bytes_with_proto_converter(
-        bytes.as_ref(),
-        ctx.task_ctx().as_ref(),
-        &codec,
-        &proto_converter,
-    )?;
+    assert_eq!(
+        roundtrip_file_scan_config(scan_config)?.output_partitioning,
+        Some(output_partitioning)
+    );
 
-    let data_source_exec = result_plan
-        .downcast_ref::<DataSourceExec>()
-        .expect("Expected DataSourceExec");
-    let file_scan_config = data_source_exec
-        .data_source()
-        .downcast_ref::<FileScanConfig>()
-        .expect("Expected FileScanConfig");
+    Ok(())
+}
 
-    assert!(file_scan_config.partitioned_by_file_group);
+#[test]
+fn roundtrip_parquet_exec_range_output_partitioning() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let output_partitioning = Partitioning::Range(RangePartitioning::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "col", 0,
+        )))])
+        .unwrap(),
+        vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+    ));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .with_output_partitioning(Some(output_partitioning.clone()))
+            .build();
+
+    assert_eq!(
+        roundtrip_file_scan_config(scan_config)?.output_partitioning,
+        Some(output_partitioning)
+    );
 
     Ok(())
 }
