@@ -44,9 +44,7 @@ use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
     DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
-    filtered_null_mask, set_nulls,
-};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::avg::convert_to_avg_state;
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use datafusion_macros::user_doc;
 use log::debug;
@@ -955,13 +953,7 @@ where
             .as_primitive::<T>()
             .clone()
             .with_data_type(self.sum_data_type.clone());
-        let counts = UInt64Array::from_value(1, sums.len());
-
-        let nulls = filtered_null_mask(opt_filter, &sums);
-
-        // set nulls on the arrays
-        let counts = set_nulls(counts, nulls.clone());
-        let sums = set_nulls(sums, nulls);
+        let (sums, counts) = convert_to_avg_state::<T, UInt64Type>(sums, 1, opt_filter);
 
         Ok(vec![Arc::new(counts) as ArrayRef, Arc::new(sums)])
     }
@@ -972,5 +964,116 @@ where
 
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<u64>() + self.sums.capacity() * size_of::<T>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, Float64Array};
+    use arrow::datatypes::{Decimal128Type, DurationNanosecondType};
+
+    fn float64_acc() -> AvgGroupsAccumulator<Float64Type, impl Fn(f64, u64) -> Result<f64>>
+    {
+        AvgGroupsAccumulator::<Float64Type, _>::new(
+            &DataType::Float64,
+            &DataType::Float64,
+            |sum, count| Ok(sum / count as f64),
+        )
+    }
+
+    fn decimal128_acc()
+    -> AvgGroupsAccumulator<Decimal128Type, impl Fn(i128, u64) -> Result<i128>> {
+        AvgGroupsAccumulator::<Decimal128Type, _>::new(
+            &DataType::Decimal128(10, 2),
+            &DataType::Decimal128(14, 6),
+            |sum, _count| Ok(sum),
+        )
+    }
+
+    fn duration_acc()
+    -> AvgGroupsAccumulator<DurationNanosecondType, impl Fn(i64, u64) -> Result<i64>>
+    {
+        AvgGroupsAccumulator::<DurationNanosecondType, _>::new(
+            &DataType::Duration(TimeUnit::Nanosecond),
+            &DataType::Duration(TimeUnit::Nanosecond),
+            |sum, count| Ok(sum / count as i64),
+        )
+    }
+
+    #[test]
+    fn float64_convert_to_state_uses_count_sum_order_and_null_filter() {
+        let acc = float64_acc();
+        let values: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
+            Some(10.0),
+            Some(20.0),
+            None,
+            Some(40.0),
+        ]))];
+        let filter = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+
+        let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
+
+        let counts = state[0].as_primitive::<UInt64Type>();
+        let sums = state[1].as_primitive::<Float64Type>();
+        assert_eq!(counts.values().as_ref(), &[1, 1, 1, 1]);
+        assert!(!counts.is_null(0));
+        assert!(counts.is_null(1));
+        assert!(counts.is_null(2));
+        assert!(counts.is_null(3));
+        assert!(!sums.is_null(0));
+        assert!(sums.is_null(1));
+        assert!(sums.is_null(2));
+        assert!(sums.is_null(3));
+    }
+
+    #[test]
+    fn decimal_convert_to_state_preserves_sum_type_and_nulls() {
+        let acc = decimal128_acc();
+        let values: Vec<ArrayRef> = vec![Arc::new(
+            PrimitiveArray::<Decimal128Type>::from(vec![
+                Some(100_i128),
+                None,
+                Some(300_i128),
+            ])
+            .with_data_type(DataType::Decimal128(10, 2)),
+        )];
+
+        let state = acc.convert_to_state(&values, None).unwrap();
+
+        let counts = state[0].as_primitive::<UInt64Type>();
+        let sums = state[1].as_primitive::<Decimal128Type>();
+        assert_eq!(sums.data_type(), &DataType::Decimal128(10, 2));
+        assert_eq!(counts.values().as_ref(), &[1, 1, 1]);
+        assert!(!counts.is_null(0));
+        assert!(counts.is_null(1));
+        assert!(!counts.is_null(2));
+        assert!(!sums.is_null(0));
+        assert!(sums.is_null(1));
+        assert!(!sums.is_null(2));
+    }
+
+    #[test]
+    fn duration_convert_to_state_preserves_sum_type_and_applies_filter() {
+        let acc = duration_acc();
+        let values: Vec<ArrayRef> = vec![Arc::new(
+            PrimitiveArray::<DurationNanosecondType>::from(vec![
+                Some(10_i64),
+                Some(20_i64),
+            ])
+            .with_data_type(DataType::Duration(TimeUnit::Nanosecond)),
+        )];
+        let filter = BooleanArray::from(vec![Some(false), Some(true)]);
+
+        let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
+
+        let counts = state[0].as_primitive::<UInt64Type>();
+        let sums = state[1].as_primitive::<DurationNanosecondType>();
+        assert_eq!(sums.data_type(), &DataType::Duration(TimeUnit::Nanosecond));
+        assert_eq!(counts.values().as_ref(), &[1, 1]);
+        assert!(counts.is_null(0));
+        assert!(!counts.is_null(1));
+        assert!(sums.is_null(0));
+        assert!(!sums.is_null(1));
     }
 }
