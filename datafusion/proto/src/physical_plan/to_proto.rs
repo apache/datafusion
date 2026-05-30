@@ -35,9 +35,7 @@ use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion_physical_plan::expressions::{
-    CaseExpr, DynamicFilterPhysicalExpr, Literal,
-};
+use datafusion_physical_plan::expressions::{CaseExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{
@@ -345,12 +343,26 @@ pub fn serialize_physical_expr_with_converter(
                 ),
             ),
         })
+<<<<<<< HEAD
     } else if let Some(lit) = expr.downcast_ref::<Literal>() {
         Ok(protobuf::PhysicalExprNode {
             expr_id,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
                 lit.value().try_into()?,
             )),
+=======
+    } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_id,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(Box::new(
+                protobuf::PhysicalTryCastNode {
+                    expr: Some(Box::new(
+                        proto_converter.physical_expr_to_proto(cast.expr(), codec)?,
+                    )),
+                    arrow_type: Some(cast.cast_type().try_into()?),
+                },
+            ))),
+>>>>>>> 69352ffb1 (feat(physical-expr): port Literal to try_to_proto / try_from_proto hooks)
         })
     } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
         let mut buf = Vec::new();
