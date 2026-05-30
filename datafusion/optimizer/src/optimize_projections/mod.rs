@@ -511,6 +511,12 @@ fn optimize_projections(
 /// Remove an unused, row-preserving [`LogicalPlan::Unnest`] below a duplicate-insensitive
 /// aggregate input.
 ///
+/// This is *not* a general unused-operator pruning rule. It is only correct when
+/// the parent aggregate is grouping-only (`aggr=[[]]`) and thus insensitive to
+/// duplicate input rows. In that case, removing `UNNEST` is safe if it cannot
+/// remove any input row and none of the surviving grouping expressions observe
+/// the unnested output or row multiplication.
+///
 /// For example, this plan:
 ///
 /// ```text
@@ -520,11 +526,26 @@ fn optimize_projections(
 ///       TableScan: t
 /// ```
 ///
-/// can be rewritten to group directly on `t.id` because `elem` is unused and
-/// `UNNEST([1, 2])` preserves at least one row per input row. The rewrite is
-/// deliberately conservative: it rejects volatile group expressions, visible
-/// aggregate expressions, referenced unnested outputs, non-literal lists, empty
-/// or null lists, and recursive list unnesting.
+/// can be rewritten to group directly on `t.id`:
+///
+/// ```text
+/// Aggregate: groupBy=[[id]], aggr=[[]]
+///   TableScan: t
+/// ```
+///
+/// because `elem` is unused, `UNNEST([1, 2])` preserves at least one row per
+/// input row, and grouping by `id` collapses the duplicate rows introduced by
+/// unnesting.
+///
+/// The rewrite is deliberately conservative. It rejects:
+///
+/// * visible aggregate expressions, such as `COUNT(*)`, because those observe
+///   row multiplication;
+/// * volatile grouping expressions, such as `uuid()` or `random()`, because row
+///   multiplication changes how many times they are evaluated;
+/// * referenced unnested output columns;
+/// * non-literal lists, empty/null lists, and recursive list unnesting, because
+///   this rule cannot prove they preserve at least one output row per input row.
 fn remove_row_preserving_unused_unnest_from_duplicate_insensitive_input(
     input: LogicalPlan,
     required_exprs: &[Expr],
