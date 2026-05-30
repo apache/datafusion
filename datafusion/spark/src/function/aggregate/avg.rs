@@ -32,9 +32,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, EmitTo, GroupsAccumulator, ReversedUDAF,
     Signature, TypeSignatureClass, Volatility,
 };
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
-    filtered_null_mask, set_nulls,
-};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::avg::convert_to_avg_state;
 use std::sync::Arc;
 
 /// AVG aggregate expression
@@ -356,11 +354,7 @@ where
             .as_primitive::<T>()
             .clone()
             .with_data_type(self.return_data_type.clone());
-        let counts = Int64Array::from_value(1, sums.len());
-
-        let nulls = filtered_null_mask(opt_filter, &sums);
-        let counts = set_nulls(counts, nulls.clone());
-        let sums = set_nulls(sums, nulls);
+        let (sums, counts) = convert_to_avg_state::<T, Int64Type>(sums, 1, opt_filter);
 
         // [sum, count] - must match state() and merge_batch()
         Ok(vec![
@@ -439,6 +433,26 @@ mod tests {
         let values: Vec<ArrayRef> =
             vec![Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]))];
         let filter = BooleanArray::from(vec![true, false, true]);
+        let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
+
+        let sums = state[0].as_primitive::<Float64Type>();
+        let counts = state[1].as_primitive::<Int64Type>();
+
+        assert!(!sums.is_null(0));
+        assert!(sums.is_null(1));
+        assert!(!sums.is_null(2));
+
+        assert_eq!(counts.value(0), 1);
+        assert!(counts.is_null(1));
+        assert_eq!(counts.value(2), 1);
+    }
+
+    #[test]
+    fn convert_to_state_with_null_filter() {
+        let acc = make_acc();
+        let values: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]))];
+        let filter = BooleanArray::from(vec![Some(true), None, Some(true)]);
         let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
 
         let sums = state[0].as_primitive::<Float64Type>();
