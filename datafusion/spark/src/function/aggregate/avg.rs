@@ -287,7 +287,7 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        _opt_filter: Option<&BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
@@ -300,8 +300,12 @@ where
 
         for (idx, &group_index) in group_indices.iter().enumerate() {
             // Skip null state entries emitted by convert_to_state for
-            // filtered / null input rows.
-            if partial_counts.is_null(idx) || partial_sums.is_null(idx) {
+            // filtered / null input rows, and rows filtered during merge.
+            if partial_counts.is_null(idx)
+                || partial_sums.is_null(idx)
+                || opt_filter
+                    .is_some_and(|filter| filter.is_null(idx) || !filter.value(idx))
+            {
                 continue;
             }
             self.counts[group_index] += partial_counts.value(idx);
@@ -390,6 +394,16 @@ mod tests {
         }
     }
 
+    fn spark_avg_state(
+        state: &[ArrayRef],
+    ) -> (&PrimitiveArray<Float64Type>, &PrimitiveArray<Int64Type>) {
+        assert_eq!(state.len(), 2);
+        (
+            state[0].as_primitive::<Float64Type>(),
+            state[1].as_primitive::<Int64Type>(),
+        )
+    }
+
     #[test]
     fn supports_convert_to_state() {
         assert!(make_acc().supports_convert_to_state());
@@ -402,9 +416,7 @@ mod tests {
             vec![Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]))];
         let state = acc.convert_to_state(&values, None).unwrap();
 
-        assert_eq!(state.len(), 2);
-        let sums = state[0].as_primitive::<Float64Type>();
-        let counts = state[1].as_primitive::<Int64Type>();
+        let (sums, counts) = spark_avg_state(&state);
 
         assert_eq!(sums.values().as_ref(), &[1.0, 2.0, 3.0]);
         assert_eq!(counts.values().as_ref(), &[1, 1, 1]);
@@ -422,8 +434,7 @@ mod tests {
         ]))];
         let state = acc.convert_to_state(&values, None).unwrap();
 
-        let sums = state[0].as_primitive::<Float64Type>();
-        let counts = state[1].as_primitive::<Int64Type>();
+        let (sums, counts) = spark_avg_state(&state);
 
         assert_validity(sums, &[true, false, true]);
 
@@ -440,8 +451,7 @@ mod tests {
         let filter = BooleanArray::from(vec![true, false, true]);
         let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
 
-        let sums = state[0].as_primitive::<Float64Type>();
-        let counts = state[1].as_primitive::<Int64Type>();
+        let (sums, counts) = spark_avg_state(&state);
 
         assert_validity(sums, &[true, false, true]);
 
@@ -458,14 +468,29 @@ mod tests {
         let filter = BooleanArray::from(vec![Some(true), None, Some(true)]);
         let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
 
-        let sums = state[0].as_primitive::<Float64Type>();
-        let counts = state[1].as_primitive::<Int64Type>();
+        let (sums, counts) = spark_avg_state(&state);
 
         assert_validity(sums, &[true, false, true]);
 
         assert_eq!(counts.value(0), 1);
         assert_validity(counts, &[true, false, true]);
         assert_eq!(counts.value(2), 1);
+    }
+
+    #[test]
+    fn merge_batch_applies_filter() {
+        let mut acc = make_acc();
+        let input: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0]))];
+        let state = acc.convert_to_state(&input, None).unwrap();
+        let filter = BooleanArray::from(vec![Some(true), Some(false), None]);
+
+        acc.merge_batch(&state, &[0, 0, 0], Some(&filter), 1)
+            .unwrap();
+
+        let result = acc.evaluate(EmitTo::All).unwrap();
+        let result = result.as_primitive::<Float64Type>();
+        assert_eq!(result.value(0), 10.0);
     }
 
     #[test]
