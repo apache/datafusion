@@ -104,15 +104,18 @@ fn quote_view(str_view: &ArrayRef) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
+const QUOTE_CHAR: char = '\'';
+const ESCAPE_CHAR: char = '\\';
+
 fn compute_quote(s: &str) -> String {
     let mut quoted = String::with_capacity(s.len() + 2);
-    quoted.push('\'');
+    quoted.push(QUOTE_CHAR);
     for c in s.chars() {
-        if c == '\\' || c == '\'' {
-            quoted.push('\\');
+        if c == ESCAPE_CHAR || c == QUOTE_CHAR {
+            quoted.push(ESCAPE_CHAR);
         }
         quoted.push(c);
     }
-    quoted.push('\'');
+    quoted.push(QUOTE_CHAR);
     quoted
 }
