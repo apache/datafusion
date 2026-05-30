@@ -16,51 +16,132 @@
 # under the License.
 
 query T
-SELECT quote(arrow_cast(1, 'Int8'));
+SELECT quote(arrow_cast(127, 'Int8'));
 ----
-'1'
+'127'
 
 query T
-SELECT quote(arrow_cast(-5, 'Int8'));
+SELECT quote(arrow_cast(-128, 'Int8'));
 ----
-'-5'
+'-128'
 
 query T
-SELECT quote('hello');
+SELECT quote(arrow_cast(32767, 'Int16'));
 ----
-'hello'
+'32767'
 
 query T
-SELECT quote('');
+SELECT quote(arrow_cast(-32768, 'Int16'));
 ----
-''
+'-32768'
 
 query T
-SELECT quote('with space');
+SELECT quote(arrow_cast(2147483647, 'Int32'));
 ----
-'with space'
+'2147483647'
 
 query T
-SELECT quote('it''s');
+SELECT quote(arrow_cast(-2147483648, 'Int32'));
 ----
-'it\'s'
+'-2147483648'
 
 query T
-SELECT quote('line\nbreak');
+SELECT quote(arrow_cast(9223372036854775807, 'Int64'));
 ----
-'line\\nbreak'
+'9223372036854775807'
 
 query T
-SELECT quote(NULL);
+SELECT quote(arrow_cast(-9223372036854775808, 'Int64'));
 ----
-NULL
+'-9223372036854775808'
 
 query T
-SELECT quote(TRUE);
+SELECT quote(arrow_cast(3.14, 'Float32'));
 ----
-'true'
+'3.14'
 
 query T
-SELECT quote(FALSE);
+SELECT quote(arrow_cast(2.718281828459045, 'Float64'));
 ----
-'false'
+'2.718281828459045'
+
+query T
+SELECT quote(arrow_cast(0, 'UInt8'));
+----
+'0'
+
+query T
+SELECT quote(arrow_cast(255, 'UInt8'));
+----
+'255'
+
+query T
+SELECT quote(arrow_cast(65535, 'UInt16'));
+----
+'65535'
+
+query T
+SELECT quote(arrow_cast(4294967295, 'UInt32'));
+----
+'4294967295'
+
+query T
+SELECT quote(arrow_cast(18446744073709551615, 'UInt64'));
+----
+'18446744073709551615'
+
+query T
+SELECT quote('special chars: !@#$%^&*()');
+----
+'special chars: !@#$%^&*()'
+
+query T
+SELECT quote('tab\tseparated');
+----
+'tab\tseparated'
+
+query T
+SELECT quote('carriage\rreturn');
+----
+'carriage\rreturn'
+
+query T
+SELECT quote('backslash\\test');
+----
+'backslash\\test'
+
+query T
+SELECT quote('quote\"inside\"');
+----
+'quote\"inside\"'
+
+query T
+SELECT quote('mixed\nescape\tchars\r\n');
+----
+'mixed\nescape\tchars\r\n'
+
+query T
+SELECT quote('unicode: 你好, 世界');
+----
+'unicode: 你好, 世界'
+
+query T
+SELECT quote('emoji: 😀🎉❤️🚀');
+----
+'emoji: 😀🎉❤️🚀'
+
+query T
+SELECT quote(arrow_cast('2024-01-15', 'Date32'));
+----
+'2024-01-15'
+
+query T
+SELECT quote(arrow_cast('2024-01-15 12:30:45', 'Timestamp'));
+----
+'2024-01-15 12:30:45'
+
+query T
+SELECT quote('special\n\t\r');
+----
+'special\n\t\r'
+

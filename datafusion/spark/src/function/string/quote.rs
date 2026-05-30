@@ -111,7 +111,7 @@ fn compute_quote(s: &str) -> String {
     let mut quoted = String::with_capacity(s.len() + 2);
     quoted.push(QUOTE_CHAR);
     for c in s.chars() {
-        if c == ESCAPE_CHAR || c == QUOTE_CHAR {
+        if c == QUOTE_CHAR {
             quoted.push(ESCAPE_CHAR);
         }
         quoted.push(c);
