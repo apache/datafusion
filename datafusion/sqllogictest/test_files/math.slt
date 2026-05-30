@@ -686,6 +686,22 @@ select gcd(-9223372036854775808, 0);
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(0, \-9223372036854775808\)
 select gcd(0, -9223372036854775808);
 
+# gcd decimal
+query RT
+select gcd(2::decimal(38, 0), 3::decimal(38, 0)), arrow_typeof(gcd(2::decimal(38, 0), 3::decimal(38, 0)));
+----
+1 Decimal128(38, 0)
+
+query RT
+select gcd(0::decimal(38, 0), 3::decimal(38, 0)), arrow_typeof(gcd(0::decimal(38, 0), 3::decimal(38, 0)));
+----
+3 Decimal128(38, 0)
+
+query RT
+select gcd(2, 3::decimal(38, 0)), arrow_typeof(gcd(2, 3::decimal(38, 0)));
+----
+1 Decimal128(38, 0)
+
 
 ## lcm
 
@@ -726,6 +742,22 @@ select lcm(1, -9223372036854775808);
 # Overflow on multiplication
 query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(2, 9223372036854775803\)
 select lcm(2, 9223372036854775803);
+
+# lcm decimal
+query R
+select lcm(2::decimal(38, 0), 3::decimal(38, 0));
+----
+6
+
+query RT
+select lcm(0::decimal(38, 0), 3::decimal(38, 0)), arrow_typeof(lcm(0::decimal(38, 0), 3::decimal(38, 0)));
+----
+0 Decimal128(38, 0)
+
+query RT
+select lcm(2, 3::decimal(38, 0)), arrow_typeof(lcm(2, 3::decimal(38, 0)));
+----
+6 Decimal128(38, 0)
 
 
 ## pow/power
@@ -899,6 +931,13 @@ SELECT lcm(6, column1) FROM (VALUES (4), (9), (0));
 18
 0
 
+query R
+SELECT lcm(6, arrow_cast(column1, 'Decimal128(38,0)')) FROM (VALUES (4), (9), (0));
+----
+12
+18
+0
+
 # lcm array and scalar with nulls in the array
 query I
 SELECT lcm(column1, 5) FROM (VALUES (0), (NULL), (25));
@@ -937,6 +976,13 @@ SELECT gcd(column1, 12) FROM (VALUES (8), (18), (0), (-36));
 
 query I
 SELECT gcd(15, column1) FROM (VALUES (10), (25), (0));
+----
+5
+5
+15
+
+query R
+SELECT gcd(15, arrow_cast(column1, 'Decimal128(38,0)')) FROM (VALUES (10), (25), (0));
 ----
 5
 5

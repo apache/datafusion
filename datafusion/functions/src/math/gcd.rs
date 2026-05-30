@@ -17,16 +17,20 @@
 
 use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
-use arrow::datatypes::{DataType, Int64Type};
-use arrow::error::ArrowError;
-use std::mem::swap;
+use arrow::datatypes::{
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Int64Type,
+};
 use std::sync::Arc;
 
+use crate::math::common::{gcd_signed, gcd_signed_int, unsigned_gcd};
+use crate::utils::calculate_binary_decimal_math_cast;
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+use datafusion_expr_common::type_coercion::binary::decimal_coercion;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -58,11 +62,7 @@ impl Default for GcdFunc {
 impl GcdFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                2,
-                vec![DataType::Int64],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -76,37 +76,123 @@ impl ScalarUDFImpl for GcdFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].clone())
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [arg1, arg2] = take_function_args(self.name(), arg_types)?;
+
+        let coerced_type = match (arg1, arg2) {
+            (DataType::Null, _) | (_, DataType::Null) => Ok(DataType::Int64),
+            (lhs, rhs) if lhs.is_integer() && rhs.is_integer() => Ok(DataType::Int64),
+            (lhs, rhs) if lhs.is_decimal() || rhs.is_decimal() => {
+                decimal_coercion(lhs, rhs).map(Ok).unwrap_or_else(|| {
+                    exec_err!(
+                        "Unsupported argument types {lhs:?} and {rhs:?} for function {}",
+                        self.name()
+                    )
+                })
+            }
+            (lhs, rhs) => {
+                exec_err!(
+                    "Unsupported argument types {lhs:?} and {rhs:?} for function {}",
+                    self.name()
+                )
+            }
+        }?;
+        Ok(vec![coerced_type.clone(), coerced_type])
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let number_rows = args.number_rows;
         let args: [ColumnarValue; 2] = args.args.try_into().map_err(|_| {
             internal_datafusion_err!("Expected 2 arguments for function gcd")
         })?;
 
-        match args {
-            [ColumnarValue::Array(a), ColumnarValue::Array(b)] => {
-                compute_gcd_for_arrays(&a, &b)
+        if args[0].data_type() == DataType::Int64 {
+            // Optimized path for both integers
+            match args {
+                [ColumnarValue::Array(a), ColumnarValue::Array(b)] => {
+                    compute_gcd_for_arrays(&a, &b)
+                }
+                [
+                    ColumnarValue::Scalar(ScalarValue::Int64(a)),
+                    ColumnarValue::Scalar(ScalarValue::Int64(b)),
+                ] => match (a, b) {
+                    (Some(a), Some(b)) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(
+                        Some(gcd_signed_int(a, b)?),
+                    ))),
+                    _ => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
+                },
+                [
+                    ColumnarValue::Array(a),
+                    ColumnarValue::Scalar(ScalarValue::Int64(b)),
+                ] => compute_gcd_with_scalar(&a, b),
+                [
+                    ColumnarValue::Scalar(ScalarValue::Int64(a)),
+                    ColumnarValue::Array(b),
+                ] => compute_gcd_with_scalar(&b, a),
+                _ => exec_err!("Unsupported argument types for function gcd"),
             }
-            [
-                ColumnarValue::Scalar(ScalarValue::Int64(a)),
-                ColumnarValue::Scalar(ScalarValue::Int64(b)),
-            ] => match (a, b) {
-                (Some(a), Some(b)) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(
-                    Some(compute_gcd(a, b)?),
-                ))),
-                _ => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
-            },
-            [
-                ColumnarValue::Array(a),
-                ColumnarValue::Scalar(ScalarValue::Int64(b)),
-            ] => compute_gcd_with_scalar(&a, b),
-            [
-                ColumnarValue::Scalar(ScalarValue::Int64(a)),
-                ColumnarValue::Array(b),
-            ] => compute_gcd_with_scalar(&b, a),
-            _ => exec_err!("Unsupported argument types for function gcd"),
+        } else {
+            // Decimal path: convert left to array and use generic helper
+            let left = args[0].to_array(number_rows)?;
+            let right = &args[1];
+
+            let arr: ArrayRef = match (left.data_type(), right.data_type()) {
+                (
+                    lhs @ DataType::Decimal32(precision, scale),
+                    rhs @ DataType::Decimal32(_, _),
+                ) if *lhs == rhs => calculate_binary_decimal_math_cast::<
+                    Decimal32Type,
+                    Decimal32Type,
+                    Decimal32Type,
+                    _,
+                >(
+                    &left, right, gcd_signed, *precision, *scale, lhs
+                )?,
+                (
+                    lhs @ DataType::Decimal64(precision, scale),
+                    rhs @ DataType::Decimal64(_, _),
+                ) if *lhs == rhs => calculate_binary_decimal_math_cast::<
+                    Decimal64Type,
+                    Decimal64Type,
+                    Decimal64Type,
+                    _,
+                >(
+                    &left, right, gcd_signed, *precision, *scale, lhs
+                )?,
+                (
+                    lhs @ DataType::Decimal128(precision, scale),
+                    rhs @ DataType::Decimal128(_, _),
+                ) if *lhs == rhs => calculate_binary_decimal_math_cast::<
+                    Decimal128Type,
+                    Decimal128Type,
+                    Decimal128Type,
+                    _,
+                >(
+                    &left, right, gcd_signed, *precision, *scale, lhs
+                )?,
+                (
+                    lhs @ DataType::Decimal256(precision, scale),
+                    rhs @ DataType::Decimal256(_, _),
+                ) if *lhs == rhs => calculate_binary_decimal_math_cast::<
+                    Decimal256Type,
+                    Decimal256Type,
+                    Decimal256Type,
+                    _,
+                >(
+                    &left, right, gcd_signed, *precision, *scale, lhs
+                )?,
+                (lhs, rhs) => {
+                    exec_err!(
+                        "Unsupported data types {lhs:?} and {rhs:?} for function {}",
+                        self.name()
+                    )
+                }?,
+            };
+            Ok(ColumnarValue::Array(arr))
         }
     }
 
@@ -118,7 +204,7 @@ impl ScalarUDFImpl for GcdFunc {
 fn compute_gcd_for_arrays(a: &ArrayRef, b: &ArrayRef) -> Result<ColumnarValue> {
     let a = a.as_primitive::<Int64Type>();
     let b = b.as_primitive::<Int64Type>();
-    try_binary(a, b, compute_gcd)
+    try_binary(a, b, gcd_signed_int)
         .map(|arr: PrimitiveArray<Int64Type>| {
             ColumnarValue::Array(Arc::new(arr) as ArrayRef)
         })
@@ -141,44 +227,271 @@ fn compute_gcd_with_scalar(arr: &ArrayRef, scalar: Option<i64>) -> Result<Column
         }
         Some(scalar_value) => {
             let result: PrimitiveArray<Int64Type> =
-                prim.try_unary(|val| compute_gcd(val, scalar_value))?;
+                prim.try_unary(|val| gcd_signed_int(val, scalar_value))?;
             Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
         }
         None => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
     }
 }
 
-/// Computes gcd of two unsigned integers using Binary GCD algorithm.
-pub(super) fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
-    if a == 0 {
-        return b;
-    }
-    if b == 0 {
-        return a;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::common::gcd_signed;
+    use arrow::array::{Array, Decimal128Array, Int64Array};
+    use arrow::datatypes::{DECIMAL128_MAX_PRECISION, Field};
+    use arrow_buffer::i256;
+    use datafusion_common::ScalarValue;
+    use datafusion_common::cast::{as_decimal128_array, as_int64_array};
+    use datafusion_common::config::ConfigOptions;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_i64_array() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true).into(),
+            Field::new("b", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![
+                    0, 2, 0, 2, 15, 20,
+                ]))),
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![
+                    0, 0, 2, 3, 10, 1000,
+                ]))),
+            ],
+            arg_fields,
+            number_rows: 6,
+            return_field: Field::new("f", DataType::Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = GcdFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let values =
+                    as_int64_array(&arr).expect("failed to convert result to an array");
+                assert_eq!(values.len(), 6);
+                assert_eq!(values.value(0), 0);
+                assert_eq!(values.value(1), 2);
+                assert_eq!(values.value(2), 2);
+                assert_eq!(values.value(3), 1);
+                assert_eq!(values.value(4), 5);
+                assert_eq!(values.value(5), 20);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
     }
 
-    let shift = (a | b).trailing_zeros();
-    a >>= a.trailing_zeros();
-    loop {
-        b >>= b.trailing_zeros();
-        if a > b {
-            swap(&mut a, &mut b);
-        }
-        b -= a;
-        if b == 0 {
-            return a << shift;
+    #[test]
+    fn test_decimal_scalar() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0), true)
+                .into(),
+            Field::new("b", DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0), true)
+                .into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Decimal128(
+                    Some(i128::from(2)),
+                    DECIMAL128_MAX_PRECISION,
+                    0,
+                )),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(
+                    Some(i128::from(3)),
+                    DECIMAL128_MAX_PRECISION,
+                    0,
+                )),
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new(
+                "f",
+                DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                true,
+            )
+            .into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = GcdFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints = as_decimal128_array(&arr)
+                    .expect("failed to convert result to an array");
+
+                assert_eq!(ints.len(), 1);
+                assert_eq!(ints.value(0), i128::from(1));
+                // Signature stays the same as input
+                assert_eq!(
+                    *arr.data_type(),
+                    DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0)
+                );
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
         }
     }
-}
 
-/// Computes greatest common divisor using Binary GCD algorithm.
-pub fn compute_gcd(x: i64, y: i64) -> Result<i64, ArrowError> {
-    let a = x.unsigned_abs();
-    let b = y.unsigned_abs();
-    let r = unsigned_gcd(a, b);
-    // The result can be up to 2^63 (e.g. gcd(i64::MIN, 0) or
-    // gcd(i64::MIN, i64::MIN)), which does not fit into i64.
-    r.try_into().map_err(|_| {
-        ArrowError::ComputeError(format!("Signed integer overflow in GCD({x}, {y})"))
-    })
+    #[test]
+    fn test_decimal_array_scalar() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0), true)
+                .into(),
+            Field::new("b", DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0), true)
+                .into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(
+                    Decimal128Array::from(vec![2, 15])
+                        .with_precision_and_scale(DECIMAL128_MAX_PRECISION, 0)
+                        .unwrap(),
+                )),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(
+                    Some(i128::from(3)),
+                    DECIMAL128_MAX_PRECISION,
+                    0,
+                )),
+            ],
+            arg_fields,
+            number_rows: 2,
+            return_field: Field::new(
+                "f",
+                DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0),
+                true,
+            )
+            .into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = GcdFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints = as_decimal128_array(&arr)
+                    .expect("failed to convert result to an array");
+
+                assert_eq!(ints.len(), 2);
+                assert_eq!(ints.value(0), i128::from(1));
+                assert_eq!(ints.value(1), i128::from(3));
+                // Signature stays the same as input
+                assert_eq!(
+                    *arr.data_type(),
+                    DataType::Decimal128(DECIMAL128_MAX_PRECISION, 0)
+                );
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_coercion() {
+        let mut coerced = GcdFunc::new()
+            .coerce_types(&[DataType::Int64, DataType::Int32])
+            .expect("coercion should succeed");
+        assert_eq!(coerced, vec![DataType::Int64, DataType::Int64]);
+
+        coerced = GcdFunc::new()
+            .coerce_types(&[DataType::Decimal128(10, 2), DataType::Int32])
+            .expect("coercion should succeed");
+
+        assert_eq!(
+            coerced,
+            vec![DataType::Decimal128(12, 2), DataType::Decimal128(12, 2)]
+        );
+
+        coerced = GcdFunc::new()
+            .coerce_types(&[DataType::Decimal128(10, 2), DataType::Null])
+            .expect("coercion should succeed");
+
+        assert_eq!(coerced, vec![DataType::Int64, DataType::Int64]);
+    }
+
+    const GCD_COMMON_TEST_CASES: [(i64, i64, i64); 18] = [
+        // Basic cases
+        (48, 18, 6),
+        (54, 24, 6),
+        (100, 50, 50),
+        (17, 19, 1),
+        (21, 14, 7),
+        // Edge cases with 0
+        (0, 0, 0),
+        (0, 5, 5),
+        (10, 0, 10),
+        // Same numbers
+        (7, 7, 7),
+        (100, 100, 100),
+        // One is 1
+        (1, 1, 1),
+        (1, 100, 1),
+        (999, 1, 1),
+        // Large numbers
+        (1000000, 500000, 500000),
+        (123456, 789012, 12),
+        (999999, 111111, 111111),
+        // Powers of 2
+        (64, 128, 64),
+        (1024, 2048, 1024),
+    ];
+
+    #[test]
+    fn test_gcd_i64() {
+        let test_cases: Vec<(i64, i64, i64)> = [
+            GCD_COMMON_TEST_CASES.into(),
+            vec![
+                // Max value cases
+                (1, i64::MAX, 1),
+                (i64::MAX, 1, 1),
+                (i64::MAX, i64::MAX, i64::MAX),
+            ],
+        ]
+        .concat();
+
+        // Success cases
+        for (a, b, expected) in test_cases {
+            let actual = gcd_signed(a, b).expect("should succeed");
+            assert_eq!(
+                actual, expected,
+                "euclid_gcd({a}, {b}) expected {expected}, actual {actual}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_gcd_decimal128() {
+        let test_cases: Vec<(i256, i256, i256)> = [
+            GCD_COMMON_TEST_CASES
+                .iter()
+                .map(|&(a, b, c)| (i256::from(a), i256::from(b), i256::from(c)))
+                .collect(),
+            vec![
+                (i256::from(1), i256::MAX, i256::from(1)),
+                (i256::MAX, i256::from(1), i256::from(1)),
+                (i256::MAX, i256::MAX, i256::MAX),
+            ],
+        ]
+        .concat();
+
+        // Success cases
+        for (a, b, expected) in test_cases {
+            let actual = gcd_signed(a, b).expect("should succeed");
+            assert_eq!(
+                actual, expected,
+                "euclid_gcd({a}, {b}) expected {expected}, actual {actual}"
+            );
+        }
+    }
 }
