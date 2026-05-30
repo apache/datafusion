@@ -18,6 +18,7 @@
 use crate::utils::{calculate_binary_decimal_math, calculate_binary_math};
 
 use arrow::array::ArrayRef;
+use arrow::compute::{DecimalCast, rescale_decimal};
 use arrow::datatypes::DataType::{
     Decimal32, Decimal64, Decimal128, Decimal256, Float32, Float64,
 };
@@ -31,13 +32,33 @@ use datafusion_common::types::{
     NativeType, logical_float32, logical_float64, logical_int32,
 };
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::preimage::PreimageResult;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+    Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
+use num_traits::Float;
 use std::sync::Arc;
+
+trait FloatExt: Float {
+    fn next_up(self) -> Self;
+}
+impl FloatExt for f64 {
+    #[inline]
+    fn next_up(self) -> f64 {
+        f64::next_up(self)
+    }
+}
+impl FloatExt for f32 {
+    #[inline]
+    fn next_up(self) -> f32 {
+        f32::next_up(self)
+    }
+}
 
 fn output_scale_for_decimal(precision: u8, input_scale: i8, decimal_places: i32) -> i8 {
     // `decimal_places` controls the maximum output scale, but scale cannot exceed the input scale.
@@ -451,6 +472,119 @@ impl ScalarUDFImpl for RoundFunc {
         }
     }
 
+    /// Compute the preimage for `round(col[, dp]) = literal`.
+    ///
+    /// `round` uses **round-half-away-from-zero** (Rust's `.round()` for floats;
+    /// analogous for decimals). The preimage of N depends on the sign of N:
+    ///
+    /// | N     | Preimage     |
+    /// |-------|--------------|
+    /// | N > 0 | `[N−h, N+h)` |
+    /// | N = 0 | `(−h, h)`    |
+    /// | N < 0 | `(N−h, N+h]` |
+    ///
+    /// where `h = 0.5 × 10^(−dp)` (defaults to `0.5` when `dp = 0`). For N ≤ 0
+    /// the preimage is not naturally half-open, so `next_up()` shifts the
+    /// affected bound by one ULP.
+    ///
+    /// For decimal types the same pattern applies using discrete scale units,
+    /// but only when `dp = 0`; non-zero `dp` reduces the output scale so the
+    /// literal type differs from the column type, which is not yet supported.
+    /// Returns `None` when `dp` is not a literal, when the literal has a
+    /// fractional part incompatible with `dp`, or at overflow extremes.
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        _info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        let dp: i32 = match args.get(1) {
+            None => 0,
+            Some(Expr::Literal(sv, _)) => match decimal_places_from_scalar(sv) {
+                Ok(v) => v,
+                Err(_) => return Ok(PreimageResult::None),
+            },
+            Some(_) => return Ok(PreimageResult::None),
+        };
+
+        let Expr::Literal(lit_value, _) = lit_expr else {
+            return Ok(PreimageResult::None);
+        };
+
+        let half_f64 = 0.5 * 10_f64.powi(-dp);
+        if half_f64 == 0.0 || half_f64.is_infinite() {
+            return Ok(PreimageResult::None);
+        }
+        let half_f32 = half_f64 as f32;
+
+        let Some((lower, upper)) = (match lit_value {
+            ScalarValue::Float64(Some(n)) => {
+                round_preimage_float(*n, half_f64).map(|(lo, hi)| {
+                    (
+                        ScalarValue::Float64(Some(lo)),
+                        ScalarValue::Float64(Some(hi)),
+                    )
+                })
+            }
+            ScalarValue::Float32(Some(n)) => {
+                round_preimage_float(*n, half_f32).map(|(lo, hi)| {
+                    (
+                        ScalarValue::Float32(Some(lo)),
+                        ScalarValue::Float32(Some(hi)),
+                    )
+                })
+            }
+            ScalarValue::Decimal32(Some(n), precision, scale) if dp == 0 => {
+                round_preimage_decimal::<Decimal32Type>(*n, *precision, *scale).map(
+                    |(lo, hi)| {
+                        (
+                            ScalarValue::Decimal32(Some(lo), *precision, *scale),
+                            ScalarValue::Decimal32(Some(hi), *precision, *scale),
+                        )
+                    },
+                )
+            }
+            ScalarValue::Decimal64(Some(n), precision, scale) if dp == 0 => {
+                round_preimage_decimal::<Decimal64Type>(*n, *precision, *scale).map(
+                    |(lo, hi)| {
+                        (
+                            ScalarValue::Decimal64(Some(lo), *precision, *scale),
+                            ScalarValue::Decimal64(Some(hi), *precision, *scale),
+                        )
+                    },
+                )
+            }
+            ScalarValue::Decimal128(Some(n), precision, scale) if dp == 0 => {
+                round_preimage_decimal::<Decimal128Type>(*n, *precision, *scale).map(
+                    |(lo, hi)| {
+                        (
+                            ScalarValue::Decimal128(Some(lo), *precision, *scale),
+                            ScalarValue::Decimal128(Some(hi), *precision, *scale),
+                        )
+                    },
+                )
+            }
+            ScalarValue::Decimal256(Some(n), precision, scale) if dp == 0 => {
+                round_preimage_decimal::<Decimal256Type>(*n, *precision, *scale).map(
+                    |(lo, hi)| {
+                        (
+                            ScalarValue::Decimal256(Some(lo), *precision, *scale),
+                            ScalarValue::Decimal256(Some(hi), *precision, *scale),
+                        )
+                    },
+                )
+            }
+            _ => None,
+        }) else {
+            return Ok(PreimageResult::None);
+        };
+
+        Ok(PreimageResult::Range {
+            expr: args[0].clone(),
+            interval: Box::new(Interval::try_new(lower, upper)?),
+        })
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -632,7 +766,7 @@ fn round_columnar(
 
 fn round_float<T>(value: T, decimal_places: i32) -> Result<T, ArrowError>
 where
-    T: num_traits::Float,
+    T: Float,
 {
     let factor = T::from(10_f64.powi(decimal_places)).ok_or_else(|| {
         ArrowError::ComputeError(format!(
@@ -839,5 +973,334 @@ mod test {
             result,
             Err(DataFusionError::ArrowError(_, _)) | Err(DataFusionError::Execution(_))
         ));
+    }
+}
+
+/// Computes the half-open preimage interval for `round(x, dp) = N` on floats.
+///
+/// Uses **round-half-away-from-zero** semantics (Rust's `.round()`). The
+/// interval boundary that falls on exactly `±half` is exclusive for the side
+/// where that value rounds *away* from N, so `next_up()` shifts it inward:
+///
+/// | N     | interval    |
+/// |-------|-------------|
+/// | N > 0 | `[N−h, N+h)` |
+/// | N = 0 | `[next_up(−h), h)` |
+/// | N < 0 | `[next_up(N−h), next_up(N+h))` |
+///
+/// Returns `None` if N is non-finite, has a fractional part incompatible with
+/// `half`, or if the interval would degenerate (overflow).
+fn round_preimage_float<F: Float + FloatExt>(n: F, half: F) -> Option<(F, F)> {
+    if !n.is_finite() {
+        return None;
+    }
+    let two = F::one() + F::one();
+    let unit_scaled = n / (two * half); // = n * 10^dp; must be an integer
+    if !unit_scaled.is_finite() || unit_scaled.fract() != F::zero() {
+        return None;
+    }
+
+    let lo = n - half;
+    let hi = n + half;
+    if !lo.is_finite() || !hi.is_finite() {
+        return None;
+    }
+
+    if n > F::zero() {
+        // N > 0: [N-h, N+h)
+        Some((lo, hi))
+    } else if n == F::zero() {
+        // N = 0: (-h, h) — lower exclusive, shift by one ULP
+        Some((lo.next_up(), hi))
+    } else {
+        // N < 0: (N-h, N+h] — both exclusive after ULP shift
+        Some((lo.next_up(), hi.next_up()))
+    }
+}
+
+/// Computes the preimage bounds for `round(x) = N` (dp=0) on decimal types.
+///
+/// The decimal interval mirrors the float formula using discrete scale units.
+/// `half_scaled = one_scaled / 2` is the half-unit at this scale; scale must
+/// be ≥ 1 for this to be representable.
+///
+/// | N_raw    | lower_raw              | upper_raw            |
+/// |----------|------------------------|----------------------|
+/// | > 0      | N_raw − half_scaled    | N_raw + half_scaled  |
+/// | = 0      | −half_scaled + 1       | half_scaled          |
+/// | < 0      | N_raw−half_scaled + 1  | N_raw+half_scaled+1  |
+///
+/// Returns `None` for scale ≤ 0 (0.5 not representable), non-integer N, or
+/// overflow.
+fn round_preimage_decimal<D: DecimalType>(
+    n_raw: D::Native,
+    precision: u8,
+    scale: i8,
+) -> Option<(D::Native, D::Native)>
+where
+    D::Native: DecimalCast + ArrowNativeTypeOp + std::ops::Rem<Output = D::Native>,
+{
+    if scale <= 0 {
+        return None;
+    }
+
+    let one_scaled: D::Native =
+        rescale_decimal::<D, D>(D::Native::ONE, 1, 0, precision, scale)?;
+
+    // N must be a valid round output: divisible by one_scaled (integer decimal).
+    if n_raw % one_scaled != D::Native::ZERO {
+        return None;
+    }
+
+    let two = D::Native::ONE.add_checked(D::Native::ONE).ok()?;
+    let half_scaled = one_scaled.div_wrapping(two);
+    if half_scaled == D::Native::ZERO {
+        return None;
+    }
+
+    let one = D::Native::ONE;
+    let zero = D::Native::ZERO;
+
+    let (lower, upper) = if n_raw > zero {
+        // N > 0: [N − half, N + half)
+        let lo = n_raw.sub_checked(half_scaled).ok()?;
+        let hi = n_raw.add_checked(half_scaled).ok()?;
+        (lo, hi)
+    } else if n_raw == zero {
+        // N = 0: (−half, half) — lower exclusive, shift by +1 scale unit
+        let lo = zero.sub_checked(half_scaled).ok()?.add_checked(one).ok()?;
+        let hi = half_scaled;
+        (lo, hi)
+    } else {
+        // N < 0: (N − half, N + half] — both exclusive after shift
+        let lo = n_raw.sub_checked(half_scaled).ok()?.add_checked(one).ok()?;
+        let hi = n_raw.add_checked(half_scaled).ok()?.add_checked(one).ok()?;
+        (lo, hi)
+    };
+
+    Some((lower, upper))
+}
+
+#[cfg(test)]
+mod preimage_tests {
+    use super::*;
+    use arrow_buffer::i256;
+    use datafusion_expr::col;
+
+    fn assert_preimage_range(
+        input: ScalarValue,
+        expected_lower: ScalarValue,
+        expected_upper: ScalarValue,
+    ) {
+        let round_func = RoundFunc::new();
+        let args = vec![col("x")];
+        let lit_expr = Expr::Literal(input.clone(), None);
+        let info = SimplifyContext::default();
+
+        let result = round_func.preimage(&args, &lit_expr, &info).unwrap();
+
+        match result {
+            PreimageResult::Range { expr, interval } => {
+                assert_eq!(expr, col("x"));
+                assert_eq!(interval.lower().clone(), expected_lower);
+                assert_eq!(interval.upper().clone(), expected_upper);
+            }
+            PreimageResult::None => {
+                panic!("Expected Range, got None for input {input:?}")
+            }
+        }
+    }
+
+    fn assert_preimage_none(input: ScalarValue) {
+        let round_func = RoundFunc::new();
+        let args = vec![col("x")];
+        let lit_expr = Expr::Literal(input.clone(), None);
+        let info = SimplifyContext::default();
+
+        let result = round_func.preimage(&args, &lit_expr, &info).unwrap();
+        assert!(
+            matches!(result, PreimageResult::None),
+            "Expected None for input {input:?}"
+        );
+    }
+
+    #[test]
+    fn test_round_preimage_float_positive() {
+        // round(x) = 5 → x ∈ [4.5, 5.5)
+        assert_preimage_range(
+            ScalarValue::Float64(Some(5.0)),
+            ScalarValue::Float64(Some(4.5)),
+            ScalarValue::Float64(Some(5.5)),
+        );
+        assert_preimage_range(
+            ScalarValue::Float32(Some(5.0)),
+            ScalarValue::Float32(Some(4.5)),
+            ScalarValue::Float32(Some(5.5)),
+        );
+    }
+
+    #[test]
+    fn test_round_preimage_float_negative() {
+        // round(x) = -5 → x ∈ (-5.5, -4.5] → [next_up(-5.5), next_up(-4.5))
+        assert_preimage_range(
+            ScalarValue::Float64(Some(-5.0)),
+            ScalarValue::Float64(Some((-5.5_f64).next_up())),
+            ScalarValue::Float64(Some((-4.5_f64).next_up())),
+        );
+        assert_preimage_range(
+            ScalarValue::Float32(Some(-5.0)),
+            ScalarValue::Float32(Some((-5.5_f32).next_up())),
+            ScalarValue::Float32(Some((-4.5_f32).next_up())),
+        );
+    }
+
+    #[test]
+    fn test_round_preimage_float_zero() {
+        // round(x) = 0 → x ∈ (-0.5, 0.5) → [next_up(-0.5), 0.5)
+        assert_preimage_range(
+            ScalarValue::Float64(Some(0.0)),
+            ScalarValue::Float64(Some((-0.5_f64).next_up())),
+            ScalarValue::Float64(Some(0.5)),
+        );
+        assert_preimage_range(
+            ScalarValue::Float32(Some(0.0)),
+            ScalarValue::Float32(Some((-0.5_f32).next_up())),
+            ScalarValue::Float32(Some(0.5)),
+        );
+    }
+
+    #[test]
+    fn test_round_preimage_float_with_dp() {
+        // round(x, 2) = 2.50 → x ∈ [2.50 − 0.005, 2.50 + 0.005)
+        // Bounds use computed f64 arithmetic to match what the implementation produces.
+        let round_func = RoundFunc::new();
+        let args = vec![col("x"), Expr::Literal(ScalarValue::Int32(Some(2)), None)];
+        let lit_expr = Expr::Literal(ScalarValue::Float64(Some(2.50)), None);
+        let info = SimplifyContext::default();
+
+        let result = round_func.preimage(&args, &lit_expr, &info).unwrap();
+        match result {
+            PreimageResult::Range { expr, interval } => {
+                assert_eq!(expr, col("x"));
+                let half = 0.005_f64;
+                assert_eq!(
+                    interval.lower().clone(),
+                    ScalarValue::Float64(Some(2.50_f64 - half))
+                );
+                assert_eq!(
+                    interval.upper().clone(),
+                    ScalarValue::Float64(Some(2.50_f64 + half))
+                );
+            }
+            PreimageResult::None => panic!("Expected Range for round(x,2)=2.50"),
+        }
+    }
+
+    #[test]
+    fn test_round_preimage_float_non_integer() {
+        assert_preimage_none(ScalarValue::Float64(Some(3.5)));
+        assert_preimage_none(ScalarValue::Float64(Some(-2.7)));
+    }
+
+    #[test]
+    fn test_round_preimage_float_edge_cases() {
+        assert_preimage_none(ScalarValue::Float64(Some(f64::INFINITY)));
+        assert_preimage_none(ScalarValue::Float64(Some(f64::NEG_INFINITY)));
+        assert_preimage_none(ScalarValue::Float64(Some(f64::NAN)));
+        assert_preimage_none(ScalarValue::Float32(Some(f32::NAN)));
+    }
+
+    #[test]
+    fn test_round_preimage_float_null() {
+        assert_preimage_none(ScalarValue::Float64(None));
+        assert_preimage_none(ScalarValue::Float32(None));
+    }
+
+    #[test]
+    fn test_round_preimage_decimal_positive() {
+        // round(x) = 5.00 (raw 500, scale=2) → [4.50, 5.50) raw [450, 550)
+        assert_preimage_range(
+            ScalarValue::Decimal128(Some(500), 10, 2),
+            ScalarValue::Decimal128(Some(450), 10, 2),
+            ScalarValue::Decimal128(Some(550), 10, 2),
+        );
+    }
+
+    #[test]
+    fn test_round_preimage_decimal_negative() {
+        // round(x) = -5.00 (raw -500, scale=2) → (-5.50, -4.50] raw → [-549, -449)
+        assert_preimage_range(
+            ScalarValue::Decimal128(Some(-500), 10, 2),
+            ScalarValue::Decimal128(Some(-549), 10, 2),
+            ScalarValue::Decimal128(Some(-449), 10, 2),
+        );
+    }
+
+    #[test]
+    fn test_round_preimage_decimal_zero() {
+        // round(x) = 0.00 (raw 0, scale=2) → (-0.50, 0.50) raw → [-49, 50)
+        assert_preimage_range(
+            ScalarValue::Decimal128(Some(0), 10, 2),
+            ScalarValue::Decimal128(Some(-49), 10, 2),
+            ScalarValue::Decimal128(Some(50), 10, 2),
+        );
+    }
+
+    #[test]
+    fn test_round_preimage_decimal_scale_zero_returns_none() {
+        assert_preimage_none(ScalarValue::Decimal128(Some(5), 10, 0));
+        assert_preimage_none(ScalarValue::Decimal128(Some(0), 10, 0));
+    }
+
+    #[test]
+    fn test_round_preimage_decimal_non_integer_returns_none() {
+        assert_preimage_none(ScalarValue::Decimal128(Some(550), 10, 2)); // 5.50
+        assert_preimage_none(ScalarValue::Decimal128(Some(51), 10, 2)); // 0.51
+    }
+
+    #[test]
+    fn test_round_preimage_decimal_overflow_returns_none() {
+        assert_preimage_none(ScalarValue::Decimal64(Some(i64::MAX), 19, 2));
+    }
+
+    #[test]
+    fn test_round_preimage_decimal_all_variants() {
+        // Decimal32
+        assert_preimage_range(
+            ScalarValue::Decimal32(Some(500), 9, 2),
+            ScalarValue::Decimal32(Some(450), 9, 2),
+            ScalarValue::Decimal32(Some(550), 9, 2),
+        );
+        // Decimal64
+        assert_preimage_range(
+            ScalarValue::Decimal64(Some(500), 18, 2),
+            ScalarValue::Decimal64(Some(450), 18, 2),
+            ScalarValue::Decimal64(Some(550), 18, 2),
+        );
+        // Decimal256
+        assert_preimage_range(
+            ScalarValue::Decimal256(Some(i256::from(500)), 76, 2),
+            ScalarValue::Decimal256(Some(i256::from(450)), 76, 2),
+            ScalarValue::Decimal256(Some(i256::from(550)), 76, 2),
+        );
+    }
+
+    #[test]
+    fn test_round_preimage_decimal_null() {
+        assert_preimage_none(ScalarValue::Decimal32(None, 9, 2));
+        assert_preimage_none(ScalarValue::Decimal64(None, 18, 2));
+        assert_preimage_none(ScalarValue::Decimal128(None, 38, 2));
+        assert_preimage_none(ScalarValue::Decimal256(None, 76, 2));
+    }
+
+    #[test]
+    fn test_round_preimage_non_literal_dp_returns_none() {
+        let round_func = RoundFunc::new();
+        let args = vec![col("x"), col("dp")];
+        let lit_expr = Expr::Literal(ScalarValue::Float64(Some(5.0)), None);
+        let info = SimplifyContext::default();
+
+        let result = round_func.preimage(&args, &lit_expr, &info).unwrap();
+        assert!(matches!(result, PreimageResult::None));
     }
 }

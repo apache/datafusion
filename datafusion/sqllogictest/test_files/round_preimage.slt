@@ -1,0 +1,275 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Round Preimage Tests
+##
+## round(col) = N uses half-away-from-zero rounding:
+##   N > 0:  [N − 0.5, N + 0.5)
+##   N = 0:  [next_up(−0.5), 0.5)
+##   N < 0:  [next_up(N−0.5), next_up(N+0.5))
+##########
+
+statement ok
+CREATE TABLE test_data (
+    id   INT,
+    fval DOUBLE,
+    dval DECIMAL(10,2)
+) AS VALUES
+    (1, 4.4,   4.40),
+    (2, 4.5,   4.50),
+    (3, 5.4,   5.40),
+    (4, 5.5,   5.50),
+    (5, 0.0,   0.00),
+    (6, -4.5, -4.50),
+    (7, -4.6, -4.60),
+    (8, NULL,  NULL);
+
+##########
+## Data Correctness Tests
+##########
+
+# round(x) = 5 — 4.5→5, 5.4→5
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) = arrow_cast(5, 'Float64');
+----
+2
+3
+
+# 5.5 rounds to 6 (away from zero), not 5
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) = arrow_cast(6, 'Float64');
+----
+4
+
+# round(x) = 0
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) = arrow_cast(0, 'Float64');
+----
+5
+
+# Negative: round(x) = -5 — -4.5→-5, -4.6→-5
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) = arrow_cast(-5, 'Float64');
+----
+6
+7
+
+# Non-integer literal: no rows
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) = arrow_cast(4.5, 'Float64');
+----
+
+# Decimal128: round(x) = 5.00 — 4.50→5.00, 5.40→5.00
+query I rowsort
+SELECT id FROM test_data WHERE round(dval) = arrow_cast(5.00, 'Decimal128(10,2)');
+----
+2
+3
+
+# IN list
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) IN (arrow_cast(5, 'Float64'), arrow_cast(6, 'Float64'));
+----
+2
+3
+4
+
+# NOT IN list
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) NOT IN (arrow_cast(5, 'Float64'), arrow_cast(6, 'Float64'));
+----
+1
+5
+6
+7
+
+# IS NOT DISTINCT FROM
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) IS NOT DISTINCT FROM arrow_cast(5, 'Float64');
+----
+2
+3
+
+# IS DISTINCT FROM — NULL row (id=8) is included
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) IS DISTINCT FROM arrow_cast(5, 'Float64');
+----
+1
+4
+5
+6
+7
+8
+
+# round(x) > 5
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) > arrow_cast(5, 'Float64');
+----
+4
+
+# round(x) >= 5
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) >= arrow_cast(5, 'Float64');
+----
+2
+3
+4
+
+# round(x) < 5
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) < arrow_cast(5, 'Float64');
+----
+1
+5
+6
+7
+
+# round(x) <= 5
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) <= arrow_cast(5, 'Float64');
+----
+1
+2
+3
+5
+6
+7
+
+# round(x) != 5
+query I rowsort
+SELECT id FROM test_data WHERE round(fval) != arrow_cast(5, 'Float64');
+----
+1
+4
+5
+6
+7
+
+##########
+## EXPLAIN Tests
+##########
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# round(col) = 5 → naturally half-open
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) = arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval >= Float64(4.5) AND test_data.fval < Float64(5.5)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# round(col) = 0 — lower bound shifted by next_up
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) = arrow_cast(0, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval >= Float64(-0.49999999999999994) AND test_data.fval < Float64(0.5)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# round(col) = -5 — both bounds shifted by next_up
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) = arrow_cast(-5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval >= Float64(-5.499999999999999) AND test_data.fval < Float64(-4.499999999999999)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# Decimal with no dp reduces output scale to 0; half-unit 0.5 is not
+# representable at scale 0 so preimage bails and the predicate is preserved.
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(dval) = arrow_cast(5.00, 'Decimal128(10,2)');
+----
+logical_plan
+01)Filter: round(test_data.dval) = Decimal128(5,10,0)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# Non-integer literal — predicate preserved
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) = arrow_cast(4.5, 'Float64');
+----
+logical_plan
+01)Filter: round(test_data.fval) = Float64(4.5)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# IS NOT DISTINCT FROM — adds IS NOT NULL check
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) IS NOT DISTINCT FROM arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval IS NOT NULL AND test_data.fval >= Float64(4.5) AND test_data.fval < Float64(5.5)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# IS DISTINCT FROM — adds OR IS NULL branch
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) IS DISTINCT FROM arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval < Float64(4.5) OR test_data.fval >= Float64(5.5) OR test_data.fval IS NULL
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# NOT IN — each item inverted and ANDed
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) NOT IN (arrow_cast(5, 'Float64'), arrow_cast(6, 'Float64'));
+----
+logical_plan
+01)Filter: (test_data.fval < Float64(4.5) OR test_data.fval >= Float64(5.5)) AND (test_data.fval < Float64(5.5) OR test_data.fval >= Float64(6.5))
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# round(x) > 5 → fval >= 5.5
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) > arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval >= Float64(5.5)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# round(x) <= 5 → fval < 5.5
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) <= arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval < Float64(5.5)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# round(x) < 5 → fval < 4.5
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) < arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval < Float64(4.5)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+# round(x) >= 5 → fval >= 4.5
+query TT
+EXPLAIN SELECT * FROM test_data WHERE round(fval) >= arrow_cast(5, 'Float64');
+----
+logical_plan
+01)Filter: test_data.fval >= Float64(4.5)
+02)--TableScan: test_data projection=[id, fval, dval]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+##########
+## Cleanup
+##########
+
+statement ok
+DROP TABLE test_data;
