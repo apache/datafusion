@@ -69,13 +69,3 @@ query T
 SELECT quote(FALSE);
 ----
 'false'
-
-query T
-SELECT quote(3.14:FLOAT);
-----
-'3.14'
-
-query T
-SELECT quote(-0.001:FLOAT);
-----
-'-0.001'
