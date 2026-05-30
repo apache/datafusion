@@ -48,7 +48,7 @@ SELECT quote('with space');
 query T
 SELECT quote('it''s');
 ----
-'it''s'
+'it\'s'
 
 query T
 SELECT quote('line\nbreak');
