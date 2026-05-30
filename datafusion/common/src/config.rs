@@ -1483,6 +1483,21 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
     }
 }
 
+config_namespace! {
+    /// Options controlling DataFusion's Spark-compatibility layer (functions
+    /// under `datafusion/spark` and Spark-specific planner behavior). Keys
+    /// here mirror their `spark.sql.*` equivalents in Apache Spark.
+    pub struct SparkOptions {
+        /// Whether to allow more than one generator function (`unnest`, `explode`, `explode_outer`, ...) in a single `SELECT` projection.
+        ///
+        /// - `true` (default): DataFusion's native behavior — multiple generators are allowed in one `SELECT`.
+        /// - `false`: Spark-strict behavior — any `SELECT` with more than one generator is rejected with `[UNSUPPORTED_GENERATOR.MULTI_GENERATOR]` at planning time, matching Spark's `AnalysisException`.
+        ///
+        /// A `SELECT` that mixes `explode_outer` with `unnest`/`explode` is always rejected regardless of this setting, because the two require different null-handling modes on a single `Unnest` plan node.
+        pub allow_multiple_generators: bool, default = true
+    }
+}
+
 /// A key value pair, with a corresponding description
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
@@ -1514,6 +1529,9 @@ pub struct ConfigOptions {
     pub extensions: Extensions,
     /// Formatting options when printing batches
     pub format: FormatOptions,
+    /// Spark-compatibility options (functions under `datafusion/spark` and
+    /// Spark-specific planner behavior)
+    pub spark: SparkOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -1524,6 +1542,7 @@ impl ConfigField for ConfigOptions {
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
         self.format.visit(v, "datafusion.format", "");
+        self.spark.visit(v, "datafusion.spark", "");
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -1536,6 +1555,7 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
             "format" => self.format.set(rem, value),
+            "spark" => self.spark.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -1575,6 +1595,7 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.reset(rem),
             "sql_parser" => self.sql_parser.reset(rem),
             "format" => self.format.reset(rem),
+            "spark" => self.spark.reset(rem),
             other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
     }

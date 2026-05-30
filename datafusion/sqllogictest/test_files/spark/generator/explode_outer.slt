@@ -129,6 +129,40 @@ statement error DataFusion error: Error during planning: Cannot mix `unnest\(\.\
 SELECT explode(xs), explode_outer(xs) FROM int_lists;
 
 ##############################
+# 5b. Spark-strict mode: `datafusion.spark.allow_multiple_generators = false`
+#     rejects ANY second generator in one SELECT (matches Spark's
+#     `UNSUPPORTED_GENERATOR.MULTI_GENERATOR`). Default DataFusion behavior
+#     (`true`) permits multiple same-mode generators.
+##############################
+
+statement ok
+set datafusion.spark.allow_multiple_generators = false;
+
+# Two same-mode generators in one SELECT — rejected only under strict mode.
+# (Aliases sidestep the unique-output-name check so we hit the new error path.)
+statement error DataFusion error: Error during planning: \[UNSUPPORTED_GENERATOR\.MULTI_GENERATOR\] Only one generator function
+SELECT explode(xs) AS a, explode(xs) AS b FROM int_lists;
+
+statement error DataFusion error: Error during planning: \[UNSUPPORTED_GENERATOR\.MULTI_GENERATOR\] Only one generator function
+SELECT explode_outer(xs) AS a, explode_outer(xs) AS b FROM int_lists;
+
+# Mixed-mode is rejected regardless of this flag (the mix message wins
+# because it's a technical constraint, not a stylistic one).
+statement error DataFusion error: Error during planning: Cannot mix `unnest\(\.\.\.\)` \(or `explode\(\.\.\.\)`\) with `explode_outer\(\.\.\.\)` in the same SELECT
+SELECT unnest(xs) AS a, explode_outer(xs) AS b FROM int_lists;
+
+# A single generator still works under strict mode.
+query I
+SELECT explode_outer(xs) AS x FROM int_lists WHERE id = 1 ORDER BY x;
+----
+10
+20
+30
+
+statement ok
+set datafusion.spark.allow_multiple_generators = true;
+
+##############################
 # 6. Chained explode → explode_outer via subquery.
 #    `explode(xs)` (inner) drops NULL and empty outer rows, then
 #    `explode_outer(ys)` (outer) preserves NULL and empty sub-lists from
