@@ -190,14 +190,14 @@ fn rewrite_node(
             )
         }
         LogicalPlan::Distinct(Distinct::All(input)) => {
-            // `SELECT DISTINCT *` deduplicates on every input column, so a join
-            // side below is part of the DISTINCT key and cannot be dropped just
-            // because duplicate rows are collapsed. Recurse with
-            // `duplicate_insensitive = false` so a join is only rewritten to a
-            // semi join when the removed side is provably unique on the join
-            // keys: uniqueness makes that side's columns functionally determined
-            // by the preserved join keys, hence redundant in the DISTINCT key.
-            rewrite_single_input(input, live, false, |input| {
+            // `SELECT DISTINCT *` is exactly a no-aggregate `GROUP BY` over every
+            // input column, so the input is duplicate-insensitive — but every
+            // column is part of the dedup key. Marking all columns live keeps any
+            // join side whose columns reach the DISTINCT (dropping them would
+            // change the distinct count); only a side projected away below the
+            // DISTINCT falls outside the key and can collapse to a semi join.
+            let child_live = all_columns(input.schema());
+            rewrite_single_input(input, child_live, true, |input| {
                 Ok(LogicalPlan::Distinct(Distinct::All(input)))
             })
         }
@@ -208,7 +208,10 @@ fn rewrite_node(
             input,
             schema,
         })) => {
-            // Narrows `live` to the ON/SELECT/ORDER BY columns; stays duplicate-sensitive.
+            // `DISTINCT ON (on) select [ORDER BY sort]` is a no-aggregate
+            // `GROUP BY` on the columns it reads, so its input is duplicate-
+            // insensitive; the live columns are exactly those of the
+            // ON/SELECT/ORDER BY expressions.
             let mut child_live = live_columns_for_exprs(&on_expr, input.schema())?;
             extend_live_columns_for_exprs(&mut child_live, &select_expr, input.schema())?;
             if let Some(sort_expr) = &sort_expr {
@@ -219,7 +222,7 @@ fn rewrite_node(
                 )?;
             }
 
-            rewrite_single_input(input, child_live, false, |input| {
+            rewrite_single_input(input, child_live, true, |input| {
                 Ok(LogicalPlan::Distinct(Distinct::On(DistinctOn {
                     on_expr,
                     select_expr,
@@ -725,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn distinct_does_not_rewrite_without_uniqueness() -> Result<()> {
+    fn distinct_star_keeps_unreferenced_side() -> Result<()> {
         // `SELECT DISTINCT *` deduplicates on every join-output column, including
         // the right side's. With a non-unique right side the inner join can
         // multiply left rows into distinct `(l, r)` combinations, so the join
@@ -746,11 +749,12 @@ mod tests {
     }
 
     #[test]
-    fn distinct_rewrites_when_removed_side_is_unique() -> Result<()> {
-        // When the removed side is unique on the join keys, its columns are
-        // functionally determined by the preserved join keys and so are
-        // redundant in the DISTINCT key. The inner join can be rewritten to a
-        // semi join even under `SELECT DISTINCT *`.
+    fn distinct_star_keeps_side_even_when_unique() -> Result<()> {
+        // `SELECT DISTINCT *` keys on every column, including the right side's, so
+        // the right side stays even when it is unique on the join keys — its
+        // columns are part of the DISTINCT key regardless. This matches a
+        // no-aggregate `GROUP BY` over all columns; dropping a redundant unique
+        // key would be a separate, functional-dependency-based simplification.
         let plan = left_join_right_with_constraints(primary_key_on_id())?
             .distinct()?
             .project(vec![col("l.x")])?
@@ -759,6 +763,26 @@ mod tests {
         assert_optimized_plan_equal!(plan, @r"
         Projection: l.x
           Distinct:
+            Inner Join: l.id = r.id
+              TableScan: l
+              TableScan: r
+        ")
+    }
+
+    #[test]
+    fn distinct_drops_unreferenced_side_when_projected() -> Result<()> {
+        // `SELECT DISTINCT l.x` projects the right side away below the DISTINCT,
+        // leaving it outside the dedup key. Like a no-aggregate `GROUP BY l.x`,
+        // the DISTINCT makes the input duplicate-insensitive, so the inner join
+        // collapses to a semi join even though the right side is not unique.
+        let plan = left_join_right()?
+            .project(vec![col("l.x")])?
+            .distinct()?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Distinct:
+          Projection: l.x
             LeftSemi Join: l.id = r.id
               TableScan: l
               TableScan: r
