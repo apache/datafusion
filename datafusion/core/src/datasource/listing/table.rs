@@ -139,11 +139,13 @@ mod tests {
     use datafusion_expr::dml::InsertOp;
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_expr::expressions::binary;
+    use datafusion_physical_expr::expressions::{Column, binary};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::statistics::StatisticsArgs;
-    use datafusion_physical_plan::{ExecutionPlanProperties, Partitioning, collect};
+    use datafusion_physical_plan::{
+        ExecutionPlanProperties, Partitioning, RangePartitioning, SplitPoint, collect,
+    };
     use std::collections::HashMap;
     use std::io::Write;
     use std::sync::Arc;
@@ -1317,6 +1319,48 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(group_sizes, vec![1, 1, 0, 0]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partition_filter_drops_declared_output_partitioning() -> Result<()> {
+        let files = ["bucket/test/pid=1/file1", "bucket/test/pid=2/file2"];
+
+        let ctx = SessionContext::new();
+        register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
+
+        let output_partitioning = Partitioning::Range(RangePartitioning::try_new(
+            LexOrdering::new(vec![PhysicalSortExpr::new(
+                Arc::new(Column::new("pid", 1)),
+                SortOptions::default(),
+            )])
+            .unwrap(),
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(2))])],
+        )?);
+
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_table_partition_cols(vec![("pid".to_string(), DataType::Int32)])
+            .with_output_partitioning(Some(output_partitioning.clone()));
+
+        let table_path = ListingTableUrl::parse("test:///bucket/test/")?;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(schema);
+        let table = ListingTable::try_new(config)?;
+
+        let unfiltered = table.scan(&ctx.state(), None, &[], None).await?;
+        assert_eq!(unfiltered.output_partitioning(), &output_partitioning);
+
+        let filter = Expr::eq(col("pid"), lit(2_i32));
+        let filtered = table.scan(&ctx.state(), None, &[filter], None).await?;
+        assert!(matches!(
+            filtered.output_partitioning(),
+            Partitioning::UnknownPartitioning(1)
+        ));
 
         Ok(())
     }

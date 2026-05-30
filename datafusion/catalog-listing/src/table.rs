@@ -520,7 +520,14 @@ impl TableProvider for ListingTable {
         // at the same time. This is because the limit should be applied after the filters are applied.
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
-        let declared_output_partitioning = self.options.output_partitioning.clone();
+        let declared_output_partitioning = if partition_filters.is_empty() {
+            self.options.output_partitioning.clone()
+        } else {
+            // Partition pruning can remove files before grouping. Without a
+            // stable file-to-declared-partition mapping, regrouping the
+            // remaining files could shift them into the wrong partition index.
+            None
+        };
         let target_partitions = declared_output_partitioning
             .as_ref()
             .map(Partitioning::partition_count)
@@ -755,6 +762,12 @@ impl ListingTable {
         target_partitions: usize,
         preserve_partition_count: bool,
     ) -> datafusion_common::Result<ListFilesResult> {
+        if target_partitions == 0 {
+            return plan_err!(
+                "ListingTable requires target_partitions to be greater than zero"
+            );
+        }
+
         let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
