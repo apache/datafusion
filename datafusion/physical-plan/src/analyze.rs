@@ -62,11 +62,7 @@ pub struct AnalyzeExec {
 
 /// Builder for [`AnalyzeExec`].
 ///
-/// Required: `verbose`, `show_statistics`, `input`, `schema`.
-/// Optional (all have sensible defaults):
-/// - `metric_types` — defaults to `[Summary, Dev]`
-/// - `metric_categories` — defaults to `None` (all categories)
-/// - `format` — defaults to [`ExplainFormat::Indent`]
+/// Builder for [AnalyzeExec].
 pub struct AnalyzeExecBuilder {
     verbose: bool,
     show_statistics: bool,
