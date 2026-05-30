@@ -18,17 +18,17 @@
 query T
 SELECT quote(1:INT);
 ----
-1
+'1'
 
 query T
 SELECT quote(0:INT);
 ----
-0
+'0'
 
 query T
 SELECT quote(-5:INT);
 ----
--5
+'-5'
 
 query T
 SELECT quote('hello');
@@ -63,19 +63,19 @@ NULL
 query T
 SELECT quote(TRUE);
 ----
-true
+'true'
 
 query T
 SELECT quote(FALSE);
 ----
-false
+'false'
 
 query T
 SELECT quote(3.14:FLOAT);
 ----
-3.14
+'3.14'
 
 query T
 SELECT quote(-0.001:FLOAT);
 ----
--0.001
+'-0.001'
