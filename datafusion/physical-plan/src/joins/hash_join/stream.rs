@@ -41,15 +41,16 @@ use crate::{
     hash_utils::create_hashes,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
-        StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
-        build_batch_empty_build_side, build_batch_from_indices,
-        need_produce_result_in_final,
+        JoinKeyComparator, StatefulStreamResult, adjust_indices_by_join_type,
+        apply_join_filter_to_indices, build_batch_empty_build_side,
+        build_batch_from_indices, get_anti_indices, need_produce_result_in_final,
     },
 };
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::SortOptions;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
 };
@@ -632,6 +633,12 @@ impl HashJoinStream {
     fn process_probe_batch(
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        if self.filter.is_none()
+            && matches!(self.join_type, JoinType::RightSemi | JoinType::RightAnti)
+        {
+            return self.process_probe_batch_right_existence();
+        }
+
         let state = self.state.try_as_process_probe_batch_mut()?;
         let build_side = self.build_side.try_as_ready_mut()?;
 
@@ -845,6 +852,120 @@ impl HashJoinStream {
                 last_joined_right_idx,
             )
         };
+
+        Ok(StatefulStreamResult::Continue)
+    }
+
+    /// Specialized probe path for right semi/anti hash joins without residual
+    /// filters. In these joins the build side is only an existence side, so the
+    /// probe only needs to know whether at least one build row with equal join
+    /// keys exists. This avoids materializing every duplicate build-side match.
+    fn process_probe_batch_right_existence(
+        &mut self,
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let state = self.state.try_as_process_probe_batch_mut()?;
+        let build_side = self.build_side.try_as_ready_mut()?;
+
+        self.join_metrics
+            .probe_hit_rate
+            .add_total(state.batch.num_rows());
+
+        let timer = self.join_metrics.join_time.timer();
+
+        if build_side.left_data.map().is_empty() {
+            let result = build_batch_empty_build_side(
+                &self.schema,
+                build_side.left_data.batch(),
+                &state.batch,
+                &self.column_indices,
+                self.join_type,
+            )?;
+            timer.done();
+            self.output_buffer.push_batch(result)?;
+            self.state = HashJoinStreamState::FetchProbeBatch;
+            return Ok(StatefulStreamResult::Continue);
+        }
+
+        let limit = if self.join_type == JoinType::RightAnti {
+            state.batch.num_rows()
+        } else {
+            self.batch_size
+        };
+
+        let next_offset = match build_side.left_data.map() {
+            Map::HashMap(map) => {
+                let sort_options =
+                    vec![SortOptions::default(); build_side.left_data.values().len()];
+                let comparator = JoinKeyComparator::new(
+                    build_side.left_data.values(),
+                    &state.values,
+                    &sort_options,
+                    self.null_equality,
+                )?;
+                let mut is_match =
+                    |build_idx, probe_idx| comparator.is_equal(build_idx, probe_idx);
+                map.get_probe_indices_with_any_match(
+                    &self.hashes_buffer,
+                    limit,
+                    state.offset,
+                    &mut self.probe_indices_buffer,
+                    &mut is_match,
+                )
+            }
+            Map::ArrayMap(array_map) => array_map.get_probe_indices_with_match(
+                &state.values,
+                limit,
+                state.offset,
+                &mut self.probe_indices_buffer,
+            )?,
+        };
+
+        let matched_right_indices = UInt32Array::from(self.probe_indices_buffer.clone());
+        self.join_metrics
+            .probe_hit_rate
+            .add_part(matched_right_indices.len());
+        self.join_metrics
+            .avg_fanout
+            .add_part(matched_right_indices.len());
+        self.join_metrics
+            .avg_fanout
+            .add_total(matched_right_indices.len());
+
+        let right_indices = if self.join_type == JoinType::RightAnti {
+            get_anti_indices(0..state.batch.num_rows(), &matched_right_indices)
+        } else {
+            matched_right_indices
+        };
+
+        if !right_indices.is_empty() {
+            let left_indices = UInt64Array::from_iter_values(std::iter::empty::<u64>());
+            let batch = build_batch_from_indices(
+                &self.schema,
+                build_side.left_data.batch(),
+                &state.batch,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                JoinSide::Left,
+                self.join_type,
+            )?;
+
+            let push_status = self.output_buffer.push_batch(batch)?;
+            if push_status == PushBatchStatus::LimitReached {
+                timer.done();
+                self.output_buffer.finish()?;
+                self.state = HashJoinStreamState::Completed;
+                return Ok(StatefulStreamResult::Continue);
+            }
+        }
+
+        timer.done();
+
+        if let Some(next_offset) = next_offset {
+            state.advance(next_offset, None);
+        } else {
+            self.state = HashJoinStreamState::FetchProbeBatch;
+        }
 
         Ok(StatefulStreamResult::Continue)
     }

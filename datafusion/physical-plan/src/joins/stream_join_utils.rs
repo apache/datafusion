@@ -25,7 +25,7 @@ use std::sync::Arc;
 use crate::joins::MapOffset;
 use crate::joins::join_hash_map::{
     contain_hashes, get_matched_indices, get_matched_indices_with_limit_offset,
-    update_from_iter,
+    get_probe_indices_with_any_match, update_from_iter,
 };
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use crate::metrics::{
@@ -95,6 +95,27 @@ impl JoinHashMapType for PruningJoinHashMap {
             offset,
             input_indices,
             match_indices,
+        )
+    }
+
+    fn get_probe_indices_with_any_match(
+        &self,
+        hash_values: &[u64],
+        limit: usize,
+        offset: MapOffset,
+        probe_indices: &mut Vec<u32>,
+        is_match: &mut dyn FnMut(usize, usize) -> bool,
+    ) -> Option<MapOffset> {
+        // Flatten the deque
+        let next: Vec<u64> = self.next.iter().copied().collect();
+        get_probe_indices_with_any_match::<u64>(
+            &self.map,
+            &next,
+            hash_values,
+            limit,
+            offset,
+            probe_indices,
+            is_match,
         )
     }
 

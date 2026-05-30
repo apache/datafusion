@@ -264,6 +264,69 @@ impl ArrayMap {
         )
     }
 
+    pub fn get_probe_indices_with_match(
+        &self,
+        prob_side_keys: &[ArrayRef],
+        limit: usize,
+        current_offset: MapOffset,
+        probe_indices: &mut Vec<u32>,
+    ) -> Result<Option<MapOffset>> {
+        if prob_side_keys.len() != 1 {
+            return internal_err!(
+                "ArrayMap expects 1 join key, but got {}",
+                prob_side_keys.len()
+            );
+        }
+        let array = &prob_side_keys[0];
+
+        downcast_supported_integer!(
+            array.data_type() => (
+                lookup_and_get_probe_indices_with_match,
+                self,
+                array,
+                limit,
+                current_offset,
+                probe_indices
+            )
+        )
+    }
+
+    fn lookup_and_get_probe_indices_with_match<T: ArrowNumericType>(
+        &self,
+        array: &ArrayRef,
+        limit: usize,
+        current_offset: MapOffset,
+        probe_indices: &mut Vec<u32>,
+    ) -> Result<Option<MapOffset>>
+    where
+        T::Native: Copy + AsPrimitive<u64>,
+    {
+        probe_indices.clear();
+
+        let arr = array.as_primitive::<T>();
+        let have_null = arr.null_count() > 0;
+
+        for prob_idx in current_offset.0..arr.len() {
+            if probe_indices.len() == limit {
+                return Ok(Some((prob_idx, None)));
+            }
+
+            if have_null && arr.is_null(prob_idx) {
+                continue;
+            }
+
+            // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
+            let prob_val: u64 = unsafe { arr.value_unchecked(prob_idx) }.as_();
+            let idx_in_build_side = prob_val.wrapping_sub(self.offset) as usize;
+
+            if idx_in_build_side < self.data.len() && self.data[idx_in_build_side] != 0 {
+                probe_indices.push(prob_idx as u32);
+            }
+        }
+
+        Ok(None)
+    }
+
     fn lookup_and_get_indices<T: ArrowNumericType>(
         &self,
         array: &ArrayRef,
