@@ -708,31 +708,28 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Union(Union { inputs, schema }) => {
-                let first_input_schema = inputs[0].schema();
-                // Check field count AND field types AND field names/qualifiers.
-                // A width-only check misses cases where inputs were rewritten with
-                // different types or aliases (e.g. after type-coercion rewrites).
-                let schemas_match = schema.fields().len() == first_input_schema.fields().len()
-                    && (0..schema.fields().len()).all(|i| {
-                        let (q1, f1) = schema.qualified_field(i);
-                        let (q2, f2) = first_input_schema.qualified_field(i);
-                        q1 == q2
-                            && f1.data_type() == f2.data_type()
-                            && f1.name() == f2.name()
-                    });
-                if schemas_match {
-                    // Inputs are structurally identical to the cached schema;
-                    // no recomputation needed.
-                    Ok(LogicalPlan::Union(Union { inputs, schema }))
+                // Recompute what the schema should be from the current inputs.
+                // Comparing the full recomputed schema (not just inputs[0]) correctly
+                // handles: field-count changes, type changes, name/alias changes,
+                // nullability changes, and metadata changes — all in one place.
+                //
+                // A note on `Union`s constructed via `try_new_by_name`:
+                //
+                // At this point, the schema for each input should have
+                // the same width. Thus, we do not need to save whether a
+                // `Union` was created `BY NAME`, and can safely rely on the
+                // `try_new` initializer to derive the new schema based on
+                // column positions.
+                let recomputed = Union::try_new(inputs)?;
+                if recomputed.schema == schema {
+                    // Schema is still valid; preserve the cached schema
+                    // (which may carry metadata the recomputed one lacks).
+                    Ok(LogicalPlan::Union(Union {
+                        inputs: recomputed.inputs,
+                        schema,
+                    }))
                 } else {
-                    // A note on `Union`s constructed via `try_new_by_name`:
-                    //
-                    // At this point, the schema for each input should have
-                    // the same width. Thus, we do not need to save whether a
-                    // `Union` was created `BY NAME`, and can safely rely on the
-                    // `try_new` initializer to derive the new schema based on
-                    // column positions.
-                    Ok(LogicalPlan::Union(Union::try_new(inputs)?))
+                    Ok(LogicalPlan::Union(recomputed))
                 }
             }
             LogicalPlan::Distinct(distinct) => {
@@ -6217,6 +6214,46 @@ mod tests {
             "b",
             "Union schema should reflect the renamed column after \
          recompute_schema(), but the width-only check left it stale"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_recompute_schema_union_nullability_mismatch() -> Result<()> {
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        // nullable: false
+        let schema_not_null = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        // nullable: true
+        let schema_nullable = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+
+        // Build Union starting with NOT NULL inputs.
+        let original = Union::try_new(vec![
+            Arc::new(table_scan(Some("t1"), &schema_not_null, None)?.build()?),
+            Arc::new(table_scan(Some("t2"), &schema_not_null, None)?.build()?),
+        ])?;
+        assert!(
+            !original.schema.field(0).is_nullable(),
+            "sanity: starting schema field is NOT NULL"
+        );
+
+        // Simulate a rewrite that made the inputs nullable while leaving
+        // the Union's cached schema stale.
+        let stale = LogicalPlan::Union(Union {
+            inputs: vec![
+                Arc::new(table_scan(Some("t1"), &schema_nullable, None)?.build()?),
+                Arc::new(table_scan(Some("t2"), &schema_nullable, None)?.build()?),
+            ],
+            schema: Arc::clone(&original.schema),
+        });
+
+        let recomputed = stale.recompute_schema()?;
+
+        assert!(
+            recomputed.schema().field(0).is_nullable(),
+            "Union schema should reflect the new nullable inputs after \
+         recompute_schema(), but the stale NOT NULL schema was kept"
         );
 
         Ok(())
