@@ -1127,6 +1127,12 @@ SELECT power(2.5::decimal(38, 3), 4), arrow_typeof(power(2.5::decimal(38, 3), 4)
 ----
 39.0625 Float64
 
+# https://github.com/apache/datafusion/issues/22480
+query RT
+SELECT power(2.5::decimal(20, 4), 10), arrow_typeof(power(2.5::decimal(20, 4), 10));
+----
+9536.7431640625 Float64
+
 query RT
 SELECT power(2.5, 4.0), arrow_typeof(power(2.5, 4.0));
 ----
