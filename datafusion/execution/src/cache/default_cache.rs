@@ -193,7 +193,7 @@ impl<K: CacheKey, V: CacheValue> DefaultCache<K, V> {
         }
     }
 
-    /// Override the cache name reported by [`CacheAccessor::name`].
+    /// Override the cache name.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self
