@@ -224,48 +224,20 @@ impl OptimizerRule for EliminateCrossJoin {
 /// / `Expr::Exists` / `Expr::SetComparison`.
 ///
 /// Used as a fast-path gate at the top of [`EliminateCrossJoin::rewrite`]
-/// so that join-free plans skip the full recursive rewrite. The
-/// expression-side recursion is required because `rewrite_children`
-/// also dives into uncorrelated subqueries via
-/// `map_uncorrelated_subqueries`; ignoring them here would skip
-/// optimizing a `CROSS JOIN` that sits only inside an
-/// `IN (SELECT ... FROM a, b)`-style predicate.
+/// so that join-free plans skip the full recursive rewrite. Subquery
+/// traversal matters because `rewrite_children` also dives into
+/// uncorrelated subqueries via `map_uncorrelated_subqueries`; ignoring
+/// them here would skip optimizing a `CROSS JOIN` that sits only inside
+/// an `IN (SELECT ... FROM a, b)`-style predicate.
 ///
-/// Read-only `apply` walk with early stop on first match, no
-/// allocations.
+/// `LogicalPlan::apply_with_subqueries` already implements the
+/// "walk this node + every child + every subquery plan" traversal we
+/// need, so the helper is a thin wrapper around it.
 fn plan_has_joins(plan: &LogicalPlan) -> bool {
     let mut found = false;
-    let _ = plan.apply(|node| {
+    let _ = plan.apply_with_subqueries(|node| {
         if matches!(node, LogicalPlan::Join(_)) {
             found = true;
-            return Ok(TreeNodeRecursion::Stop);
-        }
-        // Recurse into subquery plans referenced from this node's
-        // expressions. `LogicalPlan::apply` does not descend into the
-        // subquery plan, so we have to do it explicitly.
-        let _ = node.apply_expressions(|expr| {
-            if found {
-                return Ok(TreeNodeRecursion::Stop);
-            }
-            let _ = expr.apply(|e| {
-                let subquery_plan = match e {
-                    Expr::ScalarSubquery(sq) => Some(sq.subquery.as_ref()),
-                    Expr::InSubquery(in_sq) => Some(in_sq.subquery.subquery.as_ref()),
-                    Expr::Exists(exists) => Some(exists.subquery.subquery.as_ref()),
-                    Expr::SetComparison(sc) => Some(sc.subquery.subquery.as_ref()),
-                    _ => None,
-                };
-                if let Some(sub) = subquery_plan
-                    && plan_has_joins(sub)
-                {
-                    found = true;
-                    return Ok(TreeNodeRecursion::Stop);
-                }
-                Ok(TreeNodeRecursion::Continue)
-            });
-            Ok(TreeNodeRecursion::Continue)
-        });
-        if found {
             Ok(TreeNodeRecursion::Stop)
         } else {
             Ok(TreeNodeRecursion::Continue)
