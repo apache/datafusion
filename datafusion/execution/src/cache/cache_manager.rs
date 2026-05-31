@@ -466,7 +466,8 @@ mod tests {
     #[test]
     fn test_ttl_preserved_when_not_set_in_config() {
         // Create a cache with TTL = 1 second
-        let list_file_cache = DefaultCache::new_with_ttl(1024, Some(Duration::from_secs(1)));
+        let list_file_cache =
+            DefaultCache::new_with_ttl(1024, Some(Duration::from_secs(1)));
 
         // Verify the cache has TTL set initially
         assert_eq!(
@@ -502,7 +503,8 @@ mod tests {
     #[test]
     fn test_ttl_overridden_when_set_in_config() {
         // Create a cache with TTL = 1 second
-        let list_file_cache = DefaultCache::new_with_ttl(1024, Some(Duration::from_secs(1)));
+        let list_file_cache =
+            DefaultCache::new_with_ttl(1024, Some(Duration::from_secs(1)));
 
         // Put cache in config WITH a different TTL set
         let config = CacheManagerConfig::default()
