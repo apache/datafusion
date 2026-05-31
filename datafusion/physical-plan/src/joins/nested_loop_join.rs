@@ -3136,6 +3136,21 @@ pub(crate) mod tests {
         Ok((columns, batches, metrics))
     }
 
+    async fn assert_multi_partition_join_oom(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: &JoinType,
+        join_filter: Option<JoinFilter>,
+        context: Arc<TaskContext>,
+    ) -> Result<()> {
+        let err =
+            multi_partitioned_join_collect(left, right, join_type, join_filter, context)
+                .await
+                .unwrap_err();
+        assert_contains!(err.to_string(), "Resources exhausted");
+        Ok(())
+    }
+
     fn new_task_ctx(batch_size: usize) -> Arc<TaskContext> {
         let base = TaskContext::default();
         // limit max size of intermediate batch used in nlj to 1
@@ -3511,7 +3526,7 @@ pub(crate) mod tests {
 
         // Join types that support memory-limited fallback should succeed
         // even under tight memory limits (they spill to disk instead of OOM).
-        let fallback_join_types = vec![
+        let fallback_join_types = [
             JoinType::Inner,
             JoinType::Right,
             JoinType::RightSemi,
@@ -3541,7 +3556,7 @@ pub(crate) mod tests {
         // partitions are intentionally not supported in the fallback path yet
         // (cross-partition left-bitmap coordination is missing). They should
         // still OOM under tight memory rather than produce incorrect output.
-        let left_final_join_types = vec![
+        let left_final_join_types = [
             JoinType::Left,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
@@ -3555,16 +3570,14 @@ pub(crate) mod tests {
                 .build_arc()?;
             let task_ctx = TaskContext::default().with_runtime(runtime);
             let task_ctx = Arc::new(task_ctx);
-            let err = multi_partitioned_join_collect(
+            assert_multi_partition_join_oom(
                 Arc::clone(&left),
                 Arc::clone(&right),
                 join_type,
                 Some(filter.clone()),
                 task_ctx,
             )
-            .await
-            .unwrap_err();
-            assert_contains!(err.to_string(), "Resources exhausted");
+            .await?;
         }
 
         Ok(())
@@ -3786,19 +3799,17 @@ pub(crate) mod tests {
         let right = build_right_table();
         let filter = prepare_join_filter();
 
-        let err = multi_partitioned_join_collect(
+        assert_multi_partition_join_oom(
             Arc::clone(&left),
             Arc::clone(&right),
             &JoinType::Left,
             Some(filter.clone()),
             task_ctx,
         )
-        .await
-        .unwrap_err();
-        assert_contains!(err.to_string(), "Resources exhausted");
+        .await?;
 
         let single_partition_task_ctx = task_ctx_with_memory_limit(50, 16)?;
-        let (_columns, _batches, metrics) = join_collect(
+        let (_, _, metrics) = join_collect(
             left,
             right,
             &JoinType::Left,
