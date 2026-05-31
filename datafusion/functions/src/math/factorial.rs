@@ -23,8 +23,7 @@ use arrow::datatypes::{DECIMAL256_MAX_PRECISION, DataType, Decimal256Type, Int64
 use arrow_buffer::i256;
 
 use datafusion_common::{
-    Result, ScalarValue, exec_err, internal_err,
-    utils::take_function_args,
+    Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -176,10 +175,7 @@ const FACTORIALS: [i256; 57] = [
     i256::from_parts(54441957834517090031680871000348557312, 4128941885723),
     i256::from_parts(299309985358604090582029808424378695680, 177544501086095),
     i256::from_parts(238909412782918374001076488265470574592, 7811958047788218),
-    i256::from_parts(
-        202170200682234462683829141561361301504,
-        351538112150469841,
-    ),
+    i256::from_parts(202170200682234462683829141561361301504, 351538112150469841),
     i256::from_parts(
         112205324517446769945026111164878159872,
         16170753158921612713,
