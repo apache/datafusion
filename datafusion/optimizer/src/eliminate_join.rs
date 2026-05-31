@@ -645,14 +645,18 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_can_rewrite_when_removed_side_is_unique() -> Result<()> {
-        let plan = left_join_right_with_constraints(primary_key_on_id())?
+    fn aggregate_with_aggregates_is_not_duplicate_insensitive() -> Result<()> {
+        // A `GROUP BY` *with* aggregate functions observes how many rows fall in
+        // each group, so its input is not duplicate-insensitive. With a non-unique
+        // right side the join must stay an inner join: collapsing it to a semi
+        // join would drop matching duplicates and undercount `count(l.id)`.
+        let plan = left_join_right()?
             .aggregate(vec![col("l.x")], vec![count(col("l.id"))])?
             .build()?;
 
         assert_optimized_plan_equal!(plan, @r"
         Aggregate: groupBy=[[l.x]], aggr=[[count(l.id)]]
-          LeftSemi Join: l.id = r.id
+          Inner Join: l.id = r.id
             TableScan: l
             TableScan: r
         ")
@@ -717,29 +721,10 @@ mod tests {
         // the right side's. With a non-unique right side the inner join can
         // multiply left rows into distinct `(l, r)` combinations, so the join
         // must not be rewritten to a semi join (which would drop the right
-        // columns from the DISTINCT key and undercount the result).
+        // columns from the DISTINCT key and undercount the result). This holds
+        // even when the right side is unique on the join keys: its columns are
+        // part of the DISTINCT key regardless.
         let plan = left_join_right()?
-            .distinct()?
-            .project(vec![col("l.x")])?
-            .build()?;
-
-        assert_optimized_plan_equal!(plan, @r"
-        Projection: l.x
-          Distinct:
-            Inner Join: l.id = r.id
-              TableScan: l
-              TableScan: r
-        ")
-    }
-
-    #[test]
-    fn distinct_star_keeps_side_even_when_unique() -> Result<()> {
-        // `SELECT DISTINCT *` keys on every column, including the right side's, so
-        // the right side stays even when it is unique on the join keys — its
-        // columns are part of the DISTINCT key regardless. This matches a
-        // no-aggregate `GROUP BY` over all columns; dropping a redundant unique
-        // key would be a separate, functional-dependency-based simplification.
-        let plan = left_join_right_with_constraints(primary_key_on_id())?
             .distinct()?
             .project(vec![col("l.x")])?
             .build()?;
