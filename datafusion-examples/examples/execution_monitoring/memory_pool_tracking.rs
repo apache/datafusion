@@ -54,8 +54,7 @@ async fn automatic_usage_example() -> Result<()> {
         .with_memory_limit(5_000_000, 1.0) // 5MB, 100% utilization
         .build_arc()?;
 
-    let mut config = SessionConfig::new();
-    config.options_mut().execution.enable_materialized_ctes = false;
+    let config = SessionConfig::new();
     let ctx = SessionContext::new_with_config_rt(config, runtime);
 
     // Create a simple table for demonstration
