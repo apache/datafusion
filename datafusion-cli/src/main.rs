@@ -702,7 +702,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_files_cache() -> Result<(), DataFusionError> {
         let list_files_cache =
-            Arc::new(DefaultCache::with_ttl(1024, Some(Duration::from_secs(1))));
+            Arc::new(DefaultCache::new_with_ttl(1024, Some(Duration::from_secs(1))));
 
         let rt = RuntimeEnvBuilder::new()
             .with_cache_manager(

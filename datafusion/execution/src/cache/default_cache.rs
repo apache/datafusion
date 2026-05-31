@@ -180,12 +180,12 @@ pub struct DefaultCache<K: CacheKey, V: CacheValue> {
 impl<K: CacheKey, V: CacheValue> DefaultCache<K, V> {
     /// Create a cache with the given memory budget in bytes and no TTL.
     pub fn new(memory_limit: usize) -> Self {
-        Self::with_ttl(memory_limit, None)
+        Self::new_with_ttl(memory_limit, None)
     }
 
     /// Create a cache with the given memory budget in bytes and an optional
     /// TTL applied to every newly inserted entry.
-    pub fn with_ttl(memory_limit: usize, ttl: Option<Duration>) -> Self {
+    pub fn new_with_ttl(memory_limit: usize, ttl: Option<Duration>) -> Self {
         Self {
             state: Mutex::new(DefaultCacheState::new(memory_limit, ttl)),
             time_provider: Arc::new(SystemTimeProvider),
