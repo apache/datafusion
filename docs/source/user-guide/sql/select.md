@@ -772,8 +772,7 @@ EXCEPT ALL
 SELECT a FROM table2;
 ```
 
-`UNION BY NAME` matches columns by name instead of by position. `UNION ALL BY
-NAME` preserves duplicates, and `UNION DISTINCT BY NAME` removes duplicates.
+`UNION BY NAME` matches columns by name instead of by position. `UNION ALL BY NAME` preserves duplicates, and `UNION DISTINCT BY NAME` removes duplicates.
 
 ```sql
 SELECT a, b FROM table1
