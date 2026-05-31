@@ -229,7 +229,6 @@ mod tests {
         datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
         test_util::parquet_test_data,
     };
-    use datafusion_execution::cache::CacheAccessor;
     use datafusion_execution::cache::cache_manager::{
         CacheManagerConfig, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
     };
@@ -243,6 +242,7 @@ mod tests {
 
     use datafusion_common::parsers::CompressionTypeVariant;
     use datafusion_common::{DFSchema, TableReference};
+    use datafusion_execution::cache::Cache;
     use datafusion_execution::cache::default_cache::DefaultCache;
     use datafusion_expr::registry::ExtensionTypeRegistryRef;
 
