@@ -18,11 +18,11 @@
 #[cfg(test)]
 mod tests {
     use crate::cache::cache_manager::{
-        CachedFileList, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, TableScopedPath,
+        CachedFileList, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
         meta_heap_bytes,
     };
     use crate::cache::default_cache::{DefaultCache, TimeProvider};
-    use crate::cache::{Cache, CacheEntryInfo, CacheKey, CacheValue};
+    use crate::cache::{Cache, CacheEntryInfo, CacheKey, CacheValue, TableScopedPath};
     use chrono::DateTime;
     use datafusion_common::HashMap;
     use datafusion_common::TableReference;

@@ -23,13 +23,13 @@ pub mod default_cache;
 mod file_metadata_cache;
 mod list_files_cache;
 
-use crate::cache::cache_manager::TableScopedPath;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;
 use datafusion_common::{HashMap, TableReference};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::time::Duration;
+use object_store::path::Path;
 
 /// Base trait for cache implementations with common operations.
 ///
@@ -131,12 +131,12 @@ pub struct CacheEntryInfo<V> {
 }
 
 impl<K: CacheKey, V: CacheValue> Debug for dyn Cache<K, V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Cache name: {} with length: {}", self.name(), self.len())
     }
 }
 
-impl CacheKey for object_store::path::Path {
+impl CacheKey for Path {
     fn size(&self) -> usize {
         self.as_ref().heap_size(&mut DFHeapSizeCtx::default())
     }
@@ -153,5 +153,30 @@ impl CacheKey for TableScopedPath {
 
     fn table_ref(&self) -> Option<&TableReference> {
         self.table.as_ref()
+    }
+}
+
+/// Each entry is scoped to its use within a specific table so that the cache
+/// can differentiate between identical paths in different tables, and
+/// table-level cache invalidation.
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct TableScopedPath {
+    pub table: Option<TableReference>,
+    pub path: Path,
+}
+
+impl DFHeapSize for TableScopedPath {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.path.as_ref().heap_size(ctx) + self.table.heap_size(ctx)
+    }
+}
+
+impl Display for TableScopedPath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(table) = &self.table {
+            write!(f, "{}, {}", self.path, table)
+        } else {
+            write!(f, "{}", self.path)
+        }
     }
 }

@@ -18,10 +18,10 @@
 #[cfg(test)]
 mod tests {
     use crate::cache::cache_manager::{
-        CachedFileMetadata, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT, TableScopedPath,
+        CachedFileMetadata, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
     };
     use crate::cache::default_cache::DefaultCache;
-    use crate::cache::{Cache, CacheEntryInfo};
+    use crate::cache::{Cache, CacheEntryInfo, TableScopedPath};
     use arrow::array::{Int32Array, ListArray, RecordBatch};
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};

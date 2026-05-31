@@ -16,19 +16,30 @@
 // under the License.
 
 use crate::cache::default_cache::DefaultCache;
-use crate::cache::{Cache, CacheValue};
+pub use crate::cache::{Cache, CacheValue, TableScopedPath};
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
-use datafusion_common::stats::Precision;
-use datafusion_common::{HashMap, TableReference};
+use datafusion_common::HashMap;
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use object_store::ObjectMeta;
 use object_store::path::Path;
 use std::any::Any;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
+
+pub const DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT: usize = 1024 * 1024; // 1MiB
+
+pub const DEFAULT_LIST_FILES_CACHE_TTL: Option<Duration> = None; // Infinite
+
+pub const DEFAULT_FILE_STATISTICS_MEMORY_LIMIT: usize = 20 * 1024 * 1024; // 20MiB
+
+pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
+
+pub type FileStatisticsCache = dyn Cache<TableScopedPath, CachedFileMetadata>;
+pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
+pub type FileMetadataCache = dyn Cache<Path, CachedFileMetadataEntry>;
 
 /// Calculates the number of bytes an [`ObjectMeta`] occupies in the heap.
 pub fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
@@ -42,31 +53,6 @@ pub fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
     }
 
     size
-}
-
-/// Each entry is scoped to its use within a specific table so that the cache
-/// can differentiate between identical paths in different tables, and
-/// table-level cache invalidation.
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct TableScopedPath {
-    pub table: Option<TableReference>,
-    pub path: Path,
-}
-
-impl DFHeapSize for TableScopedPath {
-    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        self.path.as_ref().heap_size(ctx) + self.table.heap_size(ctx)
-    }
-}
-
-impl Display for TableScopedPath {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Some(table) = &self.table {
-            write!(f, "{}, {}", self.path, table)
-        } else {
-            write!(f, "{}", self.path)
-        }
-    }
 }
 
 /// Cached metadata for a file, including statistics and ordering.
@@ -111,18 +97,6 @@ impl CacheValue for CachedFileMetadata {
         DFHeapSize::heap_size(self, &mut DFHeapSizeCtx::default())
     }
 }
-
-pub const DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT: usize = 1024 * 1024; // 1MiB
-
-pub const DEFAULT_LIST_FILES_CACHE_TTL: Option<Duration> = None; // Infinite
-
-pub const DEFAULT_FILE_STATISTICS_MEMORY_LIMIT: usize = 20 * 1024 * 1024; // 20MiB
-
-pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
-
-pub type FileStatisticsCache = dyn Cache<TableScopedPath, CachedFileMetadata>;
-pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
-pub type FileMetadataCache = dyn Cache<Path, CachedFileMetadataEntry>;
 
 impl DFHeapSize for CachedFileMetadata {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
