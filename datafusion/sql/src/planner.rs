@@ -16,7 +16,7 @@
 // under the License.
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::vec;
@@ -276,6 +276,14 @@ pub struct PlannerContext {
     set_expr_left_schema: Option<DFSchemaRef>,
     /// The parameters of all lambdas seen so far
     lambda_parameters: HashMap<String, FieldRef>,
+    /// CTEs explicitly marked as MATERIALIZED
+    materialized_cte_names: HashSet<String>,
+    /// CTEs explicitly marked as NOT MATERIALIZED
+    not_materialized_cte_names: HashSet<String>,
+    /// CTEs that are recursive
+    recursive_cte_names: HashSet<String>,
+    /// Reference counts for CTEs (how many times each CTE is referenced)
+    cte_ref_counts: HashMap<String, usize>,
 }
 
 impl Default for PlannerContext {
@@ -295,6 +303,10 @@ impl PlannerContext {
             create_table_schema: None,
             set_expr_left_schema: None,
             lambda_parameters: HashMap::new(),
+            materialized_cte_names: HashSet::new(),
+            not_materialized_cte_names: HashSet::new(),
+            recursive_cte_names: HashSet::new(),
+            cte_ref_counts: HashMap::new(),
         }
     }
 
@@ -429,6 +441,61 @@ impl PlannerContext {
         schema: Option<DFSchemaRef>,
     ) -> Option<DFSchemaRef> {
         std::mem::replace(&mut self.set_expr_left_schema, schema)
+    }
+
+    /// Mark a CTE as explicitly MATERIALIZED
+    pub fn insert_materialized_cte(&mut self, name: &str) {
+        self.materialized_cte_names.insert(name.to_string());
+    }
+
+    /// Mark a CTE as explicitly NOT MATERIALIZED
+    pub fn insert_not_materialized_cte(&mut self, name: &str) {
+        self.not_materialized_cte_names.insert(name.to_string());
+    }
+
+    /// Mark a CTE as recursive
+    pub fn insert_recursive_cte(&mut self, name: &str) {
+        self.recursive_cte_names.insert(name.to_string());
+    }
+
+    /// Check if a CTE is explicitly marked as MATERIALIZED
+    pub fn is_materialized_cte(&self, name: &str) -> bool {
+        self.materialized_cte_names.contains(name)
+    }
+
+    /// Check if a CTE is explicitly marked as NOT MATERIALIZED
+    pub fn is_not_materialized_cte(&self, name: &str) -> bool {
+        self.not_materialized_cte_names.contains(name)
+    }
+
+    /// Check if a CTE is recursive
+    pub fn is_recursive_cte(&self, name: &str) -> bool {
+        self.recursive_cte_names.contains(name)
+    }
+
+    /// Increment the reference count for a CTE
+    pub fn increment_cte_ref_count(&mut self, name: &str) {
+        *self.cte_ref_counts.entry(name.to_string()).or_insert(0) += 1;
+    }
+
+    /// Get the reference count for a CTE
+    pub fn get_cte_ref_count(&self, name: &str) -> usize {
+        self.cte_ref_counts.get(name).copied().unwrap_or(0)
+    }
+
+    /// Get a reference to the materialized CTE names
+    pub fn materialized_cte_names(&self) -> &HashSet<String> {
+        &self.materialized_cte_names
+    }
+
+    /// Get a reference to the CTE reference counts
+    pub fn cte_ref_counts(&self) -> &HashMap<String, usize> {
+        &self.cte_ref_counts
+    }
+
+    /// Returns an iterator over CTE names
+    pub fn cte_names(&self) -> impl Iterator<Item = &String> {
+        self.ctes.keys()
     }
 }
 
