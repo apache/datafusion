@@ -3141,8 +3141,10 @@ pub(crate) mod tests {
         right: Arc<dyn ExecutionPlan>,
         join_type: &JoinType,
         join_filter: Option<JoinFilter>,
-        context: Arc<TaskContext>,
+        memory_limit: usize,
+        batch_size: usize,
     ) -> Result<()> {
+        let context = task_ctx_with_memory_limit(memory_limit, batch_size)?;
         let err =
             multi_partitioned_join_collect(left, right, join_type, join_filter, context)
                 .await
@@ -3565,17 +3567,13 @@ pub(crate) mod tests {
         ];
 
         for join_type in &left_final_join_types {
-            let runtime = RuntimeEnvBuilder::new()
-                .with_memory_limit(100, 1.0)
-                .build_arc()?;
-            let task_ctx = TaskContext::default().with_runtime(runtime);
-            let task_ctx = Arc::new(task_ctx);
             assert_multi_partition_join_oom(
                 Arc::clone(&left),
                 Arc::clone(&right),
                 join_type,
                 Some(filter.clone()),
-                task_ctx,
+                100,
+                16,
             )
             .await?;
         }
@@ -3794,7 +3792,6 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_nlj_memory_limited_left_join_multi_partition_fallback_disabled()
     -> Result<()> {
-        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
         let left = build_left_table();
         let right = build_right_table();
         let filter = prepare_join_filter();
@@ -3804,7 +3801,8 @@ pub(crate) mod tests {
             Arc::clone(&right),
             &JoinType::Left,
             Some(filter.clone()),
-            task_ctx,
+            50,
+            16,
         )
         .await?;
 
