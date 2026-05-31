@@ -21,7 +21,7 @@ mod tests {
 
     use crate::cache::cache_manager::{CachedFileMetadataEntry, FileMetadata};
     use crate::cache::default_cache::DefaultCache;
-    use crate::cache::{Cache, CacheAccessor, CacheEntryInfo};
+    use crate::cache::{Cache, CacheEntryInfo};
     use datafusion_common::HashMap;
     use object_store::ObjectMeta;
     use object_store::path::Path;

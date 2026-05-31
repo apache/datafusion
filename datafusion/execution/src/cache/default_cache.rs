@@ -23,7 +23,7 @@ use datafusion_common::instant::Instant;
 use datafusion_common::{HashMap, Result};
 
 use crate::cache::lru_queue::LruQueue;
-use crate::cache::{Cache, CacheAccessor, CacheEntryInfo, CacheKey, CacheValue};
+use crate::cache::{Cache, CacheEntryInfo, CacheKey, CacheValue};
 
 /// Source of the current time used by a [`DefaultCache`] when applying TTLs.
 pub trait TimeProvider: Send + Sync {
@@ -211,7 +211,8 @@ impl<K: CacheKey, V: CacheValue> DefaultCache<K, V> {
     }
 }
 
-impl<K: CacheKey, V: CacheValue> CacheAccessor<K, V> for DefaultCache<K, V> {
+impl<K: CacheKey, V: CacheValue> Cache<K, V> for DefaultCache<K, V> {
+
     fn get(&self, key: &K) -> Option<V> {
         let now = self.time_provider.now();
         let mut state = self.state.lock().unwrap();
@@ -247,9 +248,6 @@ impl<K: CacheKey, V: CacheValue> CacheAccessor<K, V> for DefaultCache<K, V> {
     fn name(&self) -> String {
         self.name.clone()
     }
-}
-
-impl<K: CacheKey, V: CacheValue> Cache<K, V> for DefaultCache<K, V> {
     fn cache_limit(&self) -> usize {
         self.state.lock().unwrap().memory_limit
     }

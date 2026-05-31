@@ -22,7 +22,7 @@ mod tests {
         meta_heap_bytes,
     };
     use crate::cache::default_cache::{DefaultCache, TimeProvider};
-    use crate::cache::{Cache, CacheAccessor, CacheEntryInfo, CacheKey, CacheValue};
+    use crate::cache::{Cache, CacheEntryInfo, CacheKey, CacheValue};
     use chrono::DateTime;
     use datafusion_common::HashMap;
     use datafusion_common::TableReference;

@@ -21,7 +21,7 @@ mod tests {
         CachedFileMetadata, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT, TableScopedPath,
     };
     use crate::cache::default_cache::DefaultCache;
-    use crate::cache::{Cache, CacheAccessor, CacheEntryInfo};
+    use crate::cache::{Cache, CacheEntryInfo};
     use arrow::array::{Int32Array, ListArray, RecordBatch};
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};

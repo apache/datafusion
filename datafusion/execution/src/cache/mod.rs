@@ -50,7 +50,7 @@ use std::time::Duration;
 /// 1. Call `get(key)` to check for cached value
 /// 2. If `Some(cached)`, validate with `cached.is_valid_for(&current_meta)`
 /// 3. If invalid or missing, compute new value and call `put(key, new_value)`
-pub trait CacheAccessor<K, V>: Send + Sync {
+pub trait Cache<K: CacheKey, V: CacheValue>: Send + Sync {
     /// Get a cached entry if it exists.
     ///
     /// Returns the cached value without any validation. The caller should
@@ -81,12 +81,7 @@ pub trait CacheAccessor<K, V>: Send + Sync {
 
     /// Return the cache name.
     fn name(&self) -> String;
-}
 
-/// A managed cache with capacity, expiration, and introspection policies.
-///
-
-pub trait Cache<K: CacheKey, V: CacheValue>: CacheAccessor<K, V> {
     /// Current memory budget, in bytes.
     fn cache_limit(&self) -> usize;
 
@@ -103,7 +98,7 @@ pub trait Cache<K: CacheKey, V: CacheValue>: CacheAccessor<K, V> {
     /// Invalidate every entry associated with `table_ref`.
     fn drop_table_entries(
         &self,
-        _table_ref: &Option<TableReference>,
+        table_ref: &Option<TableReference>,
     ) -> datafusion_common::Result<()>;
 
     /// Snapshot of all current entries with per-entry metadata (size, hits,
