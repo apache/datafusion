@@ -20,6 +20,7 @@ use crate::logical_plan::producer::utils::substrait_sort_field;
 use datafusion::common::{DFSchemaRef, ScalarValue, not_impl_err};
 use datafusion::logical_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion::logical_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use substrait::proto::aggregate_function::AggregationInvocation;
 use substrait::proto::expression::RexType;
 use substrait::proto::expression::WindowFunction as SubstraitWindowFunction;
 use substrait::proto::expression::window_function::bound as SubstraitBound;
@@ -41,11 +42,21 @@ pub fn from_window_function(
                 partition_by,
                 order_by,
                 window_frame,
-                null_treatment: _,
-                distinct: _,
-                filter: _,
+                null_treatment,
+                distinct,
+                filter,
             },
     } = window_fn;
+    if let Some(null_treatment) = null_treatment {
+        return not_impl_err!(
+            "Window functions with {null_treatment} are not supported in Substrait"
+        );
+    }
+    if filter.is_some() {
+        return not_impl_err!(
+            "Window functions with FILTER are not supported in Substrait"
+        );
+    }
     // function reference
     let function_anchor = producer.register_function(fun.to_string());
     // arguments
@@ -75,6 +86,7 @@ pub fn from_window_function(
         order_by,
         bounds,
         bound_type,
+        *distinct,
     ))
 }
 
@@ -85,6 +97,7 @@ fn make_substrait_window_function(
     sorts: Vec<SortField>,
     bounds: (Bound, Bound),
     bounds_type: BoundsType,
+    distinct: bool,
 ) -> Expression {
     #[expect(deprecated)]
     Expression {
@@ -95,8 +108,12 @@ fn make_substrait_window_function(
             sorts,
             options: vec![],
             output_type: None,
-            phase: 0,      // default to AGGREGATION_PHASE_UNSPECIFIED
-            invocation: 0, // TODO: fix
+            phase: 0, // default to AGGREGATION_PHASE_UNSPECIFIED
+            invocation: if distinct {
+                AggregationInvocation::Distinct as i32
+            } else {
+                AggregationInvocation::All as i32
+            },
             lower_bound: Some(bounds.0),
             upper_bound: Some(bounds.1),
             args: vec![],
@@ -120,45 +137,47 @@ fn to_substrait_bounds(
     window_frame: &WindowFrame,
 ) -> datafusion::common::Result<(Bound, Bound)> {
     Ok((
-        to_substrait_bound(&window_frame.start_bound),
-        to_substrait_bound(&window_frame.end_bound),
+        to_substrait_bound(&window_frame.start_bound)?,
+        to_substrait_bound(&window_frame.end_bound)?,
     ))
 }
 
-fn to_substrait_bound(bound: &WindowFrameBound) -> Bound {
+fn to_substrait_bound(bound: &WindowFrameBound) -> datafusion::common::Result<Bound> {
+    if bound.is_unbounded() {
+        return Ok(Bound {
+            kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
+        });
+    }
     match bound {
-        WindowFrameBound::CurrentRow => Bound {
+        WindowFrameBound::CurrentRow => Ok(Bound {
             kind: Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {})),
-        },
-        WindowFrameBound::Preceding(s) => match to_substrait_bound_offset(s) {
-            Some(offset) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding { offset })),
-            },
-            None => Bound {
-                kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
-            },
-        },
-        WindowFrameBound::Following(s) => match to_substrait_bound_offset(s) {
-            Some(offset) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following { offset })),
-            },
-            None => Bound {
-                kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
-            },
-        },
+        }),
+        WindowFrameBound::Preceding(s) => Ok(Bound {
+            kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
+                offset: to_substrait_bound_offset(s)?,
+            })),
+        }),
+        WindowFrameBound::Following(s) => Ok(Bound {
+            kind: Some(BoundKind::Following(SubstraitBound::Following {
+                offset: to_substrait_bound_offset(s)?,
+            })),
+        }),
     }
 }
 
-fn to_substrait_bound_offset(value: &ScalarValue) -> Option<i64> {
+fn to_substrait_bound_offset(value: &ScalarValue) -> datafusion::common::Result<i64> {
     match value {
-        ScalarValue::UInt8(Some(v)) => Some(*v as i64),
-        ScalarValue::UInt16(Some(v)) => Some(*v as i64),
-        ScalarValue::UInt32(Some(v)) => Some(*v as i64),
-        ScalarValue::UInt64(Some(v)) => Some(*v as i64),
-        ScalarValue::Int8(Some(v)) => Some(*v as i64),
-        ScalarValue::Int16(Some(v)) => Some(*v as i64),
-        ScalarValue::Int32(Some(v)) => Some(*v as i64),
-        ScalarValue::Int64(Some(v)) => Some(*v),
-        _ => None,
+        ScalarValue::UInt8(Some(v)) => Ok((*v).into()),
+        ScalarValue::UInt16(Some(v)) => Ok((*v).into()),
+        ScalarValue::UInt32(Some(v)) => Ok((*v).into()),
+        ScalarValue::UInt64(Some(v)) => match i64::try_from(*v) {
+            Ok(v) => Ok(v),
+            Err(_) => not_impl_err!("Unsupported Substrait window frame offset: {value}"),
+        },
+        ScalarValue::Int8(Some(v)) => Ok((*v).into()),
+        ScalarValue::Int16(Some(v)) => Ok((*v).into()),
+        ScalarValue::Int32(Some(v)) => Ok((*v).into()),
+        ScalarValue::Int64(Some(v)) => Ok(*v),
+        _ => not_impl_err!("Unsupported Substrait window frame offset: {value}"),
     }
 }
