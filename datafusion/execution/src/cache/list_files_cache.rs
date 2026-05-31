@@ -478,7 +478,7 @@ mod tests {
     #[test]
     fn test_ttl_expiration_in_get() {
         let ttl = Duration::from_millis(100);
-        let cache = DefaultCache::new_with_ttl(1000, Some(ttl));
+        let cache = DefaultCache::new_with_ttl(10000, Some(ttl));
 
         let table_ref = Some(TableReference::from("table"));
         let (key, value) = create_test_list_files_entry("path", 2, 50, table_ref);
