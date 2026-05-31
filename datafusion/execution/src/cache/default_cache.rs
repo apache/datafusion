@@ -170,7 +170,7 @@ impl<K: CacheKey, V: CacheValue> DefaultCacheState<K, V> {
 /// push `memory_used` above `memory_limit`. Inserts whose own size exceeds the
 /// limit are rejected (and any prior entry under the same key is removed).
 /// When a TTL is configured, the expiration is stamped onto each entry at
-/// insertion time and checked lazily on access.
+/// insertion time and checked lazily on access. Entries with size 0 are rejected.
 pub struct DefaultCache<K: CacheKey, V: CacheValue> {
     state: Mutex<DefaultCacheState<K, V>>,
     time_provider: Arc<dyn TimeProvider>,
