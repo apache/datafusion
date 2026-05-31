@@ -342,18 +342,18 @@ fn rewrite_join(
 
     add_join_condition_columns(&join, &mut left_live, &mut right_live)?;
 
-    let (left_duplicate_insensitive, right_duplicate_insensitive) =
+    let (left_dup_insensitive, right_dup_insensitive) =
         child_duplicate_insensitivity(rewritten_join_type, duplicate_insensitive);
 
     let left = rewrite_subtree(
         Arc::unwrap_or_clone(join.left),
         left_live,
-        left_duplicate_insensitive,
+        left_dup_insensitive,
     )?;
     let right = rewrite_subtree(
         Arc::unwrap_or_clone(join.right),
         right_live,
-        right_duplicate_insensitive,
+        right_dup_insensitive,
     )?;
 
     let changed =
@@ -479,13 +479,13 @@ fn split_join_output_columns(
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
             split_columns_at(live, left_len)
         }
+        // A semi/anti/mark join outputs only the surviving side's columns, with
+        // the same index space, so `live` passes straight through to that side.
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
-            let left = live.iter().copied().filter(|idx| *idx < left_len).collect();
-            (left, LiveColumns::new())
+            (live.clone(), LiveColumns::new())
         }
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
-            let right = live.iter().copied().collect();
-            (LiveColumns::new(), right)
+            (LiveColumns::new(), live.clone())
         }
     }
 }
