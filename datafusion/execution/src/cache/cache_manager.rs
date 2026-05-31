@@ -41,20 +41,6 @@ pub type FileStatisticsCache = dyn Cache<TableScopedPath, CachedFileMetadata>;
 pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
 pub type FileMetadataCache = dyn Cache<Path, CachedFileMetadataEntry>;
 
-/// Calculates the number of bytes an [`ObjectMeta`] occupies in the heap.
-pub fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
-    let mut size = object_meta.location.as_ref().len();
-
-    if let Some(e) = &object_meta.e_tag {
-        size += e.len();
-    }
-    if let Some(v) = &object_meta.version {
-        size += v.len();
-    }
-
-    size
-}
-
 /// Cached metadata for a file, including statistics and ordering.
 ///
 /// This struct embeds the [`ObjectMeta`] used for cache validation,
@@ -162,6 +148,20 @@ impl CacheValue for CachedFileList {
                 .reduce(|acc, b| acc + b)
                 .unwrap_or(0)
     }
+}
+
+/// Calculates the number of bytes an [`ObjectMeta`] occupies in the heap.
+pub fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
+    let mut size = object_meta.location.as_ref().len();
+
+    if let Some(e) = &object_meta.e_tag {
+        size += e.len();
+    }
+    if let Some(v) = &object_meta.version {
+        size += v.len();
+    }
+
+    size
 }
 
 impl Deref for CachedFileList {
