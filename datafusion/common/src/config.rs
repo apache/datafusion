@@ -632,9 +632,11 @@ config_namespace! {
         pub enable_recursive_ctes: bool, default = true
 
         /// Should DataFusion materialize CTEs that are referenced multiple times.
-        /// When enabled, CTEs referenced more than once are generally computed
-        /// once and cached, except for cheap CTEs and CTEs consumed below a top-level
-        /// limit.
+        /// When enabled, CTEs referenced more than once are computed once and
+        /// cached, except for cheap CTEs (e.g. literal projections) which remain
+        /// inlined. Volatile CTEs are always materialized to preserve
+        /// single-evaluation semantics. Supports explicit MATERIALIZED / NOT
+        /// MATERIALIZED SQL hints.
         pub enable_materialized_ctes: bool, default = false
 
         /// Attempt to eliminate sorts by packing & sorting files with non-overlapping

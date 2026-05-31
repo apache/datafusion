@@ -223,6 +223,25 @@ impl ExecutionPlan for MaterializedCteExec {
             &self.continuation.schema(),
         )))
     }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let cache = Arc::new(MaterializedCteCache::new(self.name.clone()));
+        let partition_count = self.cte_plan.output_partitioning().partition_count();
+        let statistics = materialized_cte_statistics(self.cte_plan.as_ref())?;
+        let continuation = replace_materialized_cte_readers(
+            Arc::clone(&self.continuation),
+            &self.name,
+            &cache,
+            partition_count,
+            &statistics,
+        )?;
+        Ok(Arc::new(Self::new(
+            self.name.clone(),
+            Arc::clone(&self.cte_plan),
+            continuation,
+            cache,
+        )))
+    }
 }
 
 /// Physical execution plan that reads from a previously materialized CTE cache.

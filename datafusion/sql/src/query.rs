@@ -116,16 +116,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Apply CTE materialization to the plan.
     ///
-    /// Materialize ALL multi-referenced CTEs upfront (DuckDB-style).
+    /// Wraps multi-referenced CTEs in MaterializedCteProducer/Reader nodes so
+    /// they are computed once and shared across all references. Cheap CTEs
+    /// (literal projections, empty relations) are left inlined unless they
+    /// contain volatile functions (which require single-evaluation semantics).
     ///
-    /// The SQL planner wraps every multi-ref CTE in MaterializedCteProducer/Reader
-    /// nodes. The `InlineCte` optimizer rule then selectively inlines ones where
-    /// materialization is not beneficial (cheap CTEs, CTEs under LIMIT, etc.).
-    ///
-    /// This approach ensures:
-    /// 1. The optimizer has full context (explicit CTE nodes in the plan)
-    /// 2. The inlining decision can be revisited after other optimizer passes
-    /// 3. DataFrame API users benefit via the optimizer rule
+    /// Respects explicit SQL hints: `AS MATERIALIZED` forces materialization,
+    /// `AS NOT MATERIALIZED` prevents it.
     fn apply_cte_materialization(
         &self,
         plan: LogicalPlan,
