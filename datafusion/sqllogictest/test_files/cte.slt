@@ -1320,6 +1320,10 @@ RESET datafusion.execution.enable_recursive_ctes;
 statement ok
 RESET datafusion.sql_parser.enable_ident_normalization;
 
+# Enable materialized CTEs for the following tests
+statement ok
+set datafusion.execution.enable_materialized_ctes = true;
+
 # Materialized CTEs collect all input partitions before readers consume them.
 query I
 WITH t AS (
@@ -1355,3 +1359,6 @@ ON t1.a = t2.a AND t1.b = t2.b;
 
 statement ok
 RESET datafusion.optimizer.prefer_hash_join;
+
+statement ok
+RESET datafusion.execution.enable_materialized_ctes;
