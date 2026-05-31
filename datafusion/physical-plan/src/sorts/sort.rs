@@ -59,7 +59,6 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
     unwrap_or_internal_err,
@@ -1142,32 +1141,14 @@ impl ExecutionPlan for SortExec {
             vec![Distribution::UnspecifiedDistribution]
         } else {
             // global sort
-            // TODO support RangePartition and OrderedDistribution
+            // TODO support range partitioning and OrderedDistribution.
+            // See https://github.com/apache/datafusion/issues/22395
             vec![Distribution::SinglePartition]
         }
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to sort expressions
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-        }
-
-        // Apply to dynamic filter expression if present (when fetch is Some, TopK mode)
-        if let Some(filter) = &self.filter {
-            let filter_guard = filter.read();
-            tnr = tnr.visit_sibling(|| f(filter_guard.expr().as_ref()))?;
-        }
-
-        Ok(tnr)
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -1528,13 +1509,6 @@ mod tests {
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(

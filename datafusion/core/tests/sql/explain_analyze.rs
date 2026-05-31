@@ -1267,3 +1267,115 @@ async fn explain_analyze_categories() {
         );
     }
 }
+
+/// Returns a [`SessionContext`] configured with the PostgreSQL dialect so
+/// that `EXPLAIN (option, ...)` utility-option syntax is accepted.
+fn session_ctx_with_pg_dialect() -> SessionContext {
+    use std::str::FromStr;
+    let mut config = SessionConfig::new();
+    let options = config.options_mut();
+    options.sql_parser.dialect =
+        datafusion::config::Dialect::from_str("PostgreSQL").unwrap();
+    SessionContext::new_with_config(config)
+}
+
+async fn collect_explain(ctx: &SessionContext, sql: &str) -> String {
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let batches = dataframe.collect().await.unwrap();
+    arrow::util::pretty::pretty_format_batches(&batches)
+        .unwrap()
+        .to_string()
+}
+
+/// Verifies that the Postgres-style `EXPLAIN (METRICS '...')` form produces
+/// the same category filtering as `SET datafusion.explain.analyze_categories`.
+#[tokio::test]
+async fn explain_analyze_paren_metrics_filtering() {
+    let ctx = session_ctx_with_pg_dialect();
+    let sql = "EXPLAIN (ANALYZE, METRICS 'rows') \
+               SELECT * FROM generate_series(10) as t1(v1) ORDER BY v1 DESC";
+    let plan = collect_explain(&ctx, sql).await;
+    assert!(
+        plan.contains("output_rows"),
+        "rows category should include output_rows:\n{plan}"
+    );
+    assert!(
+        !plan.contains("elapsed_compute"),
+        "rows-only METRICS should exclude elapsed_compute:\n{plan}"
+    );
+    assert!(
+        !plan.contains("output_bytes"),
+        "rows-only METRICS should exclude output_bytes:\n{plan}"
+    );
+}
+
+/// Verifies that a statement-level METRICS overrides the session config.
+#[tokio::test]
+async fn explain_analyze_paren_metrics_overrides_session_config() {
+    let ctx = session_ctx_with_pg_dialect();
+    // Session default: show only `rows` via config.
+    {
+        let state = ctx.state_ref();
+        let mut state = state.write();
+        state.config_mut().options_mut().explain.analyze_categories =
+            ExplainAnalyzeCategories::Only(vec![MetricCategory::Rows]);
+    }
+    // Statement overrides with 'bytes' — we should see output_bytes but not
+    // output_rows (except row-count metrics with the `output_bytes` substring
+    // are avoided because the metric names are distinct).
+    let sql = "EXPLAIN (ANALYZE, METRICS 'bytes') \
+               SELECT * FROM generate_series(10) as t1(v1) ORDER BY v1 DESC";
+    let plan = collect_explain(&ctx, sql).await;
+    assert!(
+        plan.contains("output_bytes"),
+        "statement-level METRICS='bytes' should show output_bytes:\n{plan}"
+    );
+    assert!(
+        !plan.contains("output_rows"),
+        "statement-level METRICS='bytes' should hide output_rows:\n{plan}"
+    );
+}
+
+/// Verifies that `EXPLAIN (ANALYZE, LEVEL summary)` only shows summary metrics,
+/// overriding the session default of `dev`.
+#[tokio::test]
+async fn explain_analyze_paren_level_overrides_session_config() {
+    let ctx = session_ctx_with_pg_dialect();
+    // Session default: Dev
+    {
+        let state = ctx.state_ref();
+        let mut state = state.write();
+        state.config_mut().options_mut().explain.analyze_level = MetricType::Dev;
+    }
+    let sql = "EXPLAIN (ANALYZE, LEVEL summary) \
+               SELECT * FROM generate_series(10) as t1(v1) ORDER BY v1 DESC";
+    let plan = collect_explain(&ctx, sql).await;
+    // `spill_count` is Dev-only; `output_rows` is Summary.
+    assert!(
+        plan.contains("output_rows"),
+        "summary should still show output_rows:\n{plan}"
+    );
+    assert!(
+        !plan.contains("spill_count"),
+        "summary should hide Dev-only spill_count:\n{plan}"
+    );
+}
+
+/// Verifies that `EXPLAIN (ANALYZE, BUFFERS)` returns a helpful error.
+#[tokio::test]
+async fn explain_paren_buffers_rejected() {
+    let ctx = session_ctx_with_pg_dialect();
+    let err = ctx
+        .sql("EXPLAIN (ANALYZE, BUFFERS) SELECT 1")
+        .await
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("BUFFERS"),
+        "error should mention BUFFERS: {msg}"
+    );
+    assert!(
+        msg.contains("not supported"),
+        "error should say not supported: {msg}"
+    );
+}

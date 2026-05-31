@@ -92,7 +92,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 ///
 /// For example the expression `A + 1` will be represented as
 ///
-///```text
+/// ```text
 ///  BinaryExpr {
 ///    left: Expr::Column("A"),
 ///    op: Operator::Plus,
@@ -265,7 +265,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 ///
 /// [`ExplainFormat::Tree`]: crate::logical_plan::ExplainFormat::Tree
 ///
-///```
+/// ```
 /// # use datafusion_expr::{lit, col};
 /// let expr = col("c1") + lit(42);
 /// assert_eq!(format!("{}", expr.human_display()), "c1 + 42");
@@ -301,7 +301,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// Rewrite an expression, replacing references to column "a" in an
 /// to the literal `42`:
 ///
-///  ```
+/// ```
 /// # use datafusion_common::tree_node::{Transformed, TreeNode};
 /// # use datafusion_expr::{col, Expr, lit};
 /// // expression a = 5 AND b = 6
@@ -437,14 +437,14 @@ pub enum Expr {
 #[derive(Clone, Eq, PartialOrd, Debug)]
 pub struct HigherOrderFunction {
     /// The function
-    pub func: Arc<dyn HigherOrderUDF>,
+    pub func: Arc<HigherOrderUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
 }
 
 impl HigherOrderFunction {
     /// Create a new `HigherOrderFunction` from a [`HigherOrderUDF`]
-    pub fn new(func: Arc<dyn HigherOrderUDF>, args: Vec<Expr>) -> Self {
+    pub fn new(func: Arc<HigherOrderUDF>, args: Vec<Expr>) -> Self {
         Self { func, args }
     }
 
@@ -452,7 +452,7 @@ impl HigherOrderFunction {
         self.func.name()
     }
 
-    /// Invokes the inner function [`HigherOrderUDF::lambda_parameters`]
+    /// Invokes the inner function [`crate::HigherOrderUDFImpl::lambda_parameters`]
     /// using the arguments of this invocation. This expression lambda
     /// variables must be already resolved either by coming from the
     /// default sql planner or by calling [Expr::resolve_lambda_variables]
@@ -662,7 +662,7 @@ pub fn intersect_metadata_for_union<'a>(
             }
             Some(current) => {
                 // Only keep keys that exist in both with the same value
-                current.retain(|k, v| metadata.get(k) == Some(v));
+                current.retain(|k, v| metadata.get(k) == Some(&*v));
             }
         }
     }
@@ -2185,6 +2185,32 @@ impl Expr {
                     for item in list.iter_mut() {
                         rewrite_placeholder(item, expr.as_ref(), schema)?;
                     }
+                }
+                Expr::InSubquery(InSubquery {
+                    expr,
+                    subquery,
+                    negated: _,
+                }) => {
+                    let subquery_schema = subquery.subquery.schema();
+                      match &subquery_schema.fields()[..] {
+                          [subquery_field] => {
+                              let column = Expr::Column(Column::new_unqualified(
+                                  subquery_field.name().clone(),
+                              ));
+                              rewrite_placeholder(
+                                  expr.as_mut(),
+                                  &column,
+                                  subquery_schema,
+                              )?;
+                          }
+                          _ => {
+                              return plan_err!(
+                                  "InSubquery should only return one column, but found {}: {}",
+                                  subquery_schema.fields().len(),
+                                  subquery_schema.field_names().join(", ")
+                              );
+                          }
+                      }
                 }
                 Expr::Like(Like { expr, pattern, .. })
                 | Expr::SimilarTo(Like { expr, pattern, .. }) => {
@@ -3818,6 +3844,108 @@ mod test {
     }
 
     #[test]
+    fn infer_placeholder_in_subquery() {
+        // WHERE $1 IN (SELECT a FROM t)
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let in_subquery = Expr::InSubquery(InSubquery {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            negated: false,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) =
+            in_subquery.infer_placeholder_types(&outer_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::InSubquery(in_subquery) => match *in_subquery.expr {
+                Expr::Placeholder(placeholder) => {
+                    let inferred = placeholder.field.expect("placeholder field");
+                    assert_eq!(inferred.data_type(), &DataType::Int32);
+                    assert!(inferred.is_nullable());
+                }
+                _ => panic!("Expected Placeholder expression in InSubquery"),
+            },
+            _ => panic!("Expected InSubquery expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_not_in_subquery() {
+        // WHERE $1 NOT IN (SELECT a FROM t)
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let not_in_subquery = Expr::InSubquery(InSubquery {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            negated: true,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) = not_in_subquery
+            .infer_placeholder_types(&outer_schema)
+            .unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::InSubquery(in_subquery) => {
+                assert!(in_subquery.negated, "negated flag must be preserved");
+                match *in_subquery.expr {
+                    Expr::Placeholder(placeholder) => {
+                        let inferred = placeholder.field.expect("placeholder field");
+                        assert_eq!(inferred.data_type(), &DataType::Int32);
+                        assert!(inferred.is_nullable());
+                    }
+                    _ => {
+                        panic!("Expected Placeholder expression in InSubquery")
+                    }
+                }
+            }
+            _ => panic!("Expected InSubquery expression"),
+        }
+    }
+
+    #[test]
     fn infer_placeholder_like_and_similar_to() {
         // name LIKE $1
         let schema =
@@ -3924,6 +4052,24 @@ mod test {
         // representation. CAST does not change the name of expressions.
         assert_eq!("Float32(1.23)", expr.schema_name().to_string());
         Ok(())
+    }
+
+    #[test]
+    fn format_decimal_literal() {
+        let expr = lit(ScalarValue::Decimal128(Some(1), 1, 1));
+        assert_eq!("Decimal128(0.1,1,1)", format!("{expr}"));
+        assert_eq!("Decimal128(0.1,1,1)", expr.schema_name().to_string());
+        assert_eq!("0.1", expr.human_display().to_string());
+
+        let expr = lit(ScalarValue::Decimal128(Some(120), 3, 2));
+        assert_eq!("Decimal128(1.20,3,2)", format!("{expr}"));
+        assert_eq!("Decimal128(1.20,3,2)", expr.schema_name().to_string());
+        assert_eq!("1.20", expr.human_display().to_string());
+
+        let null_expr = lit(ScalarValue::Decimal128(None, 10, 2));
+        assert_eq!("Decimal128(NULL,10,2)", format!("{null_expr}"));
+        assert_eq!("Decimal128(NULL,10,2)", null_expr.schema_name().to_string());
+        assert_eq!("NULL", null_expr.human_display().to_string());
     }
 
     #[test]

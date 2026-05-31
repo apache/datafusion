@@ -684,3 +684,29 @@ enum ExplainFormat {
   EXPLAIN_FORMAT_PGJSON = 2;
   EXPLAIN_FORMAT_GRAPHVIZ = 3;
 }
+
+// Verbosity level for `EXPLAIN ANALYZE`. Mirrors
+// `datafusion_common::format::MetricType`.
+enum MetricType {
+  METRIC_TYPE_SUMMARY = 0;
+  METRIC_TYPE_DEV = 1;
+}
+
+// Category of an `EXPLAIN ANALYZE` metric. Mirrors
+// `datafusion_common::format::MetricCategory`.
+enum MetricCategory {
+  METRIC_CATEGORY_ROWS = 0;
+  METRIC_CATEGORY_BYTES = 1;
+  METRIC_CATEGORY_TIMING = 2;
+  METRIC_CATEGORY_UNCATEGORIZED = 3;
+}
+
+// Wire encoding for `datafusion_common::format::ExplainAnalyzeCategories`.
+//
+// If `all` is true, every category is shown (the `only` list is ignored).
+// If `all` is false, only the categories listed in `only` are shown — an
+// empty `only` means "plan only", i.e. suppress all metrics.
+message ExplainAnalyzeCategoriesNode {
+  bool all = 1;
+  repeated MetricCategory only = 2;
+}

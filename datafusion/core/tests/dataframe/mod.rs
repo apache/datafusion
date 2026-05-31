@@ -840,7 +840,7 @@ async fn test_aggregate_with_pk() -> Result<()> {
     let aggr_expr = vec![];
     let df = df.aggregate(group_expr, aggr_expr)?;
 
-    // Since id and name are functionally dependant, we can use name among
+    // Since id and name are functionally dependent, we can use name among
     // expression even if it is not part of the group by expression and can
     // select "name" column even though it wasn't explicitly grouped
     let df = df.select(vec![col("id"), col("name")])?;
@@ -895,7 +895,7 @@ async fn test_aggregate_with_pk2() -> Result<()> {
     "
     );
 
-    // Since id and name are functionally dependant, we can use name among expression
+    // Since id and name are functionally dependent, we can use name among expression
     // even if it is not part of the group by expression.
     let df_results = df.collect().await?;
 
@@ -943,7 +943,7 @@ async fn test_aggregate_with_pk3() -> Result<()> {
     "
     );
 
-    // Since id and name are functionally dependant, we can use name among expression
+    // Since id and name are functionally dependent, we can use name among expression
     // even if it is not part of the group by expression.
     let df_results = df.collect().await?;
 
@@ -1141,7 +1141,13 @@ async fn test_aggregate_name_collision() -> Result<()> {
         // The select expr has the same display_name as the group_expr,
         // but since they are different expressions, it should fail.
         .expect_err("Expected error");
-    assert_snapshot!(df.strip_backtrace(), @r#"Schema error: No field named aggregate_test_100.c2. Valid fields are "aggregate_test_100.c2 + aggregate_test_100.c3"."#);
+    assert_snapshot!(
+        df.strip_backtrace(),
+        @r#"
+Schema error: No field named aggregate_test_100.c2.
+Valid fields are "aggregate_test_100.c2 + aggregate_test_100.c3".
+"#
+    );
 
     Ok(())
 }
@@ -1204,7 +1210,7 @@ async fn window_using_aggregates() -> Result<()> {
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     | first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
-    |             |          |                 |               |        |     |      | 1  | -85  |
+    |             |          | 0               |               |        |     |      | 1  | -85  |
     | -85         | -101     | 14              | -12.0         | -12.0  | 83  | -101 | 4  | -54  |
     | -85         | -101     | 17              | -25.0         | -25.0  | 83  | -101 | 5  | -31  |
     | -85         | -12      | 10              | -32.75        | -34.0  | 83  | -85  | 3  | 13   |
@@ -3345,7 +3351,11 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
 
     // To be able to remove user specific paths from the plan, for stable assertions
     let testdata_clean = Path::new(&testdata).canonicalize()?.display().to_string();
-    let testdata_clean = testdata_clean.strip_prefix("/").unwrap_or(&testdata_clean);
+    let testdata_clean = testdata_clean.replace("\\", "/");
+    let testdata_clean = testdata_clean
+        .strip_prefix("//?/")
+        .or_else(|| testdata_clean.strip_prefix("/"))
+        .unwrap_or(&testdata_clean);
 
     // Use displayable() rather than explain().collect() to avoid table formatting issues. We need
     // to replace machine-specific paths with variable lengths, which breaks table alignment and
@@ -6305,7 +6315,10 @@ async fn test_alias_nested() -> Result<()> {
     let select2 = df.select(vec![col("alias1.a")]);
     assert_snapshot!(
         select2.unwrap_err().strip_backtrace(),
-        @"Schema error: No field named alias1.a. Valid fields are alias2.a, alias2.b, alias2.one."
+        @r#"
+Schema error: No field named alias1.a. Did you mean 'alias2.a'?
+Valid fields are alias2.a, alias2.b, alias2.one.
+"#
     );
     Ok(())
 }

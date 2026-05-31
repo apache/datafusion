@@ -116,7 +116,7 @@ use datafusion::{
 };
 use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err, tree_node::TreeNodeRecursion,
+    plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
@@ -737,22 +737,6 @@ impl ExecutionPlan for SampleExec {
             .to_inexact();
 
         Ok(Arc::new(stats))
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion::physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 }
 

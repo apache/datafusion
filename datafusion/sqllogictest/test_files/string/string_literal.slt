@@ -391,6 +391,10 @@ SELECT repeat(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 3)
 ----
 foofoofoo
 
+query error DataFusion error: Execution error: string size overflow on repeat, max size is 2147483647, but got \d+
+SELECT repeat(x, 9223372036854775807)
+FROM (VALUES ('abc')) AS t(x);
+
 query T
 SELECT arrow_typeof(repeat('foo', 3))
 ----

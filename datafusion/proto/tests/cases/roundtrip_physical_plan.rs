@@ -74,7 +74,6 @@ use datafusion::physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -90,7 +89,8 @@ use datafusion::physical_plan::windows::{
 };
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PhysicalExpr, SendableRecordBatchStream, Statistics, displayable,
+    PhysicalExpr, RangePartitioning, SendableRecordBatchStream, SplitPoint, Statistics,
+    displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -99,13 +99,12 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, NullEquality, Result, UnnestOptions, exec_datafusion_err,
     internal_datafusion_err, internal_err, not_impl_err,
 };
-use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
+use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
@@ -129,7 +128,7 @@ use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_conv
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DeduplicatingProtoConverter, DefaultPhysicalExtensionCodec,
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
-    PhysicalProtoConverterExtension,
+    PhysicalPlanNodeExt, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
@@ -1009,7 +1008,7 @@ fn roundtrip_arrow_scan() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let table_schema = TableSchema::new(file_schema.clone(), vec![]);
+    let table_schema = TableSchema::from(&file_schema);
     let file_source = Arc::new(ArrowSource::new_file_source(table_schema));
 
     let scan_config =
@@ -1036,14 +1035,13 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let table_schema = TableSchema::new(
-        schema.clone(),
-        vec![Arc::new(Field::new(
+    let table_schema = TableSchemaBuilder::from(&schema)
+        .with_table_partition_cols(vec![Arc::new(Field::new(
             "part".to_string(),
             wrap_partition_type_in_dict(DataType::Int16),
             false,
-        ))],
-    );
+        ))])
+        .build();
 
     let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
     let scan_config =
@@ -1559,14 +1557,9 @@ fn roundtrip_analyze() -> Result<()> {
     let schema = Schema::new(vec![field_a, field_b]);
     let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
 
-    roundtrip_test(Arc::new(AnalyzeExec::new(
-        false,
-        false,
-        vec![MetricType::Summary, MetricType::Dev],
-        None,
-        input,
-        Arc::new(schema),
-    )))
+    roundtrip_test(Arc::new(
+        AnalyzeExec::builder(false, false, input, Arc::new(schema)).build(),
+    ))
 }
 
 #[tokio::test]
@@ -1804,6 +1797,21 @@ fn roundtrip_repartition_preserve_order() -> Result<()> {
     let repartition = RepartitionExec::try_new(union, Partitioning::RoundRobinBatch(10))?
         .with_preserve_order();
     assert!(repartition.preserve_order());
+
+    roundtrip_test(Arc::new(repartition))
+}
+
+#[test]
+fn roundtrip_range_partitioning() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let range_partitioning = Partitioning::Range(RangePartitioning::new(
+        [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
+        vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
+    ));
+    // RepartitionExec is used only to carry the partitioning through proto.
+    // Executing range repartitioning is intentionally unsupported.
+    let repartition = RepartitionExec::try_new(input, range_partitioning)?;
 
     roundtrip_test(Arc::new(repartition))
 }
@@ -3929,17 +3937,6 @@ impl ExecutionPlan for CustomExecWithExprs {
         vec![&self.child]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for expr in &self.exprs {
-            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-        }
-        Ok(tnr)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
@@ -4079,5 +4076,54 @@ fn test_custom_node_with_dynamic_filter_dedup_roundtrip() -> Result<()> {
     // rewrite can reconstruct the remapped form on the other side.
     assert_dynamic_filters_equal(deser_custom_df, deser_filter_df);
     assert_dynamic_filter_update_is_visible(deser_custom_df, deser_filter_df)?;
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_parquet_exec_partitioned_by_file_group() -> Result<()> {
+    use datafusion::datasource::physical_plan::FileScanConfig;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .with_partitioned_by_file_group(true)
+            .build();
+
+    assert!(scan_config.partitioned_by_file_group);
+
+    let exec_plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&exec_plan),
+        &codec,
+        &proto_converter,
+    )?;
+    let result_plan = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &proto_converter,
+    )?;
+
+    let data_source_exec = result_plan
+        .downcast_ref::<DataSourceExec>()
+        .expect("Expected DataSourceExec");
+    let file_scan_config = data_source_exec
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("Expected FileScanConfig");
+
+    assert!(file_scan_config.partitioned_by_file_group);
+
     Ok(())
 }

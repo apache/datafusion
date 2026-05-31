@@ -325,7 +325,7 @@ datafusion.optimizer.prefer_existing_union false
 datafusion.optimizer.prefer_hash_join true
 datafusion.optimizer.preserve_file_partitions 0
 datafusion.optimizer.repartition_aggregations true
-datafusion.optimizer.repartition_file_min_size 10485760
+datafusion.optimizer.repartition_file_min_size 1048576
 datafusion.optimizer.repartition_file_scans true
 datafusion.optimizer.repartition_joins true
 datafusion.optimizer.repartition_sorts true
@@ -475,7 +475,7 @@ datafusion.optimizer.prefer_existing_union false When set to true, the optimizer
 datafusion.optimizer.prefer_hash_join true When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory
 datafusion.optimizer.preserve_file_partitions 0 Minimum number of distinct partition values required to group files by their Hive partition column values (enabling Hash partitioning declaration). How the option is used:     - preserve_file_partitions=0: Disable it.     - preserve_file_partitions=1: Always enable it.     - preserve_file_partitions=N, actual file partitions=M: Only enable when M >= N.     This threshold preserves I/O parallelism when file partitioning is below it. Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct partitions is less than the target_partitions.
 datafusion.optimizer.repartition_aggregations true Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel using the provided `target_partitions` level
-datafusion.optimizer.repartition_file_min_size 10485760 Minimum total files size in bytes to perform file scan repartitioning.
+datafusion.optimizer.repartition_file_min_size 1048576 Minimum total file size in bytes for file-group byte-range splitting to fire. Files (or merged file groups) smaller than this stay as one partition. Lower values produce more, smaller partitions — better at filling `target_partitions` worth of cores when files are modestly sized, at the cost of slightly more per-partition open / metadata-load overhead.
 datafusion.optimizer.repartition_file_scans true When set to `true`, datasource partitions will be repartitioned to achieve maximum parallelism. This applies to both in-memory partitions and FileSource's file groups (1 group is 1 partition). For FileSources, only Parquet and CSV formats are currently supported. If set to `true` for a FileSource, all files will be repartitioned evenly (i.e., a single large file might be partitioned into smaller chunks) for parallel scanning. If set to `false` for a FileSource, different files will be read in parallel, but repartitioning won't happen within a single file. If set to `true` for an in-memory source, all memtable's partitions will have their batches repartitioned evenly to the desired number of `target_partitions`. Repartitioning can change the total number of partitions and batches per partition, but does not slice the initial record tables provided to the MemTable on creation.
 datafusion.optimizer.repartition_joins true Should DataFusion repartition data using the join keys to execute joins in parallel using the provided `target_partitions` level
 datafusion.optimizer.repartition_sorts true Should DataFusion execute sorts in a per-partition fashion and merge afterwards instead of coalescing first and sorting globally. With this flag is enabled, plans in the form below ```text      "SortExec: [a@0 ASC]",      "  CoalescePartitionsExec",      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1", ``` would turn into the plan below which performs better in multithreaded environments ```text      "SortPreservingMergeExec: [a@0 ASC]",      "  SortExec: [a@0 ASC]",      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1", ```
@@ -561,8 +561,8 @@ CREATE OR REPLACE TABLE some_table AS VALUES (1,2),(3,4);
 query TTT rowsort
 DESCRIBE some_table
 ----
-column1 Int64 YES
-column2 Int64 YES
+column1 Int64 NO
+column2 Int64 NO
 
 statement ok
 DROP TABLE public.some_table;
@@ -575,8 +575,8 @@ CREATE OR REPLACE TABLE public.some_table AS VALUES (1,2),(3,4);
 query TTT rowsort
 DESCRIBE public.some_table
 ----
-column1 Int64 YES
-column2 Int64 YES
+column1 Int64 NO
+column2 Int64 NO
 
 statement ok
 DROP TABLE public.some_table;
@@ -589,8 +589,8 @@ CREATE OR REPLACE TABLE datafusion.public.some_table AS VALUES (1,2),(3,4);
 query TTT rowsort
 DESCRIBE datafusion.public.some_table
 ----
-column1 Int64 YES
-column2 Int64 YES
+column1 Int64 NO
+column2 Int64 NO
 
 statement ok
 DROP TABLE datafusion.public.some_table;
@@ -895,7 +895,7 @@ show functions
 statement ok
 reset datafusion.catalog.information_schema;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
