@@ -16,9 +16,7 @@
 // under the License.
 
 //! [`EliminateJoin`] rewrites inner joins to simpler forms to make them cheaper
-//! to evaluate.
-//!
-//! # What it rewrites
+//! to evaluate. We implement two distinct rewrites:
 //!
 //! * An inner join can be rewritten to an empty relation if the join condition
 //!   is trivially false.
@@ -34,7 +32,7 @@
 //!        functional dependencies to prove that each L row matches at most one R
 //!        row (R is provably unique on the join keys).
 //!
-//! # How it works
+//! # Overview
 //!
 //! `rewrite_subtree` walks the plan top-down, threading two pieces of context
 //! down to each join:
@@ -58,10 +56,6 @@
 //! node types just forward the context to their single child via
 //! `rewrite_single_input`; nodes that alter column requirements or
 //! duplicate-sensitivity (projection, aggregate, sort, ...) adjust it first.
-//!
-//! Joins nested inside subquery expressions are reached as well: `rewrite_subtree`
-//! descends into each node's subquery plans itself (via `map_subqueries`),
-//! seeding each as a fresh root.
 use crate::utils::for_each_referenced_index;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -69,7 +63,7 @@ use datafusion_common::{
     DFSchema, Dependency, HashSet, NullEquality, Result, ScalarValue,
 };
 use datafusion_expr::{
-    Expr, JoinType, SortExpr,
+    Expr, JoinType,
     logical_plan::{
         Aggregate, Distinct, DistinctOn, EmptyRelation, Filter, Join, Limit, LogicalPlan,
         Partitioning, Projection, Repartition, Sort, SubqueryAlias,
@@ -143,7 +137,7 @@ fn rewrite_node(
             ..
         }) => {
             // Narrows `live` to the columns the projection's expressions reference.
-            let child_live = live_columns_for_exprs(&expr, input.schema())?;
+            let child_live = live_columns(&expr, input.schema())?;
             rewrite_single_input(input, child_live, duplicate_insensitive, |input| {
                 Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
                     expr, input, schema,
@@ -155,7 +149,7 @@ fn rewrite_node(
         }) => {
             // Adds the predicate's columns to `live` (a side used only by the filter stays live).
             let mut child_live = live;
-            extend_live_columns(&mut child_live, &predicate, input.schema())?;
+            extend_live_columns(&mut child_live, [&predicate], input.schema())?;
             rewrite_single_input(input, child_live, duplicate_insensitive, |input| {
                 Ok(LogicalPlan::Filter(Filter::new(predicate, input)))
             })
@@ -168,8 +162,8 @@ fn rewrite_node(
             ..
         }) => {
             // Narrows `live` to the grouping and aggregate expressions' columns.
-            let mut child_live = live_columns_for_exprs(&group_expr, input.schema())?;
-            extend_live_columns_for_exprs(&mut child_live, &aggr_expr, input.schema())?;
+            let child_live =
+                live_columns(group_expr.iter().chain(&aggr_expr), input.schema())?;
 
             // A grouping aggregate with no aggregate functions (`GROUP BY` with
             // an empty `aggr_expr`) only observes which group-key values exist,
@@ -190,12 +184,9 @@ fn rewrite_node(
             )
         }
         LogicalPlan::Distinct(Distinct::All(input)) => {
-            // `SELECT DISTINCT *` is exactly a no-aggregate `GROUP BY` over every
-            // input column, so the input is duplicate-insensitive — but every
-            // column is part of the dedup key. Marking all columns live keeps any
-            // join side whose columns reach the DISTINCT (dropping them would
-            // change the distinct count); only a side projected away below the
-            // DISTINCT falls outside the key and can collapse to a semi join.
+            // `SELECT DISTINCT *` is equivalent to a no-aggregate `GROUP BY`
+            // over every input column, so the input is duplicate-insensitive,
+            // but every column is part of the dedup key.
             let child_live = all_columns(input.schema());
             rewrite_single_input(input, child_live, true, |input| {
                 Ok(LogicalPlan::Distinct(Distinct::All(input)))
@@ -212,12 +203,12 @@ fn rewrite_node(
             // `GROUP BY` on the columns it reads, so its input is duplicate-
             // insensitive; the live columns are exactly those of the
             // ON/SELECT/ORDER BY expressions.
-            let mut child_live = live_columns_for_exprs(&on_expr, input.schema())?;
-            extend_live_columns_for_exprs(&mut child_live, &select_expr, input.schema())?;
+            let mut child_live =
+                live_columns(on_expr.iter().chain(&select_expr), input.schema())?;
             if let Some(sort_expr) = &sort_expr {
-                extend_live_columns_for_sort_exprs(
+                extend_live_columns(
                     &mut child_live,
-                    sort_expr,
+                    sort_expr.iter().map(|s| &s.expr),
                     input.schema(),
                 )?;
             }
@@ -235,7 +226,11 @@ fn rewrite_node(
         LogicalPlan::Sort(Sort { expr, input, fetch }) => {
             // Adds the sort-key columns to `live`.
             let mut child_live = live;
-            extend_live_columns_for_sort_exprs(&mut child_live, &expr, input.schema())?;
+            extend_live_columns(
+                &mut child_live,
+                expr.iter().map(|s| &s.expr),
+                input.schema(),
+            )?;
 
             // A `fetch` (top-N) makes the row count observable, so duplicate-
             // insensitivity does not survive past it.
@@ -269,11 +264,7 @@ fn rewrite_node(
             let mut child_live = live;
             match &partitioning_scheme {
                 Partitioning::Hash(exprs, _) | Partitioning::DistributeBy(exprs) => {
-                    extend_live_columns_for_exprs(
-                        &mut child_live,
-                        exprs,
-                        input.schema(),
-                    )?;
+                    extend_live_columns(&mut child_live, exprs, input.schema())?;
                 }
                 Partitioning::RoundRobinBatch(_) => {}
             }
@@ -385,7 +376,7 @@ fn rewrite_join(
         )?)))
     } else {
         // Nothing changed; reassemble the join reusing its existing schema rather
-        // than recomputing it (as `rewrite_single_input` does for other nodes).
+        // than recomputing it.
         Ok(Transformed::no(LogicalPlan::Join(Join {
             left,
             right,
@@ -460,14 +451,20 @@ fn add_join_condition_columns(
     left_live: &mut LiveColumns,
     right_live: &mut LiveColumns,
 ) -> Result<()> {
-    for (left_expr, right_expr) in &join.on {
-        extend_live_columns(left_live, left_expr, join.left.schema())?;
-        extend_live_columns(right_live, right_expr, join.right.schema())?;
-    }
+    extend_live_columns(
+        left_live,
+        join.on.iter().map(|(l, _)| l),
+        join.left.schema(),
+    )?;
+    extend_live_columns(
+        right_live,
+        join.on.iter().map(|(_, r)| r),
+        join.right.schema(),
+    )?;
 
     if let Some(filter) = &join.filter {
-        extend_live_columns(left_live, filter, join.left.schema())?;
-        extend_live_columns(right_live, filter, join.right.schema())?;
+        extend_live_columns(left_live, [filter], join.left.schema())?;
+        extend_live_columns(right_live, [filter], join.right.schema())?;
     }
 
     Ok(())
@@ -533,42 +530,29 @@ fn all_columns(schema: &DFSchema) -> LiveColumns {
     (0..schema.fields().len()).collect()
 }
 
-fn live_columns_for_exprs(exprs: &[Expr], schema: &DFSchema) -> Result<LiveColumns> {
+/// The columns of `schema` referenced by any of `exprs`.
+fn live_columns<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+    schema: &DFSchema,
+) -> Result<LiveColumns> {
     let mut live = LiveColumns::new();
-    extend_live_columns_for_exprs(&mut live, exprs, schema)?;
+    extend_live_columns(&mut live, exprs, schema)?;
     Ok(live)
 }
 
-fn extend_live_columns_for_exprs(
+/// Inserts into `live` the index, within `schema`, of every column referenced
+/// by any of `exprs`.
+fn extend_live_columns<'a>(
     live: &mut LiveColumns,
-    exprs: &[Expr],
+    exprs: impl IntoIterator<Item = &'a Expr>,
     schema: &DFSchema,
 ) -> Result<()> {
     for expr in exprs {
-        extend_live_columns(live, expr, schema)?;
+        for_each_referenced_index(expr, schema, |idx| {
+            live.insert(idx);
+        })?;
     }
     Ok(())
-}
-
-fn extend_live_columns_for_sort_exprs(
-    live: &mut LiveColumns,
-    exprs: &[SortExpr],
-    schema: &DFSchema,
-) -> Result<()> {
-    for sort_expr in exprs {
-        extend_live_columns(live, &sort_expr.expr, schema)?;
-    }
-    Ok(())
-}
-
-fn extend_live_columns(
-    live: &mut LiveColumns,
-    expr: &Expr,
-    schema: &DFSchema,
-) -> Result<()> {
-    for_each_referenced_index(expr, schema, |idx| {
-        live.insert(idx);
-    })
 }
 
 #[cfg(test)]
