@@ -135,6 +135,18 @@ pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn GroupValues>> {
+    new_group_values_with_ordering(schema, !matches!(group_ordering, GroupOrdering::None))
+}
+
+/// Return a specialized unordered implementation of [`GroupValues`] for the given schema.
+pub fn new_unordered_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
+    new_group_values_with_ordering(schema, false)
+}
+
+fn new_group_values_with_ordering(
+    schema: SchemaRef,
+    ordered: bool,
+) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
@@ -201,10 +213,10 @@ pub fn new_group_values(
     }
 
     if multi_group_by::supported_schema(schema.as_ref()) {
-        if matches!(group_ordering, GroupOrdering::None) {
-            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
-        } else {
+        if ordered {
             Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
+        } else {
+            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
         }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))

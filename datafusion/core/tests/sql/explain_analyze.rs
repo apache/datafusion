@@ -776,9 +776,9 @@ async fn test_physical_plan_display_indent() {
     SortPreservingMergeExec: [the_min@2 DESC], fetch=10
       SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]
         ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]
-          AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
+          AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)], stream=GroupedHashAggregateStream
             RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
-              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
+              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)], stream=RawPartialHashAggregateStream
                 FilterExec: c12@1 < 10
                   RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
                     DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true

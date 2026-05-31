@@ -69,6 +69,15 @@ statement ok
 CREATE TABLE test (c1 BIGINT,c2 BIGINT) as values
 (0,null), (1,1), (null,1), (3,2), (3,2)
 
+# EXPLAIN VERBOSE shows the concrete aggregate stream implementation.
+query TT
+EXPLAIN VERBOSE
+SELECT value % 2 AS g, COUNT(*)
+FROM generate_series(1, 3)
+GROUP BY g;
+----
+<slt:ignore>AggregateExec: mode=Partial<slt:ignore>stream=RawPartialHashAggregateStream<slt:ignore>
+
 statement ok
 CREATE TABLE group_median_table_non_nullable (
     col_group STRING NOT NULL,
