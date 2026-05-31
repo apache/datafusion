@@ -136,23 +136,6 @@ impl DFHeapSize for CachedFileMetadata {
     }
 }
 
-/// Represents information about a cached statistics entry.
-/// This is used to expose the statistics cache contents to outside modules.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileStatisticsCacheEntry {
-    pub object_meta: ObjectMeta,
-    /// Number of table rows.
-    pub num_rows: Precision<usize>,
-    /// Number of table columns.
-    pub num_columns: usize,
-    /// Total table size, in bytes.
-    pub table_size_bytes: Precision<usize>,
-    /// Size of the statistics entry, in bytes.
-    pub statistics_size_bytes: usize,
-    /// Whether ordering information is cached for this file.
-    pub has_ordering: bool,
-}
-
 /// Cached file listing.
 ///
 /// TTL expiration is handled internally by the cache implementation.
