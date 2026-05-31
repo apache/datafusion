@@ -304,7 +304,12 @@ impl CacheManager {
             .file_metadata_cache
             .as_ref()
             .map(Arc::clone)
-            .unwrap_or_else(|| Arc::new(DefaultCache::new(config.metadata_cache_limit).with_name("DefaultFileMetadataCache")));
+            .unwrap_or_else(|| {
+                Arc::new(
+                    DefaultCache::new(config.metadata_cache_limit)
+                        .with_name("DefaultFileMetadataCache"),
+                )
+            });
 
         // the cache memory limit might have changed, ensure the limit is updated
         file_metadata_cache.update_cache_limit(config.metadata_cache_limit);
