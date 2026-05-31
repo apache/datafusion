@@ -708,29 +708,76 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Union(Union { inputs, schema }) => {
-                // Recompute what the schema should be from the current inputs.
-                // Comparing the full recomputed schema (not just inputs[0]) correctly
-                // handles: field-count changes, type changes, name/alias changes,
-                // nullability changes, and metadata changes — all in one place.
+                // Fast path: if all inputs structurally match the cached schema
+                // (field count, types, names, qualifiers, nullability) then no
+                // recomputation is needed and we avoid any allocation.
+                let schemas_match = inputs.iter().all(|input| {
+                    let input_schema = input.schema();
+                    schema.fields().len() == input_schema.fields().len()
+                        && schema.iter().zip(input_schema.iter()).all(
+                            |((q1, f1), (q2, f2))| {
+                                q1 == q2
+                                    && f1.name() == f2.name()
+                                    && f1.data_type() == f2.data_type()
+                                    && f1.is_nullable() == f2.is_nullable()
+                            },
+                        )
+                });
+                if schemas_match {
+                    // Inputs are structurally identical to the cached schema.
+                    return Ok(LogicalPlan::Union(Union { inputs, schema }));
+                }
+
+                // Slow path: inputs changed — recompute the schema.
                 //
-                // A note on `Union`s constructed via `try_new_by_name`:
-                //
+                // NOTE: A note on `Union`s constructed via `try_new_by_name`:
                 // At this point, the schema for each input should have
                 // the same width. Thus, we do not need to save whether a
                 // `Union` was created `BY NAME`, and can safely rely on the
                 // `try_new` initializer to derive the new schema based on
                 // column positions.
-                let recomputed = Union::try_new(inputs)?;
-                if recomputed.schema == schema {
-                    // Schema is still valid; preserve the cached schema
-                    // (which may carry metadata the recomputed one lacks).
-                    Ok(LogicalPlan::Union(Union {
-                        inputs: recomputed.inputs,
-                        schema,
-                    }))
-                } else {
-                    Ok(LogicalPlan::Union(recomputed))
+                let mut recomputed = Union::try_new(inputs)?;
+
+                // Metadata preservation: Union::try_new uses intersection logic
+                // for metadata, but we want "later takes precedence" (extend semantics)
+                // to match coerce_union_schema_with_schema in type_coercion.rs.
+                let mut merged_metadata =
+                    recomputed.inputs[0].schema().metadata().clone();
+                for input in recomputed.inputs.iter().skip(1) {
+                    merged_metadata.extend(input.schema().metadata().clone());
                 }
+
+                let mut merged_field_metadata = recomputed.inputs[0]
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.metadata().clone())
+                    .collect::<Vec<_>>();
+
+                for input in recomputed.inputs.iter().skip(1) {
+                    for (field_meta, input_field) in merged_field_metadata
+                        .iter_mut()
+                        .zip(input.schema().fields())
+                    {
+                        field_meta.extend(input_field.metadata().clone());
+                    }
+                }
+
+                let new_fields = recomputed
+                    .schema
+                    .iter()
+                    .zip(merged_field_metadata)
+                    .map(|((qualifier, field), meta)| {
+                        let mut field = field.as_ref().clone();
+                        field.set_metadata(meta);
+                        (qualifier.cloned(), Arc::new(field))
+                    })
+                    .collect::<Vec<_>>();
+
+                recomputed.schema =
+                    Arc::new(DFSchema::new_with_metadata(new_fields, merged_metadata)?);
+
+                Ok(LogicalPlan::Union(recomputed))
             }
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
@@ -6255,6 +6302,60 @@ mod tests {
             "Union schema should reflect the new nullable inputs after \
          recompute_schema(), but the stale NOT NULL schema was kept"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_recompute_schema_union_metadata_preservation() -> Result<()> {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::collections::HashMap;
+
+        let mut meta1 = HashMap::new();
+        meta1.insert("k1".to_string(), "v1".to_string());
+        let mut meta2 = HashMap::new();
+        meta2.insert("k1".to_string(), "v2".to_string()); // duplicate key, different value
+        meta2.insert("k2".to_string(), "v2".to_string());
+
+        let schema1 = Schema::new_with_metadata(
+            vec![Field::new("a", DataType::Int32, false)],
+            meta1.clone(),
+        );
+        let schema2 = Schema::new_with_metadata(
+            vec![Field::new("a", DataType::Int32, false)],
+            meta2.clone(),
+        );
+
+        // Build a Union. Its initial schema will have intersected metadata.
+        let original = Union::try_new(vec![
+            Arc::new(table_scan(Some("t1"), &schema1, None)?.build()?),
+            Arc::new(table_scan(Some("t2"), &schema2, None)?.build()?),
+        ])?;
+
+        // Union::try_new uses intersection, so k1 should be missing (v1 != v2)
+        // and k2 should be missing (not in meta1).
+        assert!(original.schema.metadata().is_empty());
+
+        // Now simulate recompute_schema() where we want EXTEND semantics (later takes precedence).
+        // Our implementation of recompute_schema for Union now does this.
+        let stale = LogicalPlan::Union(Union {
+            inputs: vec![
+                Arc::new(table_scan(Some("t1"), &schema1, None)?.build()?),
+                Arc::new(table_scan(Some("t2"), &schema2, None)?.build()?),
+            ],
+            // Use a dummy schema that forces recomputation (e.g. different name)
+            schema: Arc::new(DFSchema::try_from(Schema::new(vec![Field::new(
+                "wrong_name",
+                DataType::Int32,
+                false,
+            )]))?),
+        });
+
+        let recomputed = stale.recompute_schema()?;
+
+        // Metadata should now be {k1: v2, k2: v2} because meta2 was the last input.
+        assert_eq!(recomputed.schema().metadata().get("k1").unwrap(), "v2");
+        assert_eq!(recomputed.schema().metadata().get("k2").unwrap(), "v2");
 
         Ok(())
     }
