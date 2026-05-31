@@ -29,7 +29,7 @@ use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
     ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
-    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF,
+    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
     LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     ValueOrLambda, Volatility, col,
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
@@ -725,7 +725,7 @@ fn plan_insert_no_target_columns() {
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named nonexistent. \
+    "Schema error: No field named nonexistent.\n\
     Valid fields are id, price."
 )]
 #[case::target_column_count_mismatch(
@@ -1681,7 +1681,10 @@ fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() 
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @r#"Schema error: No field named doesnotexist. Valid fields are "sum(person.age)", person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person."😀"."#
+        @r#"
+Schema error: No field named doesnotexist.
+Valid fields are "sum(person.age)", person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person."😀".
+"#
     );
 }
 
@@ -3510,7 +3513,9 @@ fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<Logica
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
     let state = MockSessionState::default()
         .with_aggregate_function(sum_udaf())
-        .with_higher_order_function(Arc::new(MockArrayReduce::new()))
+        .with_higher_order_function(Arc::new(HigherOrderUDF::new_from_impl(
+            MockArrayReduce::new(),
+        )))
         .with_scalar_function(make_array_udf())
         .with_expr_planner(Arc::new(CustomExprPlanner {})); // plan array literal
     let context = MockContextProvider { state };
@@ -5358,7 +5363,7 @@ fn test_progressive_lambda_parameters() {
     assert_eq!(
         expr,
         Expr::HigherOrderFunction(HigherOrderFunction::new(
-            Arc::new(MockArrayReduce::new()),
+            Arc::new(HigherOrderUDF::new_from_impl(MockArrayReduce::new())),
             vec![
                 Expr::ScalarFunction(ScalarFunction::new_udf(
                     make_array_udf(),
@@ -5402,7 +5407,7 @@ impl MockArrayReduce {
     }
 }
 
-impl HigherOrderUDF for MockArrayReduce {
+impl HigherOrderUDFImpl for MockArrayReduce {
     fn name(&self) -> &str {
         "array_reduce"
     }

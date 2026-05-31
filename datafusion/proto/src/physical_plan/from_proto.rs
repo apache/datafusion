@@ -298,15 +298,7 @@ pub fn parse_physical_expr_with_converter(
         ExprType::Sort(_) => {
             return not_impl_err!("Cannot convert sort expr node to physical expression");
         }
-        ExprType::IsNullExpr(e) => {
-            Arc::new(IsNullExpr::new(parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?))
-        }
+        ExprType::IsNullExpr(_) => IsNullExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::IsNotNullExpr(_) => IsNotNullExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
