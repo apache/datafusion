@@ -274,9 +274,9 @@ physical_plan
 01)SortPreservingMergeExec: [c2@0 ASC NULLS LAST]
 02)--SortExec: expr=[c2@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
-04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)], stream=PartialFinalHashAggregateStream
 05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)], stream=RawPartialHashAggregateStream
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
@@ -293,9 +293,9 @@ physical_plan
 01)SortPreservingMergeExec: [total_sal@1 ASC NULLS LAST, c2@0 ASC NULLS LAST]
 02)--SortExec: expr=[total_sal@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
-04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)], stream=PartialFinalHashAggregateStream
 05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)], stream=RawPartialHashAggregateStream
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
@@ -312,9 +312,9 @@ physical_plan
 01)SortPreservingMergeExec: [c2@0 ASC NULLS LAST, abs(c2@0) ASC NULLS LAST]
 02)--SortExec: expr=[c2@0 ASC NULLS LAST, abs(c2@0) ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
-04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)], stream=PartialFinalHashAggregateStream
 05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
+06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)], stream=RawPartialHashAggregateStream
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
@@ -1034,15 +1034,15 @@ physical_plan
 02)--SortExec: expr=[m@0 ASC NULLS LAST, t@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----InterleaveExec
 04)------ProjectionExec: expr=[0 as m, t@0 as t]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[], stream=PartialFinalHashAggregateStream
 06)----------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
+07)------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[], stream=RawPartialHashAggregateStream
 08)--------------ProjectionExec: expr=[column1@0 as t]
 09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 10)------ProjectionExec: expr=[1 as m, t@0 as t]
-11)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
+11)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[], stream=PartialFinalHashAggregateStream
 12)----------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
-13)------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
+13)------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[], stream=RawPartialHashAggregateStream
 14)--------------ProjectionExec: expr=[column1@0 as t]
 15)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 

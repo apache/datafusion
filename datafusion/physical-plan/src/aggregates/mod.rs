@@ -22,8 +22,10 @@ use std::sync::Arc;
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
-    no_grouping::AggregateStream, raw_partial_hash::RawPartialHashAggregateStream,
-    row_hash::GroupedHashAggregateStream, topk_stream::GroupedTopKAggregateStream,
+    no_grouping::AggregateStream,
+    raw_partial_hash::{PartialFinalHashAggregateStream, RawPartialHashAggregateStream},
+    row_hash::GroupedHashAggregateStream,
+    topk_stream::GroupedTopKAggregateStream,
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::filter_pushdown::{
@@ -502,6 +504,7 @@ impl PartialEq for PhysicalGroupBy {
 enum StreamType {
     AggregateStream(AggregateStream),
     RawPartialHash(RawPartialHashAggregateStream),
+    PartialFinalHash(PartialFinalHashAggregateStream),
     GroupedHash(GroupedHashAggregateStream),
     GroupedPriorityQueue(GroupedTopKAggregateStream),
 }
@@ -511,6 +514,7 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::RawPartialHash(stream) => Box::pin(stream),
+            StreamType::PartialFinalHash(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
@@ -974,6 +978,12 @@ impl AggregateExec {
             ));
         }
 
+        if self.should_use_partial_final_hash_stream(context) {
+            return Ok(StreamType::PartialFinalHash(
+                PartialFinalHashAggregateStream::new(self, context, partition)?,
+            ));
+        }
+
         // grouping by something else and we need to just materialize all results
         Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
             self, context, partition,
@@ -994,10 +1004,31 @@ impl AggregateExec {
         self.mode == AggregateMode::Partial
             && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
+            && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
 
-    /// Returns the stream implied by plan shape for `EXPLAIN VERBOSE`.
+    fn should_use_partial_final_hash_stream(&self, context: &TaskContext) -> bool {
+        // Keep finite-memory execution on the existing stream for now because
+        // that path owns the mature spill behavior.
+        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
+            return false;
+        }
+
+        self.can_use_partial_final_hash_stream()
+    }
+
+    fn can_use_partial_final_hash_stream(&self) -> bool {
+        matches!(
+            self.mode,
+            AggregateMode::Final | AggregateMode::FinalPartitioned
+        ) && self.limit_options.is_none()
+            && self.input_order_mode == InputOrderMode::Linear
+            && !self.group_by.is_true_no_grouping()
+            && self.group_by.is_single()
+    }
+
+    /// Returns the stream implied by plan shape for `EXPLAIN`.
     ///
     /// Execution also checks the runtime memory pool. Finite-memory execution
     /// stays on `GroupedHashAggregateStream` to preserve its spill behavior.
@@ -1016,7 +1047,17 @@ impl AggregateExec {
             return "RawPartialHashAggregateStream";
         }
 
+        if self.can_use_partial_final_hash_stream() {
+            return "PartialFinalHashAggregateStream";
+        }
+
         "GroupedHashAggregateStream"
+    }
+
+    fn should_display_stream_name(&self, t: DisplayFormatType) -> bool {
+        matches!(t, DisplayFormatType::Verbose)
+            || self.can_use_raw_partial_hash_stream()
+            || self.can_use_partial_final_hash_stream()
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
@@ -1498,7 +1539,7 @@ impl DisplayAs for AggregateExec {
                     write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
                 }
 
-                if matches!(t, DisplayFormatType::Verbose) {
+                if self.should_display_stream_name(t) {
                     write!(f, ", stream={}", self.stream_name_for_display())?;
                 }
             }
@@ -3051,21 +3092,45 @@ mod tests {
                 .build()?,
         )];
 
-        let aggregate = AggregateExec::try_new(
+        let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
-            group_by,
-            aggregates,
+            group_by.clone(),
+            aggregates.clone(),
             vec![None],
             input,
             Arc::clone(&schema),
-        )?;
+        )?);
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(2)),
         );
 
-        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::RawPartialHash(_)));
+
+        let stream: SendableRecordBatchStream = stream.into();
+        let batches = collect(stream).await?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+
+        let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
+        let final_aggregate = AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            aggregates,
+            vec![None],
+            merge,
+            Arc::clone(&schema),
+        )?;
+
+        let stream = final_aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::PartialFinalHash(_)));
 
         let stream: SendableRecordBatchStream = stream.into();
         let batches = collect(stream).await?;

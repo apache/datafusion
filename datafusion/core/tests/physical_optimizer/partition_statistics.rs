@@ -826,7 +826,7 @@ mod test {
         let plan_string = get_plan_string(&aggregate_exec_partial).swap_remove(0);
         assert_snapshot!(
             plan_string,
-            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]"
+            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)], stream=RawPartialHashAggregateStream"
         );
 
         let p0_statistics = aggregate_exec_partial.partition_statistics(Some(0))?;
@@ -922,7 +922,7 @@ mod test {
         let agg_plan = get_plan_string(&agg_partial).remove(0);
         assert_snapshot!(
             agg_plan,
-            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]"
+            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)], stream=RawPartialHashAggregateStream"
         );
 
         let empty_stat = Statistics {

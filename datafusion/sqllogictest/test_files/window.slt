@@ -274,7 +274,7 @@ physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a]
-04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[max(d.a)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[max(d.a)], stream=PartialFinalHashAggregateStream
 05)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)], ordering_mode=Sorted
 07)------------UnionExec
@@ -1877,9 +1877,9 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------ProjectionExec: expr=[]
-06)----------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[], stream=PartialFinalHashAggregateStream
 07)------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-08)--------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
+08)--------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[], stream=RawPartialHashAggregateStream
 09)----------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true

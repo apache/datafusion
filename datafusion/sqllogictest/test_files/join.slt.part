@@ -1422,9 +1422,9 @@ physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(v0@1, v0@0)], projection=[v0@2, v1@3, sum(t1.v1)@0]
 02)--CoalescePartitionsExec
 03)----ProjectionExec: expr=[sum(t1.v1)@1 as sum(t1.v1), v0@0 as v0]
-04)------AggregateExec: mode=FinalPartitioned, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[v0@0 as v0], aggr=[sum(t1.v1)], stream=PartialFinalHashAggregateStream
 05)--------RepartitionExec: partitioning=Hash([v0@0], 4), input_partitions=1
-06)----------AggregateExec: mode=Partial, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
+06)----------AggregateExec: mode=Partial, gby=[v0@0 as v0], aggr=[sum(t1.v1)], stream=RawPartialHashAggregateStream
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 08)--DataSourceExec: partitions=1, partition_sizes=[1]
 

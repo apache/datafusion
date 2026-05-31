@@ -69,7 +69,8 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=Partial, gby=[c1@0 as c1]",
-        "reduction_factor=5.05% (5/99)"
+        "stream=RawPartialHashAggregateStream",
+        "skipped_aggregation_rows=0"
     );
 
     {
@@ -83,6 +84,7 @@ async fn explain_analyze_baseline_metrics() {
         assert_metrics!(
             &formatted,
             "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
+            "stream=PartialFinalHashAggregateStream",
             "metrics=[output_rows=5, elapsed_compute=",
             "output_bytes=",
             expected_batch_count_after_repartition
@@ -776,7 +778,7 @@ async fn test_physical_plan_display_indent() {
     SortPreservingMergeExec: [the_min@2 DESC], fetch=10
       SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]
         ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]
-          AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)], stream=GroupedHashAggregateStream
+          AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)], stream=PartialFinalHashAggregateStream
             RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
               AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)], stream=RawPartialHashAggregateStream
                 FilterExec: c12@1 < 10

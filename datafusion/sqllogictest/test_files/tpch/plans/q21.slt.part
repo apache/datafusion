@@ -93,9 +93,9 @@ physical_plan
 01)SortPreservingMergeExec: [numwait@1 DESC, s_name@0 ASC NULLS LAST]
 02)--SortExec: expr=[numwait@1 DESC, s_name@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[s_name@0 as s_name, count(Int64(1))@1 as numwait]
-04)------AggregateExec: mode=FinalPartitioned, gby=[s_name@0 as s_name], aggr=[count(Int64(1))]
+04)------AggregateExec: mode=FinalPartitioned, gby=[s_name@0 as s_name], aggr=[count(Int64(1))], stream=PartialFinalHashAggregateStream
 05)--------RepartitionExec: partitioning=Hash([s_name@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[s_name@0 as s_name], aggr=[count(Int64(1))]
+06)----------AggregateExec: mode=Partial, gby=[s_name@0 as s_name], aggr=[count(Int64(1))], stream=RawPartialHashAggregateStream
 07)------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(l_orderkey@1, l_orderkey@0)], filter=l_suppkey@1 != l_suppkey@0, projection=[s_name@0]
 08)--------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(l_orderkey@1, l_orderkey@0)], filter=l_suppkey@1 != l_suppkey@0
 09)----------------RepartitionExec: partitioning=Hash([l_orderkey@1], 4), input_partitions=4

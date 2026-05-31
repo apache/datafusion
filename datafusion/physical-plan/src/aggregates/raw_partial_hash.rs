@@ -15,19 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Grouped hash aggregation for the first aggregation stage.
+//! Grouped hash aggregation for simple multi-stage aggregation paths.
 //!
-//! This stream handles the basic grouped `raw rows -> partial state` path:
+//! This module handles the basic grouped two-stage paths:
 //!
 //! ```text
 //! input rows -> GROUP BY hash table -> accumulator state rows
+//! state rows -> GROUP BY hash table -> final aggregate rows
 //! ```
 //!
-//! `AggregateExec` keeps finite-memory, ordered, limit, grouping-set, later-stage
-//! (`partial state -> final values`, `partial state -> partial state`) and
-//! single-stage aggregation on `GroupedHashAggregateStream` for now.
+//! `AggregateExec` keeps finite-memory, ordered, limit, grouping-set,
+//! `partial state -> partial state`, and single-stage aggregation on
+//! `GroupedHashAggregateStream` for now.
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -42,7 +44,7 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
-use super::group_values::{GroupValues, new_unordered_group_values};
+use super::group_values::{GroupByMetrics, GroupValues, new_unordered_group_values};
 use super::row_hash::create_group_accumulator;
 use super::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
@@ -61,7 +63,7 @@ enum ExecutionState {
     Done,
 }
 
-struct RawPartialAccumulator {
+struct HashAggregateAccumulator {
     /// Arguments to pass to this accumulator.
     ///
     /// Example: `CORR(x, y)` stores two expressions here, while `SUM(x)` stores one.
@@ -76,12 +78,21 @@ struct RawPartialAccumulator {
     accumulator: Box<dyn GroupsAccumulator>,
 }
 
-struct EvaluatedRawPartialAccumulator {
+struct EvaluatedHashAggregateAccumulator {
     arguments: Vec<ArrayRef>,
     filter: Option<ArrayRef>,
 }
 
-impl RawPartialAccumulator {
+struct EvaluatedAggregateBatch {
+    /// One entry per grouping set; each entry contains all evaluated group key
+    /// arrays for the current input batch.
+    grouping_set_args: Vec<Vec<ArrayRef>>,
+
+    /// Evaluated arguments and filters, one entry per aggregate expression.
+    accumulator_args: Vec<EvaluatedHashAggregateAccumulator>,
+}
+
+impl HashAggregateAccumulator {
     fn new(
         arguments: Vec<Arc<dyn PhysicalExpr>>,
         filter: Option<Arc<dyn PhysicalExpr>>,
@@ -94,7 +105,7 @@ impl RawPartialAccumulator {
         }
     }
 
-    fn evaluate(&self, batch: &RecordBatch) -> Result<EvaluatedRawPartialAccumulator> {
+    fn evaluate(&self, batch: &RecordBatch) -> Result<EvaluatedHashAggregateAccumulator> {
         let arguments = self
             .arguments
             .iter()
@@ -114,12 +125,12 @@ impl RawPartialAccumulator {
             })
             .transpose()?;
 
-        Ok(EvaluatedRawPartialAccumulator { arguments, filter })
+        Ok(EvaluatedHashAggregateAccumulator { arguments, filter })
     }
 
     fn update_batch(
         &mut self,
-        values: &EvaluatedRawPartialAccumulator,
+        values: &EvaluatedHashAggregateAccumulator,
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
@@ -130,6 +141,25 @@ impl RawPartialAccumulator {
             filter,
             total_num_groups,
         )
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &EvaluatedHashAggregateAccumulator,
+        group_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        debug_assert!(values.filter.is_none());
+        self.accumulator.merge_batch(
+            &values.arguments,
+            group_indices,
+            None,
+            total_num_groups,
+        )
+    }
+
+    fn evaluate_final(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        self.accumulator.evaluate(emit_to)
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -151,6 +181,12 @@ impl RawPartialAccumulator {
     }
 }
 
+/// Hash table mode that consumes raw input rows and produces partial state.
+struct RawPartial;
+
+/// Hash table mode that consumes partial state and produces final values.
+struct PartialFinal;
+
 /// Hash table state for grouped raw-partial aggregation.
 ///
 /// This owns the coupled state for:
@@ -159,12 +195,15 @@ impl RawPartialAccumulator {
 /// - mapping each input row to its group index,
 /// - evaluating aggregate inputs,
 /// - updating per-group accumulator state.
-struct AggregateHashTable {
+struct AggregateHashTable<Mode> {
+    /// Grouping and accumulator-specific timing metrics.
+    group_by_metrics: GroupByMetrics,
+
     /// Raw input schema, used to evaluate expressions and synthesize empty
     /// grouping-set rows.
     input_schema: SchemaRef,
 
-    /// Output schema: group columns followed by partial aggregate state columns.
+    /// Output schema: group columns followed by aggregate state or final values.
     output_schema: SchemaRef,
 
     /// Maximum rows per emitted output batch.
@@ -186,9 +225,9 @@ struct AggregateHashTable {
     ///
     /// Example: `COUNT(x), SUM(y)` creates two items. Each item owns the input
     /// expressions, optional filter, and accumulator state for all groups.
-    accumulators: Vec<RawPartialAccumulator>,
+    accumulators: Vec<HashAggregateAccumulator>,
 
-    /// Full partial-state output built once after input is exhausted.
+    /// Full output built once after input is exhausted.
     output_batch: Option<RecordBatch>,
 
     /// Offset of the next row to slice from `output_batch`.
@@ -196,14 +235,17 @@ struct AggregateHashTable {
 
     /// True once all output rows have been emitted.
     output_finished: bool,
+
+    _mode: PhantomData<Mode>,
 }
 
-impl AggregateHashTable {
-    fn new(
+impl<Mode> AggregateHashTable<Mode> {
+    fn new_with_filters(
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
         batch_size: usize,
+        filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
         let input_schema = agg.input().schema();
         let aggregate_arguments = aggregate_expressions(
@@ -215,26 +257,22 @@ impl AggregateHashTable {
             .aggr_expr
             .iter()
             .zip(aggregate_arguments)
-            .zip(agg.filter_expr.iter().cloned())
+            .zip(filters)
             .map(|((agg_expr, arguments), filter)| {
                 let accumulator = create_group_accumulator(agg_expr)?;
-                Ok(RawPartialAccumulator::new(arguments, filter, accumulator))
+                Ok(HashAggregateAccumulator::new(
+                    arguments,
+                    filter,
+                    accumulator,
+                ))
             })
             .collect::<Result<_>>()?;
-
-        if accumulators
-            .iter()
-            .all(|acc| acc.supports_convert_to_state())
-        {
-            let _skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Rows)
-                .counter("skipped_aggregation_rows", partition);
-        }
 
         let group_schema = agg.group_by.group_schema(&input_schema)?;
         let group_values = new_unordered_group_values(group_schema)?;
 
         Ok(Self {
+            group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
             input_schema,
             output_schema,
             batch_size,
@@ -245,42 +283,42 @@ impl AggregateHashTable {
             output_batch: None,
             output_batch_offset: 0,
             output_finished: false,
+            _mode: PhantomData,
         })
     }
 
-    fn aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+    fn evaluate_batch(&self, batch: &RecordBatch) -> Result<EvaluatedAggregateBatch> {
+        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
         // outer vec: one per each grouping set
         // inner vec: all group by exprs for the current grouping set
         let grouping_set_args = evaluate_group_by(&self.group_by, batch)?;
+        drop(timer);
+
+        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
         // The evaluated args for each accumulator
         let accumulator_args = self
             .accumulators
             .iter()
             .map(|acc| acc.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
+        drop(timer);
 
-        for group_values in &grouping_set_args {
-            self.group_values
-                .intern(group_values, &mut self.batch_group_indices)?;
-            let group_indices = &self.batch_group_indices;
-            let total_num_groups = self.group_values.len();
-
-            for (acc, values) in self.accumulators.iter_mut().zip(accumulator_args.iter())
-            {
-                acc.update_batch(values, group_indices, total_num_groups)?;
-            }
-        }
-
-        Ok(())
+        Ok(EvaluatedAggregateBatch {
+            grouping_set_args,
+            accumulator_args,
+        })
     }
 
-    fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+    fn next_output_batch_from(
+        &mut self,
+        build_output_batch: impl FnOnce(&mut Self) -> Result<Option<RecordBatch>>,
+    ) -> Result<Option<RecordBatch>> {
         if self.output_finished {
             return Ok(None);
         }
 
         if self.output_batch.is_none() {
-            self.output_batch = self.build_output_batch()?;
+            self.output_batch = build_output_batch(self)?;
             self.output_batch_offset = 0;
         }
 
@@ -308,24 +346,6 @@ impl AggregateHashTable {
         Ok(Some(output))
     }
 
-    fn build_output_batch(&mut self) -> Result<Option<RecordBatch>> {
-        self.init_empty_grouping_sets()?;
-
-        if self.group_values.is_empty() {
-            return Ok(None);
-        }
-
-        let mut output = self.group_values.emit(EmitTo::All)?;
-
-        for acc in self.accumulators.iter_mut() {
-            output.extend(acc.state(EmitTo::All)?);
-        }
-
-        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
-        debug_assert!(batch.num_rows() > 0);
-        Ok(Some(batch))
-    }
-
     fn memory_size(&self) -> usize {
         let acc = self
             .accumulators
@@ -350,6 +370,82 @@ impl AggregateHashTable {
         self.output_batch = None;
         self.output_batch_offset = 0;
         self.output_finished = false;
+    }
+}
+
+impl AggregateHashTable<RawPartial> {
+    fn new(
+        agg: &AggregateExec,
+        partition: usize,
+        output_schema: SchemaRef,
+        batch_size: usize,
+    ) -> Result<Self> {
+        let table = Self::new_with_filters(
+            agg,
+            partition,
+            output_schema,
+            batch_size,
+            agg.filter_expr.iter().cloned().collect(),
+        )?;
+
+        if table
+            .accumulators
+            .iter()
+            .all(|acc| acc.supports_convert_to_state())
+        {
+            let _skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
+                .with_category(MetricCategory::Rows)
+                .counter("skipped_aggregation_rows", partition);
+        }
+
+        Ok(table)
+    }
+
+    fn aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let evaluated_batch = self.evaluate_batch(batch)?;
+
+        let timer = self.group_by_metrics.aggregation_time.timer();
+        for group_values in &evaluated_batch.grouping_set_args {
+            self.group_values
+                .intern(group_values, &mut self.batch_group_indices)?;
+            let group_indices = &self.batch_group_indices;
+            let total_num_groups = self.group_values.len();
+
+            for (acc, values) in self
+                .accumulators
+                .iter_mut()
+                .zip(evaluated_batch.accumulator_args.iter())
+            {
+                acc.update_batch(values, group_indices, total_num_groups)?;
+            }
+        }
+        drop(timer);
+
+        Ok(())
+    }
+
+    fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.next_output_batch_from(Self::build_output_batch)
+    }
+
+    fn build_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.init_empty_grouping_sets()?;
+
+        if self.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut output = self.group_values.emit(EmitTo::All)?;
+
+        for acc in self.accumulators.iter_mut() {
+            output.extend(acc.state(EmitTo::All)?);
+        }
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+        drop(timer);
+        Ok(Some(batch))
     }
 
     fn init_empty_grouping_sets(&mut self) -> Result<()> {
@@ -393,7 +489,7 @@ impl AggregateHashTable {
             let false_filter = BooleanArray::from(vec![false]);
             for acc in self.accumulators.iter_mut() {
                 let null_args = acc.null_arguments(&self.input_schema)?;
-                let values = EvaluatedRawPartialAccumulator {
+                let values = EvaluatedHashAggregateAccumulator {
                     arguments: null_args,
                     filter: Some(Arc::new(false_filter.clone())),
                 };
@@ -405,8 +501,70 @@ impl AggregateHashTable {
     }
 }
 
+impl AggregateHashTable<PartialFinal> {
+    fn new(
+        agg: &AggregateExec,
+        partition: usize,
+        output_schema: SchemaRef,
+        batch_size: usize,
+    ) -> Result<Self> {
+        Self::new_with_filters(
+            agg,
+            partition,
+            output_schema,
+            batch_size,
+            vec![None; agg.aggr_expr.len()],
+        )
+    }
+
+    fn aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let evaluated_batch = self.evaluate_batch(batch)?;
+
+        let timer = self.group_by_metrics.aggregation_time.timer();
+        for group_values in &evaluated_batch.grouping_set_args {
+            self.group_values
+                .intern(group_values, &mut self.batch_group_indices)?;
+            let group_indices = &self.batch_group_indices;
+            let total_num_groups = self.group_values.len();
+
+            for (acc, values) in self
+                .accumulators
+                .iter_mut()
+                .zip(evaluated_batch.accumulator_args.iter())
+            {
+                acc.merge_batch(values, group_indices, total_num_groups)?;
+            }
+        }
+        drop(timer);
+
+        Ok(())
+    }
+
+    fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.next_output_batch_from(Self::build_output_batch)
+    }
+
+    fn build_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut output = self.group_values.emit(EmitTo::All)?;
+
+        for acc in self.accumulators.iter_mut() {
+            output.push(acc.evaluate_final(EmitTo::All)?);
+        }
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+        drop(timer);
+        Ok(Some(batch))
+    }
+}
+
 /// Hash aggregate stream for grouped `AggregateMode::Partial`.
-/// 
+///
 /// Input: raw rows
 /// Output: partial state (e.g. for avg(x), it's sum(x), count(x))
 pub(crate) struct RawPartialHashAggregateStream {
@@ -435,7 +593,7 @@ pub(crate) struct RawPartialHashAggregateStream {
     // and one for `SUM(y)`.
     // ========================================================================
     /// Hash table and accumulator state for all groups seen so far.
-    hash_table: AggregateHashTable,
+    hash_table: AggregateHashTable<RawPartial>,
 
     // ========================================================================
     // EXECUTION RESOURCES:
@@ -465,8 +623,12 @@ impl RawPartialHashAggregateStream {
         // Preserve the existing aggregate metric surface for this plan node.
         let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);
 
-        let hash_table =
-            AggregateHashTable::new(agg, partition, Arc::clone(&schema), batch_size)?;
+        let hash_table = AggregateHashTable::<RawPartial>::new(
+            agg,
+            partition,
+            Arc::clone(&schema),
+            batch_size,
+        )?;
 
         let reservation =
             MemoryConsumer::new(format!("RawPartialHashAggregateStream[{partition}]"))
@@ -562,6 +724,154 @@ impl Stream for RawPartialHashAggregateStream {
 }
 
 impl RecordBatchStream for RawPartialHashAggregateStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+/// `AggregateMode::FinalPartitioned`.
+///
+/// Input: partial state, such as `sum(x), count(x)` for `avg(x)`.
+/// Output: final values, such as `avg(x)`.
+pub(crate) struct PartialFinalHashAggregateStream {
+    /// Output schema: group columns followed by final aggregate value columns.
+    schema: SchemaRef,
+
+    /// Input batches containing partial aggregate state rows.
+    input: SendableRecordBatchStream,
+
+    /// Controls whether the stream is reading input, emitting output, or done.
+    exec_state: ExecutionState,
+
+    /// Hash table and accumulator state for all groups seen so far.
+    hash_table: AggregateHashTable<PartialFinal>,
+
+    /// Execution metrics shared with the aggregate plan node.
+    baseline_metrics: BaselineMetrics,
+
+    /// Memory reservation for group keys and accumulators.
+    reservation: MemoryReservation,
+}
+
+impl PartialFinalHashAggregateStream {
+    pub fn new(
+        agg: &AggregateExec,
+        context: &Arc<TaskContext>,
+        partition: usize,
+    ) -> Result<Self> {
+        debug_assert!(matches!(
+            agg.mode,
+            super::AggregateMode::Final | super::AggregateMode::FinalPartitioned
+        ));
+        debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
+
+        let schema = Arc::clone(&agg.schema);
+        let input = agg.input.execute(partition, Arc::clone(context))?;
+        let batch_size = context.session_config().batch_size();
+        let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+
+        // Preserve the existing aggregate metric surface for this plan node.
+        let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);
+
+        let hash_table = AggregateHashTable::<PartialFinal>::new(
+            agg,
+            partition,
+            Arc::clone(&schema),
+            batch_size,
+        )?;
+
+        let reservation =
+            MemoryConsumer::new(format!("PartialFinalHashAggregateStream[{partition}]"))
+                .register(context.memory_pool());
+
+        Ok(Self {
+            schema,
+            input,
+            exec_state: ExecutionState::ReadingInput,
+            hash_table,
+            baseline_metrics,
+            reservation,
+        })
+    }
+}
+
+impl Stream for PartialFinalHashAggregateStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+
+        loop {
+            match &self.exec_state {
+                ExecutionState::ReadingInput => {
+                    match ready!(self.input.poll_next_unpin(cx)) {
+                        Some(Ok(batch)) => {
+                            let timer = elapsed_compute.timer();
+                            let result = self.hash_table.aggregate_batch(&batch);
+                            timer.done();
+
+                            if let Err(e) = result {
+                                return Poll::Ready(Some(Err(e)));
+                            }
+
+                            if let Err(e) =
+                                self.reservation.try_resize(self.hash_table.memory_size())
+                            {
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                        }
+                        Some(Err(e)) => {
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                        None => {
+                            let input_schema = self.input.schema();
+                            self.input =
+                                Box::pin(EmptyRecordBatchStream::new(input_schema));
+
+                            self.exec_state = ExecutionState::ProducingOutput;
+                        }
+                    }
+                }
+
+                ExecutionState::ProducingOutput => {
+                    let timer = elapsed_compute.timer();
+                    let result = self.hash_table.next_output_batch();
+                    timer.done();
+
+                    match result {
+                        Ok(Some(batch)) => {
+                            let _ = self
+                                .reservation
+                                .try_resize(self.hash_table.memory_size());
+                            debug_assert!(batch.num_rows() > 0);
+                            return Poll::Ready(Some(Ok(
+                                batch.record_output(&self.baseline_metrics)
+                            )));
+                        }
+                        Ok(None) => {
+                            let _ = self
+                                .reservation
+                                .try_resize(self.hash_table.memory_size());
+                            self.exec_state = ExecutionState::Done;
+                        }
+                        Err(e) => return Poll::Ready(Some(Err(e))),
+                    }
+                }
+
+                ExecutionState::Done => {
+                    self.hash_table.clear();
+                    let _ = self.reservation.try_resize(self.hash_table.memory_size());
+                    return Poll::Ready(None);
+                }
+            }
+        }
+    }
+}
+
+impl RecordBatchStream for PartialFinalHashAggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
