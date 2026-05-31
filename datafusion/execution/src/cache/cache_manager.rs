@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::cache::default_cache::DefaultCache;
-use crate::cache::{Cache, Value};
+use crate::cache::{Cache, CacheValue};
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::stats::Precision;
 use datafusion_common::{HashMap, TableReference};
@@ -106,7 +106,7 @@ impl CachedFileMetadata {
     }
 }
 
-impl Value for CachedFileMetadata {
+impl CacheValue for CachedFileMetadata {
     fn size(&self) -> usize {
         DFHeapSize::heap_size(self, &mut DFHeapSizeCtx::default())
     }
@@ -195,7 +195,7 @@ impl CachedFileList {
     }
 }
 
-impl Value for CachedFileList {
+impl CacheValue for CachedFileList {
     fn size(&self) -> usize {
         self.files.capacity() * size_of::<ObjectMeta>()
             + self
@@ -247,7 +247,7 @@ pub struct CachedFileMetadataEntry {
     pub file_metadata: Arc<dyn FileMetadata>,
 }
 
-impl Value for CachedFileMetadataEntry {
+impl CacheValue for CachedFileMetadataEntry {
     fn size(&self) -> usize {
         self.file_metadata.memory_size()
     }

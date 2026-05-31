@@ -85,10 +85,8 @@ pub trait CacheAccessor<K, V>: Send + Sync {
 
 /// A managed cache with capacity, expiration, and introspection policies.
 ///
-/// Keys must implement [`Key`] and values must implement [`Value`] so
-/// the implementation can account for heap usage when enforcing the cache limit.
-///
-pub trait Cache<K: Key, V: Value>: CacheAccessor<K, V> {
+
+pub trait Cache<K: CacheKey, V: CacheValue>: CacheAccessor<K, V> {
     /// Current memory budget, in bytes.
     fn cache_limit(&self) -> usize;
 
@@ -114,7 +112,7 @@ pub trait Cache<K: Key, V: Value>: CacheAccessor<K, V> {
 }
 
 /// Key type for entries stored in a [`Cache`].
-pub trait Key: Clone + Eq + Hash + Send + Sync + Debug {
+pub trait CacheKey: Clone + Eq + Hash + Send + Sync + Debug {
     /// Size of the key in bytes, used for cache memory accounting.
     fn size(&self) -> usize;
 
@@ -124,7 +122,7 @@ pub trait Key: Clone + Eq + Hash + Send + Sync + Debug {
 }
 
 /// Value type for entries stored in a [`Cache`].
-pub trait Value: Clone + Send + Sync {
+pub trait CacheValue: Clone + Send + Sync {
     /// Size of the value in bytes used for cache memory accounting.
     fn size(&self) -> usize;
 }
@@ -137,13 +135,13 @@ pub struct CacheEntryInfo<V> {
     pub expires: Option<Instant>,
 }
 
-impl<K: Key, V: Value> Debug for dyn Cache<K, V> {
+impl<K: CacheKey, V: CacheValue> Debug for dyn Cache<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Cache name: {} with length: {}", self.name(), self.len())
     }
 }
 
-impl Key for object_store::path::Path {
+impl CacheKey for object_store::path::Path {
     fn size(&self) -> usize {
         self.as_ref().heap_size(&mut DFHeapSizeCtx::default())
     }
@@ -153,7 +151,7 @@ impl Key for object_store::path::Path {
     }
 }
 
-impl Key for TableScopedPath {
+impl CacheKey for TableScopedPath {
     fn size(&self) -> usize {
         DFHeapSize::heap_size(self, &mut DFHeapSizeCtx::default())
     }

@@ -23,7 +23,7 @@ use datafusion_common::instant::Instant;
 use datafusion_common::{HashMap, Result};
 
 use crate::cache::lru_queue::LruQueue;
-use crate::cache::{Cache, CacheAccessor, CacheEntryInfo, Key, Value};
+use crate::cache::{Cache, CacheAccessor, CacheEntryInfo, CacheKey, CacheValue};
 
 /// Source of the current time used by a [`DefaultCache`] when applying TTLs.
 pub trait TimeProvider: Send + Sync {
@@ -44,12 +44,12 @@ impl TimeProvider for SystemTimeProvider {
 }
 
 #[derive(Clone)]
-struct ValueEntry<V: Value> {
+struct ValueEntry<V: CacheValue> {
     value: V,
     expires: Option<Instant>,
 }
 
-struct DefaultCacheState<K: Key, V: Value> {
+struct DefaultCacheState<K: CacheKey, V: CacheValue> {
     lru_queue: LruQueue<K, ValueEntry<V>>,
     hits: HashMap<K, usize>,
     memory_limit: usize,
@@ -57,7 +57,7 @@ struct DefaultCacheState<K: Key, V: Value> {
     ttl: Option<Duration>,
 }
 
-impl<K: Key, V: Value> DefaultCacheState<K, V> {
+impl<K: CacheKey, V: CacheValue> DefaultCacheState<K, V> {
     fn new(memory_limit: usize, ttl: Option<Duration>) -> Self {
         Self {
             lru_queue: LruQueue::new(),
@@ -171,13 +171,13 @@ impl<K: Key, V: Value> DefaultCacheState<K, V> {
 /// limit are rejected (and any prior entry under the same key is removed).
 /// When a TTL is configured, the expiration is stamped onto each entry at
 /// insertion time and checked lazily on access.
-pub struct DefaultCache<K: Key, V: Value> {
+pub struct DefaultCache<K: CacheKey, V: CacheValue> {
     state: Mutex<DefaultCacheState<K, V>>,
     time_provider: Arc<dyn TimeProvider>,
     name: String,
 }
 
-impl<K: Key, V: Value> DefaultCache<K, V> {
+impl<K: CacheKey, V: CacheValue> DefaultCache<K, V> {
     /// Create a cache with the given memory budget in bytes and no TTL.
     pub fn new(memory_limit: usize) -> Self {
         Self::with_ttl(memory_limit, None)
@@ -211,7 +211,7 @@ impl<K: Key, V: Value> DefaultCache<K, V> {
     }
 }
 
-impl<K: Key, V: Value> CacheAccessor<K, V> for DefaultCache<K, V> {
+impl<K: CacheKey, V: CacheValue> CacheAccessor<K, V> for DefaultCache<K, V> {
     fn get(&self, key: &K) -> Option<V> {
         let now = self.time_provider.now();
         let mut state = self.state.lock().unwrap();
@@ -249,7 +249,7 @@ impl<K: Key, V: Value> CacheAccessor<K, V> for DefaultCache<K, V> {
     }
 }
 
-impl<K: Key, V: Value> Cache<K, V> for DefaultCache<K, V> {
+impl<K: CacheKey, V: CacheValue> Cache<K, V> for DefaultCache<K, V> {
     fn cache_limit(&self) -> usize {
         self.state.lock().unwrap().memory_limit
     }
