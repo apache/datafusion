@@ -17,8 +17,8 @@
 
 use crate::cache::default_cache::DefaultCache;
 pub use crate::cache::{Cache, CacheValue, TableScopedPath};
-use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::HashMap;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use object_store::ObjectMeta;

@@ -26,10 +26,10 @@ mod list_files_cache;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;
 use datafusion_common::{HashMap, TableReference};
+use object_store::path::Path;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::time::Duration;
-use object_store::path::Path;
 
 /// Base trait for cache implementations with common operations.
 ///

@@ -212,7 +212,6 @@ impl<K: CacheKey, V: CacheValue> DefaultCache<K, V> {
 }
 
 impl<K: CacheKey, V: CacheValue> Cache<K, V> for DefaultCache<K, V> {
-
     fn get(&self, key: &K) -> Option<V> {
         let now = self.time_provider.now();
         let mut state = self.state.lock().unwrap();

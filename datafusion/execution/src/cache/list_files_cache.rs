@@ -18,8 +18,7 @@
 #[cfg(test)]
 mod tests {
     use crate::cache::cache_manager::{
-        CachedFileList, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
-        meta_heap_bytes,
+        CachedFileList, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, meta_heap_bytes,
     };
     use crate::cache::default_cache::{DefaultCache, TimeProvider};
     use crate::cache::{Cache, CacheEntryInfo, CacheKey, CacheValue, TableScopedPath};
