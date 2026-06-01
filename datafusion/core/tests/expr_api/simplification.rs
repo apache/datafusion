@@ -648,13 +648,19 @@ fn test_simplify_power() {
         let expected = col("c3_non_null");
         test_simplify(expr, expected)
     }
-    // Power(c3, Log(c3, c4)) ===> c4
+    // Power(c3, Log(c3, c4)) ===> cast(c4 AS Int64)
+    // The simplifier rewrites `power(b, log(b, x))` to `x`, but the
+    // rewritten expression must keep the same type as the original
+    // `power` call. `power`'s declared return type follows its base
+    // argument (c3 = Int64), so the UInt32 c4 has to be cast to Int64
+    // to preserve the output schema the optimizer already committed to.
     {
         let expr = power(
             col("c3_non_null"),
             log(col("c3_non_null"), col("c4_non_null")),
         );
-        let expected = col("c4_non_null");
+        let expected =
+            Expr::Cast(Cast::new(Box::new(col("c4_non_null")), DataType::Int64));
         test_simplify(expr, expected)
     }
     // Power(c3, c4) ===> Power(c3, c4)

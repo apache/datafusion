@@ -2464,6 +2464,7 @@ dependencies = [
  "rand 0.9.4",
  "rstest",
  "rstest_reuse",
+ "serde_json",
  "tokio",
 ]
 
@@ -2620,6 +2621,7 @@ dependencies = [
  "chrono",
  "clap",
  "datafusion",
+ "datafusion-datasource",
  "datafusion-spark",
  "datafusion-substrait",
  "env_logger",

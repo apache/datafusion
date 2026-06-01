@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`HigherOrderUDF`] definitions for array_any_match function.
+//! [`datafusion_expr::HigherOrderUDF`] definitions for array_any_match function.
 
 use arrow::{
     array::{Array, AsArray, BooleanArray, BooleanBuilder, new_null_array},
@@ -31,7 +31,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
-    HigherOrderSignature, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda,
+    HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda,
     Volatility,
 };
 use datafusion_macros::user_doc;
@@ -106,7 +106,7 @@ fn any_match_for_range(
     if any_null { None } else { Some(false) }
 }
 
-impl HigherOrderUDF for ArrayAnyMatch {
+impl HigherOrderUDFImpl for ArrayAnyMatch {
     fn name(&self) -> &str {
         "array_any_match"
     }
@@ -272,7 +272,7 @@ mod tests {
     };
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
-        Expr, HigherOrderReturnFieldArgs, HigherOrderUDF, ValueOrLambda, col,
+        Expr, HigherOrderReturnFieldArgs, HigherOrderUDFImpl, ValueOrLambda, col,
         execution_props::ExecutionProps,
         expr::{HigherOrderFunction, LambdaVariable},
         lambda, lit,

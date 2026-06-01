@@ -74,7 +74,6 @@ use datafusion::physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -1558,14 +1557,9 @@ fn roundtrip_analyze() -> Result<()> {
     let schema = Schema::new(vec![field_a, field_b]);
     let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
 
-    roundtrip_test(Arc::new(AnalyzeExec::new(
-        false,
-        false,
-        vec![MetricType::Summary, MetricType::Dev],
-        None,
-        input,
-        Arc::new(schema),
-    )))
+    roundtrip_test(Arc::new(
+        AnalyzeExec::builder(false, false, input, Arc::new(schema)).build(),
+    ))
 }
 
 #[tokio::test]
