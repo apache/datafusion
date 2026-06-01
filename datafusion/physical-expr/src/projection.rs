@@ -2868,7 +2868,6 @@ pub(crate) mod tests {
 
     #[test]
     fn test_project_statistics_duplicate_column() -> Result<()> {
-        // SELECT col0 AS a, col0 AS b: both outputs carry col0's statistics.
         let input_stats = get_stats();
         let col0 = input_stats.column_statistics[0].clone();
         let projection = ProjectionExprs::new([
@@ -2885,8 +2884,6 @@ pub(crate) mod tests {
 
     #[test]
     fn test_project_statistics_column_and_cast() -> Result<()> {
-        // SELECT col0 AS num, CAST(col0 AS Int32) AS casted: the passthrough
-        // copies col0's stats; the cast keeps them with min/max cast to Int32.
         let input_stats = get_stats();
         let col0 = input_stats.column_statistics[0].clone();
         let projection = ProjectionExprs::new([
