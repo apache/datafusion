@@ -210,21 +210,28 @@ fn apply_date_subtraction(
 fn subtract_date_to_days<T: ArrowPrimitiveType>(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
-    day_diff_fn: impl Fn(T::Native, T::Native) -> i64,
+    day_diff_fn: impl Fn(i64, i64) -> i64,
 ) -> Result<ColumnarValue>
 where
-    T::Native: Copy,
+    T::Native: Copy + Into<i64>,
 {
-    /// Extract the native value from a scalar by converting to a single-element
-    /// array and reading index 0. Returns `None` for null scalars.
-    fn scalar_to_native<P: ArrowPrimitiveType>(
+    /// Extract the date value as `i64`. Returns `None` for null scalars.
+    fn date_scalar_to_i64<P: ArrowPrimitiveType>(
         scalar: &ScalarValue,
-    ) -> Result<Option<P::Native>> {
-        if scalar.is_null() {
-            return Ok(None);
+    ) -> Result<Option<i64>> {
+        match scalar {
+            ScalarValue::Date32(value) if P::DATA_TYPE == DataType::Date32 => {
+                Ok(value.map(i64::from))
+            }
+            ScalarValue::Date64(value) if P::DATA_TYPE == DataType::Date64 => Ok(*value),
+            other => {
+                internal_err!(
+                    "{} date scalar expected, got: {}",
+                    P::DATA_TYPE,
+                    other.data_type()
+                )
+            }
         }
-        let array = scalar.to_array_of_size(1)?;
-        Ok(Some(array.as_primitive::<P>().value(0)))
     }
 
     match (lhs, rhs) {
@@ -232,38 +239,36 @@ where
             let left = left.as_primitive::<T>();
             let right = right.as_primitive::<T>();
             let result: Int64Array =
-                arrow::compute::binary::<_, _, _, Int64Type>(left, right, &day_diff_fn)?;
+                arrow::compute::binary::<_, _, _, Int64Type>(left, right, |l, r| {
+                    day_diff_fn(l.into(), r.into())
+                })?;
             Ok(ColumnarValue::Array(Arc::new(result)))
         }
         (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => {
             let left = left.as_primitive::<T>();
-            match scalar_to_native::<T>(right)? {
+            match date_scalar_to_i64::<T>(right)? {
                 Some(right_val) => {
-                    let result: Int64Array = left.unary(|l| day_diff_fn(l, right_val));
+                    let result: Int64Array =
+                        left.unary(|l| day_diff_fn(l.into(), right_val));
                     Ok(ColumnarValue::Array(Arc::new(result)))
                 }
-                None => Ok(ColumnarValue::Array(new_null_array(
-                    &DataType::Int64,
-                    left.len(),
-                ))),
+                None => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
             }
         }
         (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => {
             let right = right.as_primitive::<T>();
-            match scalar_to_native::<T>(left)? {
+            match date_scalar_to_i64::<T>(left)? {
                 Some(left_val) => {
-                    let result: Int64Array = right.unary(|r| day_diff_fn(left_val, r));
+                    let result: Int64Array =
+                        right.unary(|r| day_diff_fn(left_val, r.into()));
                     Ok(ColumnarValue::Array(Arc::new(result)))
                 }
-                None => Ok(ColumnarValue::Array(new_null_array(
-                    &DataType::Int64,
-                    right.len(),
-                ))),
+                None => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
             }
         }
         (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
-            let left_val = scalar_to_native::<T>(left)?;
-            let right_val = scalar_to_native::<T>(right)?;
+            let left_val = date_scalar_to_i64::<T>(left)?;
+            let right_val = date_scalar_to_i64::<T>(right)?;
             Ok(ColumnarValue::Scalar(ScalarValue::Int64(
                 left_val.zip(right_val).map(|(l, r)| day_diff_fn(l, r)),
             )))
@@ -2081,6 +2086,24 @@ mod tests {
             Operator::Minus,
             Int64Array::from(vec![Some(3), Some(-3), None, None]),
         )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn date32_minus_null_scalar_returns_int64_null_scalar() -> Result<()> {
+        let result = apply_date_subtraction(
+            &ColumnarValue::Array(Arc::new(Date32Array::from(vec![
+                Some(18_901),
+                Some(18_900),
+            ]))),
+            &ColumnarValue::Scalar(ScalarValue::Date32(None)),
+        )?;
+
+        assert!(matches!(
+            result,
+            ColumnarValue::Scalar(ScalarValue::Int64(None))
+        ));
 
         Ok(())
     }
