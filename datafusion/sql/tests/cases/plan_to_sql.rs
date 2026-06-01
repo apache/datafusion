@@ -27,7 +27,7 @@ use datafusion_expr::test::function_stub::{
 };
 use datafusion_expr::{
     ColumnarValue, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Union,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SortExpr, Union,
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility, WindowFrame,
     WindowFunctionDefinition, cast, col, exists, in_subquery, lit, scalar_subquery,
     table_scan, wildcard,
@@ -69,6 +69,22 @@ use datafusion_sql::unparser::extension_unparser::{
 };
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
+
+fn row_number_over(order_by: SortExpr, alias: &str) -> Expr {
+    Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![order_by],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias(alias)
+}
 
 #[test]
 fn test_roundtrip_expr_1() {
@@ -1542,19 +1558,7 @@ fn test_unparse_subquery_alias_select_scope_boundaries() -> Result<()> {
         @"SELECT * FROM (SELECT sum(t1.age) AS total_age, t1.id FROM t1 GROUP BY t1.id) AS a"
     );
 
-    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
-        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-        params: WindowFunctionParams {
-            args: vec![],
-            partition_by: vec![],
-            order_by: vec![col("age").sort(true, true)],
-            window_frame: WindowFrame::new(None),
-            null_treatment: None,
-            distinct: false,
-            filter: None,
-        },
-    }))
-    .alias("row_idx");
+    let window_expr = row_number_over(col("age").sort(true, true), "row_idx");
     let window_child = table_scan(Some("t1"), &schema, None)?
         .window(vec![window_expr])?
         .alias("a")?
@@ -3215,27 +3219,14 @@ fn test_unparse_window_over_sort_without_projection() -> Result<()> {
         Field::new("k", DataType::Int32, false),
         Field::new("v", DataType::Int32, false),
     ]);
-    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
-        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-        params: WindowFunctionParams {
-            args: vec![],
-            partition_by: vec![],
-            order_by: vec![col("v").sort(true, true)],
-            window_frame: WindowFrame::new(None),
-            null_treatment: None,
-            distinct: false,
-            filter: None,
-        },
-    }))
-    .alias("row_idx");
+    let window_expr = row_number_over(col("v").sort(true, true), "row_idx");
     let plan = table_scan(Some("test"), &schema, None)?
         .sort(vec![col("v").sort(false, false)])?
         .window(vec![window_expr])?
         .build()?;
 
-    let sql = Unparser::default().plan_to_sql(&plan)?;
     assert_snapshot!(
-        sql,
+        Unparser::default().plan_to_sql(&plan)?,
         @"SELECT *, row_number() OVER (ORDER BY derived_window_input.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM (SELECT * FROM test ORDER BY test.v DESC NULLS LAST) AS derived_window_input"
     );
 
@@ -3259,26 +3250,13 @@ fn test_unparse_window_over_union_without_projection() -> Result<()> {
         ],
         schema,
     });
-    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
-        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-        params: WindowFunctionParams {
-            args: vec![],
-            partition_by: vec![],
-            order_by: vec![col("v").sort(true, true)],
-            window_frame: WindowFrame::new(None),
-            null_treatment: None,
-            distinct: false,
-            filter: None,
-        },
-    }))
-    .alias("row_idx");
+    let window_expr = row_number_over(col("v").sort(true, true), "row_idx");
     let plan = LogicalPlanBuilder::from(union)
         .window(vec![window_expr])?
         .build()?;
 
-    let sql = Unparser::default().plan_to_sql(&plan)?;
     assert_snapshot!(
-        sql,
+        Unparser::default().plan_to_sql(&plan)?,
         @"SELECT *, row_number() OVER (ORDER BY derived_window_input.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM (SELECT 1 AS k, 10 AS v UNION ALL SELECT 2 AS k, 20 AS v) AS derived_window_input"
     );
 
