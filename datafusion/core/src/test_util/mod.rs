@@ -188,7 +188,7 @@ impl TableProviderFactory for TestTableFactory {
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
-            url: cmd.location.to_string(),
+            url: cmd.locations.first().cloned().unwrap_or_default(),
             schema: Arc::clone(cmd.schema.inner()),
         }))
     }

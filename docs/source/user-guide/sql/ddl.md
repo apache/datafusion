@@ -82,6 +82,22 @@ For a comprehensive list of format-specific options that can be specified in the
 a path to a file or directory of partitioned files locally or on an
 object store.
 
+Multiple locations can be supplied as a parenthesized list of string literals,
+in which case the files are read together as one table:
+
+```sql
+CREATE EXTERNAL TABLE hits
+STORED AS PARQUET
+LOCATION (
+  's3://clickhouse-public-datasets/hits_compatible/athena_partitioned/hits_1.parquet',
+  's3://clickhouse-public-datasets/hits_compatible/athena_partitioned/hits_2.parquet'
+);
+```
+
+All listed locations must reside on the same object store and resolve to data
+with the same schema. Paths that themselves contain a literal comma can still
+be used as a single string literal, for example `LOCATION 'path/with,comma.csv'`.
+
 ### Example: Parquet
 
 Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement such as the following. It is not necessary to

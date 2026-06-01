@@ -409,6 +409,36 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_create_external_table_multiple_locations() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Planning a CREATE EXTERNAL TABLE does not read the referenced files, so
+    // the paths need not exist. Multiple locations must survive the round-trip
+    // through the `repeated locations` proto field.
+    let query = "CREATE EXTERNAL TABLE t (a INTEGER, b INTEGER)
+            STORED AS CSV
+            LOCATION ('file_a.csv', 'file_b.csv')
+            OPTIONS ('format.has_header' 'true')";
+
+    let plan = ctx.state().create_logical_plan(query).await?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan, logical_round_trip);
+
+    let LogicalPlan::Ddl(datafusion_expr::DdlStatement::CreateExternalTable(rt)) =
+        logical_round_trip
+    else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(
+        rt.locations,
+        vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_logical_plan_aggregation_with_pk() -> Result<()> {
     let ctx = SessionContext::new();
 
