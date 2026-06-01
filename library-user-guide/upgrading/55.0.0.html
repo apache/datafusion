@@ -502,6 +502,33 @@ as a supertrait:</p>
 </pre></div>
 </div>
 </section>
+<section id="spark-map-functions-now-reject-duplicate-keys-by-default">
+<h3>Spark map functions now reject duplicate keys by default<a class="headerlink" href="#spark-map-functions-now-reject-duplicate-keys-by-default" title="Link to this heading">#</a></h3>
+<p>The Spark-compatibility map-construction functions (<code class="docutils literal notranslate"><span class="pre">map_from_arrays</span></code>,
+<code class="docutils literal notranslate"><span class="pre">map_from_entries</span></code>, <code class="docutils literal notranslate"><span class="pre">str_to_map</span></code>) now raise <code class="docutils literal notranslate"><span class="pre">[DUPLICATED_MAP_KEY]</span></code> at runtime
+when constructing a map that contains duplicate keys. This matches the default
+of Spark’s <a class="reference external" href="https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4502-L4511"><code class="docutils literal notranslate"><span class="pre">spark.sql.mapKeyDedupPolicy</span></code></a>.</p>
+<p>A new config option, <code class="docutils literal notranslate"><span class="pre">datafusion.spark.map_key_dedup_policy</span></code>, controls the
+behavior:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">EXCEPTION</span></code> (default): raise on any duplicate key.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">LAST_WIN</span></code>: keep the last occurrence of each duplicate key. The key stays at
+its first-seen position with the value from its last occurrence (matching
+Spark’s <code class="docutils literal notranslate"><span class="pre">ArrayBasedMapBuilder</span></code>).</p></li>
+</ul>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Queries calling <code class="docutils literal notranslate"><span class="pre">map_from_arrays</span></code> or <code class="docutils literal notranslate"><span class="pre">str_to_map</span></code> on data that contains
+duplicate keys. Previously these functions either tolerated duplicates
+silently or raised a non-configurable error.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>To restore lenient duplicate-key handling, set the policy to <code class="docutils literal notranslate"><span class="pre">LAST_WIN</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">spark</span><span class="p">.</span><span class="n">map_key_dedup_policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;LAST_WIN&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/21720">PR #21720</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -557,6 +584,7 @@ as a supertrait:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-dynamic-physical-expr-is-deprecated"><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#queryplanner-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spark-map-functions-now-reject-duplicate-keys-by-default">Spark map functions now reject duplicate keys by default</a></li>
 </ul>
 </li>
 </ul>

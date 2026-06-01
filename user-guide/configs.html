@@ -1027,6 +1027,10 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>false</p></td>
 <td><p>Show types in visual representation batches</p></td>
 </tr>
+<tr class="row-odd"><td><p>datafusion.spark.map_key_dedup_policy</p></td>
+<td><p>EXCEPTION</p></td>
+<td><p>Policy for handling duplicate keys in Spark-compatible map-construction functions (<code class="docutils literal notranslate"><span class="pre">map_from_arrays</span></code>, <code class="docutils literal notranslate"><span class="pre">map_from_entries</span></code>, <code class="docutils literal notranslate"><span class="pre">str_to_map</span></code>). Mirrors Spark’s <a class="reference external" href="https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961"><code class="docutils literal notranslate"><span class="pre">spark.sql.mapKeyDedupPolicy</span></code></a>: - <code class="docutils literal notranslate"><span class="pre">EXCEPTION</span></code> (default): raise <code class="docutils literal notranslate"><span class="pre">[DUPLICATED_MAP_KEY]</span></code> at runtime on any duplicate key. - <code class="docutils literal notranslate"><span class="pre">LAST_WIN</span></code>: keep the last occurrence of each duplicate key. Values are case-insensitive.</p></td>
+</tr>
 </tbody>
 </table>
 </div>
