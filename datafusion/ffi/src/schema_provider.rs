@@ -22,6 +22,7 @@ use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_catalog::{SchemaProvider, TableProvider};
 use datafusion_common::error::{DataFusionError, Result};
+use datafusion_expr::TableType;
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
@@ -32,6 +33,7 @@ use tokio::runtime::Handle;
 use crate::execution::FFI_TaskContextProvider;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::table_provider::{FFI_TableProvider, ForeignTableProvider};
+use crate::table_source::FFI_TableType;
 use crate::util::{FFI_Option, FFI_Result};
 use crate::{df_result, sresult_return};
 
@@ -49,6 +51,12 @@ pub struct FFI_SchemaProvider {
     ) -> FfiFuture<
         FFI_Result<FFI_Option<FFI_TableProvider>>,
     >,
+
+    pub table_type:
+        unsafe extern "C" fn(
+            provider: &Self,
+            name: SString,
+        ) -> FfiFuture<FFI_Result<FFI_Option<FFI_TableType>>>,
 
     pub register_table: unsafe extern "C" fn(
         provider: &Self,
@@ -144,6 +152,24 @@ unsafe extern "C" fn table_fn_wrapper(
     }
 }
 
+unsafe extern "C" fn table_type_fn_wrapper(
+    provider: &FFI_SchemaProvider,
+    name: SString,
+) -> FfiFuture<FFI_Result<FFI_Option<FFI_TableType>>> {
+    unsafe {
+        let provider = Arc::clone(provider.inner());
+
+        async move {
+            let table_type = sresult_return!(provider.table_type(name.as_str()).await)
+                .map(Into::into)
+                .into();
+
+            FFI_Result::Ok(table_type)
+        }
+        .into_ffi()
+    }
+}
+
 unsafe extern "C" fn register_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: SString,
@@ -216,6 +242,7 @@ unsafe extern "C" fn clone_fn_wrapper(
             owner_name: provider.owner_name.clone(),
             table_names: table_names_fn_wrapper,
             table: table_fn_wrapper,
+            table_type: table_type_fn_wrapper,
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
@@ -270,6 +297,7 @@ impl FFI_SchemaProvider {
             owner_name,
             table_names: table_names_fn_wrapper,
             table: table_fn_wrapper,
+            table_type: table_type_fn_wrapper,
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
@@ -339,6 +367,15 @@ impl SchemaProvider for ForeignSchemaProvider {
         }
     }
 
+    async fn table_type(&self, name: &str) -> Result<Option<TableType>> {
+        unsafe {
+            let table_type: Option<FFI_TableType> =
+                df_result!((self.0.table_type)(&self.0, name.into()).await)?.into();
+
+            Ok(table_type.map(Into::into))
+        }
+    }
+
     fn register_table(
         &self,
         name: String,
@@ -384,6 +421,7 @@ mod tests {
     use arrow::datatypes::Schema;
     use datafusion::catalog::MemorySchemaProvider;
     use datafusion::datasource::empty::EmptyTable;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
@@ -450,6 +488,96 @@ mod tests {
             .expect("Unable to query table");
         assert!(returned_schema.is_some());
         assert!(foreign_schema_provider.table_exist("second_table"));
+    }
+
+    #[derive(Debug)]
+    struct TableTypeSchemaProvider {
+        table_calls: Arc<AtomicUsize>,
+        table_type_calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl SchemaProvider for TableTypeSchemaProvider {
+        fn table_names(&self) -> Vec<String> {
+            vec!["view_table".to_string()]
+        }
+
+        async fn table(
+            &self,
+            _name: &str,
+        ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+            self.table_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(empty_table()))
+        }
+
+        async fn table_type(&self, name: &str) -> Result<Option<TableType>> {
+            self.table_type_calls.fetch_add(1, Ordering::SeqCst);
+            Ok((name == "view_table").then_some(TableType::View))
+        }
+
+        fn table_exist(&self, name: &str) -> bool {
+            name == "view_table"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ffi_schema_provider_table_type_uses_foreign_hook() {
+        let table_calls = Arc::new(AtomicUsize::new(0));
+        let table_type_calls = Arc::new(AtomicUsize::new(0));
+        let schema_provider = Arc::new(TableTypeSchemaProvider {
+            table_calls: Arc::clone(&table_calls),
+            table_type_calls: Arc::clone(&table_type_calls),
+        });
+
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+
+        let mut ffi_schema_provider =
+            FFI_SchemaProvider::new(schema_provider, None, task_ctx_provider, None);
+        ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_schema_provider: Arc<dyn SchemaProvider> =
+            (&ffi_schema_provider).into();
+
+        let table_type = foreign_schema_provider
+            .table_type("view_table")
+            .await
+            .expect("Unable to query table type");
+
+        assert_eq!(table_type, Some(TableType::View));
+        assert_eq!(table_type_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(table_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_ffi_schema_provider_table_type_local_bypass() {
+        let table_calls = Arc::new(AtomicUsize::new(0));
+        let table_type_calls = Arc::new(AtomicUsize::new(0));
+        let schema_provider = Arc::new(TableTypeSchemaProvider {
+            table_calls: Arc::clone(&table_calls),
+            table_type_calls: Arc::clone(&table_type_calls),
+        });
+
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+
+        let ffi_schema_provider =
+            FFI_SchemaProvider::new(schema_provider, None, task_ctx_provider, None);
+
+        let schema_provider: Arc<dyn SchemaProvider> = (&ffi_schema_provider).into();
+
+        assert!(
+            schema_provider
+                .downcast_ref::<TableTypeSchemaProvider>()
+                .is_some()
+        );
+
+        let table_type = schema_provider
+            .table_type("view_table")
+            .await
+            .expect("Unable to query table type");
+
+        assert_eq!(table_type, Some(TableType::View));
+        assert_eq!(table_type_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(table_calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

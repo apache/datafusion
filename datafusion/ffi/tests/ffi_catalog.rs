@@ -24,6 +24,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::catalog::{CatalogProvider, CatalogProviderList};
+    use datafusion_expr::TableType;
     use datafusion_ffi::tests::utils::get_module;
 
     #[tokio::test]
@@ -43,6 +44,25 @@ mod tests {
         assert_eq!(results.len(), 2);
         let num_rows: usize = results.into_iter().map(|rb| rb.num_rows()).sum();
         assert_eq!(num_rows, 5);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_schema_provider_table_type() -> datafusion_common::Result<()> {
+        let module = get_module()?;
+        let (_ctx, codec) = super::utils::ctx_and_codec();
+
+        let ffi_catalog = (module.create_catalog)(codec);
+        let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
+
+        let override_schema = foreign_catalog.schema("apple").expect("apple schema");
+        let fallback_schema = foreign_catalog.schema("banana").expect("banana schema");
+        let table_type = override_schema.table_type("purchases").await?;
+        let fallback_table_type = fallback_schema.table_type("sales").await?;
+
+        assert_eq!(table_type, Some(TableType::View));
+        assert_eq!(fallback_table_type, Some(TableType::Base));
 
         Ok(())
     }
