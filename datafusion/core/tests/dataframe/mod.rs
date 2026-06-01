@@ -6616,6 +6616,73 @@ async fn test_fill_nan_all_columns() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn test_fill_nan_non_float_column() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Explicitly naming a non-float column is a no-op, not an error: NaN does
+    // not exist for Int32, so column "b" (and the un-targeted "a") are unchanged.
+    let df_filled =
+        df.fill_nan(ScalarValue::Float64(Some(0.0)), vec!["b".to_string()])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    | NaN | 2 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_unknown_column() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // A column name that is not in the schema is propagated as an error.
+    let err = df
+        .fill_nan(ScalarValue::Float64(Some(0.0)), vec!["does_not_exist".to_string()])
+        .unwrap_err();
+
+    assert_snapshot!(err.to_string(), @"Error during planning: Column 'does_not_exist' not found");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_uncastable_value() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // The float column "a" is targeted, but "abc" cannot be cast to Float64, so
+    // the fill is skipped and column "a" keeps its original NaN value.
+    let df_filled =
+        df.fill_nan(ScalarValue::Utf8(Some("abc".to_string())), vec!["a".to_string()])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    | NaN | 2 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_insert_into_casting_support() -> Result<()> {
     // Testing case1:
