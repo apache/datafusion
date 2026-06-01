@@ -375,13 +375,14 @@ mod parquet {
     use super::*;
 
     use crate::protobuf::{
-        CdcOptions as CdcOptionsProto, ParquetColumnOptions as ParquetColumnOptionsProto,
-        ParquetColumnSpecificOptions, ParquetOptions as ParquetOptionsProto,
+        ParquetCdcOptions as ParquetCdcOptionsProto,
+        ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
+        ParquetOptions as ParquetOptionsProto,
         TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
         parquet_options,
     };
     use datafusion_common::config::{
-        CdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        ParquetCdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     };
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
@@ -453,7 +454,7 @@ mod parquet {
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
                 }),
-                content_defined_chunking: Some(CdcOptionsProto {
+                content_defined_chunking: Some(ParquetCdcOptionsProto {
                     enabled: global_options.global.content_defined_chunking.enabled,
                     min_chunk_size: global_options.global.content_defined_chunking.min_chunk_size as u64,
                     max_chunk_size: global_options.global.content_defined_chunking.max_chunk_size as u64,
@@ -561,7 +562,7 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
-            content_defined_chunking: proto.content_defined_chunking.map(|cdc| CdcOptions {
+            content_defined_chunking: proto.content_defined_chunking.map(|cdc| ParquetCdcOptions {
                 enabled: cdc.enabled,
                 min_chunk_size: cdc.min_chunk_size as usize,
                 max_chunk_size: cdc.max_chunk_size as usize,

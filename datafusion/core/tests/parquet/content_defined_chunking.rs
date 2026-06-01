@@ -25,7 +25,7 @@ use arrow::array::{AsArray, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
-use datafusion_common::config::{CdcOptions, TableParquetOptions};
+use datafusion_common::config::{ParquetCdcOptions, TableParquetOptions};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ArrowReaderMetadata;
 use parquet::file::properties::WriterProperties;
@@ -97,7 +97,7 @@ async fn cdc_data_round_trip() {
     let batch = make_test_batch(5000);
 
     let mut opts = TableParquetOptions::default();
-    opts.global.content_defined_chunking = CdcOptions::enabled();
+    opts.global.content_defined_chunking = ParquetCdcOptions::enabled();
     let props = writer_props(&mut opts, &batch.schema());
 
     let tmp = write_parquet_file(&batch, props);
@@ -145,7 +145,7 @@ async fn cdc_affects_page_boundaries() {
 
     // Write WITH CDC using small chunk sizes to maximize effect
     let mut cdc_opts = TableParquetOptions::default();
-    cdc_opts.global.content_defined_chunking = CdcOptions {
+    cdc_opts.global.content_defined_chunking = ParquetCdcOptions {
         enabled: true,
         min_chunk_size: 512,
         max_chunk_size: 2048,

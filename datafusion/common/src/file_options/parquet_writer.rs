@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::{
     _internal_datafusion_err, DataFusionError, Result,
-    config::{ParquetOptions, TableParquetOptions},
+    config::{ParquetCdcOptions, ParquetOptions, TableParquetOptions},
 };
 
 use arrow::datatypes::Schema;
@@ -166,6 +166,42 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
     }
 }
 
+/// Convert DataFusion's [`ParquetCdcOptions`] into parquet-rs's `Option<CdcOptions>`.
+///
+/// parquet-rs has no `enabled` flag; CDC is on when the option is `Some`. So a
+/// disabled [`ParquetCdcOptions`] maps to `None`, and an enabled one to `Some`
+/// with the chunking parameters.
+impl From<&ParquetCdcOptions> for Option<parquet::file::properties::CdcOptions> {
+    fn from(value: &ParquetCdcOptions) -> Self {
+        value
+            .enabled
+            .then_some(parquet::file::properties::CdcOptions {
+                min_chunk_size: value.min_chunk_size,
+                max_chunk_size: value.max_chunk_size,
+                norm_level: value.norm_level,
+            })
+    }
+}
+
+/// Convert parquet-rs's `Option<&CdcOptions>` back into DataFusion's
+/// [`ParquetCdcOptions`].
+///
+/// The presence of parquet-rs options means CDC was enabled, so `Some` maps to
+/// `enabled: true`; `None` yields the disabled default.
+impl From<Option<&parquet::file::properties::CdcOptions>> for ParquetCdcOptions {
+    fn from(value: Option<&parquet::file::properties::CdcOptions>) -> Self {
+        match value {
+            Some(cdc) => ParquetCdcOptions {
+                enabled: true,
+                min_chunk_size: cdc.min_chunk_size,
+                max_chunk_size: cdc.max_chunk_size,
+                norm_level: cdc.norm_level,
+            },
+            None => ParquetCdcOptions::default(),
+        }
+    }
+}
+
 impl ParquetOptions {
     /// Convert the global session options, [`ParquetOptions`], into a single write action's [`WriterPropertiesBuilder`].
     ///
@@ -249,27 +285,7 @@ impl ParquetOptions {
         if let Some(encoding) = encoding {
             builder = builder.set_encoding(parse_encoding_string(encoding)?);
         }
-        if content_defined_chunking.enabled {
-            let cdc = content_defined_chunking;
-            if cdc.min_chunk_size == 0 {
-                return Err(DataFusionError::Configuration(
-                    "CDC min_chunk_size must be greater than 0".to_string(),
-                ));
-            }
-            if cdc.max_chunk_size <= cdc.min_chunk_size {
-                return Err(DataFusionError::Configuration(format!(
-                    "CDC max_chunk_size ({}) must be greater than min_chunk_size ({})",
-                    cdc.max_chunk_size, cdc.min_chunk_size
-                )));
-            }
-            builder = builder.set_content_defined_chunking(Some(
-                parquet::file::properties::CdcOptions {
-                    min_chunk_size: cdc.min_chunk_size,
-                    max_chunk_size: cdc.max_chunk_size,
-                    norm_level: cdc.norm_level,
-                },
-            ));
-        }
+        builder = builder.set_content_defined_chunking(content_defined_chunking.into());
 
         Ok(builder)
     }
@@ -412,7 +428,7 @@ mod tests {
     #[cfg(feature = "parquet_encryption")]
     use crate::config::ConfigFileEncryptionProperties;
     use crate::config::{
-        CdcOptions, ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions,
+        ParquetCdcOptions, ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions,
     };
     use crate::parquet_config::DFParquetWriterVersion;
     use parquet::basic::Compression;
@@ -604,15 +620,7 @@ mod tests {
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
                 coerce_int96_tz: None,
-                content_defined_chunking: props
-                    .content_defined_chunking()
-                    .map(|c| CdcOptions {
-                        enabled: true,
-                        min_chunk_size: c.min_chunk_size,
-                        max_chunk_size: c.max_chunk_size,
-                        norm_level: c.norm_level,
-                    })
-                    .unwrap_or_default(),
+                content_defined_chunking: props.content_defined_chunking().into(),
             },
             column_specific_options,
             key_value_metadata,
@@ -826,7 +834,7 @@ mod tests {
     #[test]
     fn test_cdc_enabled_with_custom_options() {
         let mut opts = TableParquetOptions::default();
-        opts.global.content_defined_chunking = CdcOptions {
+        opts.global.content_defined_chunking = ParquetCdcOptions {
             enabled: true,
             min_chunk_size: 128 * 1024,
             max_chunk_size: 512 * 1024,
@@ -854,7 +862,7 @@ mod tests {
     fn test_cdc_params_ignored_when_disabled() {
         // Parameters are customized but `enabled` is false, so CDC stays off.
         let mut opts = TableParquetOptions::default();
-        opts.global.content_defined_chunking = CdcOptions {
+        opts.global.content_defined_chunking = ParquetCdcOptions {
             enabled: false,
             min_chunk_size: 128 * 1024,
             max_chunk_size: 512 * 1024,
@@ -869,7 +877,7 @@ mod tests {
     #[test]
     fn test_cdc_round_trip_through_writer_props() {
         let mut opts = TableParquetOptions::default();
-        opts.global.content_defined_chunking = CdcOptions {
+        opts.global.content_defined_chunking = ParquetCdcOptions {
             enabled: true,
             min_chunk_size: 64 * 1024,
             max_chunk_size: 2 * 1024 * 1024,
@@ -885,31 +893,6 @@ mod tests {
         assert_eq!(cdc.min_chunk_size, 64 * 1024);
         assert_eq!(cdc.max_chunk_size, 2 * 1024 * 1024);
         assert_eq!(cdc.norm_level, -1);
-    }
-
-    #[test]
-    fn test_cdc_validation_zero_min_chunk_size() {
-        let mut opts = TableParquetOptions::default();
-        opts.global.content_defined_chunking = CdcOptions {
-            enabled: true,
-            min_chunk_size: 0,
-            ..CdcOptions::default()
-        };
-        opts.arrow_schema(&Arc::new(Schema::empty()));
-        assert!(WriterPropertiesBuilder::try_from(&opts).is_err());
-    }
-
-    #[test]
-    fn test_cdc_validation_max_not_greater_than_min() {
-        let mut opts = TableParquetOptions::default();
-        opts.global.content_defined_chunking = CdcOptions {
-            enabled: true,
-            min_chunk_size: 512 * 1024,
-            max_chunk_size: 256 * 1024,
-            ..CdcOptions::default()
-        };
-        opts.arrow_schema(&Arc::new(Schema::empty()));
-        assert!(WriterPropertiesBuilder::try_from(&opts).is_err());
     }
 
     #[test]
