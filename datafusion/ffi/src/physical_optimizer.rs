@@ -209,21 +209,13 @@ unsafe extern "C" fn optimize_with_context_fn_wrapper(
     let config = sresult_return!(ConfigOptions::try_from(unsafe {
         (context.config_options)(context)
     }));
-    let has_registry = unsafe { (context.has_statistics_registry)(context) };
-    let registry = if has_registry {
-        Some(
-            context
-                .inner()
-                .statistics_registry
-                .clone()
-                .unwrap_or_default(),
-        )
-    } else {
-        None
-    };
+    // StatisticsRegistry cannot safely cross an FFI boundary because it contains
+    // trait object vtables (`Vec<Arc<dyn StatisticsProvider>>`) that are only valid
+    // within the originating library. Rules that need statistics should fall back to
+    // per-partition statistics via `ExecutionPlan::partition_statistics()`.
     let foreign_ctx = ForeignOptimizerContext {
         config,
-        statistics_registry: registry,
+        statistics_registry: None,
     };
     let optimized_plan = sresult_return!(inner.optimize_with_context(plan, &foreign_ctx));
 
@@ -584,6 +576,11 @@ mod tests {
         Ok(())
     }
 
+    /// Tests that `optimize_with_context` works even when the caller supplies a
+    /// statistics registry. The registry cannot survive the FFI round-trip (it
+    /// contains trait object vtables that are library-local), so the provider
+    /// side will always see `None`. This test verifies the context-aware path
+    /// still succeeds in that scenario.
     #[test]
     fn test_optimize_with_context_with_registry() -> Result<()> {
         let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
@@ -616,6 +613,8 @@ mod tests {
         };
 
         let plan = create_test_plan();
+        // The optimize_with_context path works, but the registry is not
+        // available on the provider side (it will be None).
         let optimized = foreign_rule.optimize_with_context(plan, &ctx)?;
         assert_eq!(optimized.name(), "empty-exec");
 
