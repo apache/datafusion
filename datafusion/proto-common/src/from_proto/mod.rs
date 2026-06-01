@@ -39,7 +39,7 @@ use datafusion_common::{
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
-        CdcOptions, CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
+        CsvOptions, JsonOptions, ParquetCdcOptions, ParquetColumnOptions, ParquetOptions,
         TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
@@ -1130,13 +1130,19 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
             }).unwrap_or(None),
-            content_defined_chunking: value.content_defined_chunking.map(|cdc| CdcOptions {
-                enabled: cdc.enabled,
-                min_chunk_size: cdc.min_chunk_size as usize,
-                max_chunk_size: cdc.max_chunk_size as usize,
-                norm_level: cdc.norm_level,
-            }).unwrap_or_default(),
+            content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::from).unwrap_or_default(),
         })
+    }
+}
+
+impl From<protobuf::ParquetCdcOptions> for ParquetCdcOptions {
+    fn from(value: protobuf::ParquetCdcOptions) -> Self {
+        ParquetCdcOptions {
+            enabled: value.enabled,
+            min_chunk_size: value.min_chunk_size as usize,
+            max_chunk_size: value.max_chunk_size as usize,
+            norm_level: value.norm_level,
+        }
     }
 }
 
@@ -1324,7 +1330,9 @@ pub(crate) fn csv_writer_options_from_proto(
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::config::{CdcOptions, ParquetOptions, TableParquetOptions};
+    use datafusion_common::config::{
+        ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+    };
 
     fn parquet_options_proto_round_trip(opts: ParquetOptions) -> ParquetOptions {
         let proto: crate::protobuf_common::ParquetOptions =
@@ -1384,7 +1392,7 @@ mod tests {
     #[test]
     fn test_parquet_options_cdc_enabled_round_trip() {
         let opts = ParquetOptions {
-            content_defined_chunking: CdcOptions {
+            content_defined_chunking: ParquetCdcOptions {
                 enabled: true,
                 min_chunk_size: 128 * 1024,
                 max_chunk_size: 512 * 1024,
@@ -1403,10 +1411,10 @@ mod tests {
     #[test]
     fn test_parquet_options_cdc_negative_norm_level_round_trip() {
         let opts = ParquetOptions {
-            content_defined_chunking: CdcOptions {
+            content_defined_chunking: ParquetCdcOptions {
                 enabled: true,
                 norm_level: -3,
-                ..CdcOptions::default()
+                ..ParquetCdcOptions::default()
             },
             ..ParquetOptions::default()
         };
@@ -1417,7 +1425,7 @@ mod tests {
     #[test]
     fn test_table_parquet_options_cdc_round_trip() {
         let mut opts = TableParquetOptions::default();
-        opts.global.content_defined_chunking = CdcOptions {
+        opts.global.content_defined_chunking = ParquetCdcOptions {
             enabled: true,
             min_chunk_size: 64 * 1024,
             max_chunk_size: 2 * 1024 * 1024,

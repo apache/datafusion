@@ -376,13 +376,14 @@ mod parquet {
     use super::*;
 
     use crate::protobuf::{
-        CdcOptions as CdcOptionsProto, ParquetColumnOptions as ParquetColumnOptionsProto,
-        ParquetColumnSpecificOptions, ParquetOptions as ParquetOptionsProto,
+        ParquetCdcOptions as ParquetCdcOptionsProto,
+        ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
+        ParquetOptions as ParquetOptionsProto,
         TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
         parquet_options,
     };
     use datafusion_common::config::{
-        CdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        ParquetCdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     };
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
@@ -454,7 +455,7 @@ mod parquet {
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
                 }),
-                content_defined_chunking: Some(CdcOptionsProto {
+                content_defined_chunking: Some(ParquetCdcOptionsProto {
                     enabled: global_options.global.content_defined_chunking.enabled,
                     min_chunk_size: global_options.global.content_defined_chunking.min_chunk_size as u64,
                     max_chunk_size: global_options.global.content_defined_chunking.max_chunk_size as u64,
@@ -496,6 +497,17 @@ mod parquet {
                 })
                 .collect(),
         }
+        }
+    }
+
+    impl FromProto<ParquetCdcOptionsProto> for ParquetCdcOptions {
+        fn from_proto(value: ParquetCdcOptionsProto) -> Self {
+            ParquetCdcOptions {
+                enabled: value.enabled,
+                min_chunk_size: value.min_chunk_size as usize,
+                max_chunk_size: value.max_chunk_size as usize,
+                norm_level: value.norm_level,
+            }
         }
     }
 
@@ -618,12 +630,7 @@ mod parquet {
                     }),
                 content_defined_chunking: proto
                     .content_defined_chunking
-                    .map(|cdc| CdcOptions {
-                        enabled: cdc.enabled,
-                        min_chunk_size: cdc.min_chunk_size as usize,
-                        max_chunk_size: cdc.max_chunk_size as usize,
-                        norm_level: cdc.norm_level,
-                    })
+                    .map(ParquetCdcOptions::from_proto)
                     .unwrap_or_default(),
             })
         }

@@ -760,11 +760,11 @@ config_namespace! {
     /// Options for content-defined chunking (CDC) when writing parquet files.
     /// Mirrors `parquet::file::properties::CdcOptions`.
     ///
-    /// Carried as a [`CdcOptions`] in [`ParquetOptions::content_defined_chunking`]
+    /// Carried as a [`ParquetCdcOptions`] in [`ParquetOptions::content_defined_chunking`]
     /// with an explicit `enabled` flag, so it can be toggled with dotted config
     /// keys (`content_defined_chunking.enabled = true|false`) and the result is
     /// independent of the order in which the keys are set.
-    pub struct CdcOptions {
+    pub struct ParquetCdcOptions {
         /// (writing) EXPERIMENTAL: Enable content-defined chunking (CDC) when writing
         /// parquet files. When enabled, parallel writing is automatically disabled
         /// since the chunker state must persist across row groups.
@@ -784,12 +784,12 @@ config_namespace! {
     }
 }
 
-impl CdcOptions {
+impl ParquetCdcOptions {
     /// Returns enabled CDC options with the default chunking parameters.
     ///
-    /// Shorthand for `CdcOptions { enabled: true, ..Default::default() }`; combine
-    /// with struct-update syntax to override parameters, e.g.
-    /// `CdcOptions { min_chunk_size: 4096, ..CdcOptions::enabled() }`.
+    /// Shorthand for `ParquetCdcOptions { enabled: true, ..Default::default() }`;
+    /// combine with struct-update syntax to override parameters, e.g.
+    /// `ParquetCdcOptions { min_chunk_size: 4096, ..ParquetCdcOptions::enabled() }`.
     pub fn enabled() -> Self {
         Self {
             enabled: true,
@@ -797,7 +797,7 @@ impl CdcOptions {
         }
     }
 
-    /// Returns disabled CDC options (equivalent to [`CdcOptions::default`]).
+    /// Returns disabled CDC options (equivalent to [`ParquetCdcOptions::default`]).
     pub fn disabled() -> Self {
         Self::default()
     }
@@ -1006,7 +1006,7 @@ config_namespace! {
         /// enabled, parallel writing is automatically disabled since the chunker state
         /// must persist across row groups. Mirrors
         /// `parquet::file::properties::WriterProperties::content_defined_chunking`.
-        pub content_defined_chunking: CdcOptions, default = Default::default()
+        pub content_defined_chunking: ParquetCdcOptions, default = Default::default()
     }
 }
 
