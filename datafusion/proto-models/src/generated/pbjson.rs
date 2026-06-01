@@ -3634,7 +3634,7 @@ impl serde::Serialize for CreateExternalTableNode {
         if self.name.is_some() {
             len += 1;
         }
-        if !self.location.is_empty() {
+        if !self.locations.is_empty() {
             len += 1;
         }
         if !self.file_type.is_empty() {
@@ -3677,8 +3677,8 @@ impl serde::Serialize for CreateExternalTableNode {
         if let Some(v) = self.name.as_ref() {
             struct_ser.serialize_field("name", v)?;
         }
-        if !self.location.is_empty() {
-            struct_ser.serialize_field("location", &self.location)?;
+        if !self.locations.is_empty() {
+            struct_ser.serialize_field("locations", &self.locations)?;
         }
         if !self.file_type.is_empty() {
             struct_ser.serialize_field("fileType", &self.file_type)?;
@@ -3727,7 +3727,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
     {
         const FIELDS: &[&str] = &[
             "name",
-            "location",
+            "locations",
             "file_type",
             "fileType",
             "schema",
@@ -3751,7 +3751,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Name,
-            Location,
+            Locations,
             FileType,
             Schema,
             TablePartitionCols,
@@ -3786,7 +3786,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     {
                         match value {
                             "name" => Ok(GeneratedField::Name),
-                            "location" => Ok(GeneratedField::Location),
+                            "locations" => Ok(GeneratedField::Locations),
                             "fileType" | "file_type" => Ok(GeneratedField::FileType),
                             "schema" => Ok(GeneratedField::Schema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
@@ -3819,7 +3819,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut name__ = None;
-                let mut location__ = None;
+                let mut locations__ = None;
                 let mut file_type__ = None;
                 let mut schema__ = None;
                 let mut table_partition_cols__ = None;
@@ -3840,11 +3840,11 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             }
                             name__ = map_.next_value()?;
                         }
-                        GeneratedField::Location => {
-                            if location__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("location"));
+                        GeneratedField::Locations => {
+                            if locations__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("locations"));
                             }
-                            location__ = Some(map_.next_value()?);
+                            locations__ = Some(map_.next_value()?);
                         }
                         GeneratedField::FileType => {
                             if file_type__.is_some() {
@@ -3926,7 +3926,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 }
                 Ok(CreateExternalTableNode {
                     name: name__,
-                    location: location__.unwrap_or_default(),
+                    locations: locations__.unwrap_or_default(),
                     file_type: file_type__.unwrap_or_default(),
                     schema: schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
