@@ -101,6 +101,18 @@ pub fn plan_to_sql(plan: &LogicalPlan) -> Result<ast::Statement> {
     unparser.plan_to_sql(plan)
 }
 
+/// Context in which a child plan may need its own SQL SELECT scope.
+enum SelectScopeContext {
+    /// The direct input of a Window plan. Some inputs must remain below the
+    /// Window node because their SELECT clauses are evaluated after window
+    /// expressions in one SELECT block.
+    WindowInput,
+    /// The direct child of a SubqueryAlias. Some children must be emitted as a
+    /// derived table so clauses owned by the alias scope are not flattened into
+    /// the parent SELECT.
+    SubqueryAliasChild,
+}
+
 impl Unparser<'_> {
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         let mut plan = normalize_union_schema(plan)?;
@@ -542,16 +554,9 @@ impl Unparser<'_> {
     }
 
     fn window_input_requires_derived_subquery(plan: &LogicalPlan) -> bool {
-        // These operators either produce a SELECT list or apply SQL clauses
-        // evaluated after window functions in a single SELECT block. Keep them
-        // below the Window node by emitting a derived table.
-        matches!(
+        Self::plan_requires_independent_select_scope(
             plan,
-            LogicalPlan::Projection(_)
-                | LogicalPlan::Distinct(_)
-                | LogicalPlan::Limit(_)
-                | LogicalPlan::Sort(_)
-                | LogicalPlan::Union(_)
+            SelectScopeContext::WindowInput,
         )
     }
 
@@ -1897,16 +1902,38 @@ impl Unparser<'_> {
     /// Returns true if a plan, when used as the direct child of a SubqueryAlias,
     /// must be emitted as a derived subquery `(SELECT ...) AS alias`.
     fn requires_derived_subquery(plan: &LogicalPlan) -> bool {
-        // These operators build or constrain SELECT clauses whose scope belongs
-        // under the alias. Flattening them into the parent would lose the
-        // derived-table boundary.
-        matches!(
+        Self::plan_requires_independent_select_scope(
             plan,
-            LogicalPlan::Aggregate(_)
-                | LogicalPlan::Window(_)
-                | LogicalPlan::Sort(_)
-                | LogicalPlan::Limit(_)
-                | LogicalPlan::Union(_)
+            SelectScopeContext::SubqueryAliasChild,
+        )
+    }
+
+    /// Returns true when `plan` must keep its own SELECT scope for `context`.
+    ///
+    /// Each context protects a different SQL boundary: window inputs preserve
+    /// child clauses evaluated after window expressions, while SubqueryAlias
+    /// children preserve clauses owned by the aliased derived-table scope.
+    fn plan_requires_independent_select_scope(
+        plan: &LogicalPlan,
+        context: SelectScopeContext,
+    ) -> bool {
+        matches!(
+            (context, plan),
+            (
+                SelectScopeContext::WindowInput,
+                LogicalPlan::Projection(_)
+                    | LogicalPlan::Distinct(_)
+                    | LogicalPlan::Limit(_)
+                    | LogicalPlan::Sort(_)
+                    | LogicalPlan::Union(_),
+            ) | (
+                SelectScopeContext::SubqueryAliasChild,
+                LogicalPlan::Aggregate(_)
+                    | LogicalPlan::Window(_)
+                    | LogicalPlan::Sort(_)
+                    | LogicalPlan::Limit(_)
+                    | LogicalPlan::Union(_),
+            )
         )
     }
 
