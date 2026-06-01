@@ -269,7 +269,7 @@ fn apply_replace<B: BulkNullStringArrayBuilder>(
 
     if from.is_empty() {
         // PostgreSQL returns the input unchanged when `from` is empty (#22253).
-        builder.append_with(|w| w.write_str(string));
+        builder.append_value(string);
         return;
     }
 
