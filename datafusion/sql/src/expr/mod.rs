@@ -1415,7 +1415,7 @@ mod tests {
             None
         }
 
-        fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+        fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<HigherOrderUDF>> {
             None
         }
 
