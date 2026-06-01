@@ -67,6 +67,7 @@ pub mod map;
 pub mod map_entries;
 pub mod map_extract;
 pub mod map_keys;
+pub mod map_transform;
 pub mod map_values;
 pub mod min_max;
 pub mod planner;
@@ -123,6 +124,7 @@ pub mod expr_fn {
     pub use super::map_entries::map_entries;
     pub use super::map_extract::map_extract;
     pub use super::map_keys::map_keys;
+    pub use super::map_transform::map_transform;
     pub use super::map_values::map_values;
     pub use super::min_max::array_max;
     pub use super::min_max::array_min;
@@ -211,6 +213,7 @@ pub fn all_default_higher_order_functions() -> Vec<Arc<HigherOrderUDF>> {
         array_any_match::array_any_match_higher_order_function(),
         array_filter::array_filter_higher_order_function(),
         array_transform::array_transform_higher_order_function(),
+        map_transform::map_transform_higher_order_function(),
     ]
 }
 

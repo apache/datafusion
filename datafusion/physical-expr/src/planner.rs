@@ -513,10 +513,20 @@ pub fn create_physical_expr(
                 config_options,
             )?))
         }
-        Expr::Lambda(Lambda { params, body }) => expressions::lambda(
-            params,
-            create_physical_expr(body, input_dfschema, execution_props)?,
-        ),
+        Expr::Lambda(Lambda { params, body }) => {
+            // The lambda was planned against a schema that appends the
+            // lambda's parameters to the outer input schema. Subtract
+            // `params.len()` to recover the outer column count, which the
+            // physical lambda needs to distinguish outer captures from
+            // lambda parameters during projection.
+            let outer_columns_count =
+                input_dfschema.fields().len().saturating_sub(params.len());
+            expressions::lambda(
+                params,
+                create_physical_expr(body, input_dfschema, execution_props)?,
+                outer_columns_count,
+            )
+        }
         Expr::LambdaVariable(LambdaVariable {
             name,
             field,
