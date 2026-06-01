@@ -91,7 +91,7 @@ logical_plan
 03)----TableScan: sum_simplify_t projection=[]
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 as sum(Int64(2) + Int64(1)), __common_expr_1@0 as sum(Int64(3))]
-02)--AggregateExec: mode=Single, gby=[], aggr=[__common_expr_1]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(3) as __common_expr_1]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -170,9 +170,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[sum(alias1), sum(alias2)]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[sum(alias1), sum(alias2)]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[alias2]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[sum(__common_expr_1) as alias2]
 06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[__common_expr_1@0 as alias1], aggr=[alias2]
+07)------------AggregateExec: mode=Partial, gby=[__common_expr_1@0 as alias1], aggr=[sum(__common_expr_1) as alias2]
 08)--------------ProjectionExec: expr=[column1@0 + 1 as __common_expr_1]
 09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -249,7 +249,7 @@ logical_plan
 03)----TableScan: sum_simplify_t projection=[]
 physical_plan
 01)ProjectionExec: expr=[sum(random() + Int64(2))@1 > sum(random() + Int64(1))@0 as sum(random() + Int64(1)) < sum(random() + Int64(2))]
-02)--AggregateExec: mode=Single, gby=[], aggr=[sum(random() + Int64(1)), sum(random() + Int64(2))]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(random() + 1) as sum(random() + Int64(1)), sum(random() + 2) as sum(random() + Int64(2))]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Checks grouped aggregates with explicit ORDER BY return deterministic row order.

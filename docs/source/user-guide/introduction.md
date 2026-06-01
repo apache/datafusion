@@ -186,7 +186,7 @@ provide integrations with other systems, some of which are described below:
 - [datafusion-c](https://github.com/datafusion-contrib/datafusion-c)
 - [datafusion-python](https://github.com/apache/datafusion-python)
 - [datafusion-ruby](https://github.com/datafusion-contrib/datafusion-ruby)
-- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
+- [datafusion-java](https://github.com/apache/datafusion-java)
 
 ### Integrations
 

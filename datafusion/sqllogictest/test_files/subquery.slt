@@ -237,9 +237,9 @@ physical_plan
 02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(t2_id@1, t1_id@0)], projection=[t1_id@2, sum(t2.t2_int * Float64(1)) + Int64(1)@0]
 03)----CoalescePartitionsExec
 04)------ProjectionExec: expr=[sum(t2.t2_int * Float64(1))@1 + 1 as sum(t2.t2_int * Float64(1)) + Int64(1), t2_id@0 as t2_id]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int * Float64(1))]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int) as sum(t2.t2_int * Float64(1))]
 06)----------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int * Float64(1))]
+07)------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int) as sum(t2.t2_int * Float64(1))]
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------DataSourceExec: partitions=1, partition_sizes=[2]
 10)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -851,6 +851,22 @@ SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) from t1
 44 0
 
 
+#correlated_scalar_subquery_count_agg_duplicated_in_projection
+# Two structurally identical correlated COUNT subqueries in the same
+# projection must each receive the count-bug compensation, so unmatched
+# outer rows produce 0 (not NULL) on both sides.
+query III rowsort
+SELECT
+  t1_id,
+  (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) + 1 AS a,
+  (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) + 2 AS b
+FROM t1
+----
+11 2 3
+22 1 2
+33 4 5
+44 1 2
+
 #correlated_scalar_subquery_count_agg2
 query TT
 explain SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
@@ -871,6 +887,68 @@ SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from 
 22 0
 33 3
 44 0
+
+#correlated_scalar_subquery_non_count_agg_empty_defaults
+query III rowsort
+SELECT
+  t1_id,
+  (
+    SELECT regr_count(1.0, 1.0)
+    FROM t2
+    WHERE t2.t2_int = t1.t1_int
+  ) AS r,
+  (
+    SELECT approx_distinct(t2.t2_id)
+    FROM t2
+    WHERE t2.t2_int = t1.t1_int
+  ) AS d
+FROM t1
+----
+11 1 1
+22 0 0
+33 3 3
+44 0 0
+
+query II rowsort
+SELECT
+  t1_id,
+  (
+    SELECT regr_count(1.0, 1.0) + approx_distinct(t2.t2_id)
+    FROM t2
+    WHERE t2.t2_int = t1.t1_int
+  ) AS combined
+FROM t1
+----
+11 2
+22 0
+33 6
+44 0
+
+query I rowsort
+SELECT t1_id
+FROM t1
+WHERE
+  (
+    SELECT approx_distinct(t2.t2_id)
+    FROM t2
+    WHERE t2.t2_int = t1.t1_int
+  ) = 0
+----
+22
+44
+
+query I rowsort
+SELECT t1_id
+FROM t1
+WHERE
+  (
+    SELECT regr_count(1.0, 1.0)
+    FROM t2
+    WHERE t2.t2_int = t1.t1_int
+  ) = 0
+----
+22
+44
 
 #correlated_scalar_subquery_count_agg_with_alias
 query TT
@@ -1848,17 +1926,16 @@ logical_plan
 physical_plan
 01)ScalarSubqueryExec: subqueries=1
 02)--SortPreservingMergeExec: [i@0 ASC NULLS LAST]
-03)----SortExec: expr=[i@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------ProjectionExec: expr=[value@0 as i]
-05)--------FilterExec: CAST(value@0 AS Float64) > scalar_subquery(<pending>)
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
-08)--AggregateExec: mode=Final, gby=[], aggr=[avg(u.j)]
-09)----CoalescePartitionsExec
-10)------AggregateExec: mode=Partial, gby=[], aggr=[avg(u.j)]
-11)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------ProjectionExec: expr=[value@0 as j]
-13)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
+03)----ProjectionExec: expr=[value@0 as i]
+04)------FilterExec: CAST(value@0 AS Float64) > scalar_subquery(<pending>)
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
+07)--AggregateExec: mode=Final, gby=[], aggr=[avg(u.j)]
+08)----CoalescePartitionsExec
+09)------AggregateExec: mode=Partial, gby=[], aggr=[avg(u.j)]
+10)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+11)----------ProjectionExec: expr=[value@0 as j]
+12)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
 
 query I
 SELECT i
@@ -2076,6 +2153,95 @@ SELECT (SELECT v FROM (SELECT 1 AS v UNION ALL SELECT 2) AS t ORDER BY v LIMIT 1
 ----
 1
 
+#############
+## End-to-end correctness coverage for the flag-off path.
+## When `datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery` is false,
+## uncorrelated scalar subqueries are rewritten to left joins by
+## `ScalarSubqueryToJoin` instead of executed by `ScalarSubqueryExec`. This
+## restores pre-PR-21240 behavior, which has two known shortcomings the
+## physical-execution path was built to fix: multi-row subqueries silently
+## return wrong results, and uncorrelated scalar subqueries do not work in
+## ORDER BY / JOIN ON / aggregate-function arguments. Those cases are
+## intentionally not covered here; the queries below are the ones where both
+## paths agree.
+#############
+
+statement ok
+set datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery = false;
+
+# Scalar subquery returning exactly one row → success
+query I
+SELECT (SELECT v FROM sq_values LIMIT 1);
+----
+1
+
+# Scalar subquery returning exactly one row in WHERE → success
+query I rowsort
+SELECT x FROM sq_main WHERE x > (SELECT v FROM sq_values LIMIT 1);
+----
+10
+20
+
+# Scalar subquery returning zero rows → NULL
+query I
+SELECT (SELECT v FROM sq_empty);
+----
+NULL
+
+# Scalar subquery returning zero rows in arithmetic → NULL propagation
+query I
+SELECT x + (SELECT v FROM sq_empty) FROM sq_main;
+----
+NULL
+NULL
+
+# Scalar subquery returning zero rows in WHERE comparison → no matching rows
+query I
+SELECT x FROM sq_main WHERE x > (SELECT v FROM sq_empty);
+----
+
+# Aggregated subquery always returns one row, even on empty input → success
+query I
+SELECT (SELECT count(*) FROM sq_empty);
+----
+0
+
+# Aggregated subquery on multi-row table → success
+query I
+SELECT (SELECT max(v) FROM sq_values);
+----
+3
+
+# HAVING clause with uncorrelated scalar subquery
+query II rowsort
+SELECT x, count(*) AS cnt FROM sq_main GROUP BY x
+HAVING count(*) > (SELECT min(v) FROM sq_values);
+----
+
+# CASE WHEN with uncorrelated scalar subquery as condition
+query T rowsort
+SELECT CASE WHEN x > (SELECT min(v) FROM sq_values)
+            THEN 'big' ELSE 'small' END AS label
+FROM sq_main;
+----
+big
+big
+
+# Doubly-nested constant subquery
+query I
+SELECT (SELECT (SELECT 42));
+----
+42
+
+# NULL comparison semantics through subquery boundary
+query B
+SELECT 1 = (SELECT CAST(NULL AS INT));
+----
+NULL
+
+statement ok
+RESET datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery;
+
 statement count 0
 DROP TABLE sq_values;
 
@@ -2187,3 +2353,87 @@ ORDER BY column1;
 
 statement ok
 DROP TABLE subquery_partitioned;
+
+# Regression test: a `count(*)` aggregate wrapping a query whose filter
+# contains an uncorrelated scalar subquery used to be folded to a literal
+# `0` by the `AggregateStatistics` physical-optimizer rule.
+#
+# The chain that triggered it requires Exact source statistics (parquet),
+# a filter the interval analyzer cannot reason about (the scalar subquery)
+# so a small default-selectivity Inexact upper-bound flows out, and a
+# LeftAnti join whose semi-join estimate matches the outer estimate.
+# `Statistics::with_fetch` then incorrectly promoted the resulting
+# `Inexact(0)` to `Exact(0)`, which the count statistics fast-path
+# trusted.
+query I
+COPY (SELECT column1 AS c_custkey,
+             column2 AS c_phone,
+             arrow_cast(column3, 'Decimal128(15, 2)') AS c_acctbal
+      FROM (VALUES (1::BIGINT, '13-a', 10.0),
+                   (2::BIGINT, '17-b', 20.0),
+                   (3::BIGINT, '18-c', 30.0),
+                   (4::BIGINT, '23-d',  5.0),
+                   (5::BIGINT, '29-e', 40.0)))
+TO 'test_files/scratch/subquery/count_scalar_sq/customer.parquet';
+----
+5
+
+query I
+COPY (SELECT column1 AS o_custkey FROM (VALUES (1::BIGINT), (4::BIGINT)))
+TO 'test_files/scratch/subquery/count_scalar_sq/orders.parquet';
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE sq_count_customer
+STORED AS PARQUET
+LOCATION 'test_files/scratch/subquery/count_scalar_sq/customer.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE sq_count_orders
+STORED AS PARQUET
+LOCATION 'test_files/scratch/subquery/count_scalar_sq/orders.parquet';
+
+# Inner query result: 2 distinct cntrycodes survive the filters/anti-join.
+query TIR
+select cntrycode, count(*) as numcust, sum(c_acctbal) as totacctbal
+from (
+    select substring(c_phone from 1 for 2) as cntrycode, c_acctbal
+    from sq_count_customer
+    where c_acctbal > (
+        select avg(c_acctbal) from sq_count_customer where c_acctbal > 0.00
+    )
+      and not exists (
+        select * from sq_count_orders where o_custkey = c_custkey
+      )
+) as custsale
+group by cntrycode
+order by cntrycode;
+----
+18 1 30
+29 1 40
+
+# `count(*)` over the same query must agree with the row count above.
+query I
+select count(*) from (
+    select cntrycode, count(*) as numcust, sum(c_acctbal) as totacctbal
+    from (
+        select substring(c_phone from 1 for 2) as cntrycode, c_acctbal
+        from sq_count_customer
+        where c_acctbal > (
+            select avg(c_acctbal) from sq_count_customer where c_acctbal > 0.00
+        )
+          and not exists (
+            select * from sq_count_orders where o_custkey = c_custkey
+          )
+    ) as custsale
+    group by cntrycode
+) as q;
+----
+2
+
+statement ok
+DROP TABLE sq_count_customer;
+
+statement ok
+DROP TABLE sq_count_orders;

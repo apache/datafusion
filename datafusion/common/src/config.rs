@@ -955,6 +955,16 @@ config_namespace! {
         /// nanosecond resolution.
         pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
 
+        /// (reading) Optional timezone applied to INT96 columns when `coerce_int96`
+        /// is set. When `Some`, INT96 columns coerce to
+        /// `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+        /// `Timestamp(<coerce_int96>, None)`. Spark and other systems write INT96
+        /// values as UTC-adjusted instants, so callers that need the resulting
+        /// Arrow type to be timezone-aware (e.g. for Spark `TimestampType`
+        /// semantics) should set this to `"UTC"`. No effect when `coerce_int96`
+        /// is `None`.
+        pub coerce_int96_tz: Option<String>, default = None
+
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
@@ -1161,6 +1171,22 @@ config_namespace! {
         /// into the file scan phase.
         pub enable_topk_dynamic_filter_pushdown: bool, default = true
 
+        /// When set to true, uncorrelated scalar subqueries are
+        /// left in the logical plan and executed by `ScalarSubqueryExec` during
+        /// physical execution. When set to false, all scalar subqueries
+        /// (including uncorrelated ones) are rewritten to left joins by the
+        /// `ScalarSubqueryToJoin` optimizer rule.
+        ///
+        /// Note disabling this option is not recommended. It restores
+        /// pre <https://github.com/apache/datafusion/pull/21240>
+        /// behavior, which silently produces incorrect results for
+        /// multi-row subqueries and does not support scalar subqueries in
+        /// ORDER BY / JOIN ON / aggregate-function arguments. This option is
+        /// intended as a temporary escape hatch for distributed execution
+        /// frameworks and is planned to be removed in a future DataFusion
+        /// release.
+        pub enable_physical_uncorrelated_scalar_subquery: bool, default = true
+
         /// When set to true, the optimizer will attempt to push down Join dynamic filters
         /// into the file scan phase.
         pub enable_join_dynamic_filter_pushdown: bool, default = true
@@ -1188,8 +1214,13 @@ config_namespace! {
         /// in parallel using the provided `target_partitions` level
         pub repartition_aggregations: bool, default = true
 
-        /// Minimum total files size in bytes to perform file scan repartitioning.
-        pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
+        /// Minimum total file size in bytes for file-group byte-range
+        /// splitting to fire. Files (or merged file groups) smaller than this
+        /// stay as one partition. Lower values produce more, smaller
+        /// partitions — better at filling `target_partitions` worth of cores
+        /// when files are modestly sized, at the cost of slightly more
+        /// per-partition open / metadata-load overhead.
+        pub repartition_file_min_size: usize, default = 1024 * 1024
 
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
         /// using the provided `target_partitions` level
@@ -1395,6 +1426,13 @@ config_namespace! {
         /// closer to the leaf table scans, and push those projections down
         /// towards the leaf nodes.
         pub enable_leaf_expression_pushdown: bool, default = true
+
+        /// When set to true, the logical optimizer will rewrite `UNION DISTINCT` branches that
+        /// read from the same source and differ only by filter predicates into a single branch
+        /// with a combined filter. This optimization is conservative and only applies when the
+        /// branches share the same source and compatible wrapper nodes such as identical
+        /// projections or aliases.
+        pub enable_unions_to_filter: bool, default = false
     }
 }
 

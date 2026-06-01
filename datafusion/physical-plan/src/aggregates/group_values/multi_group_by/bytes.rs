@@ -26,6 +26,7 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, exec_datafusion_err};
 use datafusion_physical_expr_common::binary_map::{INITIAL_BUFFER_CAPACITY, OutputType};
 use std::mem::size_of;
@@ -380,11 +381,10 @@ where
         // Given offsets like [0, 2, 4, 5] and n = 1, we expect to get
         // offsets [0, 2, 3]. We first create two offsets for first_n as [0, 2] and the remaining as [2, 4, 5].
         // And we shift the offset starting from 0 for the remaining one, [2, 4, 5] -> [0, 2, 3].
-        let mut first_n_offsets = self.offsets.drain(0..n).collect::<Vec<_>>();
-        let offset_n = *self.offsets.first().unwrap();
-        self.offsets
-            .iter_mut()
-            .for_each(|offset| *offset = offset.sub(offset_n));
+        let offset_n = self.offsets[n];
+        let mut first_n_offsets = split_vec_min_alloc(&mut self.offsets, n);
+        // After the split, self.offsets[0] == offset_n in both branches; normalize in-place.
+        self.offsets.iter_mut().for_each(|o| *o = o.sub(offset_n));
         first_n_offsets.push(offset_n);
 
         // SAFETY: the offsets were constructed correctly in `insert_if_new` --

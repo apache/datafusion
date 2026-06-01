@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
-use crate::strings::append_view;
+use crate::strings::{StringViewArrayBuilder, append_view};
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
-    StringArrayType, StringViewArray, StringViewBuilder, make_view,
+    StringArrayType, StringViewArray, make_view,
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -426,11 +426,12 @@ fn generic_string_substr_copy<T: OffsetSizeTrait>(
         count_array_opt.and_then(|a| a.nulls()),
     ]);
 
-    let mut result_builder = StringViewBuilder::new();
+    let len = string_array.len();
+    let mut result_builder = StringViewArrayBuilder::with_capacity(len);
 
-    for i in 0..string_array.len() {
+    for i in 0..len {
         if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            result_builder.append_null();
+            result_builder.append_placeholder();
             continue;
         }
 
@@ -442,7 +443,7 @@ fn generic_string_substr_copy<T: OffsetSizeTrait>(
         result_builder.append_value(&string[byte_start..byte_end]);
     }
 
-    Ok(Arc::new(result_builder.finish()) as ArrayRef)
+    Ok(Arc::new(result_builder.finish(nulls)?) as ArrayRef)
 }
 
 #[cfg(test)]

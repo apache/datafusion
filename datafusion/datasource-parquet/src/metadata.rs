@@ -18,11 +18,10 @@
 //! [`DFParquetMetadata`] for fetching Parquet file metadata, statistics
 //! and schema information.
 
-use crate::{apply_file_schema_type_coercions, coerce_int96_to_resolution};
+use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
-use arrow::compute::and;
 use arrow::compute::kernels::cmp::eq;
-use arrow::compute::sum;
+use arrow::compute::{and, sum};
 use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
@@ -46,6 +45,7 @@ use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, RowGroupMetaData,
     SortingColumn,
 };
+use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
 use std::collections::HashMap;
@@ -72,6 +72,8 @@ pub struct DFParquetMetadata<'a> {
     file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
     /// timeunit to coerce INT96 timestamps to
     pub coerce_int96: Option<TimeUnit>,
+    /// Optional timezone applied to INT96-coerced timestamps.
+    pub coerce_int96_tz: Option<Arc<str>>,
 }
 
 impl<'a> DFParquetMetadata<'a> {
@@ -83,6 +85,7 @@ impl<'a> DFParquetMetadata<'a> {
             decryption_properties: None,
             file_metadata_cache: None,
             coerce_int96: None,
+            coerce_int96_tz: None,
         }
     }
 
@@ -113,6 +116,12 @@ impl<'a> DFParquetMetadata<'a> {
     /// Set timeunit to coerce INT96 timestamps to
     pub fn with_coerce_int96(mut self, time_unit: Option<TimeUnit>) -> Self {
         self.coerce_int96 = time_unit;
+        self
+    }
+
+    /// Set the optional timezone applied to INT96-coerced timestamps.
+    pub fn with_coerce_int96_tz(mut self, timezone: Option<Arc<str>>) -> Self {
+        self.coerce_int96_tz = timezone;
         self
     }
 
@@ -218,11 +227,9 @@ impl<'a> DFParquetMetadata<'a> {
             .coerce_int96
             .as_ref()
             .and_then(|time_unit| {
-                coerce_int96_to_resolution(
-                    file_metadata.schema_descr(),
-                    &schema,
-                    time_unit,
-                )
+                Int96Coercer::new(file_metadata.schema_descr(), &schema, time_unit)
+                    .with_timezone(self.coerce_int96_tz.clone())
+                    .coerce()
             })
             .unwrap_or(schema);
         Ok(schema)
@@ -346,13 +353,12 @@ impl<'a> DFParquetMetadata<'a> {
                                 distinct_counts_array: &mut distinct_counts_array,
                             };
                             summarize_column_statistics(
-                                file_metadata.schema_descr(),
                                 logical_file_schema,
-                                &physical_file_schema,
                                 &mut accumulators,
                                 idx,
                                 &stats_converter,
                                 row_groups_metadata,
+                                num_rows,
                             )
                             .ok();
                         }
@@ -499,119 +505,208 @@ impl StatisticsAccumulators<'_> {
 }
 
 fn summarize_column_statistics(
-    parquet_schema: &SchemaDescriptor,
     logical_file_schema: &Schema,
-    physical_file_schema: &Schema,
     accumulators: &mut StatisticsAccumulators,
     logical_schema_index: usize,
     stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
+    num_rows: usize,
 ) -> Result<()> {
-    let max_values = stats_converter.row_group_maxes(row_groups_metadata)?;
-    let min_values = stats_converter.row_group_mins(row_groups_metadata)?;
-    let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
-    let is_max_value_exact_stat =
-        stats_converter.row_group_is_max_value_exact(row_groups_metadata)?;
-    let is_min_value_exact_stat =
-        stats_converter.row_group_is_min_value_exact(row_groups_metadata)?;
+    let parquet_index = stats_converter.parquet_column_index();
 
     if let Some(max_acc) = &mut accumulators.max_accs[logical_schema_index] {
-        max_acc.update_batch(&[Arc::clone(&max_values)])?;
-
-        // handle the common special case when all row groups have exact statistics
-        let exactness = &is_max_value_exact_stat;
-        if !exactness.is_empty() && exactness.null_count() == 0 && !exactness.has_false()
-        {
-            accumulators.is_max_value_exact[logical_schema_index] = Some(true);
-        } else if !exactness.has_true() {
-            accumulators.is_max_value_exact[logical_schema_index] = Some(false);
-        } else {
-            let val = max_acc.evaluate()?;
-            accumulators.is_max_value_exact[logical_schema_index] =
-                has_any_exact_match(&val, &max_values, exactness);
-        }
+        accumulators.is_max_value_exact[logical_schema_index] = summarize_bound(
+            max_acc,
+            &stats_converter.row_group_maxes(row_groups_metadata)?,
+            parquet_index,
+            row_groups_metadata,
+            ParquetStatistics::max_is_exact,
+            || Ok(stats_converter.row_group_is_max_value_exact(row_groups_metadata)?),
+        )?;
     }
 
     if let Some(min_acc) = &mut accumulators.min_accs[logical_schema_index] {
-        min_acc.update_batch(&[Arc::clone(&min_values)])?;
-
-        // handle the common special case when all row groups have exact statistics
-        let exactness = &is_min_value_exact_stat;
-        if !exactness.is_empty() && exactness.null_count() == 0 && !exactness.has_false()
-        {
-            accumulators.is_min_value_exact[logical_schema_index] = Some(true);
-        } else if !exactness.has_true() {
-            accumulators.is_min_value_exact[logical_schema_index] = Some(false);
-        } else {
-            let val = min_acc.evaluate()?;
-            accumulators.is_min_value_exact[logical_schema_index] =
-                has_any_exact_match(&val, &min_values, exactness);
-        }
+        accumulators.is_min_value_exact[logical_schema_index] = summarize_bound(
+            min_acc,
+            &stats_converter.row_group_mins(row_groups_metadata)?,
+            parquet_index,
+            row_groups_metadata,
+            ParquetStatistics::min_is_exact,
+            || Ok(stats_converter.row_group_is_min_value_exact(row_groups_metadata)?),
+        )?;
     }
 
-    accumulators.null_counts_array[logical_schema_index] = match sum(&null_counts) {
-        Some(null_count) => Precision::Exact(null_count as usize),
-        None => match null_counts.len() {
-            // If sum() returned None we either have no rows or all values are null
-            0 => Precision::Exact(0),
-            _ => Precision::Absent,
-        },
-    };
+    accumulators.null_counts_array[logical_schema_index] =
+        summarize_null_counts(stats_converter, row_groups_metadata)?;
 
-    // This is the same logic as parquet_column but we start from arrow schema index
-    // instead of looking up by name.
-    let parquet_index = parquet_column(
-        parquet_schema,
-        physical_file_schema,
-        logical_file_schema.field(logical_schema_index).name(),
-    )
-    .map(|(idx, _)| idx);
-
-    // Extract distinct counts from row group column statistics
     accumulators.distinct_counts_array[logical_schema_index] =
-        if let Some(parquet_idx) = parquet_index {
-            let num_row_groups = row_groups_metadata.len();
-            let distinct_counts: Vec<u64> = row_groups_metadata
-                .iter()
-                .filter_map(|rg| {
-                    rg.columns()
-                        .get(parquet_idx)
-                        .and_then(|col| col.statistics())
-                        .and_then(|stats| stats.distinct_count_opt())
-                })
-                .collect();
-
-            let coverage = distinct_counts.len() as f64 / num_row_groups.max(1) as f64;
-
-            if coverage < PARTIAL_NDV_THRESHOLD {
-                Precision::Absent
-            } else if distinct_counts.len() == 1 && num_row_groups == 1 {
-                // Single row group with distinct count - use exact value
-                Precision::Exact(distinct_counts[0] as usize)
-            } else {
-                // Multiple row groups - use max as a lower bound estimate
-                // (can't accurately merge NDV since duplicates may exist across row groups)
-                match distinct_counts.iter().max() {
-                    Some(&max_ndv) => Precision::Inexact(max_ndv as usize),
-                    None => Precision::Absent,
-                }
-            }
-        } else {
-            Precision::Absent
-        };
+        summarize_distinct_counts(parquet_index, row_groups_metadata);
 
     let arrow_field = logical_file_schema.field(logical_schema_index);
     accumulators.column_byte_sizes[logical_schema_index] = compute_arrow_column_size(
         arrow_field.data_type(),
         row_groups_metadata,
         parquet_index,
-        row_groups_metadata
-            .iter()
-            .map(|rg| rg.num_rows() as usize)
-            .sum(),
+        num_rows,
     );
 
     Ok(())
+}
+
+/// Feed a column's per-row-group min or max `values` into `acc` and decide
+/// whether the resulting bound is exact across all row groups.
+///
+/// `is_exact` reads the per-row-group exactness flag straight from the raw
+/// parquet statistics. `row_group_exactness` rebuilds the exactness as a Boolean
+/// array and is only called for the rare case where row groups disagree.
+fn summarize_bound<A: Accumulator>(
+    acc: &mut A,
+    values: &ArrayRef,
+    parquet_index: Option<usize>,
+    row_groups_metadata: &[RowGroupMetaData],
+    is_exact: impl Fn(&ParquetStatistics) -> bool,
+    row_group_exactness: impl FnOnce() -> Result<BooleanArray>,
+) -> Result<Option<bool>> {
+    acc.update_batch(&[Arc::clone(values)])?;
+
+    Ok(
+        match summarize_row_group_exactness(parquet_index, row_groups_metadata, is_exact)
+        {
+            ExactnessSummary::AllExact => Some(true),
+            ExactnessSummary::NoneExact => Some(false),
+            ExactnessSummary::Mixed => {
+                let exactness = row_group_exactness()?;
+                has_any_exact_match(&acc.evaluate()?, values, &exactness)
+            }
+        },
+    )
+}
+
+fn summarize_null_counts(
+    stats_converter: &StatisticsConverter,
+    row_groups_metadata: &[RowGroupMetaData],
+) -> Result<Precision<usize>> {
+    if row_groups_metadata.is_empty() {
+        return Ok(Precision::Exact(0));
+    }
+
+    let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
+
+    match sum(&null_counts) {
+        Some(count) => {
+            // If any row group has an unknown null_count, either because column
+            // statistics are absent or because the null_count field is omitted,
+            // report the aggregate as inexact.
+            if null_counts.null_count() > 0 {
+                Ok(Precision::Inexact(count as usize))
+            } else {
+                Ok(Precision::Exact(count as usize))
+            }
+        }
+        None => match null_counts.len() {
+            // If sum() returned None we either have no rows or all values are null
+            0 => Ok(Precision::Exact(0)),
+            _ => Ok(Precision::Absent),
+        },
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum ExactnessSummary {
+    AllExact,
+    NoneExact,
+    Mixed,
+}
+
+fn summarize_row_group_exactness(
+    parquet_idx: Option<usize>,
+    row_groups_metadata: &[RowGroupMetaData],
+    exactness: impl Fn(&ParquetStatistics) -> bool,
+) -> ExactnessSummary {
+    let Some(parquet_idx) = parquet_idx else {
+        return ExactnessSummary::NoneExact;
+    };
+
+    summarize_exactness(row_groups_metadata.iter().map(|row_group| {
+        row_group
+            .columns()
+            .get(parquet_idx)
+            .and_then(|column| column.statistics())
+            .map(&exactness)
+    }))
+}
+
+fn summarize_exactness<I>(exactness: I) -> ExactnessSummary
+where
+    I: IntoIterator<Item = Option<bool>>,
+{
+    let mut has_true = false;
+    let mut has_false_or_null = false;
+
+    for exactness in exactness {
+        match exactness {
+            Some(true) => has_true = true,
+            Some(false) | None => has_false_or_null = true,
+        }
+
+        if has_true && has_false_or_null {
+            return ExactnessSummary::Mixed;
+        }
+    }
+
+    if has_true {
+        ExactnessSummary::AllExact
+    } else {
+        ExactnessSummary::NoneExact
+    }
+}
+
+/// Extract distinct counts from row group column statistics.
+fn summarize_distinct_counts(
+    parquet_idx: Option<usize>,
+    row_groups_metadata: &[RowGroupMetaData],
+) -> Precision<usize> {
+    let Some(parquet_idx) = parquet_idx else {
+        return Precision::Absent;
+    };
+
+    let num_row_groups = row_groups_metadata.len();
+    if num_row_groups == 0 {
+        return Precision::Absent;
+    }
+
+    let required_count = (num_row_groups as f64 * PARTIAL_NDV_THRESHOLD).ceil() as usize;
+    let mut ndv_count = 0;
+    let mut max_distinct_count: Option<u64> = None;
+
+    for (row_group_idx, row_group) in row_groups_metadata.iter().enumerate() {
+        if let Some(distinct_count) = row_group
+            .columns()
+            .get(parquet_idx)
+            .and_then(|col| col.statistics())
+            .and_then(|stats| stats.distinct_count_opt())
+        {
+            ndv_count += 1;
+            max_distinct_count = Some(match max_distinct_count {
+                Some(max) => max.max(distinct_count),
+                None => distinct_count,
+            });
+        }
+
+        // Return early if there's no chance to reach the required coverage.
+        let remaining = num_row_groups - row_group_idx - 1;
+        if ndv_count + remaining < required_count {
+            return Precision::Absent;
+        }
+    }
+
+    match max_distinct_count {
+        Some(distinct_count) if num_row_groups == 1 => {
+            Precision::Exact(distinct_count as usize)
+        }
+        Some(distinct_count) => Precision::Inexact(distinct_count as usize),
+        None => Precision::Absent,
+    }
 }
 
 /// Compute the Arrow in-memory size for a single column
@@ -859,6 +954,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_summarize_exactness() {
+        assert_eq!(
+            summarize_exactness([Some(true), Some(true)]),
+            ExactnessSummary::AllExact
+        );
+        assert_eq!(
+            summarize_exactness([Some(false), None]),
+            ExactnessSummary::NoneExact
+        );
+        assert_eq!(
+            summarize_exactness([Some(true), Some(false)]),
+            ExactnessSummary::Mixed
+        );
+        assert_eq!(
+            summarize_exactness([Some(true), None]),
+            ExactnessSummary::Mixed
+        );
+        assert_eq!(
+            summarize_exactness(std::iter::empty()),
+            ExactnessSummary::NoneExact
+        );
+    }
+
     mod ndv_tests {
         use super::*;
         use arrow::datatypes::Field;
@@ -942,6 +1061,92 @@ mod tests {
             );
 
             ParquetMetaData::new(file_meta, row_groups)
+        }
+
+        #[test]
+        fn test_summarize_null_counts() {
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(2);
+            let stats_with_count =
+                ParquetStatistics::int32(Some(1), Some(10), None, Some(2), false);
+            let stats_without_count =
+                ParquetStatistics::int32(Some(1), Some(10), None, None, false);
+
+            let row_groups = vec![
+                create_row_group_with_stats(
+                    &schema_descr,
+                    vec![Some(stats_with_count)],
+                    10,
+                ),
+                create_row_group_with_stats(
+                    &schema_descr,
+                    vec![Some(stats_without_count.clone())],
+                    10,
+                ),
+                create_row_group_with_stats(&schema_descr, vec![None], 10),
+            ];
+            let stats_converter =
+                StatisticsConverter::try_new("col_0", &arrow_schema, &schema_descr)
+                    .unwrap();
+            let missing_column_converter =
+                StatisticsConverter::try_new("col_1", &arrow_schema, &schema_descr)
+                    .unwrap();
+
+            assert_eq!(
+                summarize_null_counts(&stats_converter, &row_groups).unwrap(),
+                Precision::Inexact(2)
+            );
+            assert_eq!(
+                summarize_null_counts(&missing_column_converter, &row_groups).unwrap(),
+                Precision::Absent
+            );
+            assert_eq!(
+                summarize_null_counts(&stats_converter, &[]).unwrap(),
+                Precision::Exact(0)
+            );
+            assert_eq!(
+                summarize_null_counts(&missing_column_converter, &[]).unwrap(),
+                Precision::Exact(0)
+            );
+
+            let missing_counts_unknown_converter =
+                StatisticsConverter::try_new("col_0", &arrow_schema, &schema_descr)
+                    .unwrap()
+                    .with_missing_null_counts_as_zero(false);
+            assert_eq!(
+                summarize_null_counts(&missing_counts_unknown_converter, &row_groups)
+                    .unwrap(),
+                Precision::Inexact(2)
+            );
+
+            let row_groups_without_count = vec![
+                create_row_group_with_stats(
+                    &schema_descr,
+                    vec![Some(stats_without_count.clone())],
+                    10,
+                ),
+                create_row_group_with_stats(
+                    &schema_descr,
+                    vec![Some(stats_without_count)],
+                    10,
+                ),
+            ];
+            assert_eq!(
+                summarize_null_counts(&stats_converter, &row_groups_without_count)
+                    .unwrap(),
+                Precision::Exact(0)
+            );
+
+            let missing_counts_unknown_converter =
+                stats_converter.with_missing_null_counts_as_zero(false);
+            assert_eq!(
+                summarize_null_counts(
+                    &missing_counts_unknown_converter,
+                    &row_groups_without_count,
+                )
+                .unwrap(),
+                Precision::Absent
+            );
         }
 
         #[test]
