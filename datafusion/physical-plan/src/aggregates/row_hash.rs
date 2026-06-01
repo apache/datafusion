@@ -952,7 +952,15 @@ impl Stream for GroupedHashAggregateStream {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // New batch to aggregate
                         Some(Ok(batch)) => {
-                            let timer = elapsed_compute.timer();
+                            // `mut timer` so we can `stop()` it before
+                            // `update_skip_aggregation_probe` reads
+                            // `elapsed_compute.value()` below. The
+                            // `ScopedTimerGuard` only commits its elapsed
+                            // duration on drop / `done()` / `stop()`, so
+                            // the probe would otherwise observe a stale
+                            // value that misses this batch's compute time
+                            // and bias the cost model low.
+                            let mut timer = elapsed_compute.timer();
                             let input_rows = batch.num_rows();
 
                             if self.mode == AggregateMode::Partial
@@ -998,6 +1006,13 @@ impl Stream for GroupedHashAggregateStream {
                             if self.mode == AggregateMode::Partial {
                                 // Spilling should never be activated in partial aggregation mode.
                                 assert!(!self.spill_state.is_stream_merging);
+
+                                // Flush this batch's compute time into
+                                // `elapsed_compute` before the probe reads
+                                // it. Without this the probe sees a stale
+                                // pre-batch value (timer guard only commits
+                                // on drop / `done()` / `stop()`).
+                                timer.stop();
 
                                 // Check if we should switch to skip aggregation mode
                                 // It's important that we do this before we early emit since we've
@@ -1098,9 +1113,14 @@ impl Stream for GroupedHashAggregateStream {
                     //     (return to `ReadingInput`).
                     match ready!(self.input.poll_next_unpin(cx)) {
                         Some(Ok(batch)) => {
-                            let _timer = elapsed_compute.timer();
+                            // `mut` + explicit `stop()` so the probe's
+                            // read of `elapsed_compute.value()` below
+                            // sees this batch's contribution (see the
+                            // matching note in the `ReadingInput` arm).
+                            let mut timer = elapsed_compute.timer();
                             let input_rows = batch.num_rows();
                             let states = self.transform_to_states(&batch)?;
+                            timer.stop();
                             if let Some(probe) = self.skip_aggregation_probe.as_mut() {
                                 probe.observe_ab_batch(input_rows);
                             }
