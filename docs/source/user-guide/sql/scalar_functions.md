@@ -3276,6 +3276,7 @@ _Alias of [current_date](#current_date)._
 - [array_position](#array_position)
 - [array_positions](#array_positions)
 - [array_prepend](#array_prepend)
+- [array_product](#array_product)
 - [array_push_back](#array_push_back)
 - [array_push_front](#array_push_front)
 - [array_remove](#array_remove)
@@ -3334,6 +3335,7 @@ _Alias of [current_date](#current_date)._
 - [list_position](#list_position)
 - [list_positions](#list_positions)
 - [list_prepend](#list_prepend)
+- [list_product](#list_product)
 - [list_push_back](#list_push_back)
 - [list_push_front](#list_push_front)
 - [list_remove](#list_remove)
@@ -4135,6 +4137,33 @@ array_prepend(element, array)
 - list_prepend
 - array_push_front
 - list_push_front
+
+### `array_product`
+
+Returns the product of the elements in the input numeric array. NULL elements inside the array are skipped (matching SQL aggregate convention). Returns NULL if the whole input is NULL or if every element is NULL. Returns 1.0 for an empty array (multiplicative identity). The result is always returned as `Float64`.
+
+```sql
+array_product(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_product([1.0, 2.0, 3.0]);
++------------------------------------+
+| array_product(List([1.0,2.0,3.0])) |
++------------------------------------+
+| 6.0                                |
++------------------------------------+
+```
+
+#### Aliases
+
+- list_product
 
 ### `array_push_back`
 
@@ -4958,6 +4987,10 @@ _Alias of [array_positions](#array_positions)._
 ### `list_prepend`
 
 _Alias of [array_prepend](#array_prepend)._
+
+### `list_product`
+
+_Alias of [array_product](#array_product)._
 
 ### `list_push_back`
 
