@@ -172,7 +172,7 @@ unsafe extern "C" fn placement_fn_wrapper(
 ) -> FFI_ExpressionPlacement {
     let args = args
         .into_iter()
-        .map(|p| ExpressionPlacement::from(&p))
+        .map(ExpressionPlacement::from)
         .collect::<Vec<_>>();
 
     udf.inner().placement(&args).into()
@@ -458,7 +458,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 
         let result = unsafe { (self.udf.placement)(&self.udf, args) };
 
-        (&result).into()
+        result.into()
     }
 }
 

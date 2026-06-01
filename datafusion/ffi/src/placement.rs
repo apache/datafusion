@@ -19,7 +19,7 @@ use datafusion_expr::ExpressionPlacement;
 
 #[expect(non_camel_case_types)]
 #[repr(u8)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FFI_ExpressionPlacement {
     Literal,
     Column,
@@ -38,8 +38,8 @@ impl From<ExpressionPlacement> for FFI_ExpressionPlacement {
     }
 }
 
-impl From<&FFI_ExpressionPlacement> for ExpressionPlacement {
-    fn from(value: &FFI_ExpressionPlacement) -> Self {
+impl From<FFI_ExpressionPlacement> for ExpressionPlacement {
+    fn from(value: FFI_ExpressionPlacement) -> Self {
         match value {
             FFI_ExpressionPlacement::Literal => Self::Literal,
             FFI_ExpressionPlacement::Column => Self::Column,
@@ -57,7 +57,7 @@ mod tests {
 
     fn test_round_trip_placement(placement: ExpressionPlacement) {
         let ffi_placement: FFI_ExpressionPlacement = placement.into();
-        let round_trip: ExpressionPlacement = (&ffi_placement).into();
+        let round_trip: ExpressionPlacement = ffi_placement.into();
 
         assert_eq!(placement, round_trip);
     }
