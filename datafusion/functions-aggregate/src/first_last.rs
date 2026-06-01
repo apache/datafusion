@@ -1449,8 +1449,21 @@ mod tests {
         )
     }
 
-    fn nullable_bool_filter(values: Vec<bool>, valid: Vec<bool>) -> BooleanArray {
-        BooleanArray::new(BooleanBuffer::from(values), Some(NullBuffer::from(valid)))
+    fn nullable_bool_filter(values: Vec<bool>, validity: Vec<bool>) -> BooleanArray {
+        BooleanArray::new(
+            BooleanBuffer::from(values),
+            Some(NullBuffer::from(validity)),
+        )
+    }
+
+    fn assert_group_acc_int64_result(
+        group_acc: &mut FirstLastGroupsAccumulator<PrimitiveValueState<Int64Type>>,
+        expected: Int64Array,
+    ) -> Result<()> {
+        let result = group_acc.evaluate(EmitTo::All)?;
+        let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(result, &expected);
+        Ok(())
     }
 
     #[test]
@@ -1663,12 +1676,7 @@ mod tests {
 
         group_acc.update_batch(&values_and_orderings, &[0, 0], Some(&filter), 1)?;
 
-        let result = group_acc.evaluate(EmitTo::All)?;
-        let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
-        let expected = Int64Array::from(vec![None]);
-        assert_eq!(result, &expected);
-
-        Ok(())
+        assert_group_acc_int64_result(&mut group_acc, Int64Array::from(vec![None]))
     }
 
     #[test]
@@ -1684,12 +1692,7 @@ mod tests {
 
         group_acc.update_batch(&values_and_orderings, &[0, 0, 0], Some(&filter), 1)?;
 
-        let result = group_acc.evaluate(EmitTo::All)?;
-        let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
-        let expected = Int64Array::from(vec![Some(20)]);
-        assert_eq!(result, &expected);
-
-        Ok(())
+        assert_group_acc_int64_result(&mut group_acc, Int64Array::from(vec![Some(20)]))
     }
 
     #[test]
@@ -1706,12 +1709,7 @@ mod tests {
 
         group_acc.merge_batch(&states, &[0, 0], Some(&filter), 1)?;
 
-        let result = group_acc.evaluate(EmitTo::All)?;
-        let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
-        let expected = Int64Array::from(vec![Some(20)]);
-        assert_eq!(result, &expected);
-
-        Ok(())
+        assert_group_acc_int64_result(&mut group_acc, Int64Array::from(vec![Some(20)]))
     }
 
     #[test]
