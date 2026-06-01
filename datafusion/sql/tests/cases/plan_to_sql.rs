@@ -1527,6 +1527,87 @@ fn test_table_scan_alias() -> Result<()> {
 }
 
 #[test]
+fn test_unparse_subquery_alias_select_scope_boundaries() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("age", DataType::Int32, false),
+    ]);
+
+    let aggregate_child = table_scan(Some("t1"), &schema, None)?
+        .aggregate(vec![col("id")], vec![sum(col("age")).alias("total_age")])?
+        .alias("a")?
+        .build()?;
+    assert_snapshot!(
+        plan_to_sql(&aggregate_child)?,
+        @"SELECT * FROM (SELECT sum(t1.age) AS total_age, t1.id FROM t1 GROUP BY t1.id) AS a"
+    );
+
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("age").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let window_child = table_scan(Some("t1"), &schema, None)?
+        .window(vec![window_expr])?
+        .alias("a")?
+        .build()?;
+    assert_snapshot!(
+        plan_to_sql(&window_child)?,
+        @"SELECT * FROM (SELECT *, row_number() OVER (ORDER BY t1.age ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM t1) AS a"
+    );
+
+    let sort_child = table_scan(Some("t1"), &schema, None)?
+        .sort(vec![col("age").sort(false, false)])?
+        .alias("a")?
+        .build()?;
+    assert_snapshot!(
+        plan_to_sql(&sort_child)?,
+        @"SELECT * FROM (SELECT * FROM t1 ORDER BY t1.age DESC NULLS LAST) AS a"
+    );
+
+    let limit_child = table_scan(Some("t1"), &schema, None)?
+        .limit(0, Some(5))?
+        .alias("a")?
+        .build()?;
+    assert_snapshot!(
+        plan_to_sql(&limit_child)?,
+        @"SELECT * FROM (SELECT * FROM t1 LIMIT 5) AS a"
+    );
+
+    let union_schema = Arc::new(DFSchema::try_from(Schema::new(vec![Field::new(
+        "id",
+        DataType::Int32,
+        false,
+    )]))?);
+    let empty = LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: true,
+        schema: union_schema.clone(),
+    });
+    let union_child = LogicalPlan::Union(Union {
+        inputs: vec![
+            project(empty.clone(), vec![lit(1).alias("id")])?.into(),
+            project(empty, vec![lit(2).alias("id")])?.into(),
+        ],
+        schema: union_schema,
+    });
+    let union_child = LogicalPlanBuilder::from(union_child).alias("a")?.build()?;
+    assert_snapshot!(
+        plan_to_sql(&union_child)?,
+        @"SELECT * FROM (SELECT 1 AS id UNION ALL SELECT 2 AS id) AS a"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_table_scan_pushdown() -> Result<()> {
     let schema = Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -3123,6 +3204,82 @@ fn test_unparse_window_over_projection_without_projection() -> Result<()> {
     assert_snapshot!(
         sql,
         @"SELECT *, row_number() OVER (ORDER BY derived_window_input.v_alias ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM (SELECT test.k, test.v AS v_alias FROM test) AS derived_window_input"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window_over_sort_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("v").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("test"), &schema, None)?
+        .sort(vec![col("v").sort(false, false)])?
+        .window(vec![window_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT *, row_number() OVER (ORDER BY derived_window_input.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM (SELECT * FROM test ORDER BY test.v DESC NULLS LAST) AS derived_window_input"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window_over_union_without_projection() -> Result<()> {
+    let schema = Arc::new(DFSchema::try_from(Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]))?);
+    let empty = LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: true,
+        schema: schema.clone(),
+    });
+    let union = LogicalPlan::Union(Union {
+        inputs: vec![
+            project(empty.clone(), vec![lit(1).alias("k"), lit(10).alias("v")])?.into(),
+            project(empty, vec![lit(2).alias("k"), lit(20).alias("v")])?.into(),
+        ],
+        schema,
+    });
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("v").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = LogicalPlanBuilder::from(union)
+        .window(vec![window_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT *, row_number() OVER (ORDER BY derived_window_input.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM (SELECT 1 AS k, 10 AS v UNION ALL SELECT 2 AS k, 20 AS v) AS derived_window_input"
     );
 
     Ok(())
