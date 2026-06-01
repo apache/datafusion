@@ -965,6 +965,61 @@ select round(a), round(b), round(c) from small_floats;
 0 0 1
 1 0 0
 
+# round int64 should preserve exact values above Float64 precision range
+query TI
+select arrow_typeof(round(arrow_cast(9007199254740993, 'Int64'))),
+       round(arrow_cast(9007199254740993, 'Int64'));
+----
+Int64 9007199254740993
+
+# round int64 with positive decimal_places should preserve exact values above Float64 precision range
+query TI
+select arrow_typeof(round(arrow_cast(9007199254740993, 'Int64'), 2)),
+       round(arrow_cast(9007199254740993, 'Int64'), 2);
+----
+Int64 9007199254740993
+
+# round int64 with negative decimal_places
+query TI
+select arrow_typeof(round(arrow_cast(125, 'Int64'), -1)),
+       round(arrow_cast(125, 'Int64'), -1);
+----
+Int64 130
+
+# round int64 with column decimal_places
+query I
+select round(v, dp)
+from (values (arrow_cast(125, 'Int64'), 1),
+             (arrow_cast(125, 'Int64'), -1)) as t(v, dp);
+----
+125
+130
+
+# round int64 overflow with negative decimal_places
+query error Overflow while rounding Int64
+select round(arrow_cast(9223372036854775807, 'Int64'), -1);
+
+# round uint64 should preserve exact values
+query TI
+select arrow_typeof(round(arrow_cast(18446744073709551615, 'UInt64'))),
+       round(arrow_cast(18446744073709551615, 'UInt64'));
+----
+UInt64 18446744073709551615
+
+# round uint64 with positive decimal_places should preserve exact values
+query TI
+select arrow_typeof(round(arrow_cast(18446744073709551615, 'UInt64'), 2)),
+       round(arrow_cast(18446744073709551615, 'UInt64'), 2);
+----
+UInt64 18446744073709551615
+
+# round int64 to place larger than the number itself
+query TI
+select arrow_typeof(round(arrow_cast(125, 'Int64'), -5)),
+       round(arrow_cast(125, 'Int64'), -5);
+----
+Int64 0
+
 # round with too large
 #  max Int32 is 2147483647
 query error round decimal_places 2147483648 is out of supported i32 range
