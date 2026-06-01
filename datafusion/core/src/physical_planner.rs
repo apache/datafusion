@@ -437,7 +437,20 @@ impl DefaultPhysicalPlanner {
         session_state: &'a SessionState,
     ) -> futures::future::BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
-            let all_subqueries = Self::collect_scalar_subqueries(logical_plan);
+            // When `enable_physical_uncorrelated_scalar_subquery` is disabled, the
+            // `ScalarSubqueryToJoin` optimizer rule rewrites all uncorrelated
+            // scalar subqueries to joins, so none should reach this point.
+            // Skip collection in that case to avoid creating a no-op
+            // `ScalarSubqueryExec` wrapper.
+            let all_subqueries = if session_state
+                .config_options()
+                .optimizer
+                .enable_physical_uncorrelated_scalar_subquery
+            {
+                Self::collect_scalar_subqueries(logical_plan)
+            } else {
+                Vec::new()
+            };
             let (links, index_map) = self
                 .plan_scalar_subqueries(all_subqueries, session_state)
                 .await?;
@@ -2801,14 +2814,13 @@ impl DefaultPhysicalPlanner {
             ExplainAnalyzeCategories::All => None,
             ExplainAnalyzeCategories::Only(cats) => Some(cats),
         };
-        Ok(Arc::new(AnalyzeExec::new(
-            a.verbose,
-            show_statistics,
-            metric_types,
-            metric_categories,
-            input,
-            schema,
-        )))
+        Ok(Arc::new(
+            AnalyzeExec::builder(a.verbose, show_statistics, input, schema)
+                .with_metric_types(metric_types)
+                .with_metric_categories(metric_categories)
+                .with_format(a.format.clone())
+                .build(),
+        ))
     }
 
     /// Optimize a physical plan by applying each physical optimizer,
