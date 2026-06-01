@@ -145,3 +145,8 @@ SELECT quote('special\n\t\r');
 ----
 'special\n\t\r'
 
+query T
+SELECT quote("Don't");
+----
+'Don\'t'
+
