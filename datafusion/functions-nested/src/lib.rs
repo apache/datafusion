@@ -47,6 +47,7 @@ pub mod array_filter;
 pub mod array_has;
 pub mod array_normalize;
 pub mod array_scale;
+pub mod array_subtract;
 pub mod array_transform;
 pub mod arrays_zip;
 pub mod cardinality;
@@ -99,6 +100,7 @@ pub mod expr_fn {
     pub use super::array_has::array_has_any;
     pub use super::array_normalize::array_normalize;
     pub use super::array_scale::array_scale;
+    pub use super::array_subtract::array_subtract;
     pub use super::array_transform::array_transform;
     pub use super::arrays_zip::arrays_zip;
     pub use super::cardinality::cardinality;
@@ -176,6 +178,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         array_normalize::array_normalize_udf(),
         array_add::array_add_udf(),
         array_scale::array_scale_udf(),
+        array_subtract::array_subtract_udf(),
         cosine_distance::cosine_distance_udf(),
         inner_product::inner_product_udf(),
         distance::array_distance_udf(),

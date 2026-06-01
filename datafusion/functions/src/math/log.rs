@@ -1165,7 +1165,12 @@ mod tests {
     #[test]
     fn test_log_decimal256_large() {
         // Large Decimal256 values that don't fit in i128 now use f64 fallback
-        let arg_field = Field::new("a", DataType::Decimal256(38, 0), false).into();
+        let arg_field = Field::new(
+            "a",
+            DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
+            false,
+        )
+        .into();
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Decimal256Array::from(vec![

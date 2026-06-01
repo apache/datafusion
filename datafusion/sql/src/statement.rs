@@ -2485,17 +2485,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         span: _,
                     }) = val
                     {
-                        let name =
-                            name.replace('$', "").parse::<usize>().map_err(|_| {
-                                plan_datafusion_err!("Can't parse placeholder: {name}")
-                            })? - 1;
+                        let index = match name[1..].parse::<usize>().map_err(|_| {
+                            plan_datafusion_err!("Can't parse placeholder: {name}")
+                        })? {
+                            0 => {
+                                return plan_err!(
+                                    "Invalid placeholder, zero is not a valid index: {name}"
+                                );
+                            }
+                            index => index - 1,
+                        };
                         let field = fields.get(idx).ok_or_else(|| {
                             plan_datafusion_err!(
                                 "Placeholder ${} refers to a non existent column",
                                 idx + 1
                             )
                         })?;
-                        let _ = prepare_param_data_types.insert(name, Arc::clone(field));
+                        let _ = prepare_param_data_types.insert(index, Arc::clone(field));
                     }
                 }
             }
