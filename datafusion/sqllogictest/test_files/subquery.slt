@@ -2091,6 +2091,95 @@ SELECT (SELECT v FROM (SELECT 1 AS v UNION ALL SELECT 2) AS t ORDER BY v LIMIT 1
 ----
 1
 
+#############
+## End-to-end correctness coverage for the flag-off path.
+## When `datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery` is false,
+## uncorrelated scalar subqueries are rewritten to left joins by
+## `ScalarSubqueryToJoin` instead of executed by `ScalarSubqueryExec`. This
+## restores pre-PR-21240 behavior, which has two known shortcomings the
+## physical-execution path was built to fix: multi-row subqueries silently
+## return wrong results, and uncorrelated scalar subqueries do not work in
+## ORDER BY / JOIN ON / aggregate-function arguments. Those cases are
+## intentionally not covered here; the queries below are the ones where both
+## paths agree.
+#############
+
+statement ok
+set datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery = false;
+
+# Scalar subquery returning exactly one row → success
+query I
+SELECT (SELECT v FROM sq_values LIMIT 1);
+----
+1
+
+# Scalar subquery returning exactly one row in WHERE → success
+query I rowsort
+SELECT x FROM sq_main WHERE x > (SELECT v FROM sq_values LIMIT 1);
+----
+10
+20
+
+# Scalar subquery returning zero rows → NULL
+query I
+SELECT (SELECT v FROM sq_empty);
+----
+NULL
+
+# Scalar subquery returning zero rows in arithmetic → NULL propagation
+query I
+SELECT x + (SELECT v FROM sq_empty) FROM sq_main;
+----
+NULL
+NULL
+
+# Scalar subquery returning zero rows in WHERE comparison → no matching rows
+query I
+SELECT x FROM sq_main WHERE x > (SELECT v FROM sq_empty);
+----
+
+# Aggregated subquery always returns one row, even on empty input → success
+query I
+SELECT (SELECT count(*) FROM sq_empty);
+----
+0
+
+# Aggregated subquery on multi-row table → success
+query I
+SELECT (SELECT max(v) FROM sq_values);
+----
+3
+
+# HAVING clause with uncorrelated scalar subquery
+query II rowsort
+SELECT x, count(*) AS cnt FROM sq_main GROUP BY x
+HAVING count(*) > (SELECT min(v) FROM sq_values);
+----
+
+# CASE WHEN with uncorrelated scalar subquery as condition
+query T rowsort
+SELECT CASE WHEN x > (SELECT min(v) FROM sq_values)
+            THEN 'big' ELSE 'small' END AS label
+FROM sq_main;
+----
+big
+big
+
+# Doubly-nested constant subquery
+query I
+SELECT (SELECT (SELECT 42));
+----
+42
+
+# NULL comparison semantics through subquery boundary
+query B
+SELECT 1 = (SELECT CAST(NULL AS INT));
+----
+NULL
+
+statement ok
+RESET datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery;
+
 statement count 0
 DROP TABLE sq_values;
 
