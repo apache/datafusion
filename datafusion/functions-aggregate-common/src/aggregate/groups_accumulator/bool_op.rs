@@ -108,7 +108,7 @@ where
         let values = self.values.finish();
 
         let values = match emit_to {
-            EmitTo::All => values,
+            EmitTo::All | EmitTo::Block => values,
             EmitTo::First(n) => {
                 let first_n: BooleanBuffer = values.iter().take(n).collect();
                 // put n+1 back into self.values

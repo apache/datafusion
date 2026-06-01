@@ -652,7 +652,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
     /// the values into a flat array that backs the output `ListArray`.
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let emit_groups = match emit_to {
-            EmitTo::All => self.num_groups,
+            EmitTo::All | EmitTo::Block => self.num_groups,
             EmitTo::First(n) => n,
         };
 
@@ -711,7 +711,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
 
         // Step 4: Release state for emitted groups.
         match emit_to {
-            EmitTo::All => self.clear_state(),
+            EmitTo::All | EmitTo::Block => self.clear_state(),
             EmitTo::First(_) => self.compact_retained_state(emit_groups)?,
         }
 

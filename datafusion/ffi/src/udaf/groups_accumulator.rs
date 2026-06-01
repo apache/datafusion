@@ -450,12 +450,14 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
 pub enum FFI_EmitTo {
     All,
     First(usize),
+    Block,
 }
 
 impl From<EmitTo> for FFI_EmitTo {
     fn from(value: EmitTo) -> Self {
         match value {
             EmitTo::All => Self::All,
+            EmitTo::Block => Self::Block,
             EmitTo::First(v) => Self::First(v),
         }
     }
@@ -465,6 +467,7 @@ impl From<FFI_EmitTo> for EmitTo {
     fn from(value: FFI_EmitTo) -> Self {
         match value {
             FFI_EmitTo::All => Self::All,
+            FFI_EmitTo::Block => Self::Block,
             FFI_EmitTo::First(v) => Self::First(v),
         }
     }
@@ -552,6 +555,7 @@ mod tests {
     fn test_all_emit_to_round_trip() -> Result<()> {
         test_emit_to_round_trip(EmitTo::All)?;
         test_emit_to_round_trip(EmitTo::First(10))?;
+        test_emit_to_round_trip(EmitTo::Block)?;
 
         Ok(())
     }

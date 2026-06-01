@@ -202,7 +202,7 @@ impl GroupValues for GroupValuesRows {
             .expect("Can not emit from empty rows");
 
         let mut output = match emit_to {
-            EmitTo::All => {
+            EmitTo::All | EmitTo::Block => {
                 let output = self.row_converter.convert_rows(&group_values)?;
                 group_values.clear();
                 self.map.clear();

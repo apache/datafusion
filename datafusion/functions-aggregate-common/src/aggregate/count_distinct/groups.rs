@@ -85,7 +85,7 @@ where
         let counts = emit_to.take_needed(&mut self.counts);
 
         match emit_to {
-            EmitTo::All => {
+            EmitTo::All | EmitTo::Block => {
                 self.seen.clear();
             }
             EmitTo::First(n) => {
@@ -104,7 +104,7 @@ where
 
     fn state(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
         let num_emitted = match emit_to {
-            EmitTo::All => self.counts.len(),
+            EmitTo::All | EmitTo::Block => self.counts.len(),
             EmitTo::First(n) => n,
         };
 
@@ -120,7 +120,7 @@ where
         let mut all_values = vec![T::Native::default(); total as usize];
         let mut cursors: Vec<i32> = offsets[..num_emitted].to_vec();
 
-        if matches!(emit_to, EmitTo::All) {
+        if matches!(emit_to, EmitTo::All | EmitTo::Block) {
             for (group_idx, value) in self.seen.drain() {
                 let pos = cursors[group_idx] as usize;
                 all_values[pos] = value;

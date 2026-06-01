@@ -488,7 +488,7 @@ impl MinMaxBytesState {
     /// - `min_maxes`: the actual min/max values for each group
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
         match emit_to {
-            EmitTo::All => {
+            EmitTo::All | EmitTo::Block => {
                 (
                     std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
                     std::mem::take(&mut self.min_max),

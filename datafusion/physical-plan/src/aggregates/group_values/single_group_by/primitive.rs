@@ -181,7 +181,7 @@ where
         }
 
         let array: PrimitiveArray<T> = match emit_to {
-            EmitTo::All => {
+            EmitTo::All | EmitTo::Block => {
                 self.map.clear();
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
             }

@@ -101,7 +101,7 @@ impl GroupValues for GroupValuesBoolean {
         let len = self.len();
         let mut builder = BooleanBufferBuilder::new(len);
         let emit_count = match emit_to {
-            EmitTo::All => len,
+            EmitTo::All | EmitTo::Block => len,
             EmitTo::First(n) => n,
         };
         builder.append_n(emit_count, false);

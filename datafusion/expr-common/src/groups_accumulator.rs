@@ -25,6 +25,15 @@ use datafusion_common::{Result, not_impl_err};
 pub enum EmitTo {
     /// Emit all groups
     All,
+    /// Emit one implementation-defined block of groups.
+    ///
+    /// This is intended for accumulators and group-value stores whose internal
+    /// representation is already split into fixed-size blocks. Implementations
+    /// without internal blocking may treat this the same as [`Self::All`].
+    ///
+    /// Callers should only use this once no further updates will arrive for the
+    /// current groups.
+    Block,
     /// Emit only the first `n` groups and shift all existing group
     /// indexes down by `n`.
     ///
@@ -41,7 +50,7 @@ impl EmitTo {
     /// This avoids copying if Self::All
     pub fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
         match self {
-            Self::All => {
+            Self::All | Self::Block => {
                 // Take the entire vector, leave new (empty) vector
                 std::mem::take(v)
             }

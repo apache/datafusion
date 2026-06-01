@@ -89,7 +89,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         let map_contents = self.map.take().into_state();
 
         let group_values = match emit_to {
-            EmitTo::All => {
+            EmitTo::All | EmitTo::Block => {
                 self.num_groups -= map_contents.len();
                 map_contents
             }

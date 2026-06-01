@@ -78,7 +78,7 @@ impl GroupOrdering {
             GroupOrdering::Partial(_) | GroupOrdering::Full(_) => {
                 self.emit_to().map(|emit_to| match emit_to {
                     EmitTo::First(max) => EmitTo::First(n.min(max)),
-                    EmitTo::All => EmitTo::First(n),
+                    EmitTo::All | EmitTo::Block => EmitTo::First(n),
                 })
             }
         }

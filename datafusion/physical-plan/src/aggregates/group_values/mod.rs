@@ -18,9 +18,10 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
-    Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    Date32Type, Date64Type, Decimal128Type, Int64Type, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
@@ -40,8 +41,9 @@ pub(crate) use single_group_by::primitive::HashValue;
 
 use crate::aggregates::{
     group_values::single_group_by::{
-        boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
+        blocked_primitive::GroupValuesPrimitiveBlock, boolean::GroupValuesBoolean,
+        bytes::GroupValuesBytes, bytes_view::GroupValuesBytesView,
+        primitive::GroupValuesPrimitive,
     },
     order::GroupOrdering,
 };
@@ -141,6 +143,23 @@ pub fn new_group_values(
 /// Return a specialized unordered implementation of [`GroupValues`] for the given schema.
 pub fn new_unordered_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
     new_group_values_with_ordering(schema, false)
+}
+
+/// Return a specialized unordered, internally blocked implementation for the
+/// given schema, when one exists.
+pub(crate) fn new_unordered_blocked_group_values(
+    schema: &SchemaRef,
+    block_size: usize,
+) -> Result<Option<Box<dyn GroupValues>>> {
+    if schema.fields.len() == 1 && matches!(schema.fields[0].data_type(), DataType::Int64)
+    {
+        return Ok(Some(Box::new(GroupValuesPrimitiveBlock::<Int64Type>::new(
+            schema.fields[0].data_type().clone(),
+            block_size,
+        ))));
+    }
+
+    Ok(None)
 }
 
 fn new_group_values_with_ordering(

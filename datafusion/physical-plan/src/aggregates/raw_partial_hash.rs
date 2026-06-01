@@ -30,21 +30,30 @@
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::mem::size_of;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{ArrayRef, AsArray, BooleanArray, new_null_array};
-use arrow::datatypes::SchemaRef;
+use arrow::array::types::{Float64Type, Int64Type, UInt64Type};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int64Array, NullBufferBuilder,
+    UInt64Array, new_null_array,
+};
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
-use super::group_values::{GroupByMetrics, GroupValues, new_unordered_group_values};
+use super::group_values::{
+    GroupByMetrics, GroupValues, new_unordered_blocked_group_values,
+    new_unordered_group_values,
+};
 use super::row_hash::create_group_accumulator;
 use super::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
@@ -90,6 +99,387 @@ struct EvaluatedAggregateBatch {
 
     /// Evaluated arguments and filters, one entry per aggregate expression.
     accumulator_args: Vec<EvaluatedHashAggregateAccumulator>,
+}
+
+#[derive(Debug)]
+struct BlockedAvgGroupsAccumulator {
+    state_layout: AvgStateLayout,
+    block_size: usize,
+    counts: Vec<Box<[u64]>>,
+    sums: Vec<Box<[f64]>>,
+    len: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AvgStateLayout {
+    CountSumUInt64,
+    SumCountInt64,
+}
+
+impl BlockedAvgGroupsAccumulator {
+    fn new(state_layout: AvgStateLayout, block_size: usize) -> Self {
+        assert!(block_size > 0);
+        Self {
+            state_layout,
+            block_size,
+            counts: vec![],
+            sums: vec![],
+            len: 0,
+        }
+    }
+
+    fn ensure_capacity(&mut self, total_num_groups: usize) {
+        let required_blocks = total_num_groups.div_ceil(self.block_size);
+        while self.counts.len() < required_blocks {
+            self.counts
+                .push(vec![0; self.block_size].into_boxed_slice());
+            self.sums
+                .push(vec![0.0; self.block_size].into_boxed_slice());
+        }
+        self.len = self.len.max(total_num_groups);
+    }
+
+    fn add_value(&mut self, group_index: usize, value: f64) {
+        debug_assert!(group_index < self.len);
+        let block_idx = group_index / self.block_size;
+        let value_idx = group_index % self.block_size;
+        self.counts[block_idx][value_idx] += 1;
+        self.sums[block_idx][value_idx] += value;
+    }
+
+    fn merge_value(&mut self, group_index: usize, count: u64, sum: f64) {
+        debug_assert!(group_index < self.len);
+        let block_idx = group_index / self.block_size;
+        let value_idx = group_index % self.block_size;
+        self.counts[block_idx][value_idx] += count;
+        self.sums[block_idx][value_idx] += sum;
+    }
+
+    fn values_range<T: Copy>(
+        blocks: &[Box<[T]>],
+        block_size: usize,
+        start: usize,
+        len: usize,
+    ) -> Vec<T> {
+        let mut output = Vec::with_capacity(len);
+        let mut remaining = len;
+        let mut group_id = start;
+
+        while remaining > 0 {
+            let block_idx = group_id / block_size;
+            let offset = group_id % block_size;
+            let take = remaining.min(block_size - offset);
+            output.extend_from_slice(&blocks[block_idx][offset..offset + take]);
+            remaining -= take;
+            group_id += take;
+        }
+
+        output
+    }
+
+    fn rebuild_from_values(&mut self, counts: &[u64], sums: &[f64]) {
+        debug_assert_eq!(counts.len(), sums.len());
+        self.counts.clear();
+        self.sums.clear();
+        self.len = counts.len();
+
+        for chunk in counts.chunks(self.block_size) {
+            let mut block = vec![0; self.block_size].into_boxed_slice();
+            block[..chunk.len()].copy_from_slice(chunk);
+            self.counts.push(block);
+        }
+
+        for chunk in sums.chunks(self.block_size) {
+            let mut block = vec![0.0; self.block_size].into_boxed_slice();
+            block[..chunk.len()].copy_from_slice(chunk);
+            self.sums.push(block);
+        }
+    }
+
+    fn take_all_values(&mut self) -> (Vec<u64>, Vec<f64>) {
+        let counts = Self::values_range(&self.counts, self.block_size, 0, self.len);
+        let sums = Self::values_range(&self.sums, self.block_size, 0, self.len);
+        self.counts.clear();
+        self.sums.clear();
+        self.len = 0;
+        (counts, sums)
+    }
+
+    fn take_block_values(&mut self) -> (Vec<u64>, Vec<f64>) {
+        let emit_len = self.len.min(self.block_size);
+
+        let mut counts = self.counts.remove(0).into_vec();
+        counts.truncate(emit_len);
+
+        let mut sums = self.sums.remove(0).into_vec();
+        sums.truncate(emit_len);
+
+        self.len -= emit_len;
+        (counts, sums)
+    }
+
+    fn take_first_values(&mut self, n: usize) -> (Vec<u64>, Vec<f64>) {
+        let n = n.min(self.len);
+        let counts = Self::values_range(&self.counts, self.block_size, 0, n);
+        let sums = Self::values_range(&self.sums, self.block_size, 0, n);
+
+        let remaining_counts =
+            Self::values_range(&self.counts, self.block_size, n, self.len - n);
+        let remaining_sums =
+            Self::values_range(&self.sums, self.block_size, n, self.len - n);
+        self.rebuild_from_values(&remaining_counts, &remaining_sums);
+
+        (counts, sums)
+    }
+
+    fn take_values(&mut self, emit_to: EmitTo) -> (Vec<u64>, Vec<f64>) {
+        match emit_to {
+            EmitTo::All => self.take_all_values(),
+            EmitTo::Block => self.take_block_values(),
+            EmitTo::First(n) => self.take_first_values(n),
+        }
+    }
+
+    fn nulls_for_counts(counts: &[u64]) -> Option<arrow::buffer::NullBuffer> {
+        let mut nulls = NullBufferBuilder::new(counts.len());
+        for count in counts {
+            if *count == 0 {
+                nulls.append_null();
+            } else {
+                nulls.append_non_null();
+            }
+        }
+        nulls.finish()
+    }
+
+    fn filter_is_valid(opt_filter: Option<&BooleanArray>, row: usize) -> bool {
+        opt_filter
+            .map(|filter| filter.is_valid(row) && filter.value(row))
+            .unwrap_or(true)
+    }
+
+    fn count_state_i64(counts: &[u64]) -> Vec<i64> {
+        counts.iter().map(|count| *count as i64).collect()
+    }
+}
+
+impl GroupsAccumulator for BlockedAvgGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = values[0].as_primitive::<Float64Type>();
+        self.ensure_capacity(total_num_groups);
+
+        if values.null_count() == 0 && opt_filter.is_none() {
+            for (&group_index, &value) in group_indices.iter().zip(values.values().iter())
+            {
+                self.add_value(group_index, value);
+            }
+        } else {
+            for (row, &group_index) in group_indices.iter().enumerate() {
+                if !Self::filter_is_valid(opt_filter, row) || values.is_null(row) {
+                    continue;
+                }
+                self.add_value(group_index, values.value(row));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let (counts, sums) = self.take_values(emit_to);
+        let mut values = Vec::with_capacity(counts.len());
+        let mut nulls = NullBufferBuilder::new(counts.len());
+
+        for (count, sum) in counts.into_iter().zip(sums) {
+            if count == 0 {
+                values.push(0.0);
+                nulls.append_null();
+            } else {
+                values.push(sum / count as f64);
+                nulls.append_non_null();
+            }
+        }
+
+        Ok(Arc::new(Float64Array::new(values.into(), nulls.finish())))
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let (counts, sums) = self.take_values(emit_to);
+        let nulls = Self::nulls_for_counts(&counts);
+
+        match self.state_layout {
+            AvgStateLayout::CountSumUInt64 => Ok(vec![
+                Arc::new(UInt64Array::new(counts.into(), nulls.clone())) as ArrayRef,
+                Arc::new(Float64Array::new(sums.into(), nulls)) as ArrayRef,
+            ]),
+            AvgStateLayout::SumCountInt64 => Ok(vec![
+                Arc::new(Float64Array::new(sums.into(), nulls.clone())) as ArrayRef,
+                Arc::new(Int64Array::new(
+                    Self::count_state_i64(&counts).into(),
+                    nulls,
+                )) as ArrayRef,
+            ]),
+        }
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 2, "two arguments to merge_batch");
+        self.ensure_capacity(total_num_groups);
+
+        match self.state_layout {
+            AvgStateLayout::CountSumUInt64 => {
+                let partial_counts = values[0].as_primitive::<UInt64Type>();
+                let partial_sums = values[1].as_primitive::<Float64Type>();
+
+                for (row, &group_index) in group_indices.iter().enumerate() {
+                    if !Self::filter_is_valid(opt_filter, row)
+                        || partial_counts.is_null(row)
+                        || partial_sums.is_null(row)
+                    {
+                        continue;
+                    }
+
+                    self.merge_value(
+                        group_index,
+                        partial_counts.value(row),
+                        partial_sums.value(row),
+                    );
+                }
+            }
+            AvgStateLayout::SumCountInt64 => {
+                let partial_sums = values[0].as_primitive::<Float64Type>();
+                let partial_counts = values[1].as_primitive::<Int64Type>();
+
+                for (row, &group_index) in group_indices.iter().enumerate() {
+                    if !Self::filter_is_valid(opt_filter, row)
+                        || partial_counts.is_null(row)
+                        || partial_sums.is_null(row)
+                    {
+                        continue;
+                    }
+
+                    self.merge_value(
+                        group_index,
+                        partial_counts.value(row) as u64,
+                        partial_sums.value(row),
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        assert_eq!(values.len(), 1, "single argument to convert_to_state");
+        let values = values[0].as_primitive::<Float64Type>();
+        let mut counts = Vec::with_capacity(values.len());
+        let mut sums = Vec::with_capacity(values.len());
+        let mut nulls = NullBufferBuilder::new(values.len());
+
+        for row in 0..values.len() {
+            if Self::filter_is_valid(opt_filter, row) && values.is_valid(row) {
+                counts.push(1);
+                sums.push(values.value(row));
+                nulls.append_non_null();
+            } else {
+                counts.push(0);
+                sums.push(0.0);
+                nulls.append_null();
+            }
+        }
+
+        let nulls = nulls.finish();
+        match self.state_layout {
+            AvgStateLayout::CountSumUInt64 => Ok(vec![
+                Arc::new(UInt64Array::new(counts.into(), nulls.clone())) as ArrayRef,
+                Arc::new(Float64Array::new(sums.into(), nulls)) as ArrayRef,
+            ]),
+            AvgStateLayout::SumCountInt64 => Ok(vec![
+                Arc::new(Float64Array::new(sums.into(), nulls.clone())) as ArrayRef,
+                Arc::new(Int64Array::new(
+                    Self::count_state_i64(&counts).into(),
+                    nulls,
+                )) as ArrayRef,
+            ]),
+        }
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> usize {
+        self.counts.len() * self.block_size * size_of::<u64>()
+            + self.sums.len() * self.block_size * size_of::<f64>()
+            + self.counts.allocated_size()
+            + self.sums.allocated_size()
+    }
+}
+
+fn create_blocked_group_accumulator(
+    agg_expr: &Arc<AggregateFunctionExpr>,
+    block_size: usize,
+) -> Result<Option<Box<dyn GroupsAccumulator>>> {
+    if agg_expr.fun().name() != "avg" || agg_expr.is_distinct() {
+        return Ok(None);
+    }
+
+    let state_fields = agg_expr.state_fields()?;
+    let state_layout = match state_fields.as_slice() {
+        [count, sum]
+            if matches!(count.data_type(), DataType::UInt64)
+                && matches!(sum.data_type(), DataType::Float64)
+                && matches!(agg_expr.field().data_type(), DataType::Float64) =>
+        {
+            Some(AvgStateLayout::CountSumUInt64)
+        }
+        [sum, count]
+            if matches!(sum.data_type(), DataType::Float64)
+                && matches!(count.data_type(), DataType::Int64)
+                && matches!(agg_expr.field().data_type(), DataType::Float64) =>
+        {
+            Some(AvgStateLayout::SumCountInt64)
+        }
+        _ => None,
+    };
+
+    Ok(state_layout.map(|state_layout| {
+        Box::new(BlockedAvgGroupsAccumulator::new(state_layout, block_size))
+            as Box<dyn GroupsAccumulator>
+    }))
+}
+
+fn create_blocked_group_accumulators(
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
+    block_size: usize,
+) -> Result<Option<Vec<Box<dyn GroupsAccumulator>>>> {
+    let mut accumulators = Vec::with_capacity(aggr_expr.len());
+    for agg_expr in aggr_expr {
+        let Some(accumulator) = create_blocked_group_accumulator(agg_expr, block_size)?
+        else {
+            return Ok(None);
+        };
+        accumulators.push(accumulator);
+    }
+    Ok(Some(accumulators))
 }
 
 impl HashAggregateAccumulator {
@@ -209,6 +599,10 @@ struct AggregateHashTable<Mode> {
     /// Maximum rows per emitted output batch.
     batch_size: usize,
 
+    /// True when group values and all accumulators use the same internal block
+    /// size and can emit one block per output batch.
+    blocked_output: bool,
+
     /// GROUP BY expressions evaluated for each input batch.
     group_by: Arc<PhysicalGroupBy>,
 
@@ -253,29 +647,53 @@ impl<Mode> AggregateHashTable<Mode> {
             &agg.mode,
             agg.group_by.num_group_exprs(),
         )?;
-        let accumulators: Vec<_> = agg
-            .aggr_expr
-            .iter()
-            .zip(aggregate_arguments)
-            .zip(filters)
-            .map(|((agg_expr, arguments), filter)| {
-                let accumulator = create_group_accumulator(agg_expr)?;
-                Ok(HashAggregateAccumulator::new(
-                    arguments,
-                    filter,
-                    accumulator,
-                ))
-            })
-            .collect::<Result<_>>()?;
 
         let group_schema = agg.group_by.group_schema(&input_schema)?;
-        let group_values = new_unordered_group_values(group_schema)?;
+        let can_use_blocked_output =
+            !agg.group_by.has_grouping_set() && agg.group_by.groups().len() == 1;
+
+        let blocked_group_values = if can_use_blocked_output {
+            new_unordered_blocked_group_values(&group_schema, batch_size)?
+        } else {
+            None
+        };
+        let blocked_accumulators = if can_use_blocked_output {
+            create_blocked_group_accumulators(&agg.aggr_expr, batch_size)?
+        } else {
+            None
+        };
+
+        let (group_values, accumulator_impls, blocked_output) =
+            match (blocked_group_values, blocked_accumulators) {
+                (Some(group_values), Some(accumulators)) => {
+                    (group_values, accumulators, true)
+                }
+                _ => {
+                    let group_values = new_unordered_group_values(group_schema)?;
+                    let accumulators = agg
+                        .aggr_expr
+                        .iter()
+                        .map(create_group_accumulator)
+                        .collect::<Result<Vec<_>>>()?;
+                    (group_values, accumulators, false)
+                }
+            };
+
+        let accumulators: Vec<_> = aggregate_arguments
+            .into_iter()
+            .zip(filters)
+            .zip(accumulator_impls)
+            .map(|((arguments, filter), accumulator)| {
+                HashAggregateAccumulator::new(arguments, filter, accumulator)
+            })
+            .collect();
 
         Ok(Self {
             group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
             input_schema,
             output_schema,
             batch_size,
+            blocked_output,
             group_by: Arc::clone(&agg.group_by),
             group_values,
             batch_group_indices: Default::default(),
@@ -344,6 +762,24 @@ impl<Mode> AggregateHashTable<Mode> {
         debug_assert!(output.num_rows() > 0);
         debug_assert!(output.num_rows() <= self.batch_size.max(1));
         Ok(Some(output))
+    }
+
+    fn next_blocked_output_batch_from(
+        &mut self,
+        build_output_batch: impl FnOnce(&mut Self) -> Result<Option<RecordBatch>>,
+    ) -> Result<Option<RecordBatch>> {
+        debug_assert!(self.blocked_output);
+
+        if self.output_finished {
+            return Ok(None);
+        }
+
+        let output = build_output_batch(self)?;
+        if output.is_none() {
+            self.output_finished = true;
+        }
+
+        Ok(output)
     }
 
     fn memory_size(&self) -> usize {
@@ -425,7 +861,11 @@ impl AggregateHashTable<RawPartial> {
     }
 
     fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_from(Self::build_output_batch)
+        if self.blocked_output {
+            self.next_blocked_output_batch_from(Self::build_blocked_output_batch)
+        } else {
+            self.next_output_batch_from(Self::build_output_batch)
+        }
     }
 
     fn build_output_batch(&mut self) -> Result<Option<RecordBatch>> {
@@ -444,6 +884,27 @@ impl AggregateHashTable<RawPartial> {
 
         let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
         debug_assert!(batch.num_rows() > 0);
+        drop(timer);
+        Ok(Some(batch))
+    }
+
+    fn build_blocked_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.init_empty_grouping_sets()?;
+
+        if self.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut output = self.group_values.emit(EmitTo::Block)?;
+
+        for acc in self.accumulators.iter_mut() {
+            output.extend(acc.state(EmitTo::Block)?);
+        }
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+        debug_assert!(batch.num_rows() <= self.batch_size);
         drop(timer);
         Ok(Some(batch))
     }
@@ -541,7 +1002,11 @@ impl AggregateHashTable<PartialFinal> {
     }
 
     fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_from(Self::build_output_batch)
+        if self.blocked_output {
+            self.next_blocked_output_batch_from(Self::build_blocked_output_batch)
+        } else {
+            self.next_output_batch_from(Self::build_output_batch)
+        }
     }
 
     fn build_output_batch(&mut self) -> Result<Option<RecordBatch>> {
@@ -558,6 +1023,25 @@ impl AggregateHashTable<PartialFinal> {
 
         let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
         debug_assert!(batch.num_rows() > 0);
+        drop(timer);
+        Ok(Some(batch))
+    }
+
+    fn build_blocked_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut output = self.group_values.emit(EmitTo::Block)?;
+
+        for acc in self.accumulators.iter_mut() {
+            output.push(acc.evaluate_final(EmitTo::Block)?);
+        }
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+        debug_assert!(batch.num_rows() <= self.batch_size);
         drop(timer);
         Ok(Some(batch))
     }
@@ -874,5 +1358,162 @@ impl Stream for PartialFinalHashAggregateStream {
 impl RecordBatchStream for PartialFinalHashAggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int64Array;
+    use arrow::array::types::Int64Type;
+    use arrow::datatypes::{Field, Schema};
+
+    #[test]
+    fn blocked_group_values_emit_blocks() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "user_id",
+            DataType::Int64,
+            false,
+        )]));
+        let mut group_values =
+            new_unordered_blocked_group_values(&schema, 3)?.expect("blocked Int64");
+        let values: ArrayRef =
+            Arc::new(Int64Array::from(vec![10, 20, 30, 40, 50, 60, 70]));
+        let mut groups = vec![];
+
+        group_values.intern(&[values], &mut groups)?;
+
+        assert_eq!(groups, vec![0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(group_values.len(), 7);
+
+        let block = group_values.emit(EmitTo::Block)?;
+        assert_eq!(
+            block[0].as_primitive::<Int64Type>().values().as_ref(),
+            &[10, 20, 30]
+        );
+
+        let block = group_values.emit(EmitTo::Block)?;
+        assert_eq!(
+            block[0].as_primitive::<Int64Type>().values().as_ref(),
+            &[40, 50, 60]
+        );
+
+        let block = group_values.emit(EmitTo::Block)?;
+        assert_eq!(
+            block[0].as_primitive::<Int64Type>().values().as_ref(),
+            &[70]
+        );
+        assert!(group_values.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_avg_state_emit_blocks() -> Result<()> {
+        let mut accumulator =
+            BlockedAvgGroupsAccumulator::new(AvgStateLayout::CountSumUInt64, 3);
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            Some(2.0),
+            None,
+            Some(4.0),
+            Some(5.0),
+            Some(6.0),
+            Some(7.0),
+        ]));
+        let group_indices = vec![0, 1, 2, 3, 4, 5, 6];
+
+        accumulator.update_batch(&[values], &group_indices, None, 7)?;
+
+        let state = accumulator.state(EmitTo::Block)?;
+        let counts = state[0].as_primitive::<UInt64Type>();
+        let sums = state[1].as_primitive::<Float64Type>();
+        assert_eq!(counts.values().as_ref(), &[1, 1, 0]);
+        assert_eq!(sums.values().as_ref(), &[1.0, 2.0, 0.0]);
+        assert!(counts.is_null(2));
+        assert!(sums.is_null(2));
+
+        let state = accumulator.state(EmitTo::Block)?;
+        assert_eq!(
+            state[0].as_primitive::<UInt64Type>().values().as_ref(),
+            &[1, 1, 1]
+        );
+        assert_eq!(
+            state[1].as_primitive::<Float64Type>().values().as_ref(),
+            &[4.0, 5.0, 6.0]
+        );
+
+        let state = accumulator.state(EmitTo::Block)?;
+        assert_eq!(
+            state[0].as_primitive::<UInt64Type>().values().as_ref(),
+            &[1]
+        );
+        assert_eq!(
+            state[1].as_primitive::<Float64Type>().values().as_ref(),
+            &[7.0]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_avg_merge_evaluate_blocks() -> Result<()> {
+        let mut accumulator =
+            BlockedAvgGroupsAccumulator::new(AvgStateLayout::CountSumUInt64, 2);
+        let counts: ArrayRef = Arc::new(UInt64Array::from(vec![2, 1, 3, 4, 5]));
+        let sums: ArrayRef =
+            Arc::new(Float64Array::from(vec![10.0, 4.0, 9.0, 20.0, 15.0]));
+        let group_indices = vec![0, 1, 2, 3, 4];
+
+        accumulator.merge_batch(&[counts, sums], &group_indices, None, 5)?;
+
+        let output = accumulator.evaluate(EmitTo::Block)?;
+        assert_eq!(
+            output.as_primitive::<Float64Type>().values().as_ref(),
+            &[5.0, 4.0]
+        );
+
+        let output = accumulator.evaluate(EmitTo::Block)?;
+        assert_eq!(
+            output.as_primitive::<Float64Type>().values().as_ref(),
+            &[3.0, 5.0]
+        );
+
+        let output = accumulator.evaluate(EmitTo::Block)?;
+        assert_eq!(
+            output.as_primitive::<Float64Type>().values().as_ref(),
+            &[3.0]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_avg_spark_state_layout() -> Result<()> {
+        let mut accumulator =
+            BlockedAvgGroupsAccumulator::new(AvgStateLayout::SumCountInt64, 2);
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![2.0, 4.0, 6.0]));
+        let group_indices = vec![0, 1, 2];
+
+        accumulator.update_batch(&[values], &group_indices, None, 3)?;
+
+        let state = accumulator.state(EmitTo::Block)?;
+        assert_eq!(
+            state[0].as_primitive::<Float64Type>().values().as_ref(),
+            &[2.0, 4.0]
+        );
+        assert_eq!(
+            state[1].as_primitive::<Int64Type>().values().as_ref(),
+            &[1, 1]
+        );
+
+        let state = accumulator.state(EmitTo::Block)?;
+        assert_eq!(
+            state[0].as_primitive::<Float64Type>().values().as_ref(),
+            &[6.0]
+        );
+        assert_eq!(state[1].as_primitive::<Int64Type>().values().as_ref(), &[1]);
+
+        Ok(())
     }
 }

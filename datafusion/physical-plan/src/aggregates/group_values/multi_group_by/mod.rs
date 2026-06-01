@@ -1090,7 +1090,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let mut output = match emit_to {
-            EmitTo::All => {
+            EmitTo::All | EmitTo::Block => {
                 let group_values = mem::take(&mut self.group_values);
                 debug_assert!(self.group_values.is_empty());
 
