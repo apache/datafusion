@@ -658,9 +658,11 @@ mod proto_tests {
     use datafusion_common::DataFusionError;
     use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::datafusion_common::{
+        ArrowType, EmptyMessage, arrow_type::ArrowTypeEnum,
+    };
     use datafusion_proto_models::protobuf::{
-        ArrowType, EmptyMessage, PhysicalExprNode, PhysicalTryCastNode,
-        arrow_type::ArrowTypeEnum, physical_expr_node,
+        PhysicalExprNode, PhysicalTryCastNode, physical_expr_node,
     };
 
     /// Build an `ArrowType` proto node representing `Int64`.
