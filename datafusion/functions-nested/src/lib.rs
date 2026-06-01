@@ -213,12 +213,7 @@ pub fn all_default_higher_order_functions() -> Vec<Arc<HigherOrderUDF>> {
         array_any_match::array_any_match_higher_order_function(),
         array_filter::array_filter_higher_order_function(),
         array_transform::array_transform_higher_order_function(),
-        Arc::new(
-            map_transform::map_transform_higher_order_function()
-                .as_ref()
-                .clone()
-                .with_aliases(["transform_values"]),
-        ),
+        map_transform::map_transform_higher_order_function(),
     ]
 }
 

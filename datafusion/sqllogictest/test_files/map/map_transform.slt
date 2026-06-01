@@ -28,12 +28,6 @@ SELECT map_transform(map(['a','b','c'], [1,2,3]), (k, v) -> v * 2);
 ----
 {a: 2, b: 4, c: 6}
 
-# alias transform_values works
-query ?
-SELECT transform_values(map(['a','b','c'], [1,2,3]), (k, v) -> v * 2);
-----
-{a: 2, b: 4, c: 6}
-
 # lambda may reference the key
 query ?
 SELECT map_transform(map(['a','b','c'], [1,2,3]), (k, v) -> case when k = 'b' then v * 100 else v end);
