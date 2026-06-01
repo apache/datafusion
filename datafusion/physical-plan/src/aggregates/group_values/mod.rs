@@ -151,8 +151,7 @@ pub(crate) fn new_unordered_blocked_group_values(
     schema: &SchemaRef,
     block_size: usize,
 ) -> Result<Option<Box<dyn GroupValues>>> {
-    if schema.fields.len() == 1 && matches!(schema.fields[0].data_type(), DataType::Int64)
-    {
+    if supports_blocked_group_values(schema) {
         return Ok(Some(Box::new(GroupValuesPrimitiveBlock::<Int64Type>::new(
             schema.fields[0].data_type().clone(),
             block_size,
@@ -160,6 +159,10 @@ pub(crate) fn new_unordered_blocked_group_values(
     }
 
     Ok(None)
+}
+
+pub(crate) fn supports_blocked_group_values(schema: &SchemaRef) -> bool {
+    schema.fields.len() == 1 && matches!(schema.fields[0].data_type(), DataType::Int64)
 }
 
 fn new_group_values_with_ordering(

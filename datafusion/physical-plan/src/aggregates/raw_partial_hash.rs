@@ -52,7 +52,7 @@ use futures::stream::{Stream, StreamExt};
 
 use super::group_values::{
     GroupByMetrics, GroupValues, new_unordered_blocked_group_values,
-    new_unordered_group_values,
+    new_unordered_group_values, supports_blocked_group_values,
 };
 use super::row_hash::create_group_accumulator;
 use super::{
@@ -434,10 +434,9 @@ impl GroupsAccumulator for BlockedAvgGroupsAccumulator {
     }
 }
 
-fn create_blocked_group_accumulator(
+fn blocked_avg_state_layout(
     agg_expr: &Arc<AggregateFunctionExpr>,
-    block_size: usize,
-) -> Result<Option<Box<dyn GroupsAccumulator>>> {
+) -> Result<Option<AvgStateLayout>> {
     if agg_expr.fun().name() != "avg" || agg_expr.is_distinct() {
         return Ok(None);
     }
@@ -461,6 +460,14 @@ fn create_blocked_group_accumulator(
         _ => None,
     };
 
+    Ok(state_layout)
+}
+
+fn create_blocked_group_accumulator(
+    agg_expr: &Arc<AggregateFunctionExpr>,
+    block_size: usize,
+) -> Result<Option<Box<dyn GroupsAccumulator>>> {
+    let state_layout = blocked_avg_state_layout(agg_expr)?;
     Ok(state_layout.map(|state_layout| {
         Box::new(BlockedAvgGroupsAccumulator::new(state_layout, block_size))
             as Box<dyn GroupsAccumulator>
@@ -480,6 +487,25 @@ fn create_blocked_group_accumulators(
         accumulators.push(accumulator);
     }
     Ok(Some(accumulators))
+}
+
+pub(crate) fn can_use_blocked_hash_aggregate(agg: &AggregateExec) -> Result<bool> {
+    if agg.group_by.has_grouping_set() || agg.group_by.groups().len() != 1 {
+        return Ok(false);
+    }
+
+    let group_schema = agg.group_by.group_schema(&agg.input().schema())?;
+    if !supports_blocked_group_values(&group_schema) {
+        return Ok(false);
+    }
+
+    for agg_expr in agg.aggr_expr.iter() {
+        if blocked_avg_state_layout(agg_expr)?.is_none() {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 impl HashAggregateAccumulator {
@@ -649,8 +675,7 @@ impl<Mode> AggregateHashTable<Mode> {
         )?;
 
         let group_schema = agg.group_by.group_schema(&input_schema)?;
-        let can_use_blocked_output =
-            !agg.group_by.has_grouping_set() && agg.group_by.groups().len() == 1;
+        let can_use_blocked_output = can_use_blocked_hash_aggregate(agg)?;
 
         let blocked_group_values = if can_use_blocked_output {
             new_unordered_blocked_group_values(&group_schema, batch_size)?

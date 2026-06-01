@@ -23,7 +23,10 @@ use std::sync::Arc;
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     no_grouping::AggregateStream,
-    raw_partial_hash::{PartialFinalHashAggregateStream, RawPartialHashAggregateStream},
+    raw_partial_hash::{
+        PartialFinalHashAggregateStream, RawPartialHashAggregateStream,
+        can_use_blocked_hash_aggregate,
+    },
     row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
@@ -1054,6 +1057,12 @@ impl AggregateExec {
         "GroupedHashAggregateStream"
     }
 
+    fn uses_blocked_hash_stream_for_display(&self) -> bool {
+        (self.can_use_raw_partial_hash_stream()
+            || self.can_use_partial_final_hash_stream())
+            && can_use_blocked_hash_aggregate(self).unwrap_or(false)
+    }
+
     fn should_display_stream_name(&self, t: DisplayFormatType) -> bool {
         matches!(t, DisplayFormatType::Verbose)
             || self.can_use_raw_partial_hash_stream()
@@ -1541,6 +1550,9 @@ impl DisplayAs for AggregateExec {
 
                 if self.should_display_stream_name(t) {
                     write!(f, ", stream={}", self.stream_name_for_display())?;
+                    if self.uses_blocked_hash_stream_for_display() {
+                        write!(f, ", blocked=true")?;
+                    }
                 }
             }
             DisplayFormatType::TreeRender => {
@@ -3142,6 +3154,56 @@ mod tests {
             vec![2, 1]
         );
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn grouped_avg_explain_shows_blocked_hash_stream() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Int64, false),
+            Field::new("v", DataType::Float64, false),
+        ]));
+        let input = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("g", &schema)?, "g".to_string())]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(avg_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("AVG(v)")
+                .build()?,
+        )];
+
+        let partial_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregates.clone(),
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        assert!(
+            crate::displayable(partial_aggregate.as_ref())
+                .one_line()
+                .to_string()
+                .contains("stream=RawPartialHashAggregateStream, blocked=true")
+        );
+
+        let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
+        let final_aggregate = AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            aggregates,
+            vec![None],
+            merge,
+            Arc::clone(&schema),
+        )?;
+        assert!(
+            crate::displayable(&final_aggregate)
+                .one_line()
+                .to_string()
+                .contains("stream=PartialFinalHashAggregateStream, blocked=true")
+        );
 
         Ok(())
     }
