@@ -15,56 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`PushDownTopKThroughJoin`] pushes TopK (Sort with fetch) through joins
-//! whose preserved side is known.
+//! Sort(fetch) → Join pushdown — a sub-module of `push_down_limit`.
 //!
-//! When a `Sort` with a fetch limit sits above such a join and all sort
-//! expressions come from the **preserved** side, this rule inserts a copy
-//! of the `Sort(fetch)` on that input to reduce the number of rows
-//! entering the join.
+//! When a `Sort` with a fetch limit (TopK) sits above a join whose
+//! preserved side is known (LEFT / RIGHT / LeftMark / RightMark / CROSS)
+//! and all sort expressions come from the preserved side, we insert a
+//! copy of the `Sort(fetch)` onto that input to reduce rows entering
+//! the join. The outer `Sort` is kept because a 1-to-many join can
+//! produce more than N output rows from N preserved-side rows.
 //!
-//! This is correct because:
-//! - A LEFT JOIN preserves every left row (each appears at least once in the
-//!   output). The final top-N by left-side columns must come from the top-N
-//!   left rows.
-//! - The same reasoning applies symmetrically for RIGHT JOIN and right-side
-//!   columns.
-//! - A CROSS JOIN preserves every row from both sides (Cartesian product).
-//!   The top-N by one side's columns must come from the top-N rows of that
-//!   side, since each surviving row is duplicated by the other side's row
-//!   count.
-//! - LEFT MARK / RIGHT MARK joins emit exactly one record per row of the
-//!   marked side (with an extra mark column), so that side is fully
-//!   preserved and pushdown applies symmetrically to LEFT / RIGHT joins.
-//!
-//! The top-level sort is kept for correctness since a 1-to-many join can
-//! produce more than N output rows from N input rows.
-//!
-//! ## Example
-//!
-//! Before:
-//! ```text
-//! Sort: t1.b ASC, fetch=3
-//!   Left Join: t1.a = t2.c
-//!     Scan: t1     ← scans ALL rows
-//!     Scan: t2
-//! ```
-//!
-//! After:
-//! ```text
-//! Sort: t1.b ASC, fetch=3
-//!   Left Join: t1.a = t2.c
-//!     Sort: t1.b ASC, fetch=3  ← pushed down
-//!       Scan: t1
-//!     Scan: t2
-//! ```
+//! Dispatched from `PushDownLimit::rewrite` when the plan node is
+//! `LogicalPlan::Sort` with `fetch.is_some()`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::optimizer::ApplyOrder;
-use crate::{OptimizerConfig, OptimizerRule};
-
 use crate::utils::{has_all_column_refs, schema_columns};
+
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, Result, internal_err};
 use datafusion_expr::logical_plan::{
@@ -79,309 +46,235 @@ enum Side {
     Right,
 }
 
-/// Optimization rule that pushes TopK (Sort with fetch) through joins
-/// that have a known preserved side (LEFT / RIGHT outer,
-/// LEFT MARK / RIGHT MARK, or CROSS) when all sort expressions come
-/// from a preserved side.
-///
-/// See module-level documentation for details.
-#[derive(Default, Debug)]
-pub struct PushDownTopKThroughJoin;
+/// Top-level pushdown for `Sort(fetch) → ... → Join` patterns. The plan
+/// passed in is guaranteed by the caller to be `LogicalPlan::Sort` with
+/// `fetch.is_some()`; we re-bind to a borrow inside.
+pub(super) fn push_topk_through_join(
+    plan: LogicalPlan,
+) -> Result<Transformed<LogicalPlan>> {
+    let LogicalPlan::Sort(sort) = &plan else {
+        return Ok(Transformed::no(plan));
+    };
+    let Some(fetch) = sort.fetch else {
+        return Ok(Transformed::no(plan));
+    };
 
-impl PushDownTopKThroughJoin {
-    /// Create a new `PushDownTopKThroughJoin` rule.
-    pub fn new() -> Self {
-        Self {}
+    // Don't push if any sort expression is non-deterministic (e.g.
+    // `random()`). Duplicating such expressions would produce different
+    // values at each evaluation point, potentially changing results.
+    if sort.expr.iter().any(|se| se.expr.is_volatile()) {
+        return Ok(Transformed::no(plan));
     }
-}
 
-impl OptimizerRule for PushDownTopKThroughJoin {
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
-    fn rewrite(
-        &self,
-        plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Transformed<LogicalPlan>> {
-        // Match Sort with fetch (TopK)
-        let LogicalPlan::Sort(sort) = &plan else {
-            return Ok(Transformed::no(plan));
-        };
-        let Some(fetch) = sort.fetch else {
-            return Ok(Transformed::no(plan));
-        };
-
-        // Don't push if any sort expression is non-deterministic (e.g. random()).
-        // Duplicating such expressions would produce different values at each
-        // evaluation point, potentially changing the result.
-        if sort.expr.iter().any(|se| se.expr.is_volatile()) {
-            return Ok(Transformed::no(plan));
-        }
-
-        // Peel through transparent nodes (SubqueryAlias, Projection) to find
-        // the Join. Track intermediate nodes so we can reconstruct the tree
-        // and resolve sort expressions through them.
-        let mut current = sort.input.as_ref();
-        let mut intermediates: Vec<&LogicalPlan> = Vec::new();
-        let join = loop {
-            match current {
-                LogicalPlan::Join(join) => break join,
-                LogicalPlan::Projection(proj) => {
-                    intermediates.push(current);
-                    current = proj.input.as_ref();
-                }
-                LogicalPlan::SubqueryAlias(sq) => {
-                    intermediates.push(current);
-                    current = sq.input.as_ref();
-                }
-                _ => return Ok(Transformed::no(plan)),
+    // Peel through transparent nodes (SubqueryAlias, Projection) to
+    // find the Join. Track intermediates so we can reconstruct the tree
+    // and resolve sort expressions through them.
+    let mut current = sort.input.as_ref();
+    let mut intermediates: Vec<&LogicalPlan> = Vec::new();
+    let join = loop {
+        match current {
+            LogicalPlan::Join(join) => break join,
+            LogicalPlan::Projection(proj) => {
+                intermediates.push(current);
+                current = proj.input.as_ref();
             }
-        };
-
-        // Determine which side(s) of the join are preserved.
-        //
-        // - LEFT / LeftMark: only left preserved (and only left appears in
-        //   the output schema for LEFT, or left + mark column for LeftMark).
-        // - RIGHT / RightMark: symmetric.
-        // - CROSS JOIN (represented as Inner with no `on` keys and no filter):
-        //   every row from both sides appears in the output (Cartesian
-        //   product), so we can push to whichever side has all the sort cols.
-        //
-        // For LEFT/RIGHT, non-equijoin filters in the ON clause are safe:
-        // outer joins guarantee all preserved-side rows appear in the output
-        // regardless of the filter, and the non-preserved side never appears
-        // as a standalone unmatched row.
-        //
-        // For Inner joins (cross-join detection), the filter check is strict
-        // (`filter.is_none()`). When an Inner join has a filter, that filter
-        // can drop rows from either side, so pushing fetch=N may select rows
-        // that get filtered out while discarding rows that would have matched.
-        let preserved_candidates: &[Side] = match join.join_type {
-            JoinType::Left | JoinType::LeftMark => &[Side::Left],
-            JoinType::Right | JoinType::RightMark => &[Side::Right],
-            JoinType::Inner if join.on.is_empty() && join.filter.is_none() => {
-                &[Side::Left, Side::Right]
+            LogicalPlan::SubqueryAlias(sq) => {
+                intermediates.push(current);
+                current = sq.input.as_ref();
             }
             _ => return Ok(Transformed::no(plan)),
-        };
+        }
+    };
 
-        // Resolve sort expressions through all intermediate nodes (Projection,
-        // SubqueryAlias) so that column references match the join's schema.
-        let mut resolved_sort_exprs = sort.expr.clone();
-        for node in &intermediates {
-            match node {
-                LogicalPlan::Projection(proj) => {
-                    resolved_sort_exprs = resolve_sort_exprs_through_projection(
-                        &resolved_sort_exprs,
-                        proj,
-                    )?;
-                }
-                LogicalPlan::SubqueryAlias(sq) => {
-                    resolved_sort_exprs = resolve_sort_exprs_through_subquery_alias(
-                        &resolved_sort_exprs,
-                        sq,
-                    )?;
-                }
-                _ => {
-                    return internal_err!(
-                        "PushDownTopKThroughJoin: unexpected intermediate node: {}",
-                        node.display()
-                    );
-                }
+    // Determine which side(s) of the join are preserved.
+    //
+    // - LEFT / LeftMark: only left preserved.
+    // - RIGHT / RightMark: symmetric.
+    // - CROSS JOIN (Inner with no `on` keys and no filter):
+    //   every row from both sides appears in the output (Cartesian
+    //   product), so we can push to whichever side has all the sort
+    //   columns.
+    //
+    // For LEFT/RIGHT, non-equijoin filters in the ON clause are safe:
+    // outer joins guarantee all preserved-side rows appear in the
+    // output regardless of the filter. For Inner joins (cross-join
+    // detection), the filter check is strict (`filter.is_none()`) —
+    // any filter on Inner can drop rows from either side.
+    let preserved_candidates: &[Side] = match join.join_type {
+        JoinType::Left | JoinType::LeftMark => &[Side::Left],
+        JoinType::Right | JoinType::RightMark => &[Side::Right],
+        JoinType::Inner if join.on.is_empty() && join.filter.is_none() => {
+            &[Side::Left, Side::Right]
+        }
+        _ => return Ok(Transformed::no(plan)),
+    };
+
+    // Resolve sort expressions through all intermediate nodes
+    // (Projection, SubqueryAlias) so column references match the
+    // join's schema.
+    let mut resolved_sort_exprs = sort.expr.clone();
+    for node in &intermediates {
+        match node {
+            LogicalPlan::Projection(proj) => {
+                resolved_sort_exprs =
+                    resolve_sort_exprs_through_projection(&resolved_sort_exprs, proj)?;
+            }
+            LogicalPlan::SubqueryAlias(sq) => {
+                resolved_sort_exprs =
+                    resolve_sort_exprs_through_subquery_alias(&resolved_sort_exprs, sq)?;
+            }
+            _ => {
+                return internal_err!(
+                    "push_topk_through_join: unexpected intermediate node: {}",
+                    node.display()
+                );
             }
         }
+    }
 
-        // After resolving through projections, the sort expressions may now
-        // contain volatile functions (e.g. `random() AS col`). Duplicating
-        // volatile expressions in the pushed Sort would produce different
-        // values, changing results.
-        if resolved_sort_exprs.iter().any(|se| se.expr.is_volatile()) {
+    // After resolving through projections, sort expressions may now
+    // contain volatile functions (e.g. `random() AS col`). Duplicating
+    // them would change results.
+    if resolved_sort_exprs.iter().any(|se| se.expr.is_volatile()) {
+        return Ok(Transformed::no(plan));
+    }
+
+    // Pick the first preserved-side candidate whose schema contains all
+    // referenced sort columns. For LEFT/RIGHT this is the fixed side;
+    // for CROSS we try both.
+    let Some(preserved_side) = preserved_candidates.iter().copied().find(|&side| {
+        let schema = match side {
+            Side::Left => join.left.schema(),
+            Side::Right => join.right.schema(),
+        };
+        let cols = schema_columns(schema);
+        resolved_sort_exprs
+            .iter()
+            .all(|se| has_all_column_refs(&se.expr, &cols))
+    }) else {
+        return Ok(Transformed::no(plan));
+    };
+
+    let preserved_child = match preserved_side {
+        Side::Left => &join.left,
+        Side::Right => &join.right,
+    };
+
+    // Scan deep inside the preserved child (through SubqueryAlias and
+    // Projection layers) to find an existing Sort. If found with same
+    // exprs, tighten its fetch in-place. Otherwise, insert a new Sort
+    // directly below the join as the preserved child's wrapper.
+    let mut inner_child = preserved_child.as_ref();
+    let mut deep_resolved_exprs = resolved_sort_exprs.clone();
+    loop {
+        match inner_child {
+            LogicalPlan::SubqueryAlias(sq) => {
+                deep_resolved_exprs =
+                    resolve_sort_exprs_through_subquery_alias(&deep_resolved_exprs, sq)?;
+                inner_child = sq.input.as_ref();
+            }
+            LogicalPlan::Projection(proj) => {
+                deep_resolved_exprs =
+                    resolve_sort_exprs_through_projection(&deep_resolved_exprs, proj)?;
+                inner_child = proj.input.as_ref();
+            }
+            _ => break,
+        }
+    }
+
+    // If the inner child is a Limit (PushDownLimit's own Limit handling
+    // hasn't merged it with the Sort yet), skip this iteration.
+    if matches!(inner_child, LogicalPlan::Limit(_)) {
+        return Ok(Transformed::no(plan));
+    }
+
+    // Determine action based on existing inner Sort:
+    // - Same exprs, tighter fetch → skip (already optimal)
+    // - Same exprs, larger/no fetch → tighten in-place
+    // - Different exprs or no Sort → insert new Sort below the join
+    //
+    // If `deep_resolved_exprs` became volatile while resolving through
+    // projections inside the preserved child (e.g. `random() AS col`),
+    // structural equality with an existing inner Sort is unsound: two
+    // identical `random()` exprs evaluate to different values. Fall
+    // back to inserting a new Sort with `resolved_sort_exprs`.
+    let deep_exprs_volatile = deep_resolved_exprs.iter().any(|se| se.expr.is_volatile());
+    let inner_sort = match inner_child {
+        LogicalPlan::Sort(s) if !deep_exprs_volatile => Some(s),
+        _ => None,
+    };
+    let new_preserved_child = if let Some(child_sort) = inner_sort {
+        let same_exprs = sort_exprs_equal(&child_sort.expr, &deep_resolved_exprs);
+        let child_fetch_tighter = match child_sort.fetch {
+            Some(child_fetch) => child_fetch <= fetch,
+            None => false,
+        };
+        if same_exprs && child_fetch_tighter {
             return Ok(Transformed::no(plan));
         }
-
-        // Pick the first preserved-side candidate whose schema contains all
-        // referenced sort columns. For LEFT/RIGHT this is the fixed side;
-        // for CROSS we try both.
-        let Some(preserved_side) = preserved_candidates.iter().copied().find(|&side| {
-            let schema = match side {
-                Side::Left => join.left.schema(),
-                Side::Right => join.right.schema(),
-            };
-            let cols = schema_columns(schema);
-            resolved_sort_exprs
-                .iter()
-                .all(|se| has_all_column_refs(&se.expr, &cols))
-        }) else {
-            return Ok(Transformed::no(plan));
-        };
-
-        let preserved_child = match preserved_side {
-            Side::Left => &join.left,
-            Side::Right => &join.right,
-        };
-
-        // Scan deep inside the preserved child (through SubqueryAlias and
-        // Projection layers) to find an existing Sort. If found with same
-        // exprs, tighten its fetch in-place. Otherwise, insert a new Sort
-        // directly below the join as the preserved child's wrapper.
-        let mut inner_child = preserved_child.as_ref();
-        let mut deep_resolved_exprs = resolved_sort_exprs.clone();
-        loop {
-            match inner_child {
-                LogicalPlan::SubqueryAlias(sq) => {
-                    deep_resolved_exprs = resolve_sort_exprs_through_subquery_alias(
-                        &deep_resolved_exprs,
-                        sq,
-                    )?;
-                    inner_child = sq.input.as_ref();
-                }
-                LogicalPlan::Projection(proj) => {
-                    deep_resolved_exprs = resolve_sort_exprs_through_projection(
-                        &deep_resolved_exprs,
-                        proj,
-                    )?;
-                    inner_child = proj.input.as_ref();
-                }
-                _ => break,
-            }
-        }
-
-        // If the inner child is a Limit (PushDownLimit hasn't merged it with
-        // the Sort yet), skip this iteration.  PushDownLimit will merge
-        // Limit → Sort in the next pass, then our rule will tighten the Sort.
-        if matches!(inner_child, LogicalPlan::Limit(_)) {
-            return Ok(Transformed::no(plan));
-        }
-
-        // Determine action based on existing inner Sort:
-        // - Same exprs, tighter fetch → skip (already optimal)
-        // - Same exprs, larger/no fetch → tighten in-place
-        // - Different exprs or no Sort → insert new Sort below the join
-        //
-        // Example (tighten): Sort(a ASC, fetch=5) → Join → Sort(a ASC, fetch=10)
-        //   Child limits to 10, our tighter fetch=5 tightens it in-place.
-        //
-        // Example (tighten): Sort(a ASC, fetch=5) → Join → Sort(a ASC)
-        //   Child has no fetch (full sort), tighten to fetch=5.
-        //
-        // Example (skip): Sort(a ASC, fetch=5) → Join → Sort(a ASC, fetch=3)
-        //   Child already limits to 3 rows, pushing fetch=5 won't help.
-        //
-        // Example (new): Sort(b ASC, fetch=5) → Join → Sort(a ASC, fetch=10)
-        //   Different exprs, insert Sort(b, fetch=5) above preserved child.
-        //
-        // If `deep_resolved_exprs` became volatile while resolving through
-        // projections inside the preserved child (e.g. a `random() AS col`
-        // projection turns the column reference into `random()` itself),
-        // structural equality with an existing inner Sort is unsound: two
-        // syntactically identical `random()` expressions evaluate to
-        // different values. In that case we must not match against the
-        // inner Sort — fall back to inserting a new Sort above the
-        // preserved child using `resolved_sort_exprs`, which is guaranteed
-        // non-volatile (verified above).
-        let deep_exprs_volatile =
-            deep_resolved_exprs.iter().any(|se| se.expr.is_volatile());
-        let inner_sort = match inner_child {
-            LogicalPlan::Sort(s) if !deep_exprs_volatile => Some(s),
-            _ => None,
-        };
-        let new_preserved_child = if let Some(child_sort) = inner_sort {
-            let same_exprs = sort_exprs_equal(&child_sort.expr, &deep_resolved_exprs);
-            let child_fetch_tighter = match child_sort.fetch {
-                Some(child_fetch) => child_fetch <= fetch,
-                None => false,
-            };
-            if same_exprs && child_fetch_tighter {
-                return Ok(Transformed::no(plan));
-            }
-            if same_exprs {
-                // Tighten existing Sort in-place by rebuilding the path
-                // from preserved child down to the Sort.
-                rebuild_with_tightened_sort(
-                    preserved_child.as_ref(),
-                    &deep_resolved_exprs,
-                    fetch,
-                )?
-            } else {
-                // Different exprs — insert new Sort above the preserved child.
-                // If the inner Sort has no fetch, our pushed Sort is the only
-                // row reduction. If it has a fetch, re-sorting a small set is
-                // cheap and still reduces rows entering the join.
-                Arc::new(LogicalPlan::Sort(SortPlan {
-                    expr: resolved_sort_exprs,
-                    input: Arc::clone(preserved_child),
-                    fetch: Some(fetch),
-                }))
-            }
+        if same_exprs {
+            rebuild_with_tightened_sort(
+                preserved_child.as_ref(),
+                &deep_resolved_exprs,
+                fetch,
+            )?
         } else {
-            // No existing Sort — insert new Sort below the join.
+            // Different exprs — insert new Sort above the preserved
+            // child. If the inner Sort has no fetch, our pushed Sort
+            // is the only row reduction. If it has a fetch, re-sorting
+            // a small set is cheap and still reduces join input.
             Arc::new(LogicalPlan::Sort(SortPlan {
                 expr: resolved_sort_exprs,
                 input: Arc::clone(preserved_child),
                 fetch: Some(fetch),
             }))
-        };
-
-        // Reconstruct the join with the new child
-        let mut new_join = join.clone();
-        match preserved_side {
-            Side::Left => new_join.left = new_preserved_child,
-            Side::Right => new_join.right = new_preserved_child,
         }
+    } else {
+        Arc::new(LogicalPlan::Sort(SortPlan {
+            expr: resolved_sort_exprs,
+            input: Arc::clone(preserved_child),
+            fetch: Some(fetch),
+        }))
+    };
 
-        // Rebuild the tree: join → intermediate nodes → top-level sort
-        let mut new_sort_input = Arc::new(LogicalPlan::Join(new_join));
-        for node in intermediates.into_iter().rev() {
-            new_sort_input = Arc::new(match node {
-                LogicalPlan::Projection(proj) => {
-                    let mut new_proj = proj.clone();
-                    new_proj.input = new_sort_input;
-                    LogicalPlan::Projection(new_proj)
-                }
-                LogicalPlan::SubqueryAlias(sq) => LogicalPlan::SubqueryAlias(
-                    SubqueryAlias::try_new(new_sort_input, sq.alias.clone())?,
-                ),
-                _ => {
-                    return internal_err!(
-                        "PushDownTopKThroughJoin: unexpected intermediate node: {}",
-                        node.display()
-                    );
-                }
-            });
-        }
-
-        Ok(Transformed::yes(LogicalPlan::Sort(SortPlan {
-            expr: sort.expr.clone(),
-            input: new_sort_input,
-            fetch: sort.fetch,
-        })))
+    let mut new_join = join.clone();
+    match preserved_side {
+        Side::Left => new_join.left = new_preserved_child,
+        Side::Right => new_join.right = new_preserved_child,
     }
 
-    fn name(&self) -> &str {
-        "push_down_topk_through_join"
+    // Rebuild the tree: join → intermediate nodes → top-level sort.
+    let mut new_sort_input = Arc::new(LogicalPlan::Join(new_join));
+    for node in intermediates.into_iter().rev() {
+        new_sort_input = Arc::new(match node {
+            LogicalPlan::Projection(proj) => {
+                let mut new_proj = proj.clone();
+                new_proj.input = new_sort_input;
+                LogicalPlan::Projection(new_proj)
+            }
+            LogicalPlan::SubqueryAlias(sq) => LogicalPlan::SubqueryAlias(
+                SubqueryAlias::try_new(new_sort_input, sq.alias.clone())?,
+            ),
+            _ => {
+                return internal_err!(
+                    "push_topk_through_join: unexpected intermediate node: {}",
+                    node.display()
+                );
+            }
+        });
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
+    Ok(Transformed::yes(LogicalPlan::Sort(SortPlan {
+        expr: sort.expr.clone(),
+        input: new_sort_input,
+        fetch: sort.fetch,
+    })))
 }
 
 /// Replace column references in sort expressions using a name→expr map.
-/// Uses `transform()` for deep replacement (handles nested expressions
-/// like `-t1.b` where the column is inside a Negative wrapper).
-///
-/// Example with `replace_map = {"sub.b" → Column(t1.b)}`:
-///
-/// ```text
-/// Input:  [sub.b ASC]           → Output: [t1.b ASC]         (simple column)
-/// Input:  [(- sub.b) ASC]       → Output: [(- t1.b) ASC]     (nested column)
-/// Input:  [sub.a ASC, sub.b ASC] → Output: [t1.a ASC, t1.b ASC] (multiple)
-/// ```
 fn replace_columns_in_sort_exprs(
     sort_exprs: &[SortExpr],
-    replace_map: &std::collections::HashMap<String, Expr>,
+    replace_map: &HashMap<String, Expr>,
 ) -> Result<Vec<SortExpr>> {
     sort_exprs
         .iter()
@@ -403,18 +296,11 @@ fn replace_columns_in_sort_exprs(
 
 /// Resolve sort expressions through a projection by replacing column
 /// references with the underlying projection expressions.
-///
-/// Example: sort expr is `neg_b ASC` and projection has `-t1.b AS neg_b`:
-///
-/// ```text
-/// Input sort exprs:  [neg_b ASC]
-/// Output sort exprs: [(- t1.b) ASC]
-/// ```
 fn resolve_sort_exprs_through_projection(
     sort_exprs: &[SortExpr],
     projection: &Projection,
 ) -> Result<Vec<SortExpr>> {
-    let replace_map: std::collections::HashMap<String, Expr> = projection
+    let replace_map: HashMap<String, Expr> = projection
         .schema
         .iter()
         .zip(projection.expr.iter())
@@ -427,10 +313,7 @@ fn resolve_sort_exprs_through_projection(
     replace_columns_in_sort_exprs(sort_exprs, &replace_map)
 }
 
-/// Compare two slices of `SortExpr` for equality.
-///
-/// Uses structural equality on the sort expressions (direction, nulls_first,
-/// and the expression tree).
+/// Compare two slices of `SortExpr` for structural equality.
 fn sort_exprs_equal(a: &[SortExpr], b: &[SortExpr]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b.iter()).all(|(left, right)| {
@@ -440,20 +323,13 @@ fn sort_exprs_equal(a: &[SortExpr], b: &[SortExpr]) -> bool {
         })
 }
 
-/// Resolve sort expressions through a SubqueryAlias by replacing the alias
-/// qualifier with the input schema's qualifier.
-///
-/// Example: SubqueryAlias is `sub` wrapping a join whose left input is `t1`:
-///
-/// ```text
-/// Input sort exprs:  [sub.b ASC]
-/// Output sort exprs: [t1.b ASC]
-/// ```
+/// Resolve sort expressions through a `SubqueryAlias` by replacing the
+/// alias qualifier with the input schema's qualifier.
 fn resolve_sort_exprs_through_subquery_alias(
     sort_exprs: &[SortExpr],
     subquery_alias: &SubqueryAlias,
 ) -> Result<Vec<SortExpr>> {
-    let replace_map: std::collections::HashMap<String, Expr> = subquery_alias
+    let replace_map: HashMap<String, Expr> = subquery_alias
         .schema
         .iter()
         .zip(subquery_alias.input.schema().iter())
@@ -468,24 +344,7 @@ fn resolve_sort_exprs_through_subquery_alias(
 }
 
 /// Rebuild the tree from `root` down to an existing Sort whose expressions
-/// match `target_exprs`, tightening its fetch to `new_fetch`. The path from
-/// `root` to the target Sort may contain Projections and SubqueryAliases.
-///
-/// Before (new_fetch=2):
-/// ```text
-/// SubqueryAlias(t1)
-///   Projection(a, b AS renamed_b)
-///     Sort(t1.b ASC, fetch=10)       ← target, fetch too large
-///       TableScan: t1
-/// ```
-///
-/// After:
-/// ```text
-/// SubqueryAlias(t1)                  ← rebuilt
-///   Projection(a, b AS renamed_b)    ← rebuilt
-///     Sort(t1.b ASC, fetch=2)        ← tightened
-///       TableScan: t1
-/// ```
+/// match `target_exprs`, tightening its fetch to `new_fetch`.
 fn rebuild_with_tightened_sort(
     root: &LogicalPlan,
     target_exprs: &[SortExpr],
@@ -528,6 +387,7 @@ mod test {
     use super::*;
     use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
+    use crate::push_down_limit::PushDownLimit;
     use crate::test::*;
 
     use datafusion_expr::col;
@@ -539,7 +399,8 @@ mod test {
             @ $expected:literal $(,)?
         ) => {{
             let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
-            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(PushDownTopKThroughJoin::new())];
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> =
+                vec![Arc::new(PushDownLimit::new())];
             assert_optimized_plan_eq_snapshot!(
                 optimizer_ctx,
                 rules,
@@ -733,9 +594,8 @@ mod test {
         )
     }
 
-    /// Inner join with no equi-keys but a non-empty filter: the filter can
-    /// drop rows from either side, so pushing fetch=N can produce fewer
-    /// output rows than the unpushed plan.
+    /// Inner join with no equi-keys but a non-empty filter: filter can drop
+    /// rows from either side, so pushing fetch=N is unsafe.
     #[test]
     fn topk_not_pushed_for_inner_with_filter_no_on() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -761,8 +621,7 @@ mod test {
         )
     }
 
-    /// LEFT MARK join: one record per left row (with extra mark column),
-    /// so left is fully preserved → pushdown to left.
+    /// LEFT MARK join: one record per left row → pushdown to left.
     #[test]
     fn topk_pushed_to_left_of_left_mark_join() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -845,9 +704,7 @@ mod test {
         )
     }
 
-    /// Join with a non-equijoin filter → pushdown still happens.
-    /// Outer joins preserve all rows from the preserved side regardless
-    /// of the ON filter.
+    /// Join with non-equijoin filter → pushdown still happens.
     #[test]
     fn topk_pushed_with_join_filter() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -874,7 +731,7 @@ mod test {
         )
     }
 
-    /// Sort without fetch (unbounded) → no pushdown.
+    /// Sort without fetch → no pushdown.
     #[test]
     fn topk_not_pushed_without_fetch() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -901,7 +758,7 @@ mod test {
         )
     }
 
-    /// LEFT SEMI JOIN: pushing fetch is unsafe (not all left rows appear in output).
+    /// LEFT SEMI JOIN: not all left rows appear in output → no pushdown.
     #[test]
     fn topk_not_pushed_for_left_semi_join() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -928,7 +785,7 @@ mod test {
         )
     }
 
-    /// LEFT ANTI JOIN: pushing fetch is unsafe (not all left rows appear in output).
+    /// LEFT ANTI JOIN: not all left rows appear in output → no pushdown.
     #[test]
     fn topk_not_pushed_for_left_anti_join() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -955,7 +812,7 @@ mod test {
         )
     }
 
-    /// RIGHT SEMI JOIN: pushing fetch is unsafe (not all right rows appear in output).
+    /// RIGHT SEMI JOIN: not all right rows appear in output → no pushdown.
     #[test]
     fn topk_not_pushed_for_right_semi_join() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -982,7 +839,7 @@ mod test {
         )
     }
 
-    /// RIGHT ANTI JOIN: pushing fetch is unsafe (not all right rows appear in output).
+    /// RIGHT ANTI JOIN: not all right rows appear in output → no pushdown.
     #[test]
     fn topk_not_pushed_for_right_anti_join() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -1045,7 +902,6 @@ mod test {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // Child already has Sort(b ASC, fetch=10); our outer Sort has fetch=3 (tighter).
         let t1_with_sort = LogicalPlanBuilder::from(t1)
             .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(10))?
             .build()?;
@@ -1078,7 +934,6 @@ mod test {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // Child already has Sort(b ASC, fetch=2); our outer Sort has fetch=5 (looser).
         let t1_with_sort = LogicalPlanBuilder::from(t1)
             .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(2))?
             .build()?;
@@ -1123,7 +978,7 @@ mod test {
         Ok(())
     }
 
-    /// Projection alias: sort expr references an alias that maps to a negation.
+    /// Projection alias: sort expr references an alias mapping to a negation.
     #[test]
     fn resolve_through_projection_alias() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -1263,8 +1118,6 @@ mod test {
     }
 
     /// Inner Sort has different exprs WITH fetch → stacked sorts.
-    /// Sort(b, fetch=2) is inserted above Sort(a, fetch=5). Re-sorting
-    /// 5 rows is cheap and reduces join input from 5 to 2.
     #[test]
     fn topk_stacked_when_child_has_different_exprs_with_fetch() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -1298,8 +1151,6 @@ mod test {
     }
 
     /// Inner Sort has different exprs WITHOUT fetch → stacked sorts.
-    /// Full sort doesn't limit rows, so pushed Sort(fetch=2) is the
-    /// only row reduction before the join.
     #[test]
     fn topk_stacked_when_child_has_different_exprs_no_fetch() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
