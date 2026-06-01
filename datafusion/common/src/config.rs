@@ -1124,6 +1124,22 @@ config_namespace! {
         /// into the file scan phase.
         pub enable_topk_dynamic_filter_pushdown: bool, default = true
 
+        /// When set to true, uncorrelated scalar subqueries are
+        /// left in the logical plan and executed by `ScalarSubqueryExec` during
+        /// physical execution. When set to false, all scalar subqueries
+        /// (including uncorrelated ones) are rewritten to left joins by the
+        /// `ScalarSubqueryToJoin` optimizer rule.
+        ///
+        /// Note disabling this option is not recommended. It restores
+        /// pre <https://github.com/apache/datafusion/pull/21240>
+        /// behavior, which silently produces incorrect results for
+        /// multi-row subqueries and does not support scalar subqueries in
+        /// ORDER BY / JOIN ON / aggregate-function arguments. This option is
+        /// intended as a temporary escape hatch for distributed execution
+        /// frameworks and is planned to be removed in a future DataFusion
+        /// release.
+        pub enable_physical_uncorrelated_scalar_subquery: bool, default = true
+
         /// When set to true, the optimizer will attempt to push down Join dynamic filters
         /// into the file scan phase.
         pub enable_join_dynamic_filter_pushdown: bool, default = true
