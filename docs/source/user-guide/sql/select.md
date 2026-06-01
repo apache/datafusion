@@ -813,7 +813,9 @@ SELECT age, person FROM table_name ORDER BY age DESC NULLS LAST;
 ```
 
 With the DuckDB dialect, DataFusion supports `ORDER BY ALL`, which orders by
-every expression in the `SELECT` list from left to right:
+every column in the `SELECT` list from left to right. All selected items must
+be column references; ordering by computed expressions such as `a + b` is not
+supported:
 
 ```sql
 SET datafusion.sql_parser.dialect = 'DuckDB';
@@ -856,13 +858,7 @@ SELECT age, person FROM table_name LIMIT 20, 10;
 query |> pipe_operator [|> pipe_operator ...]
 ```
 
-DataFusion supports BigQuery-style pipe operators (`|>`). The default generic
-dialect accepts this syntax, and it is also available when the SQL dialect is
-set to `BigQuery`:
-
-```sql
-set datafusion.sql_parser.dialect = 'BigQuery';
-```
+DataFusion supports BigQuery-style pipe operators (`|>`).
 
 DataFusion currently supports the following pipe operators:
 
