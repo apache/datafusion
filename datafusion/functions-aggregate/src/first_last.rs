@@ -555,9 +555,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
 
         let filter_validity = opt_filter.map(filter_to_validity);
 
-        for (idx_in_val, group_idx) in group_indices.iter().enumerate() {
-            let group_idx = *group_idx;
-
+        for (idx_in_val, &group_idx) in group_indices.iter().enumerate() {
             let passed_filter = filter_validity
                 .as_ref()
                 .is_none_or(|validity| validity.value(idx_in_val));
@@ -1429,6 +1427,32 @@ mod tests {
 
     use super::*;
 
+    fn new_int64_first_last_group_acc(
+        pick_first_in_group: bool,
+    ) -> Result<FirstLastGroupsAccumulator<PrimitiveValueState<Int64Type>>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+        ]));
+
+        let sort_keys = [PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            sort_keys.into(),
+            true,
+            &[DataType::Int64],
+            pick_first_in_group,
+        )
+    }
+
+    fn nullable_bool_filter(values: Vec<bool>, valid: Vec<bool>) -> BooleanArray {
+        BooleanArray::new(BooleanBuffer::from(values), Some(NullBuffer::from(valid)))
+    }
+
     #[test]
     fn test_first_last_value_value() -> Result<()> {
         let mut first_accumulator =
@@ -1629,32 +1653,13 @@ mod tests {
 
     #[test]
     fn test_first_group_acc_rejects_null_filter_with_true_value_bit() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, true),
-            Field::new("c", DataType::Int64, true),
-        ]));
-
-        let sort_keys = [PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
-            options: SortOptions::default(),
-        }];
-
-        let mut group_acc = FirstLastGroupsAccumulator::try_new(
-            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
-            sort_keys.into(),
-            true,
-            &[DataType::Int64],
-            true,
-        )?;
+        let mut group_acc = new_int64_first_last_group_acc(true)?;
 
         let values_and_orderings: Vec<ArrayRef> = vec![
             Arc::new(Int64Array::from(vec![10, 20])),
             Arc::new(Int64Array::from(vec![1, 2])),
         ];
-        let filter = BooleanArray::new(
-            BooleanBuffer::from(vec![true, false]),
-            Some(NullBuffer::from(vec![false, true])),
-        );
+        let filter = nullable_bool_filter(vec![true, false], vec![false, true]);
 
         group_acc.update_batch(&values_and_orderings, &[0, 0], Some(&filter), 1)?;
 
@@ -1668,32 +1673,14 @@ mod tests {
 
     #[test]
     fn test_last_group_acc_rejects_null_filter_with_true_value_bit() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, true),
-            Field::new("c", DataType::Int64, true),
-        ]));
-
-        let sort_keys = [PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
-            options: SortOptions::default(),
-        }];
-
-        let mut group_acc = FirstLastGroupsAccumulator::try_new(
-            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
-            sort_keys.into(),
-            true,
-            &[DataType::Int64],
-            false,
-        )?;
+        let mut group_acc = new_int64_first_last_group_acc(false)?;
 
         let values_and_orderings: Vec<ArrayRef> = vec![
             Arc::new(Int64Array::from(vec![10, 20, 30])),
             Arc::new(Int64Array::from(vec![1, 2, 3])),
         ];
-        let filter = BooleanArray::new(
-            BooleanBuffer::from(vec![true, true, false]),
-            Some(NullBuffer::from(vec![false, true, true])),
-        );
+        let filter =
+            nullable_bool_filter(vec![true, true, false], vec![false, true, true]);
 
         group_acc.update_batch(&values_and_orderings, &[0, 0, 0], Some(&filter), 1)?;
 
@@ -1708,33 +1695,14 @@ mod tests {
     #[test]
     fn test_first_group_acc_merge_rejects_null_filter_with_true_value_bit() -> Result<()>
     {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, true),
-            Field::new("c", DataType::Int64, true),
-        ]));
-
-        let sort_keys = [PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
-            options: SortOptions::default(),
-        }];
-
-        let mut group_acc = FirstLastGroupsAccumulator::try_new(
-            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
-            sort_keys.into(),
-            true,
-            &[DataType::Int64],
-            true,
-        )?;
+        let mut group_acc = new_int64_first_last_group_acc(true)?;
 
         let states: Vec<ArrayRef> = vec![
             Arc::new(Int64Array::from(vec![10, 20])),
             Arc::new(Int64Array::from(vec![1, 2])),
             Arc::new(BooleanArray::from(vec![true, true])),
         ];
-        let filter = BooleanArray::new(
-            BooleanBuffer::from(vec![true, true]),
-            Some(NullBuffer::from(vec![false, true])),
-        );
+        let filter = nullable_bool_filter(vec![true, true], vec![false, true]);
 
         group_acc.merge_batch(&states, &[0, 0], Some(&filter), 1)?;
 
