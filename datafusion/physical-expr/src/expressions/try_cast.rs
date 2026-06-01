@@ -654,12 +654,21 @@ mod proto_tests {
     use crate::proto_test_util::{
         StubDecoder, StubEncoder, UnreachableDecoder, column_node,
     };
+    use arrow::datatypes::Field;
     use datafusion_common::DataFusionError;
     use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf::{
-        ArrowType, PhysicalExprNode, PhysicalTryCastNode, physical_expr_node,
+        ArrowType, EmptyMessage, PhysicalExprNode, PhysicalTryCastNode,
+        arrow_type::ArrowTypeEnum, physical_expr_node,
     };
+
+    /// Build an `ArrowType` proto node representing `Int64`.
+    fn int64_arrow_type() -> ArrowType {
+        ArrowType {
+            arrow_type_enum: Some(ArrowTypeEnum::Int64(EmptyMessage {})),
+        }
+    }
 
     fn try_cast_node(
         expr: Option<Box<PhysicalExprNode>>,
@@ -668,10 +677,7 @@ mod proto_tests {
         PhysicalExprNode {
             expr_id: None,
             expr_type: Some(physical_expr_node::ExprType::TryCast(Box::new(
-                PhysicalTryCastNode {
-                    expr,
-                    arrow_type: arrow_type.map(Box::new),
-                },
+                PhysicalTryCastNode { expr, arrow_type },
             ))),
         }
     }
@@ -716,9 +722,8 @@ mod proto_tests {
 
     #[test]
     fn try_from_proto_decodes_try_cast_expr() {
-        // Int64 arrow type code = 10
-        let arrow_type = ArrowType { arrow_type_enum: Some(datafusion_proto_models::protobuf::arrow_type::ArrowTypeEnum::Int64(datafusion_proto_models::protobuf::EmptyMessage {})) };
-        let node = try_cast_node(Some(Box::new(column_node("a"))), Some(arrow_type));
+        let node =
+            try_cast_node(Some(Box::new(column_node("a"))), Some(int64_arrow_type()));
         let schema = Schema::empty();
         let decoder = StubDecoder::ok();
         let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
@@ -745,8 +750,7 @@ mod proto_tests {
 
     #[test]
     fn try_from_proto_rejects_missing_expr() {
-        let arrow_type = ArrowType { arrow_type_enum: Some(datafusion_proto_models::protobuf::arrow_type::ArrowTypeEnum::Int64(datafusion_proto_models::protobuf::EmptyMessage {})) };
-        let node = try_cast_node(None, Some(arrow_type));
+        let node = try_cast_node(None, Some(int64_arrow_type()));
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
         let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
@@ -770,8 +774,8 @@ mod proto_tests {
 
     #[test]
     fn try_from_proto_propagates_expr_decode_error() {
-        let arrow_type = ArrowType { arrow_type_enum: Some(datafusion_proto_models::protobuf::arrow_type::ArrowTypeEnum::Int64(datafusion_proto_models::protobuf::EmptyMessage {})) };
-        let node = try_cast_node(Some(Box::new(column_node("a"))), Some(arrow_type));
+        let node =
+            try_cast_node(Some(Box::new(column_node("a"))), Some(int64_arrow_type()));
         let schema = Schema::empty();
         let decoder = StubDecoder::failing_on(1);
         let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
