@@ -191,9 +191,7 @@ fn apply_date_subtraction(
 ) -> Result<ColumnarValue> {
     match (lhs.data_type(), rhs.data_type()) {
         (DataType::Date32, DataType::Date32) => {
-            subtract_date_to_days::<Date32Type>(lhs, rhs, |l, r| {
-                i64::from(l) - i64::from(r)
-            })
+            subtract_date_to_days::<Date32Type>(lhs, rhs, |l, r| l - r)
         }
         (DataType::Date64, DataType::Date64) => {
             subtract_date_to_days::<Date64Type>(lhs, rhs, |l, r| {
