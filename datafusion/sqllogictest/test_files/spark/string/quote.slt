@@ -146,7 +146,7 @@ SELECT quote('special\n\t\r');
 'special\n\t\r'
 
 query T
-SELECT quote("Don't");
+SELECT quote(concat('Don', '\'','t'));
 ----
 'Don\'t'
 
