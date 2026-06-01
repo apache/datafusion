@@ -277,6 +277,16 @@ mod proto_tests {
             node.expr_type,
             Some(physical_expr_node::ExprType::Literal(_))
         ));
+
+        // Decode and verify the null payload round-trips correctly.
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let decoded = Literal::try_from_proto(&node, &dec_ctx).unwrap();
+        let lit = decoded
+            .downcast_ref::<Literal>()
+            .expect("decoded expr should be a Literal");
+        assert_eq!(lit.value(), &ScalarValue::Int32(None));
     }
 
     // ── try_from_proto ───────────────────────────────────────────────────────
