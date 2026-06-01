@@ -1178,8 +1178,13 @@ config_namespace! {
         /// in parallel using the provided `target_partitions` level
         pub repartition_aggregations: bool, default = true
 
-        /// Minimum total files size in bytes to perform file scan repartitioning.
-        pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
+        /// Minimum total file size in bytes for file-group byte-range
+        /// splitting to fire. Files (or merged file groups) smaller than this
+        /// stay as one partition. Lower values produce more, smaller
+        /// partitions — better at filling `target_partitions` worth of cores
+        /// when files are modestly sized, at the cost of slightly more
+        /// per-partition open / metadata-load overhead.
+        pub repartition_file_min_size: usize, default = 1024 * 1024
 
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
         /// using the provided `target_partitions` level

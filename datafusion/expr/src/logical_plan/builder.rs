@@ -1335,8 +1335,11 @@ impl LogicalPlanBuilder {
         if explain_option.analyze {
             Ok(Self::new(LogicalPlan::Analyze(Analyze {
                 verbose: explain_option.verbose,
+                format: explain_option.format,
                 input: self.plan,
                 schema,
+                analyze_level: explain_option.analyze_level,
+                analyze_categories: explain_option.analyze_categories,
             })))
         } else {
             let stringified_plans =
@@ -1349,6 +1352,7 @@ impl LogicalPlanBuilder {
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,
+                show_statistics: explain_option.show_statistics,
             })))
         }
     }

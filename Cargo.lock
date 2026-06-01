@@ -2013,6 +2013,7 @@ name = "datafusion-datasource-parquet"
 version = "53.1.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "async-trait",
  "bytes",
  "chrono",
@@ -2463,6 +2464,7 @@ dependencies = [
  "rand 0.9.4",
  "rstest",
  "rstest_reuse",
+ "serde_json",
  "tokio",
 ]
 
@@ -2619,6 +2621,7 @@ dependencies = [
  "chrono",
  "clap",
  "datafusion",
+ "datafusion-datasource",
  "datafusion-spark",
  "datafusion-substrait",
  "env_logger",

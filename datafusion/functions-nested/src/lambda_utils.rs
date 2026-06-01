@@ -153,7 +153,7 @@ pub(crate) mod test_utils {
     }
 
     pub(crate) fn eval_hof_on_i32_list(
-        func: Arc<dyn HigherOrderUDF>,
+        func: Arc<HigherOrderUDF>,
         list: impl Array + Clone + 'static,
         lambda_body: Expr,
     ) -> Result<ArrayRef> {

@@ -737,6 +737,13 @@ impl BatchPartitioner {
                     num_input_partitions,
                 ))
             }
+            Partitioning::Range(_) => {
+                // Range repartition execution is tracked in
+                // https://github.com/apache/datafusion/issues/22397
+                not_impl_err!(
+                    "Range partitioning execution is not implemented by RepartitionExec"
+                )
+            }
             other => {
                 not_impl_err!("Unsupported repartitioning scheme {other:?}")
             }
@@ -1430,6 +1437,13 @@ impl ExecutionPlan for RepartitionExec {
                 }
                 Partitioning::Hash(new_partitions, *size)
             }
+            Partitioning::Range(_) => {
+                // Range partitioning optimizer propagation is tracked in
+                // https://github.com/apache/datafusion/issues/22395
+                return not_impl_err!(
+                    "Projection pushdown through RepartitionExec with range partitioning is not implemented"
+                );
+            }
             others => others.clone(),
         };
 
@@ -1466,6 +1480,18 @@ impl ExecutionPlan for RepartitionExec {
         if !self.maintains_input_order()[0] {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
+        match self.partitioning() {
+            Partitioning::Range(_) => {
+                // Range partitioning optimizer propagation is tracked in
+                // https://github.com/apache/datafusion/issues/22395
+                return not_impl_err!(
+                    "Sort pushdown through RepartitionExec with range partitioning is not implemented"
+                );
+            }
+            Partitioning::RoundRobinBatch(_)
+            | Partitioning::Hash(_, _)
+            | Partitioning::UnknownPartitioning(_) => {}
+        }
 
         // Delegate to the child and wrap with a new RepartitionExec
         self.input.try_pushdown_sort(order)?.try_map(|new_input| {
@@ -1489,6 +1515,13 @@ impl ExecutionPlan for RepartitionExec {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
+            Range(_) => {
+                // Range repartition execution is tracked in
+                // https://github.com/apache/datafusion/issues/22397
+                return not_impl_err!(
+                    "Changing RepartitionExec partition counts with range partitioning is not implemented"
+                );
+            }
         };
         Ok(Some(Arc::new(Self {
             input: Arc::clone(&self.input),
@@ -1616,6 +1649,13 @@ impl RepartitionExec {
                     input_partition,
                     num_input_partitions,
                 )
+            }
+            Partitioning::Range(_) => {
+                // Range repartition execution is tracked in
+                // https://github.com/apache/datafusion/issues/22397
+                return not_impl_err!(
+                    "Range partitioning execution is not implemented by RepartitionExec"
+                );
             }
             other => {
                 return not_impl_err!("Unsupported repartitioning scheme {other:?}");
@@ -1968,12 +2008,14 @@ mod tests {
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
     use insta::assert_snapshot;
 
     #[test]
@@ -2264,6 +2306,40 @@ mod tests {
                 .contains("Unsupported repartitioning scheme UnknownPartitioning(1)"),
             "actual: {result_string}"
         );
+    }
+
+    #[tokio::test]
+    async fn unsupported_range_partitioning() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let batch = RecordBatch::try_from_iter(vec![(
+            "my_awesome_field",
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
+        )])?;
+
+        let schema = batch.schema();
+        let expr = col("my_awesome_field", &schema)?;
+        let input = MockExec::new(vec![Ok(batch)], Arc::clone(&schema));
+        let partitioning = Partitioning::Range(RangePartitioning::new(
+            [PhysicalSortExpr::new_default(expr)].into(),
+            vec![SplitPoint::new(vec![ScalarValue::Utf8(Some(
+                "foo".to_string(),
+            ))])],
+        ));
+        let exec = RepartitionExec::try_new(Arc::new(input), partitioning)?;
+        let output_stream = exec.execute(0, task_ctx)?;
+
+        let result_string = crate::common::collect(output_stream)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            result_string.contains(
+                "Range partitioning execution is not implemented by RepartitionExec"
+            ),
+            "actual: {result_string}"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
