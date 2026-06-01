@@ -65,6 +65,7 @@ use datafusion_expr::{
     utils::COUNT_STAR_EXPANSION,
 };
 use datafusion_functions::core::coalesce;
+use datafusion_functions::math::nanvl;
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
@@ -2525,6 +2526,78 @@ impl DataFrame {
                     .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
             })
             .collect()
+    }
+
+    /// Fill NaN values in specified columns with a given value
+    /// If no columns are specified (empty vector), applies to all columns
+    /// Only fills if the value can be cast to the column's type
+    ///
+    /// # Arguments
+    /// * `value` - Value to fill NaNs with
+    /// * `columns` - List of column names to fill. If empty, fills all columns.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::ScalarValue;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// // Fill NaN in only columns "a" and "c":
+    /// let df = df.fill_nan(ScalarValue::from(0.0), vec!["a".to_owned(), "c".to_owned()])?;
+    /// // Fill NaN across all columns:
+    /// let df = df.fill_nan(ScalarValue::from(0.0), vec![])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[expect(clippy::needless_pass_by_value)]
+    pub fn fill_nan(
+        &self,
+        value: ScalarValue,
+        columns: Vec<String>,
+    ) -> Result<DataFrame> {
+        let cols = if columns.is_empty() {
+            self.logical_plan()
+                .schema()
+                .fields()
+                .iter()
+                .map(Arc::clone)
+                .collect()
+        } else {
+            self.find_columns(&columns)?
+        };
+
+        let projections = self
+            .logical_plan()
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| {
+                if cols.contains(field) && field.data_type().is_floating() {
+                    // Try to cast fill value to column type. If the cast fails, fallback to the original column.
+                    match value.clone().cast_to(field.data_type()) {
+                        Ok(fill_value) => Expr::Alias(Alias {
+                            expr: Box::new(Expr::ScalarFunction(ScalarFunction {
+                                func: nanvl(),
+                                args: vec![col(field.name()), lit(fill_value)],
+                            })),
+                            relation: None,
+                            name: field.name().to_string(),
+                            metadata: None,
+                        }),
+                        Err(_) => col(field.name()),
+                    }
+                } else {
+                    col(field.name())
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.clone().select(projections)
     }
 
     /// Find qualified columns for this dataframe from names

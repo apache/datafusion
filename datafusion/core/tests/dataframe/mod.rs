@@ -6539,6 +6539,83 @@ async fn test_fill_null_all_columns() -> Result<()> {
     Ok(())
 }
 
+async fn create_nan_table() -> Result<DataFrame> {
+    // create a DataFrame with a NaN value in a float column "a" and a
+    // non-float column "b" that must stay untouched by fill_nan.
+    //    "+-----+---+",
+    //    "| a   | b |",
+    //    "+-----+---+",
+    //    "| 1.0 | 1 |",
+    //    "| NaN | 2 |",
+    //    "| 3.0 | 3 |",
+    //    "+-----+---+",
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Float64, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+    let a_values = Float64Array::from(vec![Some(1.0), Some(f64::NAN), Some(3.0)]);
+    let b_values = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(a_values), Arc::new(b_values)],
+    )?;
+
+    let ctx = SessionContext::new();
+    let table = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
+    ctx.register_table("t_nan", Arc::new(table))?;
+    let df = ctx.table("t_nan").await?;
+    Ok(df)
+}
+
+#[tokio::test]
+async fn test_fill_nan() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Fill NaNs in the float column "a" with 0.0.
+    let df_filled =
+        df.fill_nan(ScalarValue::Float64(Some(0.0)), vec!["a".to_string()])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 0.0 | 2 |
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_all_columns() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Fill NaNs across all columns. Only the float column "a" is affected;
+    // the non-float column "b" is left unchanged since NaN only exists for
+    // floating-point types.
+    let df_filled = df.fill_nan(ScalarValue::Float64(Some(0.0)), vec![])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 0.0 | 2 |
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    +-----+---+
+    "
+    );
+    Ok(())
+}
 #[tokio::test]
 async fn test_insert_into_casting_support() -> Result<()> {
     // Testing case1:
