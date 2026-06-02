@@ -59,11 +59,11 @@ select array_product(NULL);
 ----
 NULL
 
-# Empty array: returns 1.0 (multiplicative identity)
+# Empty array: no data to reduce, returns NULL
 query R
 select array_product(arrow_cast(make_array(), 'List(Float64)'));
 ----
-1
+NULL
 
 # LargeList input
 query R
@@ -117,7 +117,7 @@ select array_product(column1) from (values
 ----
 24
 NULL
-1
+NULL
 NULL
 10
 0

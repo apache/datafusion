@@ -46,9 +46,9 @@ make_udf_expr_and_func!(
     doc_section(label = "Array Functions"),
     description = "Returns the product of the elements in the input numeric array. \
                    NULL elements inside the array are skipped (matching SQL aggregate \
-                   convention). Returns NULL if the whole input is NULL or if every \
-                   element is NULL. Returns 1.0 for an empty array (multiplicative \
-                   identity). The result is always returned as `Float64`.",
+                   convention). Returns NULL if the input is NULL, every element is  \
+                   NULL, or the array is empty. The result is always returned as \
+                   `Float64`.",
     syntax_example = "array_product(array)",
     sql_example = r#"```sql
 > select array_product([1.0, 2.0, 3.0]);
@@ -153,23 +153,12 @@ fn general_array_product<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Arra
 
         let start = offsets[row].as_usize();
         let end = offsets[row + 1].as_usize();
-        let len = end - start;
 
-        // Empty list -> multiplicative identity. Distinguished here from
-        // all-NULL elements (which yield NULL): we have no data either way,
-        // but `[]` is structurally a known-empty product, while `[NULL,NULL]`
-        // means every value was unknown.
-        if len == 0 {
-            builder.append_value(1.0);
-            continue;
-        }
-
-        let slice = values.slice(start, len);
         let mut prod = 1.0_f64;
         let mut any_valid = false;
-        for i in 0..len {
-            if slice.is_valid(i) {
-                prod *= slice.value(i);
+        for i in start..end {
+            if values.is_valid(i) {
+                prod *= values.value(i);
                 any_valid = true;
             }
         }
