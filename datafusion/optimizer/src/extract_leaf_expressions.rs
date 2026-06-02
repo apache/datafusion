@@ -1143,6 +1143,13 @@ fn try_push_into_inputs(
         return Ok(None);
     }
 
+    // Unnest may output a column with the same name but different value/type
+    // than its input column. Name-based routing cannot distinguish those.
+    // On top of that Unnest can't go through the `node.with_new_exprs(node.expressions(), new_inputs)` rebuild
+    if matches!(node, LogicalPlan::Unnest(_)) {
+        return Ok(None);
+    }
+
     // SubqueryAlias remaps qualifiers between input and output.
     // Rewrite pairs/columns from alias-space to input-space before routing.
     let remapped = if let LogicalPlan::SubqueryAlias(sa) = node {
@@ -3031,6 +3038,50 @@ mod tests {
         Projection: __datafusion_extracted_1, test.id
           Projection: test.user, test.id, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1
             TableScan: test
+        "#);
+
+        Ok(())
+    }
+
+    /// Regression test for the `Assertion failed: expr.is_empty(): Unnest`
+    /// internal error.
+    ///
+    /// `try_push_into_inputs` rebuilds the parent node via
+    /// `node.with_new_exprs(node.expressions(), new_inputs)`. For `Unnest`,
+    /// `apply_expressions` exposes the `exec_columns` as `Expr::Column`s
+    /// (so `expressions()` is **non-empty**), but `with_new_exprs` for
+    /// `Unnest` immediately calls `assert_no_expressions(expr)?` and errors
+    /// out. The optimizer should treat `Unnest` as a barrier and bail
+    /// instead of attempting to push through it.
+    #[test]
+    fn test_no_push_through_unnest() -> Result<()> {
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let schema = Schema::new(vec![
+            Field::new("list_col", DataType::new_list(DataType::Int32, true), true),
+            Field::new("other_col", DataType::Int32, true),
+        ]);
+        let table_scan =
+            datafusion_expr::logical_plan::table_scan(Some("t"), &schema, None)?
+                .build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .unnest_column("list_col")?
+            .filter(leaf_udf(col("list_col"), "x").eq(lit(1i32)))?
+            .build()?;
+
+        let ctx = OptimizerContext::new().with_max_passes(1);
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        insta::assert_snapshot!(format!("{optimized}"), @r#"
+        Projection: list_col, t.other_col
+          Filter: __datafusion_extracted_1 = Int32(1)
+            Projection: leaf_udf(list_col, Utf8("x")) AS __datafusion_extracted_1, list_col, t.other_col
+              Unnest: lists[t.list_col|depth=1] structs[]
+                TableScan: t
         "#);
 
         Ok(())
