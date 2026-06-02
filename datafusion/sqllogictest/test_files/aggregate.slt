@@ -1836,6 +1836,50 @@ SELECT approx_distinct(c14) AS a, approx_distinct(c15) AS b, approx_distinct(arr
 ----
 18 60 60 60 60
 
+# approx_distinct over Boolean: exact count via flag-pair accumulator (0..=2).
+statement ok
+CREATE TABLE approx_distinct_bool_test (g INT, b BOOLEAN) AS VALUES
+  (1, true), (1, true), (1, NULL),
+  (2, false), (2, false),
+  (3, true), (3, false), (3, NULL), (3, true),
+  (4, NULL), (4, NULL);
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 1;
+----
+1
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 2;
+----
+1
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 3;
+----
+2
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 4;
+----
+0
+
+query II
+SELECT g, approx_distinct(b) FROM approx_distinct_bool_test GROUP BY g ORDER BY g;
+----
+1 1
+2 1
+3 2
+4 0
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test;
+----
+2
+
+statement ok
+DROP TABLE approx_distinct_bool_test;
+
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
 ##

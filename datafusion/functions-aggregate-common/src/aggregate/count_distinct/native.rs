@@ -27,13 +27,14 @@ use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
+use arrow::array::BooleanArray;
 use arrow::array::PrimitiveArray;
 use arrow::array::types::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::RandomState;
 
 use datafusion_common::ScalarValue;
-use datafusion_common::cast::{as_list_array, as_primitive_array};
+use datafusion_common::cast::{as_boolean_array, as_list_array, as_primitive_array};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_expr_common::accumulator::Accumulator;
@@ -516,5 +517,87 @@ impl Accumulator for Bitmap65536DistinctCountAccumulatorI16 {
 
     fn size(&self) -> usize {
         size_of_val(self) + 8192
+    }
+}
+
+/// Optimized COUNT DISTINCT accumulator for `Boolean` using two flags.
+///
+/// Tracks whether `false` and `true` have been observed; nulls are skipped.
+/// Result is always 0, 1, or 2.
+#[derive(Debug)]
+pub struct BooleanDistinctCountAccumulator {
+    seen: [bool; 2],
+}
+
+impl BooleanDistinctCountAccumulator {
+    pub fn new() -> Self {
+        Self { seen: [false; 2] }
+    }
+
+    #[inline]
+    fn count(&self) -> i64 {
+        self.seen.iter().filter(|&&b| b).count() as i64
+    }
+}
+
+impl Default for BooleanDistinctCountAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Accumulator for BooleanDistinctCountAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let arr = as_boolean_array(&values[0])?;
+        for value in arr.iter().flatten() {
+            self.seen[value as usize] = true;
+            if self.seen[0] && self.seen[1] {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        let arr = as_list_array(&states[0])?;
+        arr.iter().try_for_each(|maybe_list| {
+            if let Some(list) = maybe_list {
+                let list = as_boolean_array(&list)?;
+                for value in list.iter().flatten() {
+                    self.seen[value as usize] = true;
+                }
+            };
+            Ok(())
+        })
+    }
+
+    fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
+        let values: Vec<bool> = self
+            .seen
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &seen)| if seen { Some(idx != 0) } else { None })
+            .collect();
+
+        let arr = Arc::new(BooleanArray::from(values));
+        Ok(vec![
+            SingleRowListArrayBuilder::new(arr).build_list_scalar(),
+        ])
+    }
+
+    fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(self.count())))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
     }
 }
