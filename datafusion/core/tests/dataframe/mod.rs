@@ -6661,6 +6661,32 @@ async fn test_fill_nan_unknown_column() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_fill_nan_casts_fill_value() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Int32(0) is not the column's type (Float64) but can be cast to it, so the
+    // NaN is replaced with 0.0. Exercises the cross-type cast path — the other
+    // positive tests pass a Float64 value, which skips the actual cast.
+    let df_filled = df.fill_nan(ScalarValue::Int32(Some(0)), vec!["a".to_string()])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 0.0 | 2 |
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_fill_nan_uncastable_value() -> Result<()> {
     let df = create_nan_table().await?;
 
