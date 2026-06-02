@@ -39,7 +39,7 @@ pub struct FFI_ExpressionArgs {
 impl TryFrom<ExpressionArgs<'_>> for FFI_ExpressionArgs {
     type Error = DataFusionError;
 
-    fn try_from(args: ExpressionArgs) -> Result<Self, DataFusionError> {
+    fn try_from(args: ExpressionArgs) -> Result<Self> {
         let input_exprs = args
             .input_exprs()
             .iter()

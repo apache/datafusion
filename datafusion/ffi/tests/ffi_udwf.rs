@@ -82,7 +82,8 @@ mod tests {
             fn partition_evaluator(
                 &self,
                 _: datafusion_expr::function::PartitionEvaluatorArgs,
-            ) -> Result<Box<dyn datafusion::logical_expr::PartitionEvaluator>> {
+            ) -> Result<Box<dyn datafusion::logical_expr::PartitionEvaluator>>
+            {
                 unimplemented!()
             }
             fn field(
@@ -96,12 +97,8 @@ mod tests {
             }
         }
 
-        let doc = Documentation::builder(
-            DocSection::default(),
-            "description",
-            "syntax",
-        )
-        .build();
+        let doc = Documentation::builder(DocSection::default(), "description", "syntax")
+            .build();
         let original_udwf = Arc::new(WindowUDF::from(MockUDWFWithDoc {
             signature: datafusion::logical_expr::Signature::any(
                 0,
