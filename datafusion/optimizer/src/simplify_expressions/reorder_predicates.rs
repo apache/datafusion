@@ -25,9 +25,12 @@
 //! The cost of evaluating a predicate is assessed with a simple, conservative
 //! heuristic: we define an allow-list of cheap operations, and consider an
 //! expression to be cheap if it consists ONLY of cheap operations; everything
-//! else is considered expensive.
+//! else is considered expensive. The sort of stable, so order within each
+//! class is preserved.
 //!
-//! The sort is stable, so order within each class is preserved.
+//! This reordering scheme is intentionally simple; many enhancements are
+//! possible (e.g., consider both cost and selectivity, build a more complex
+//! cost model, add estimated evaluation cost for individual UDFs).
 
 use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::{BinaryExpr, Expr, Operator};
