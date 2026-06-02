@@ -297,11 +297,15 @@ impl fmt::Display for CreateExternalTable {
                 if idx > 0 {
                     write!(f, ", ")?;
                 }
-                write!(f, "{location}")?;
+                write!(f, "{}", Value::SingleQuotedString(location.clone()))?;
             }
             write!(f, ")")
         } else {
-            write!(f, "LOCATION {}", self.location)
+            write!(
+                f,
+                "LOCATION {}",
+                Value::SingleQuotedString(self.location.clone())
+            )
         }
     }
 }
@@ -1423,6 +1427,24 @@ mod tests {
             ..make_create_external_table_with_locations(&["foo.csv", "bar.csv"])
         });
         expect_parse_ok(sql, expected)?;
+
+        assert_eq!(
+            Statement::CreateExternalTable(make_create_external_table("foo.csv"))
+                .to_string(),
+            "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv'"
+        );
+        assert_eq!(
+            Statement::CreateExternalTable(make_create_external_table_with_locations(&[
+                "foo.csv", "bar.csv"
+            ]))
+            .to_string(),
+            "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION ('foo.csv', 'bar.csv')"
+        );
+        assert_eq!(
+            Statement::CreateExternalTable(make_create_external_table("foo'bar.csv"))
+                .to_string(),
+            "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo''bar.csv'"
+        );
 
         // positive case: leading space
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'     ";
