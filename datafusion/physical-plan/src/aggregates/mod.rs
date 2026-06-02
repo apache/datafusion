@@ -1065,8 +1065,7 @@ impl AggregateExec {
 
     fn should_display_stream_name(&self, t: DisplayFormatType) -> bool {
         matches!(t, DisplayFormatType::Verbose)
-            || self.can_use_raw_partial_hash_stream()
-            || self.can_use_partial_final_hash_stream()
+            || self.uses_blocked_hash_stream_for_display()
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one

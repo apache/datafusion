@@ -45,9 +45,9 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [max(traces.timestamp)@1 DESC], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[max(traces.timestamp)@1 DESC], preserve_partitioning=[true]
-03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], stream=PartialFinalHashAggregateStream
+03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], stream=RawPartialHashAggregateStream
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TI
@@ -122,9 +122,9 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [min(traces.timestamp)@1 DESC], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[min(traces.timestamp)@1 DESC], preserve_partitioning=[true]
-03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[min(traces.timestamp)], stream=PartialFinalHashAggregateStream
+03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[min(traces.timestamp)]
 04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[min(traces.timestamp)], stream=RawPartialHashAggregateStream
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[min(traces.timestamp)]
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -137,9 +137,9 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [max(traces.timestamp)@1 ASC NULLS LAST], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[max(traces.timestamp)@1 ASC NULLS LAST], preserve_partitioning=[true]
-03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], stream=PartialFinalHashAggregateStream
+03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], stream=RawPartialHashAggregateStream
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -152,9 +152,9 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [trace_id@0 ASC NULLS LAST], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[trace_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], stream=PartialFinalHashAggregateStream
+03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 04)------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], stream=RawPartialHashAggregateStream
+05)--------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TI

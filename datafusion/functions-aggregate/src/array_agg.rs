@@ -34,7 +34,9 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{
     SingleRowListArrayBuilder, compare_rows, get_row_at_idx, take_function_args,
 };
-use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err, exec_err};
+use datafusion_common::{
+    Result, ScalarValue, assert_eq_or_internal_err, exec_err, internal_err,
+};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -651,8 +653,15 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
     /// entries into group order, then calls `interleave` to gather
     /// the values into a flat array that backs the output `ListArray`.
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!(
+                "EmitTo::Block is not supported by ArrayAggGroupsAccumulator"
+            );
+        }
+
         let emit_groups = match emit_to {
-            EmitTo::All | EmitTo::Block => self.num_groups,
+            EmitTo::All => self.num_groups,
+            EmitTo::Block => unreachable!("handled above"),
             EmitTo::First(n) => n,
         };
 
@@ -711,7 +720,8 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
 
         // Step 4: Release state for emitted groups.
         match emit_to {
-            EmitTo::All | EmitTo::Block => self.clear_state(),
+            EmitTo::All => self.clear_state(),
+            EmitTo::Block => unreachable!("handled above"),
             EmitTo::First(_) => self.compact_retained_state(emit_groups)?,
         }
 

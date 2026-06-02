@@ -296,7 +296,7 @@ impl NullState {
     /// resets the internal state appropriately
     pub fn build(&mut self, emit_to: EmitTo) -> Option<NullBuffer> {
         match emit_to {
-            EmitTo::All | EmitTo::Block => {
+            EmitTo::All => {
                 let old_seen = std::mem::take(&mut self.seen_values);
                 match old_seen {
                     SeenValues::All { .. } => None,
@@ -305,6 +305,7 @@ impl NullState {
                     }
                 }
             }
+            EmitTo::Block => unreachable!("handled by caller"),
             EmitTo::First(n) => match &mut self.seen_values {
                 SeenValues::All { num_values } => {
                     *num_values = num_values.saturating_sub(n);

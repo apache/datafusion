@@ -773,9 +773,9 @@ physical_plan
 04)------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, t1_id@1)], projection=[id@0, __always_true@3, cnt@1]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)--------ProjectionExec: expr=[count(Int64(1))@1 as cnt, t1_id@0 as t1_id, true as __always_true]
-07)----------AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))], stream=PartialFinalHashAggregateStream
+07)----------AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
 08)------------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=1
-09)--------------AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))], stream=RawPartialHashAggregateStream
+09)--------------AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
 10)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Verify LEFT lateral without aggregate decorrelates to left join

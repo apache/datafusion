@@ -20,8 +20,8 @@ use arrow::array::{
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ArrowPrimitiveType, Field};
-use datafusion_common::HashSet;
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::{HashSet, internal_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 use std::hash::Hash;
 use std::mem::size_of;
@@ -82,12 +82,19 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> datafusion_common::Result<ArrayRef> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!(
+                "EmitTo::Block is not supported by PrimitiveDistinctCountGroupsAccumulator"
+            );
+        }
+
         let counts = emit_to.take_needed(&mut self.counts);
 
         match emit_to {
-            EmitTo::All | EmitTo::Block => {
+            EmitTo::All => {
                 self.seen.clear();
             }
+            EmitTo::Block => unreachable!("handled above"),
             EmitTo::First(n) => {
                 let mut remaining = HashSet::default();
                 for (group_idx, value) in self.seen.drain() {
@@ -103,8 +110,15 @@ where
     }
 
     fn state(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!(
+                "EmitTo::Block is not supported by PrimitiveDistinctCountGroupsAccumulator"
+            );
+        }
+
         let num_emitted = match emit_to {
-            EmitTo::All | EmitTo::Block => self.counts.len(),
+            EmitTo::All => self.counts.len(),
+            EmitTo::Block => unreachable!("handled above"),
             EmitTo::First(n) => n,
         };
 
@@ -120,7 +134,7 @@ where
         let mut all_values = vec![T::Native::default(); total as usize];
         let mut cursors: Vec<i32> = offsets[..num_emitted].to_vec();
 
-        if matches!(emit_to, EmitTo::All | EmitTo::Block) {
+        if matches!(emit_to, EmitTo::All) {
             for (group_idx, value) in self.seen.drain() {
                 let pos = cursors[group_idx] as usize;
                 all_values[pos] = value;

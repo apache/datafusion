@@ -1047,14 +1047,14 @@ fn join_after_agg_alias() -> Result<()> {
         plan_distrib,
         @r"
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, a2@0)]
-      AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[], stream=PartialFinalHashAggregateStream
+      AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]
         RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10
-          AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[], stream=RawPartialHashAggregateStream
+          AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]
             RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[], stream=PartialFinalHashAggregateStream
+      AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]
         RepartitionExec: partitioning=Hash([a2@0], 10), input_partitions=10
-          AggregateExec: mode=Partial, gby=[a@0 as a2], aggr=[], stream=RawPartialHashAggregateStream
+          AggregateExec: mode=Partial, gby=[a@0 as a2], aggr=[]
             RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
@@ -1105,14 +1105,14 @@ fn hash_join_key_ordering() -> Result<()> {
         @r"
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b1@1, b@0), (a1@0, a@1)]
       ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
-        AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[], stream=PartialFinalHashAggregateStream
+        AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]
           RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10
-            AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[], stream=RawPartialHashAggregateStream
+            AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]
               RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                 DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[], stream=PartialFinalHashAggregateStream
+      AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]
         RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10
-          AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+          AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
             RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
@@ -1829,16 +1829,16 @@ fn smj_join_key_ordering() -> Result<()> {
       SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[true]
         ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
           ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
-            AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[], stream=PartialFinalHashAggregateStream
+            AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]
               RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10
-                AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[], stream=RawPartialHashAggregateStream
+                AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]
                   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
       SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[true]
         ProjectionExec: expr=[a@1 as a2, b@0 as b2]
-          AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[], stream=PartialFinalHashAggregateStream
+          AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]
             RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10
-              AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+              AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
                 RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     ");
@@ -1850,16 +1850,16 @@ fn smj_join_key_ordering() -> Result<()> {
       SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[true]
         ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
           ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
-            AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[], stream=PartialFinalHashAggregateStream
+            AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]
               RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10
-                AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[], stream=RawPartialHashAggregateStream
+                AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]
                   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
       SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[true]
         ProjectionExec: expr=[a@1 as a2, b@0 as b2]
-          AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[], stream=PartialFinalHashAggregateStream
+          AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]
             RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10
-              AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+              AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
                 RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     ");
@@ -1937,17 +1937,17 @@ fn union_to_interleave() -> Result<()> {
     let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib,
         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[], stream=PartialFinalHashAggregateStream
-      AggregateExec: mode=Partial, gby=[a1@0 as a2], aggr=[], stream=RawPartialHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]
+      AggregateExec: mode=Partial, gby=[a1@0 as a2], aggr=[]
         InterleaveExec
-          AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[], stream=PartialFinalHashAggregateStream
+          AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]
             RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10
-              AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[], stream=RawPartialHashAggregateStream
+              AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]
                 RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-          AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[], stream=PartialFinalHashAggregateStream
+          AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]
             RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10
-              AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[], stream=RawPartialHashAggregateStream
+              AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]
                 RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     ");
@@ -1984,18 +1984,18 @@ fn union_not_to_interleave() -> Result<()> {
     let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib,
         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]
       RepartitionExec: partitioning=Hash([a2@0], 10), input_partitions=20
-        AggregateExec: mode=Partial, gby=[a1@0 as a2], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a1@0 as a2], aggr=[]
           UnionExec
-            AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[], stream=PartialFinalHashAggregateStream
+            AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]
               RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10
-                AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[], stream=RawPartialHashAggregateStream
+                AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]
                   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-            AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[], stream=PartialFinalHashAggregateStream
+            AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]
               RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10
-                AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[], stream=RawPartialHashAggregateStream
+                AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]
                   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     ");
@@ -2014,9 +2014,9 @@ fn added_repartition_to_single_partition() -> Result<()> {
     let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib,
         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     ");
@@ -2035,9 +2035,9 @@ fn repartition_deepest_node() -> Result<()> {
     let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib,
         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           FilterExec: c@2 = 0
             RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -2139,9 +2139,9 @@ fn repartition_ignores_limit() -> Result<()> {
     let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib,
                                                                                         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
             GlobalLimitExec: skip=0, fetch=100
               CoalescePartitionsExec
@@ -2589,9 +2589,9 @@ fn parallelization_single_partition() -> Result<()> {
         test_config.to_plan(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_parquet_distrib,
                                                                                         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=parquet
     ");
     let plan_parquet_sort = test_config.to_plan(plan_parquet, &SORT_DISTRIB_DISTRIB);
@@ -2601,9 +2601,9 @@ fn parallelization_single_partition() -> Result<()> {
     let plan_csv_distrib = test_config.to_plan(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_csv_distrib,
                                                                                         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     ");
     let plan_csv_sort = test_config.to_plan(plan_csv, &SORT_DISTRIB_DISTRIB);
@@ -2701,9 +2701,9 @@ fn parallelization_compressed_csv() -> Result<()> {
                 // Compressed files cannot be partitioned
                 assert_plan!(plan_distrib,
                     @r"
-                AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+                AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
                   RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-                    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+                    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
                       RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
                         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
                 ");
@@ -2711,9 +2711,9 @@ fn parallelization_compressed_csv() -> Result<()> {
                 // Uncompressed files can be partitioned
                 assert_plan!(plan_distrib,
                     @r"
-                AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+                AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
                   RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-                    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+                    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
                       DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
                 ");
             }
@@ -2740,9 +2740,9 @@ fn parallelization_two_partitions() -> Result<()> {
         test_config.to_plan(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_parquet_distrib,
                                                                                     @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           DataSourceExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], file_type=parquet
     ");
     // Plan already has two partitions
@@ -2752,9 +2752,9 @@ fn parallelization_two_partitions() -> Result<()> {
     // Test: with csv
     let plan_csv_distrib = test_config.to_plan(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_csv_distrib, @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           DataSourceExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     ");
     // Plan already has two partitions
@@ -2780,9 +2780,9 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
     // Multiple source files split across partitions
     assert_plan!(plan_parquet_distrib,
                                                                                     @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=parquet
     ");
     // Multiple source files split across partitions
@@ -2793,9 +2793,9 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
     let plan_csv_distrib = test_config.to_plan(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     // Multiple source files split across partitions
     assert_plan!(plan_csv_distrib, @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     ");
     // Multiple source files split across partitions
@@ -2920,9 +2920,9 @@ fn parallelization_ignores_limit() -> Result<()> {
         test_config.to_plan(plan_parquet.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_parquet_distrib,
         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
             GlobalLimitExec: skip=0, fetch=100
               CoalescePartitionsExec
@@ -2942,9 +2942,9 @@ fn parallelization_ignores_limit() -> Result<()> {
     let plan_csv_distrib = test_config.to_plan(plan_csv.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_csv_distrib,
         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
       RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
           RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
             GlobalLimitExec: skip=0, fetch=100
               CoalescePartitionsExec
@@ -3363,9 +3363,9 @@ fn preserve_ordering_for_streaming_sorted_aggregate() -> Result<()> {
 
     let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib, @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted, stream=GroupedHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
       RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
-        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted, stream=GroupedHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
           DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
 
@@ -3397,9 +3397,9 @@ fn preserve_ordering_for_streaming_partially_sorted_aggregate() -> Result<()> {
 
     let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib, @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0]), stream=GroupedHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0])
       RepartitionExec: partitioning=Hash([a@0, b@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
-        AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0]), stream=GroupedHashAggregateStream
+        AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[COUNT(c)], ordering_mode=PartiallySorted([0])
           DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
 
@@ -3633,8 +3633,8 @@ fn do_not_add_unnecessary_hash() -> Result<()> {
     let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib,
                                                                                         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
-      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
     ");
     let plan_sort = test_config.to_plan(physical_plan, &SORT_DISTRIB_DISTRIB);
@@ -3663,11 +3663,11 @@ fn do_not_add_unnecessary_hash2() -> Result<()> {
     let plan_distrib = test_config.to_plan(physical_plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib,
                                                                                         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
-      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
-        AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[], stream=PartialFinalHashAggregateStream
+    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+        AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
           RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-            AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], stream=RawPartialHashAggregateStream
+            AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
                 DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet
     ");

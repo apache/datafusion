@@ -76,9 +76,9 @@ physical_plan
 02)--SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 03)----SortExec: expr=[cntrycode@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------ProjectionExec: expr=[cntrycode@0 as cntrycode, count(Int64(1))@1 as numcust, sum(custsale.c_acctbal)@2 as totacctbal]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)], stream=PartialFinalHashAggregateStream
+05)--------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)]
 06)----------RepartitionExec: partitioning=Hash([cntrycode@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)], stream=RawPartialHashAggregateStream
+07)------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)]
 08)--------------ProjectionExec: expr=[substr(c_phone@0, 1, 2) as cntrycode, c_acctbal@1 as c_acctbal]
 09)----------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(c_custkey@0, o_custkey@0)], projection=[c_phone@1, c_acctbal@2]
 10)------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4

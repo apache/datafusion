@@ -422,9 +422,9 @@ logical_plan
 01)Aggregate: groupBy=[[t1000.i]], aggr=[[]]
 02)--TableScan: t1000 projection=[i]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[], stream=PartialFinalHashAggregateStream
+01)AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
 02)--RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=1
-03)----AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[], stream=RawPartialHashAggregateStream
+03)----AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
 04)------DataSourceExec: partitions=1
 
 statement ok
@@ -652,9 +652,9 @@ physical_plan
 01)GlobalLimitExec: skip=1, fetch=2
 02)--SortPreservingMergeExec: [b@0 DESC], fetch=3
 03)----SortExec: TopK(fetch=3), expr=[b@0 DESC], preserve_partitioning=[true]
-04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(ordered_table.a)], stream=PartialFinalHashAggregateStream
+04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(ordered_table.a)]
 05)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(ordered_table.a)], stream=RawPartialHashAggregateStream
+06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(ordered_table.a)]
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], file_type=csv, has_header=true
 
@@ -1037,9 +1037,9 @@ physical_plan
 03)----SortPreservingMergeExec: [sx@1 DESC], fetch=4
 04)------SortExec: TopK(fetch=4), expr=[sx@1 DESC], preserve_partitioning=[true]
 05)--------ProjectionExec: expr=[g@0 as g, sum(t22489.x)@1 as sx, sum(t22489.y)@2 as sy]
-06)----------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[sum(t22489.x), sum(t22489.y)], stream=PartialFinalHashAggregateStream
+06)----------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[sum(t22489.x), sum(t22489.y)]
 07)------------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[sum(t22489.x), sum(t22489.y)], stream=RawPartialHashAggregateStream
+08)--------------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[sum(t22489.x), sum(t22489.y)]
 09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok

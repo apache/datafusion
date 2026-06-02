@@ -33,7 +33,7 @@ use arrow::datatypes::{
     DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type, i256,
 };
 use datafusion_common::types::{NativeType, logical_float64};
-use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, not_impl_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -792,7 +792,21 @@ where
     avg_fn: F,
 }
 
-/// Avg accumulator that stores its per-group state in fixed-size blocks.
+/// Avg accumulator for primitive types.
+///
+/// It is mostly equivalent to `AvgGroupsAccumulator`, but uses a block-based
+/// allocation policy for internal buffers:
+///
+/// block_size: 100
+/// counts: [100 states], [100 states], [100 states], ...
+/// sums  : [100 states], [100 states], [100 states], ...
+///
+/// The `group` index passed to `GroupsAccumulator` APIs is interpreted relative
+/// to the accumulator's start. The block index and index within that block are
+/// handled internally.
+///
+/// For example, with `block_size` 100, group index 101 maps to block index
+/// `101 / 100 == 1` and index within the block `101 % 100 == 1`.
 #[derive(Debug)]
 struct BlockedAvgGroupsAccumulator {
     block_size: usize,
@@ -982,6 +996,12 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!(
+                "EmitTo::Block is not supported by AvgGroupsAccumulator"
+            );
+        }
+
         let counts = emit_to.take_needed(&mut self.counts);
         let sums = emit_to.take_needed(&mut self.sums);
         let nulls = self.null_state.build(emit_to);
@@ -1023,6 +1043,12 @@ where
 
     // return arrays for sums and counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!(
+                "EmitTo::Block is not supported by AvgGroupsAccumulator"
+            );
+        }
+
         let nulls = self.null_state.build(emit_to);
 
         let counts = emit_to.take_needed(&mut self.counts);

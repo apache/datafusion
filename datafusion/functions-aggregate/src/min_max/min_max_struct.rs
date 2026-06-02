@@ -101,6 +101,12 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!(
+                "EmitTo::Block is not supported by MinMaxStructAccumulator"
+            );
+        }
+
         let (_, min_maxes) = self.inner.emit_to(emit_to);
         let fields = match &self.inner.data_type {
             DataType::Struct(fields) => fields,
@@ -277,12 +283,13 @@ impl MinMaxStructState {
     /// - `min_maxes`: the actual min/max values for each group
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<StructArray>>) {
         match emit_to {
-            EmitTo::All | EmitTo::Block => {
+            EmitTo::All => {
                 (
                     std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
                     std::mem::take(&mut self.min_max),
                 )
             }
+            EmitTo::Block => unreachable!("handled by caller"),
             EmitTo::First(n) => {
                 let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
                 let first_data_capacity: usize = first_min_maxes
