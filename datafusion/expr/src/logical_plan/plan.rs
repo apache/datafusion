@@ -353,10 +353,7 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
-            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
-                // we take the schema of the static term as the schema of the entire recursive query
-                static_term.schema()
-            }
+            LogicalPlan::RecursiveQuery(RecursiveQuery { schema, .. }) => schema,
         }
     }
 
@@ -740,7 +737,14 @@ impl LogicalPlan {
                 };
                 Ok(LogicalPlan::Distinct(distinct))
             }
-            LogicalPlan::RecursiveQuery(_) => Ok(self),
+            LogicalPlan::RecursiveQuery(RecursiveQuery {
+                name,
+                static_term,
+                recursive_term,
+                is_distinct,
+                schema: _,
+            }) => RecursiveQuery::try_new(name, static_term, recursive_term, is_distinct)
+                .map(LogicalPlan::RecursiveQuery),
             LogicalPlan::Analyze(_) => Ok(self),
             LogicalPlan::Explain(_) => Ok(self),
             LogicalPlan::TableScan(_) => Ok(self),
@@ -1080,12 +1084,13 @@ impl LogicalPlan {
             }) => {
                 self.assert_no_expressions(expr)?;
                 let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                    name: name.clone(),
-                    static_term: Arc::new(static_term),
-                    recursive_term: Arc::new(recursive_term),
-                    is_distinct: *is_distinct,
-                }))
+                RecursiveQuery::try_new(
+                    name.clone(),
+                    Arc::new(static_term),
+                    Arc::new(recursive_term),
+                    *is_distinct,
+                )
+                .map(LogicalPlan::RecursiveQuery)
             }
             LogicalPlan::Analyze(a) => {
                 self.assert_no_expressions(expr)?;
@@ -2257,7 +2262,7 @@ impl PartialOrd for EmptyRelation {
 ///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
@@ -2269,6 +2274,90 @@ pub struct RecursiveQuery {
     /// Should the output of the recursive term be deduplicated (`UNION`) or
     /// not (`UNION ALL`).
     pub is_distinct: bool,
+    /// Schema exposed to parent plans after reconciling the static and recursive terms.
+    pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for RecursiveQuery {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => {
+                match self.static_term.partial_cmp(&other.static_term) {
+                    Some(Ordering::Equal) => {
+                        match self.recursive_term.partial_cmp(&other.recursive_term) {
+                            Some(Ordering::Equal) => {
+                                self.is_distinct.partial_cmp(&other.is_distinct)
+                            }
+                            cmp => cmp,
+                        }
+                    }
+                    cmp => cmp,
+                }
+            }
+            cmp => cmp,
+        }
+        // If the query definition compares equal but the derived schema differs,
+        // return `None` instead of contradicting `PartialEq` with `Some(Equal)`.
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
+}
+
+impl RecursiveQuery {
+    pub fn try_new(
+        name: String,
+        static_term: Arc<LogicalPlan>,
+        recursive_term: Arc<LogicalPlan>,
+        is_distinct: bool,
+    ) -> Result<Self> {
+        let schema =
+            recursive_query_output_schema(static_term.schema(), recursive_term.schema())?;
+        Ok(Self {
+            name,
+            static_term,
+            recursive_term,
+            is_distinct,
+            schema,
+        })
+    }
+}
+
+/// Compute a recursive query's output schema by considering both its static and
+/// recursive terms.
+///
+/// Field names, types, and metadata come from the static term. A field is
+/// nullable if either the static or the recursive term produces a nullable
+/// value in that position, matching how `UNION` reconciles branch nullability.
+///
+/// Functional dependencies are intentionally dropped: the recursive term
+/// appends rows that can duplicate values the static term guarantees unique, so
+/// any FDs carried by the static term may not hold over the combined output.
+fn recursive_query_output_schema(
+    static_schema: &DFSchemaRef,
+    recursive_schema: &DFSchemaRef,
+) -> Result<DFSchemaRef> {
+    if static_schema.fields().len() != recursive_schema.fields().len() {
+        return Err(DataFusionError::Plan(format!(
+            "Non-recursive term and recursive term must have the same number of columns ({} != {})",
+            static_schema.fields().len(),
+            recursive_schema.fields().len()
+        )));
+    }
+
+    let fields = static_schema
+        .iter()
+        .zip(recursive_schema.fields())
+        .map(|((qualifier, static_field), recursive_field)| {
+            let nullable = static_field.is_nullable() || recursive_field.is_nullable();
+            (
+                qualifier.cloned(),
+                static_field.as_ref().clone().with_nullable(nullable).into(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    DFSchema::new_with_metadata(fields, static_schema.metadata().clone())
+        .map(DFSchemaRef::new)
 }
 
 /// Values expression. See
@@ -4498,6 +4587,74 @@ mod tests {
             .filter(in_subquery(col("state"), Arc::new(plan1)))?
             .project(vec![col("id")])?
             .build()
+    }
+
+    fn recursive_term_scan(name: &str, fields: Vec<Field>) -> Result<Arc<LogicalPlan>> {
+        Ok(Arc::new(
+            table_scan(Some(name), &Schema::new(fields), None)?.build()?,
+        ))
+    }
+
+    #[test]
+    fn recursive_query_widens_nullability_per_column() -> Result<()> {
+        // Column `a` is non-nullable in both terms and must stay non-nullable;
+        // column `b` is non-nullable in the static term but nullable in the
+        // recursive term, so the output must widen it to nullable.
+        let static_term = recursive_term_scan(
+            "static",
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ],
+        )?;
+        let recursive_term = recursive_term_scan(
+            "rec",
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, true),
+            ],
+        )?;
+
+        let query =
+            RecursiveQuery::try_new("t".to_string(), static_term, recursive_term, false)?;
+
+        // Names and types are taken from the static term.
+        assert_eq!(query.schema.field(0).name(), "a");
+        assert_eq!(query.schema.field(1).name(), "b");
+        assert_eq!(query.schema.field(0).data_type(), &DataType::Int32);
+        assert_eq!(query.schema.field(1).data_type(), &DataType::Int32);
+        // Nullability is widened independently per column.
+        assert!(!query.schema.field(0).is_nullable());
+        assert!(query.schema.field(1).is_nullable());
+        // `schema()` returns the widened recursive-query schema.
+        assert_eq!(
+            LogicalPlan::RecursiveQuery(query.clone()).schema(),
+            &query.schema
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_query_rejects_column_count_mismatch() -> Result<()> {
+        let static_term =
+            recursive_term_scan("static", vec![Field::new("a", DataType::Int32, false)])?;
+        let recursive_term = recursive_term_scan(
+            "rec",
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ],
+        )?;
+
+        let err =
+            RecursiveQuery::try_new("t".to_string(), static_term, recursive_term, false)
+                .unwrap_err();
+        assert!(
+            err.strip_backtrace()
+                .contains("must have the same number of columns"),
+            "unexpected error: {err}"
+        );
+        Ok(())
     }
 
     #[test]
