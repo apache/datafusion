@@ -41,7 +41,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{Result, internal_datafusion_err, internal_err, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -1090,7 +1090,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let mut output = match emit_to {
-            EmitTo::All | EmitTo::Block => {
+            EmitTo::All => {
                 let group_values = mem::take(&mut self.group_values);
                 debug_assert!(self.group_values.is_empty());
 
@@ -1098,6 +1098,11 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                     .into_iter()
                     .map(|v| v.build())
                     .collect::<Vec<_>>()
+            }
+            EmitTo::Block => {
+                return internal_err!(
+                    "EmitTo::Block is not supported by GroupValuesColumn"
+                );
             }
             EmitTo::First(n) => {
                 let output = self

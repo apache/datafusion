@@ -17,6 +17,7 @@
 
 use crate::aggregates::group_values::GroupValues;
 use arrow::array::{Array, ArrayRef};
+use datafusion_common::internal_err;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 use datafusion_physical_expr_common::binary_view_map::ArrowBytesViewMap;
@@ -87,14 +88,21 @@ impl GroupValues for GroupValuesBytesView {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!(
+                "EmitTo::Block is not supported by GroupValuesBytesView"
+            );
+        }
+
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
 
         let group_values = match emit_to {
-            EmitTo::All | EmitTo::Block => {
+            EmitTo::All => {
                 self.num_groups -= map_contents.len();
                 map_contents
             }
+            EmitTo::Block => unreachable!("handled above"),
             EmitTo::First(n) if n == self.len() => {
                 self.num_groups -= map_contents.len();
                 map_contents

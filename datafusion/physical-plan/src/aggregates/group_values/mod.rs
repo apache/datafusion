@@ -18,10 +18,9 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
-    Date32Type, Date64Type, Decimal128Type, Int64Type, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType,
+    Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
@@ -113,6 +112,12 @@ pub trait GroupValues: Send {
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
+    /// Returns true when [`Self::emit`] supports [`EmitTo::Block`] by emitting
+    /// one bounded block of group values.
+    fn supports_blocked_emit(&self) -> bool {
+        false
+    }
+
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, num_rows: usize);
 }
@@ -151,18 +156,54 @@ pub(crate) fn new_unordered_blocked_group_values(
     schema: &SchemaRef,
     block_size: usize,
 ) -> Result<Option<Box<dyn GroupValues>>> {
-    if supports_blocked_group_values(schema) {
-        return Ok(Some(Box::new(GroupValuesPrimitiveBlock::<Int64Type>::new(
-            schema.fields[0].data_type().clone(),
-            block_size,
-        ))));
+    if schema.fields.len() == 1 {
+        let d = schema.fields[0].data_type();
+
+        macro_rules! downcast_helper {
+            ($t:ty, $d:ident) => {
+                return Ok(Some(Box::new(GroupValuesPrimitiveBlock::<$t>::new(
+                    $d.clone(),
+                    block_size,
+                ))))
+            };
+        }
+
+        downcast_primitive! {
+            d => (downcast_helper, d),
+            _ => {}
+        }
+
+        match d {
+            DataType::Date32 => {
+                downcast_helper!(Date32Type, d);
+            }
+            DataType::Date64 => {
+                downcast_helper!(Date64Type, d);
+            }
+            DataType::Time32(t) => match t {
+                TimeUnit::Second => downcast_helper!(Time32SecondType, d),
+                TimeUnit::Millisecond => downcast_helper!(Time32MillisecondType, d),
+                _ => {}
+            },
+            DataType::Time64(t) => match t {
+                TimeUnit::Microsecond => downcast_helper!(Time64MicrosecondType, d),
+                TimeUnit::Nanosecond => downcast_helper!(Time64NanosecondType, d),
+                _ => {}
+            },
+            DataType::Timestamp(t, _tz) => match t {
+                TimeUnit::Second => downcast_helper!(TimestampSecondType, d),
+                TimeUnit::Millisecond => downcast_helper!(TimestampMillisecondType, d),
+                TimeUnit::Microsecond => downcast_helper!(TimestampMicrosecondType, d),
+                TimeUnit::Nanosecond => downcast_helper!(TimestampNanosecondType, d),
+            },
+            DataType::Decimal128(_, _) => {
+                downcast_helper!(Decimal128Type, d);
+            }
+            _ => {}
+        }
     }
 
     Ok(None)
-}
-
-pub(crate) fn supports_blocked_group_values(schema: &SchemaRef) -> bool {
-    schema.fields.len() == 1 && matches!(schema.fields[0].data_type(), DataType::Int64)
 }
 
 fn new_group_values_with_ordering(

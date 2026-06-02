@@ -20,7 +20,7 @@ use std::mem::size_of;
 use crate::aggregates::group_values::GroupValues;
 
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
 
@@ -85,14 +85,19 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!("EmitTo::Block is not supported by GroupValuesBytes");
+        }
+
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
 
         let group_values = match emit_to {
-            EmitTo::All | EmitTo::Block => {
+            EmitTo::All => {
                 self.num_groups -= map_contents.len();
                 map_contents
             }
+            EmitTo::Block => unreachable!("handled above"),
             EmitTo::First(n) if n == self.len() => {
                 self.num_groups -= map_contents.len();
                 map_contents

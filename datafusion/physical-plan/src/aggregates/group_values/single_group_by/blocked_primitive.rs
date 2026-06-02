@@ -303,6 +303,10 @@ where
         Ok(vec![output])
     }
 
+    fn supports_blocked_emit(&self) -> bool {
+        true
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.blocks.clear();
         self.blocks.shrink_to(num_rows.div_ceil(self.block_size));

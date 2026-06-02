@@ -23,9 +23,9 @@ use arrow::array::{
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use hashbrown::hash_table::HashTable;
@@ -196,18 +196,23 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!("EmitTo::Block is not supported by GroupValuesRows");
+        }
+
         let mut group_values = self
             .group_values
             .take()
             .expect("Can not emit from empty rows");
 
         let mut output = match emit_to {
-            EmitTo::All | EmitTo::Block => {
+            EmitTo::All => {
                 let output = self.row_converter.convert_rows(&group_values)?;
                 group_values.clear();
                 self.map.clear();
                 output
             }
+            EmitTo::Block => unreachable!("handled above"),
             EmitTo::First(n) => {
                 let groups_rows = group_values.iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
