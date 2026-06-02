@@ -617,6 +617,28 @@ mod tests {
     }
 
     #[test]
+    fn inner_to_left_semi_when_removed_side_is_unique_with_join_filter() -> Result<()> {
+        let right = scan("r", &test_schema(), primary_key_on_id())?;
+        let plan =
+            LogicalPlanBuilder::from(scan("l", &test_schema(), Constraints::default())?)
+                .join(
+                    right,
+                    Inner,
+                    (vec!["l.id"], vec!["r.id"]),
+                    Some(col("r.y").gt(col("l.x"))),
+                )?
+                .project(vec![col("l.x")])?
+                .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: l.x
+          LeftSemi Join: l.id = r.id Filter: r.y > l.x
+            TableScan: l
+            TableScan: r
+        ")
+    }
+
+    #[test]
     fn inner_to_right_semi_when_removed_side_is_unique() -> Result<()> {
         let plan = left_with_constraints_join_right(primary_key_on_id())?
             .project(vec![col("r.y")])?
