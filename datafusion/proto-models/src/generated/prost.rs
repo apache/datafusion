@@ -354,6 +354,8 @@ pub struct AnalyzeNode {
     pub analyze_categories: ::core::option::Option<
         super::datafusion_common::ExplainAnalyzeCategoriesNode,
     >,
+    #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "5")]
+    pub format: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExplainNode {
@@ -1852,6 +1854,8 @@ pub struct AnalyzeExecNode {
     pub has_metric_categories: bool,
     #[prost(string, repeated, tag = "6")]
     pub metric_categories: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "7")]
+    pub format: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CrossJoinExecNode {

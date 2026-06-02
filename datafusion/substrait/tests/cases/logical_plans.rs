@@ -92,6 +92,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nested_window_function_in_expression() -> Result<()> {
+        // The Substrait Project expression represents:
+        // SELECT 1 + count(*) OVER () FROM DATA
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/nested_window_expression.substrait.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @r"
+        Projection: Int64(1) + count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS EXPR$0
+          WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+            TableScan: DATA
+        "
+                );
+
+        // Trigger execution to ensure the nested window is physically plannable
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn double_window_function() -> Result<()> {
         // Confirms a WindowExpr can be repeated in the same project.
         // This wouldn't normally happen with DF-created plans since CSE would eliminate the duplicate.

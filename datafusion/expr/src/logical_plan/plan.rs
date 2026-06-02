@@ -1093,6 +1093,7 @@ impl LogicalPlan {
                 let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Analyze(Analyze {
                     verbose: a.verbose,
+                    format: a.format.clone(),
                     schema: Arc::clone(&a.schema),
                     input: Arc::new(input),
                     analyze_level: a.analyze_level,
@@ -3469,6 +3470,8 @@ impl PartialOrd for Explain {
 pub struct Analyze {
     /// Should extra detail be included?
     pub verbose: bool,
+    /// Output syntax/format for the rendered physical plan + metrics.
+    pub format: ExplainFormat,
     /// The logical plan that is being EXPLAIN ANALYZE'd
     pub input: Arc<LogicalPlan>,
     /// The output schema of the explain (2 columns of text)
