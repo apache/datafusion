@@ -548,31 +548,37 @@ impl Default for BooleanDistinctCountAccumulator {
 
 impl Accumulator for BooleanDistinctCountAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
-        if values.is_empty() {
+        if values.is_empty() || (self.seen[0] && self.seen[1]) {
             return Ok(());
         }
 
         let arr = as_boolean_array(&values[0])?;
-        for value in arr.iter().flatten() {
-            self.seen[value as usize] = true;
-            if self.seen[0] && self.seen[1] {
-                break;
-            }
+        if !self.seen[0] && arr.has_false() {
+            self.seen[0] = true;
+        }
+        if !self.seen[1] && arr.has_true() {
+            self.seen[1] = true;
         }
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
-        if states.is_empty() {
+        if states.is_empty() || (self.seen[0] && self.seen[1]) {
             return Ok(());
         }
 
         let arr = as_list_array(&states[0])?;
         arr.iter().try_for_each(|maybe_list| {
+            if self.seen[0] && self.seen[1] {
+                return Ok(());
+            }
             if let Some(list) = maybe_list {
                 let list = as_boolean_array(&list)?;
-                for value in list.iter().flatten() {
-                    self.seen[value as usize] = true;
+                if !self.seen[0] && list.has_false() {
+                    self.seen[0] = true;
+                }
+                if !self.seen[1] && list.has_true() {
+                    self.seen[1] = true;
                 }
             };
             Ok(())
