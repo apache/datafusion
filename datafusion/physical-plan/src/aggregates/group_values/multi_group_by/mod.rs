@@ -1555,6 +1555,213 @@ mod tests {
         );
     }
 
+    /// Quantitative regression: `GroupValuesColumn` must report **smaller**
+    /// `size()` than `GroupValuesRows` (the byte-encoded fallback) for the
+    /// shapes the nested-type specializations were added to optimize.
+    ///
+    /// This pins the memory-savings claim of the PR. If a future change
+    /// regresses the column-native storage so that it grows past the row
+    /// encoding, this test fails before the regression reaches users.
+    fn assert_column_smaller_than_rows(
+        schema: SchemaRef,
+        cols: &[ArrayRef],
+        label: &str,
+    ) {
+        use super::super::row::GroupValuesRows;
+
+        let mut col_gv = GroupValuesColumn::<false>::try_new(schema.clone()).unwrap();
+        let mut groups = Vec::new();
+        col_gv.intern(cols, &mut groups).unwrap();
+        let col_size = col_gv.size();
+
+        let mut row_gv = GroupValuesRows::try_new(schema).unwrap();
+        let mut groups = Vec::new();
+        row_gv.intern(cols, &mut groups).unwrap();
+        let row_size = row_gv.size();
+
+        // Column-native must be strictly smaller. Print the ratio so a
+        // CI run shows the magnitude of the win.
+        let ratio = row_size as f64 / col_size as f64;
+        assert!(
+            col_size < row_size,
+            "{label}: GroupValuesColumn must use less memory than GroupValuesRows; \
+             col_size={col_size}, row_size={row_size}, ratio={ratio:.2}x",
+        );
+        eprintln!(
+            "{label}: col_size={col_size} B, row_size={row_size} B, savings={:.1}x",
+            ratio,
+        );
+    }
+
+    #[test]
+    fn column_path_uses_less_memory_than_rows_for_list_int32() {
+        use arrow::array::{Int32Builder, ListBuilder};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "tags",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        )]));
+
+        // 500 unique list values: each row is [i, i+1, i+2]. Enough rows
+        // to amortize the per-builder fixed overhead so the comparison
+        // reflects steady-state storage.
+        let mut b = ListBuilder::new(Int32Builder::new());
+        for i in 0..500i32 {
+            b.values().append_value(i);
+            b.values().append_value(i + 1);
+            b.values().append_value(i + 2);
+            b.append(true);
+        }
+        let cols: Vec<ArrayRef> = vec![Arc::new(b.finish())];
+        assert_column_smaller_than_rows(schema, &cols, "List<Int32>");
+    }
+
+    #[test]
+    fn column_path_uses_less_memory_than_rows_for_large_list_of_struct() {
+        // The shape that motivated the PR: LargeList<Struct<Utf8, Utf8>>
+        // representing a nested attribute carried in the GROUP BY of a
+        // wide multi-column key. Column-native must beat row-encoded
+        // since the latter pays per-value null tags and chunked-escape
+        // bytes for every variable-length value.
+        use arrow::array::{
+            Int32Builder, LargeListBuilder, StringBuilder, StructBuilder,
+        };
+        use arrow::datatypes::Fields;
+
+        let inner_fields = Fields::from(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("desc", DataType::Utf8, true),
+        ]);
+        let element_field = Arc::new(Field::new(
+            "element",
+            DataType::Struct(inner_fields.clone()),
+            true,
+        ));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, false),
+            Field::new(
+                "notes",
+                DataType::LargeList(Arc::clone(&element_field)),
+                true,
+            ),
+        ]));
+
+        // Build 200 unique groups, each with 2 nested struct entries
+        // averaging ~30 chars of content.
+        let struct_builder = StructBuilder::new(
+            inner_fields.clone(),
+            vec![
+                Box::new(StringBuilder::new()),
+                Box::new(StringBuilder::new()),
+            ],
+        );
+        let mut list_b =
+            LargeListBuilder::new(struct_builder).with_field(Arc::clone(&element_field));
+        let mut k_b = Int32Builder::new();
+        for i in 0..200i32 {
+            k_b.append_value(i);
+            let s = list_b.values();
+            s.field_builder::<StringBuilder>(0)
+                .unwrap()
+                .append_value(format!("id-{i}-aaaaaaaaaaaaaaaa"));
+            s.field_builder::<StringBuilder>(1)
+                .unwrap()
+                .append_value(format!("description text for entry {i}........"));
+            s.append(true);
+            s.field_builder::<StringBuilder>(0)
+                .unwrap()
+                .append_value(format!("id-{i}-bbbbbbbbbbbbbbbb"));
+            s.field_builder::<StringBuilder>(1).unwrap().append_value(
+                format!("second description for entry {i}.....").to_string(),
+            );
+            s.append(true);
+            list_b.append(true);
+        }
+        let cols: Vec<ArrayRef> = vec![Arc::new(k_b.finish()), Arc::new(list_b.finish())];
+        assert_column_smaller_than_rows(schema, &cols, "LargeList<Struct<Utf8,Utf8>>");
+    }
+
+    #[test]
+    fn column_path_uses_less_memory_than_rows_for_wide_group_by_with_one_nested() {
+        // The actual production shape: many cheap columns + one nested
+        // column. Without this PR, the single nested column drags every
+        // cheap column onto the row-encoded path. This test asserts the
+        // composite saving is larger than either alone.
+        use arrow::array::{
+            BooleanBuilder, Date32Builder, Int32Builder, Int32Builder as I32B,
+            LargeListBuilder, StringBuilder, StructBuilder,
+        };
+        use arrow::datatypes::Fields;
+
+        let inner_fields = Fields::from(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("desc", DataType::Utf8, true),
+        ]);
+        let element_field = Arc::new(Field::new(
+            "element",
+            DataType::Struct(inner_fields.clone()),
+            true,
+        ));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Date32, false),
+            Field::new("d", DataType::Boolean, false),
+            Field::new(
+                "footnotes",
+                DataType::LargeList(Arc::clone(&element_field)),
+                true,
+            ),
+        ]));
+
+        let n: i32 = 300;
+        let mut a_b = Int32Builder::new();
+        let mut b_b = StringBuilder::new();
+        let mut c_b = Date32Builder::new();
+        let mut d_b = BooleanBuilder::new();
+        let inner_struct = StructBuilder::new(
+            inner_fields.clone(),
+            vec![
+                Box::new(StringBuilder::new()),
+                Box::new(StringBuilder::new()),
+            ],
+        );
+        let mut notes_b =
+            LargeListBuilder::new(inner_struct).with_field(Arc::clone(&element_field));
+        for i in 0..n {
+            a_b.append_value(i);
+            b_b.append_value(format!("ticker-{i:04}"));
+            c_b.append_value(20000 + i);
+            d_b.append_value(i % 2 == 0);
+            let s = notes_b.values();
+            s.field_builder::<StringBuilder>(0)
+                .unwrap()
+                .append_value(format!("note-id-{i}"));
+            s.field_builder::<StringBuilder>(1)
+                .unwrap()
+                .append_value(format!(
+                    "description for note {i}, somewhat lengthy to mimic SEC footnotes"
+                ));
+            s.append(true);
+            notes_b.append(true);
+        }
+        // suppress unused warning if I32B alias not used
+        let _ = std::marker::PhantomData::<I32B>;
+        let cols: Vec<ArrayRef> = vec![
+            Arc::new(a_b.finish()),
+            Arc::new(b_b.finish()),
+            Arc::new(c_b.finish()),
+            Arc::new(d_b.finish()),
+            Arc::new(notes_b.finish()),
+        ];
+        assert_column_smaller_than_rows(
+            schema,
+            &cols,
+            "wide(Int32+Utf8+Date32+Boolean)+LargeList<Struct>",
+        );
+    }
+
     #[test]
     fn test_intern_for_vectorized_group_values() {
         let data_set = VectorizedTestDataSet::new();
