@@ -3634,6 +3634,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if self.name.is_some() {
             len += 1;
         }
+        if !self.location.is_empty() {
+            len += 1;
+        }
         if !self.locations.is_empty() {
             len += 1;
         }
@@ -3676,6 +3679,9 @@ impl serde::Serialize for CreateExternalTableNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.CreateExternalTableNode", len)?;
         if let Some(v) = self.name.as_ref() {
             struct_ser.serialize_field("name", v)?;
+        }
+        if !self.location.is_empty() {
+            struct_ser.serialize_field("location", &self.location)?;
         }
         if !self.locations.is_empty() {
             struct_ser.serialize_field("locations", &self.locations)?;
@@ -3727,6 +3733,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
     {
         const FIELDS: &[&str] = &[
             "name",
+            "location",
             "locations",
             "file_type",
             "fileType",
@@ -3751,6 +3758,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Name,
+            Location,
             Locations,
             FileType,
             Schema,
@@ -3786,6 +3794,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     {
                         match value {
                             "name" => Ok(GeneratedField::Name),
+                            "location" => Ok(GeneratedField::Location),
                             "locations" => Ok(GeneratedField::Locations),
                             "fileType" | "file_type" => Ok(GeneratedField::FileType),
                             "schema" => Ok(GeneratedField::Schema),
@@ -3819,6 +3828,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut name__ = None;
+                let mut location__ = None;
                 let mut locations__ = None;
                 let mut file_type__ = None;
                 let mut schema__ = None;
@@ -3839,6 +3849,12 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                                 return Err(serde::de::Error::duplicate_field("name"));
                             }
                             name__ = map_.next_value()?;
+                        }
+                        GeneratedField::Location => {
+                            if location__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("location"));
+                            }
+                            location__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Locations => {
                             if locations__.is_some() {
@@ -3926,6 +3942,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 }
                 Ok(CreateExternalTableNode {
                     name: name__,
+                    location: location__.unwrap_or_default(),
                     locations: locations__.unwrap_or_default(),
                     file_type: file_type__.unwrap_or_default(),
                     schema: schema__,

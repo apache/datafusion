@@ -74,7 +74,7 @@ use datafusion_common::format::{
 };
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
+    Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
     TableReference, internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
@@ -116,7 +116,7 @@ use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec, from_proto,
 };
-use datafusion_proto::protobuf;
+use datafusion_proto::{FromProto, protobuf};
 
 use crate::cases::{
     MyAggregateUDF, MyAggregateUdfNode, MyHigherOrderUDF, MyHigherOrderUdfNode,
@@ -422,6 +422,20 @@ async fn roundtrip_create_external_table_multiple_locations() -> Result<()> {
 
     let plan = ctx.state().create_logical_plan(query).await?;
     let bytes = logical_plan_to_bytes(&plan)?;
+    let protobuf_plan = protobuf::LogicalPlanNode::decode(bytes.as_ref())
+        .expect("failed to decode CreateExternalTable proto");
+    let Some(protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
+        create_external_table,
+    )) = protobuf_plan.logical_plan_type
+    else {
+        panic!("expected a CreateExternalTable proto");
+    };
+    assert_eq!(create_external_table.location, "file_a.csv");
+    assert_eq!(
+        create_external_table.locations,
+        vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
+    );
+
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(plan, logical_round_trip);
 
@@ -434,6 +448,49 @@ async fn roundtrip_create_external_table_multiple_locations() -> Result<()> {
         rt.locations,
         vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_create_external_table_legacy_location() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = DFSchema::empty();
+    let create_external_table = protobuf::CreateExternalTableNode {
+        name: Some(protobuf::TableReference::from_proto(TableReference::bare(
+            "t",
+        ))),
+        location: "legacy.csv".to_string(),
+        locations: vec![],
+        file_type: "CSV".to_string(),
+        schema: Some((&schema).try_into()?),
+        table_partition_cols: vec![],
+        if_not_exists: false,
+        or_replace: false,
+        temporary: false,
+        definition: String::new(),
+        order_exprs: vec![],
+        unbounded: false,
+        options: HashMap::new(),
+        constraints: Some(Constraints::default().into()),
+        column_defaults: HashMap::new(),
+    };
+    let protobuf_plan = protobuf::LogicalPlanNode {
+        logical_plan_type: Some(
+            protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
+                create_external_table,
+            ),
+        ),
+    };
+    let bytes = protobuf_plan.encode_to_vec();
+
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    let LogicalPlan::Ddl(datafusion_expr::DdlStatement::CreateExternalTable(rt)) =
+        logical_round_trip
+    else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(rt.locations, vec!["legacy.csv".to_string()]);
 
     Ok(())
 }

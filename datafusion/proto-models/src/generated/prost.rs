@@ -253,6 +253,9 @@ pub struct EmptyRelationNode {
 pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "9")]
     pub name: ::core::option::Option<TableReference>,
+    /// deprecated; use repeated locations
+    #[prost(string, tag = "2")]
+    pub location: ::prost::alloc::string::String,
     #[prost(string, repeated, tag = "16")]
     pub locations: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]

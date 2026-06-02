@@ -1860,19 +1860,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-            Box::new(PlanCreateExternalTable::builder(name, location, file_type, df_schema)
-                .with_locations(locations)
-                .with_partition_cols(table_partition_cols)
-                .with_if_not_exists(if_not_exists)
-                .with_or_replace(or_replace)
-                .with_temporary(temporary)
-                .with_definition(definition)
-                .with_order_exprs(ordered_exprs)
-                .with_unbounded(unbounded)
-                .with_options(options_map)
-                .with_constraints(constraints)
-                .with_column_defaults(column_defaults)
-                .build()),
+            Box::new(
+                PlanCreateExternalTable::builder(name, location, file_type, df_schema)
+                    .with_locations(locations)
+                    .with_partition_cols(table_partition_cols)
+                    .with_if_not_exists(if_not_exists)
+                    .with_or_replace(or_replace)
+                    .with_temporary(temporary)
+                    .with_definition(definition)
+                    .with_order_exprs(ordered_exprs)
+                    .with_unbounded(unbounded)
+                    .with_options(options_map)
+                    .with_constraints(constraints)
+                    .with_column_defaults(column_defaults)
+                    .build(),
+            ),
         )))
     }
 

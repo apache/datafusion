@@ -195,7 +195,7 @@ impl TableProviderFactory for ListingTableFactory {
             // See: https://github.com/apache/datafusion/issues/7317
             None => {
                 let mut resolved_paths = Vec::with_capacity(table_paths.len());
-                let mut inferred_schema: Option<SchemaRef> = None;
+                let mut inferred_schema: Option<(String, SchemaRef)> = None;
                 for mut table_path in table_paths {
                     // if the folder then rewrite a file path as 'path/*.parquet'
                     // to only read the files the reader can understand
@@ -223,16 +223,20 @@ impl TableProviderFactory for ListingTableFactory {
                     }
                     let schema = options.infer_schema(session_state, &table_path).await?;
                     // All locations must resolve to the same fields. Schema
-                    // metadata may differ between files without changing the
-                    // fields read by the table.
+                    // and field metadata may differ between files without
+                    // changing the fields read by the table.
+                    let location = table_path.to_string();
                     match &inferred_schema {
-                        None => inferred_schema = Some(schema),
-                        Some(existing)
+                        None => inferred_schema = Some((location, schema)),
+                        Some((existing_location, existing))
                             if !schemas_have_same_fields(existing, &schema) =>
                         {
                             return plan_err!(
                                 "All locations of a CREATE EXTERNAL TABLE must have the \
-                                 same schema, but the provided locations have differing schemas"
+                                 same schema, but schema inferred from '{}' differs from \
+                                 schema inferred from '{}'",
+                                location,
+                                existing_location
                             );
                         }
                         Some(_) => {}
@@ -241,7 +245,7 @@ impl TableProviderFactory for ListingTableFactory {
                 }
                 // `table_paths` was guaranteed non-empty above, so the loop ran
                 // at least once and `inferred_schema` is always `Some` here.
-                let schema = inferred_schema.ok_or_else(|| {
+                let (_, schema) = inferred_schema.ok_or_else(|| {
                     internal_datafusion_err!(
                         "no schema could be inferred from the provided locations"
                     )
@@ -297,7 +301,16 @@ fn get_extension(path: &str) -> String {
 }
 
 fn schemas_have_same_fields(left: &SchemaRef, right: &SchemaRef) -> bool {
-    left.fields() == right.fields()
+    left.fields().len() == right.fields().len()
+        && left
+            .fields()
+            .iter()
+            .zip(right.fields())
+            .all(|(left, right)| {
+                left.name() == right.name()
+                    && left.data_type() == right.data_type()
+                    && left.is_nullable() == right.is_nullable()
+            })
 }
 
 #[cfg(test)]
@@ -635,15 +648,24 @@ mod tests {
 
     #[test]
     fn test_schema_comparison_ignores_schema_metadata() {
-        let fields = vec![Field::new("c1", DataType::Int32, true)];
+        let fields =
+            vec![
+                Field::new("c1", DataType::Int32, true).with_metadata(HashMap::from([(
+                    "field_source".to_string(),
+                    "a".to_string(),
+                )])),
+            ];
         let schema_a = Arc::new(Schema::new_with_metadata(
             fields.clone(),
             HashMap::from([("source".to_string(), "a".to_string())]),
         ));
-        let schema_b = Arc::new(Schema::new_with_metadata(
-            fields,
-            HashMap::from([("source".to_string(), "b".to_string())]),
-        ));
+        let schema_b =
+            Arc::new(Schema::new_with_metadata(
+                vec![Field::new("c1", DataType::Int32, true).with_metadata(
+                    HashMap::from([("field_source".to_string(), "b".to_string())]),
+                )],
+                HashMap::from([("source".to_string(), "b".to_string())]),
+            ));
         let schema_c =
             Arc::new(Schema::new(vec![Field::new("c2", DataType::Int32, true)]));
 
