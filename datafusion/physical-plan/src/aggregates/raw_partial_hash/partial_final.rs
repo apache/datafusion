@@ -15,19 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Grouped hash aggregation for simple multi-stage aggregation paths.
-//!
-//! This module handles the basic grouped two-stage paths:
-//!
-//! ```text
-//! input rows -> GROUP BY hash table -> accumulator state rows
-//! state rows -> GROUP BY hash table -> final aggregate rows
-//! ```
-//!
-//! `AggregateExec` keeps finite-memory, ordered, limit, grouping-set,
-//! `partial state -> partial state`, and single-stage aggregation on
-//! `GroupedHashAggregateStream` for now.
-
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -39,54 +26,29 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
-use self::hash_table::{AggregateHashTable, ExecutionState, RawPartial};
-use super::{AggregateExec, AggregateMode};
+use super::hash_table::{AggregateHashTable, ExecutionState, PartialFinal};
+use crate::aggregates::{AggregateExec, AggregateMode};
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 
-mod hash_table;
-mod partial_final;
-
-pub(crate) use hash_table::can_use_blocked_hash_aggregate;
-pub(crate) use partial_final::PartialFinalHashAggregateStream;
-
-/// Hash aggregate stream for grouped `AggregateMode::Partial`.
+/// `AggregateMode::FinalPartitioned`.
 ///
-/// Input: raw rows
-/// Output: partial state (e.g. for avg(x), it's sum(x), count(x))
-pub(crate) struct RawPartialHashAggregateStream {
-    // ========================================================================
-    // PROPERTIES:
-    // Initialized once for this input partition.
-    // ========================================================================
-    /// Output schema: group columns followed by partial aggregate state columns.
+/// Input: partial state, such as `sum(x), count(x)` for `avg(x)`.
+/// Output: final values, such as `avg(x)`.
+pub(crate) struct PartialFinalHashAggregateStream {
+    /// Output schema: group columns followed by final aggregate value columns.
     schema: SchemaRef,
 
-    /// Input batches containing raw rows, not partial aggregate state.
+    /// Input batches containing partial aggregate state rows.
     input: SendableRecordBatchStream,
 
-    // ========================================================================
-    // STATE FLAGS:
-    // Control whether the stream is reading input, emitting state, or done.
-    // ========================================================================
+    /// Controls whether the stream is reading input, emitting output, or done.
     exec_state: ExecutionState,
 
-    // ========================================================================
-    // STATE BUFFERS:
-    //
-    // Hold intermediate groups and aggregate state while reading input.
-    // Example: `SELECT z, COUNT(x), SUM(y) FROM t GROUP BY z` stores each distinct
-    // `z` in `group_values` and keeps one partial-state accumulator for `COUNT(x)`
-    // and one for `SUM(y)`.
-    // ========================================================================
     /// Hash table and accumulator state for all groups seen so far.
-    hash_table: AggregateHashTable<RawPartial>,
+    hash_table: AggregateHashTable<PartialFinal>,
 
-    // ========================================================================
-    // EXECUTION RESOURCES:
-    // Metrics and memory accounting for this stream.
-    // ========================================================================
     /// Execution metrics shared with the aggregate plan node.
     baseline_metrics: BaselineMetrics,
 
@@ -94,13 +56,16 @@ pub(crate) struct RawPartialHashAggregateStream {
     reservation: MemoryReservation,
 }
 
-impl RawPartialHashAggregateStream {
+impl PartialFinalHashAggregateStream {
     pub fn new(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
-        debug_assert_eq!(agg.mode, AggregateMode::Partial);
+        debug_assert!(matches!(
+            agg.mode,
+            AggregateMode::Final | AggregateMode::FinalPartitioned
+        ));
         debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
 
         let schema = Arc::clone(&agg.schema);
@@ -111,7 +76,7 @@ impl RawPartialHashAggregateStream {
         // Preserve the existing aggregate metric surface for this plan node.
         let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);
 
-        let hash_table = AggregateHashTable::<RawPartial>::new(
+        let hash_table = AggregateHashTable::<PartialFinal>::new(
             agg,
             partition,
             Arc::clone(&schema),
@@ -119,7 +84,7 @@ impl RawPartialHashAggregateStream {
         )?;
 
         let reservation =
-            MemoryConsumer::new(format!("RawPartialHashAggregateStream[{partition}]"))
+            MemoryConsumer::new(format!("PartialFinalHashAggregateStream[{partition}]"))
                 .register(context.memory_pool());
 
         Ok(Self {
@@ -133,7 +98,7 @@ impl RawPartialHashAggregateStream {
     }
 }
 
-impl Stream for RawPartialHashAggregateStream {
+impl Stream for PartialFinalHashAggregateStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -155,8 +120,6 @@ impl Stream for RawPartialHashAggregateStream {
                                 return Poll::Ready(Some(Err(e)));
                             }
 
-                            // TODO: impl memory-limited aggr, when OOM directly send
-                            // partial state to final aggregate stage
                             if let Err(e) =
                                 self.reservation.try_resize(self.hash_table.memory_size())
                             {
@@ -211,7 +174,7 @@ impl Stream for RawPartialHashAggregateStream {
     }
 }
 
-impl RecordBatchStream for RawPartialHashAggregateStream {
+impl RecordBatchStream for PartialFinalHashAggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

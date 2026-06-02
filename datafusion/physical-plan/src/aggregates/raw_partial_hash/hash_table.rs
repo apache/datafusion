@@ -1,0 +1,773 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::sync::Arc;
+
+use arrow::array::{ArrayRef, AsArray, BooleanArray, new_null_array};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{Result, internal_err};
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_expr::{EmitTo, GroupsAccumulator};
+
+use crate::PhysicalExpr;
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, new_unordered_blocked_group_values,
+    new_unordered_group_values,
+};
+use crate::aggregates::row_hash::{
+    create_blocked_group_accumulator, create_blocked_group_accumulators,
+    create_group_accumulator,
+};
+use crate::aggregates::{
+    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    group_id_array, max_duplicate_ordinal,
+};
+use crate::metrics::{MetricBuilder, MetricCategory};
+
+#[derive(Debug, Clone)]
+pub(super) enum ExecutionState {
+    ReadingInput,
+    ProducingOutput,
+    Done,
+}
+
+struct HashAggregateAccumulator {
+    /// Arguments to pass to this accumulator.
+    ///
+    /// Example: `CORR(x, y)` stores two expressions here, while `SUM(x)` stores one.
+    arguments: Vec<Arc<dyn PhysicalExpr>>,
+
+    /// Optional `FILTER` expression for this accumulator.
+    ///
+    /// Example: `SUM(x) FILTER (WHERE x > 10)` stores the `x > 10` predicate.
+    filter: Option<Arc<dyn PhysicalExpr>>,
+
+    /// Accumulator state for all groups for one aggregate expression.
+    accumulator: Box<dyn GroupsAccumulator>,
+}
+
+struct EvaluatedHashAggregateAccumulator {
+    arguments: Vec<ArrayRef>,
+    filter: Option<ArrayRef>,
+}
+
+struct EvaluatedAggregateBatch {
+    /// One entry per grouping set; each entry contains all evaluated group key
+    /// arrays for the current input batch.
+    grouping_set_args: Vec<Vec<ArrayRef>>,
+
+    /// Evaluated arguments and filters, one entry per aggregate expression.
+    accumulator_args: Vec<EvaluatedHashAggregateAccumulator>,
+}
+
+fn can_try_blocked_hash_aggregate(agg: &AggregateExec) -> bool {
+    !agg.aggr_expr.is_empty()
+        && !agg.group_by.has_grouping_set()
+        && agg.group_by.groups().len() == 1
+}
+
+pub(crate) fn can_use_blocked_hash_aggregate(agg: &AggregateExec) -> Result<bool> {
+    if !can_try_blocked_hash_aggregate(agg) {
+        return Ok(false);
+    }
+
+    let input_schema = agg.input().schema();
+    let group_schema = agg.group_by.group_schema(&input_schema)?;
+    let Some(group_values) = new_unordered_blocked_group_values(&group_schema, 1)? else {
+        return Ok(false);
+    };
+
+    if !group_values.supports_blocked_emit() {
+        return Ok(false);
+    }
+
+    for agg_expr in agg.aggr_expr.iter() {
+        let Some(accumulator) = create_blocked_group_accumulator(agg_expr, 1)? else {
+            return Ok(false);
+        };
+        if !accumulator.supports_blocked_emit() {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+impl HashAggregateAccumulator {
+    fn new(
+        arguments: Vec<Arc<dyn PhysicalExpr>>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        accumulator: Box<dyn GroupsAccumulator>,
+    ) -> Self {
+        Self {
+            arguments,
+            filter,
+            accumulator,
+        }
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<EvaluatedHashAggregateAccumulator> {
+        let arguments = self
+            .arguments
+            .iter()
+            .map(|expr| {
+                expr.evaluate(batch)
+                    .and_then(|value| value.into_array(batch.num_rows()))
+            })
+            .collect::<Result<_>>()?;
+
+        let filter = self
+            .filter
+            .as_ref()
+            .map(|filter| {
+                filter
+                    .evaluate(batch)
+                    .and_then(|value| value.into_array(batch.num_rows()))
+            })
+            .transpose()?;
+
+        Ok(EvaluatedHashAggregateAccumulator { arguments, filter })
+    }
+
+    fn update_batch(
+        &mut self,
+        values: &EvaluatedHashAggregateAccumulator,
+        group_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        let filter = values.filter.as_ref().map(|filter| filter.as_boolean());
+        self.accumulator.update_batch(
+            &values.arguments,
+            group_indices,
+            filter,
+            total_num_groups,
+        )
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &EvaluatedHashAggregateAccumulator,
+        group_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        debug_assert!(values.filter.is_none());
+        self.accumulator.merge_batch(
+            &values.arguments,
+            group_indices,
+            None,
+            total_num_groups,
+        )
+    }
+
+    fn evaluate_final(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        self.ensure_emit_supported(emit_to)?;
+        self.accumulator.evaluate(emit_to)
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        self.ensure_emit_supported(emit_to)?;
+        self.accumulator.state(emit_to)
+    }
+
+    fn ensure_emit_supported(&self, emit_to: EmitTo) -> Result<()> {
+        if matches!(emit_to, EmitTo::Block) && !self.accumulator.supports_blocked_emit() {
+            return internal_err!(
+                "EmitTo::Block is not supported by this GroupsAccumulator"
+            );
+        }
+        Ok(())
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        self.accumulator.supports_convert_to_state()
+    }
+
+    fn null_arguments(&self, input_schema: &SchemaRef) -> Result<Vec<ArrayRef>> {
+        self.arguments
+            .iter()
+            .map(|expr| {
+                let data_type = expr.data_type(input_schema)?;
+                Ok(new_null_array(&data_type, 1))
+            })
+            .collect()
+    }
+}
+
+/// Hash table mode that consumes raw input rows and produces partial state.
+pub(super) struct RawPartial;
+
+/// Hash table mode that consumes partial state and produces final values.
+pub(super) struct PartialFinal;
+
+/// Hash table state for grouped raw-partial and partial-final aggregation.
+///
+/// This owns the coupled state for:
+/// - evaluating group keys,
+/// - interning each distinct group,
+/// - mapping each input row to its group index,
+/// - evaluating aggregate inputs,
+/// - updating per-group accumulator state.
+pub(super) struct AggregateHashTable<Mode> {
+    /// Grouping and accumulator-specific timing metrics.
+    group_by_metrics: GroupByMetrics,
+
+    /// Raw input schema, used to evaluate expressions and synthesize empty
+    /// grouping-set rows.
+    input_schema: SchemaRef,
+
+    /// Output schema: group columns followed by aggregate state or final values.
+    output_schema: SchemaRef,
+
+    /// Maximum rows per emitted output batch.
+    batch_size: usize,
+
+    /// True when group values and all accumulators use the same internal block
+    /// size and can emit one block per output batch.
+    blocked_output: bool,
+
+    /// GROUP BY expressions evaluated for each input batch.
+    group_by: Arc<PhysicalGroupBy>,
+
+    /// Interned group keys. Accumulator state is stored separately by group index.
+    group_values: Box<dyn GroupValues>,
+
+    /// Group index for each row in the current input batch.
+    ///
+    /// Each value indexes into `group_values`, and the same index is used by every
+    /// accumulator to update that group's aggregate state.
+    batch_group_indices: Vec<usize>,
+
+    /// One item per aggregate expression.
+    ///
+    /// Example: `COUNT(x), SUM(y)` creates two items. Each item owns the input
+    /// expressions, optional filter, and accumulator state for all groups.
+    accumulators: Vec<HashAggregateAccumulator>,
+
+    /// Full output built once after input is exhausted.
+    output_batch: Option<RecordBatch>,
+
+    /// Offset of the next row to slice from `output_batch`.
+    output_batch_offset: usize,
+
+    /// True once all output rows have been emitted.
+    output_finished: bool,
+
+    _mode: PhantomData<Mode>,
+}
+
+impl<Mode> AggregateHashTable<Mode> {
+    fn new_with_filters(
+        agg: &AggregateExec,
+        partition: usize,
+        output_schema: SchemaRef,
+        batch_size: usize,
+        filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    ) -> Result<Self> {
+        let input_schema = agg.input().schema();
+        let aggregate_arguments = aggregate_expressions(
+            &agg.aggr_expr,
+            &agg.mode,
+            agg.group_by.num_group_exprs(),
+        )?;
+
+        let group_schema = agg.group_by.group_schema(&input_schema)?;
+        let can_try_blocked_output = can_try_blocked_hash_aggregate(agg);
+
+        let blocked_group_values = if can_try_blocked_output {
+            new_unordered_blocked_group_values(&group_schema, batch_size)?
+        } else {
+            None
+        };
+        let blocked_accumulators = if can_try_blocked_output {
+            create_blocked_group_accumulators(&agg.aggr_expr, batch_size)?
+        } else {
+            None
+        };
+
+        let (group_values, accumulator_impls, blocked_output) =
+            match (blocked_group_values, blocked_accumulators) {
+                (Some(group_values), Some(accumulators))
+                    if group_values.supports_blocked_emit()
+                        && accumulators.iter().all(|acc| acc.supports_blocked_emit()) =>
+                {
+                    (group_values, accumulators, true)
+                }
+                _ => {
+                    let group_values = new_unordered_group_values(group_schema)?;
+                    let accumulators = agg
+                        .aggr_expr
+                        .iter()
+                        .map(create_group_accumulator)
+                        .collect::<Result<Vec<_>>>()?;
+                    (group_values, accumulators, false)
+                }
+            };
+
+        let accumulators: Vec<_> = aggregate_arguments
+            .into_iter()
+            .zip(filters)
+            .zip(accumulator_impls)
+            .map(|((arguments, filter), accumulator)| {
+                HashAggregateAccumulator::new(arguments, filter, accumulator)
+            })
+            .collect();
+
+        Ok(Self {
+            group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
+            input_schema,
+            output_schema,
+            batch_size,
+            blocked_output,
+            group_by: Arc::clone(&agg.group_by),
+            group_values,
+            batch_group_indices: Default::default(),
+            accumulators,
+            output_batch: None,
+            output_batch_offset: 0,
+            output_finished: false,
+            _mode: PhantomData,
+        })
+    }
+
+    fn evaluate_batch(&self, batch: &RecordBatch) -> Result<EvaluatedAggregateBatch> {
+        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
+        // outer vec: one per each grouping set
+        // inner vec: all group by exprs for the current grouping set
+        let grouping_set_args = evaluate_group_by(&self.group_by, batch)?;
+        drop(timer);
+
+        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
+        // The evaluated args for each accumulator
+        let accumulator_args = self
+            .accumulators
+            .iter()
+            .map(|acc| acc.evaluate(batch))
+            .collect::<Result<Vec<_>>>()?;
+        drop(timer);
+
+        Ok(EvaluatedAggregateBatch {
+            grouping_set_args,
+            accumulator_args,
+        })
+    }
+
+    fn next_output_batch_from(
+        &mut self,
+        build_output_batch: impl FnOnce(&mut Self) -> Result<Option<RecordBatch>>,
+    ) -> Result<Option<RecordBatch>> {
+        if self.output_finished {
+            return Ok(None);
+        }
+
+        if self.output_batch.is_none() {
+            self.output_batch = build_output_batch(self)?;
+            self.output_batch_offset = 0;
+        }
+
+        let Some(batch) = self.output_batch.as_ref() else {
+            self.output_finished = true;
+            return Ok(None);
+        };
+
+        debug_assert!(self.batch_size > 0);
+        let output_len = self
+            .batch_size
+            .max(1)
+            .min(batch.num_rows() - self.output_batch_offset);
+        let output = batch.slice(self.output_batch_offset, output_len);
+        self.output_batch_offset += output_len;
+
+        if self.output_batch_offset == batch.num_rows() {
+            self.output_batch = None;
+            self.output_batch_offset = 0;
+            self.output_finished = true;
+        }
+
+        debug_assert!(output.num_rows() > 0);
+        debug_assert!(output.num_rows() <= self.batch_size.max(1));
+        Ok(Some(output))
+    }
+
+    fn next_blocked_output_batch_from(
+        &mut self,
+        build_output_batch: impl FnOnce(&mut Self) -> Result<Option<RecordBatch>>,
+    ) -> Result<Option<RecordBatch>> {
+        debug_assert!(self.blocked_output);
+
+        if self.output_finished {
+            return Ok(None);
+        }
+
+        let output = build_output_batch(self)?;
+        if output.is_none() {
+            self.output_finished = true;
+        }
+
+        Ok(output)
+    }
+
+    pub(super) fn memory_size(&self) -> usize {
+        let acc = self
+            .accumulators
+            .iter()
+            .map(|acc| acc.accumulator.size())
+            .sum::<usize>();
+        let output = self
+            .output_batch
+            .as_ref()
+            .map(RecordBatch::get_array_memory_size)
+            .unwrap_or_default();
+
+        acc + self.group_values.size()
+            + self.batch_group_indices.allocated_size()
+            + output
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.group_values.clear_shrink(0);
+        self.batch_group_indices.clear();
+        self.batch_group_indices.shrink_to(0);
+        self.output_batch = None;
+        self.output_batch_offset = 0;
+        self.output_finished = false;
+    }
+}
+
+impl AggregateHashTable<RawPartial> {
+    pub(super) fn new(
+        agg: &AggregateExec,
+        partition: usize,
+        output_schema: SchemaRef,
+        batch_size: usize,
+    ) -> Result<Self> {
+        let table = Self::new_with_filters(
+            agg,
+            partition,
+            output_schema,
+            batch_size,
+            agg.filter_expr.iter().cloned().collect(),
+        )?;
+
+        if table
+            .accumulators
+            .iter()
+            .all(|acc| acc.supports_convert_to_state())
+        {
+            let _skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
+                .with_category(MetricCategory::Rows)
+                .counter("skipped_aggregation_rows", partition);
+        }
+
+        Ok(table)
+    }
+
+    pub(super) fn aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let evaluated_batch = self.evaluate_batch(batch)?;
+
+        let timer = self.group_by_metrics.aggregation_time.timer();
+        for group_values in &evaluated_batch.grouping_set_args {
+            self.group_values
+                .intern(group_values, &mut self.batch_group_indices)?;
+            let group_indices = &self.batch_group_indices;
+            let total_num_groups = self.group_values.len();
+
+            for (acc, values) in self
+                .accumulators
+                .iter_mut()
+                .zip(evaluated_batch.accumulator_args.iter())
+            {
+                acc.update_batch(values, group_indices, total_num_groups)?;
+            }
+        }
+        drop(timer);
+
+        Ok(())
+    }
+
+    pub(super) fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.blocked_output {
+            self.next_blocked_output_batch_from(Self::build_blocked_output_batch)
+        } else {
+            self.next_output_batch_from(Self::build_output_batch)
+        }
+    }
+
+    fn build_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.init_empty_grouping_sets()?;
+
+        if self.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut output = self.group_values.emit(EmitTo::All)?;
+
+        for acc in self.accumulators.iter_mut() {
+            output.extend(acc.state(EmitTo::All)?);
+        }
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+        drop(timer);
+        Ok(Some(batch))
+    }
+
+    fn build_blocked_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.init_empty_grouping_sets()?;
+
+        if self.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut output = self.group_values.emit(EmitTo::Block)?;
+
+        for acc in self.accumulators.iter_mut() {
+            output.extend(acc.state(EmitTo::Block)?);
+        }
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+        debug_assert!(batch.num_rows() <= self.batch_size);
+        drop(timer);
+        Ok(Some(batch))
+    }
+
+    fn init_empty_grouping_sets(&mut self) -> Result<()> {
+        if !self.group_by.has_grouping_set() || !self.group_values.is_empty() {
+            return Ok(());
+        }
+
+        let max_ordinal = max_duplicate_ordinal(self.group_by.groups());
+        let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
+        let group_schema = self.group_by.group_schema(&self.input_schema)?;
+        let n_expr = self.group_by.expr().len();
+        let mut any_interned = false;
+
+        for group in self.group_by.groups() {
+            let ordinal = {
+                let entry = ordinals.entry(group.as_slice()).or_insert(0);
+                let ordinal = *entry;
+                *entry += 1;
+                ordinal
+            };
+
+            if !group.iter().all(|&is_null| is_null) {
+                continue;
+            }
+
+            let mut cols: Vec<ArrayRef> = group_schema
+                .fields()
+                .iter()
+                .take(n_expr)
+                .map(|field| new_null_array(field.data_type(), 1))
+                .collect();
+            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
+
+            self.group_values
+                .intern(&cols, &mut self.batch_group_indices)?;
+            any_interned = true;
+        }
+
+        if any_interned {
+            let total_groups = self.group_values.len();
+            let false_filter = BooleanArray::from(vec![false]);
+            for acc in self.accumulators.iter_mut() {
+                let null_args = acc.null_arguments(&self.input_schema)?;
+                let values = EvaluatedHashAggregateAccumulator {
+                    arguments: null_args,
+                    filter: Some(Arc::new(false_filter.clone())),
+                };
+                acc.update_batch(&values, &[0], total_groups)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl AggregateHashTable<PartialFinal> {
+    pub(super) fn new(
+        agg: &AggregateExec,
+        partition: usize,
+        output_schema: SchemaRef,
+        batch_size: usize,
+    ) -> Result<Self> {
+        Self::new_with_filters(
+            agg,
+            partition,
+            output_schema,
+            batch_size,
+            vec![None; agg.aggr_expr.len()],
+        )
+    }
+
+    pub(super) fn aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let evaluated_batch = self.evaluate_batch(batch)?;
+
+        let timer = self.group_by_metrics.aggregation_time.timer();
+        for group_values in &evaluated_batch.grouping_set_args {
+            self.group_values
+                .intern(group_values, &mut self.batch_group_indices)?;
+            let group_indices = &self.batch_group_indices;
+            let total_num_groups = self.group_values.len();
+
+            for (acc, values) in self
+                .accumulators
+                .iter_mut()
+                .zip(evaluated_batch.accumulator_args.iter())
+            {
+                acc.merge_batch(values, group_indices, total_num_groups)?;
+            }
+        }
+        drop(timer);
+
+        Ok(())
+    }
+
+    pub(super) fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.blocked_output {
+            self.next_blocked_output_batch_from(Self::build_blocked_output_batch)
+        } else {
+            self.next_output_batch_from(Self::build_output_batch)
+        }
+    }
+
+    fn build_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut output = self.group_values.emit(EmitTo::All)?;
+
+        for acc in self.accumulators.iter_mut() {
+            output.push(acc.evaluate_final(EmitTo::All)?);
+        }
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+        drop(timer);
+        Ok(Some(batch))
+    }
+
+    fn build_blocked_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let mut output = self.group_values.emit(EmitTo::Block)?;
+
+        for acc in self.accumulators.iter_mut() {
+            output.push(acc.evaluate_final(EmitTo::Block)?);
+        }
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+        debug_assert!(batch.num_rows() <= self.batch_size);
+        drop(timer);
+        Ok(Some(batch))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int64Array;
+    use arrow::array::types::Int64Type;
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    #[test]
+    fn blocked_group_values_emit_blocks() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "user_id",
+            DataType::Int64,
+            false,
+        )]));
+        let mut group_values =
+            new_unordered_blocked_group_values(&schema, 3)?.expect("blocked Int64");
+        let values: ArrayRef =
+            Arc::new(Int64Array::from(vec![10, 20, 30, 40, 50, 60, 70]));
+        let mut groups = vec![];
+
+        group_values.intern(&[values], &mut groups)?;
+
+        assert_eq!(groups, vec![0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(group_values.len(), 7);
+
+        let block = group_values.emit(EmitTo::Block)?;
+        assert_eq!(
+            block[0].as_primitive::<Int64Type>().values().as_ref(),
+            &[10, 20, 30]
+        );
+
+        let block = group_values.emit(EmitTo::Block)?;
+        assert_eq!(
+            block[0].as_primitive::<Int64Type>().values().as_ref(),
+            &[40, 50, 60]
+        );
+
+        let block = group_values.emit(EmitTo::Block)?;
+        assert_eq!(
+            block[0].as_primitive::<Int64Type>().values().as_ref(),
+            &[70]
+        );
+        assert!(group_values.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_group_values_support_primitive_keys() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "user_id",
+            DataType::UInt32,
+            false,
+        )]));
+        let group_values =
+            new_unordered_blocked_group_values(&schema, 3)?.expect("blocked UInt32");
+
+        assert!(group_values.supports_blocked_emit());
+
+        Ok(())
+    }
+
+    #[test]
+    fn non_blocked_group_values_reject_block_emit() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "user_id",
+            DataType::Int64,
+            false,
+        )]));
+        let mut group_values = new_unordered_group_values(schema)?;
+
+        let error = group_values
+            .emit(EmitTo::Block)
+            .expect_err("non-blocked group values should reject EmitTo::Block");
+
+        assert!(matches!(
+            error,
+            datafusion_common::DataFusionError::Internal(_)
+        ));
+
+        Ok(())
+    }
+}
