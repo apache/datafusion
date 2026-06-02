@@ -367,7 +367,7 @@ wrapper that tracks actual bytes allocated per SLT file and reconciles them
 against DataFusion's voluntary `MemoryPool` tracking. The point isn't to
 enforce a process-wide budget — it's to catch DataFusion lying about how
 much memory it's using. If `MemoryPool` reports 1 MB while the allocator
-sees 100 MB go by, *that gap is the bug*.
+sees 100 MB go by, _that gap is the bug_.
 
 ```shell
 cargo test --features memory-accounting --test sqllogictests -- \
@@ -377,8 +377,7 @@ cargo test --features memory-accounting --test sqllogictests -- \
 `--default-pool-size-mb` seeds each per-file SLT context's MemoryPool with
 the given size in MB and arms the bank as a no-op until a test opts in.
 
-**Opting an individual test in.** Add `SET datafusion.runtime.memory_limit
-= 'N'` at the top of the `.slt`. The wrapping `AccountingMemoryPool` then
+**Opting an individual test in.** Add `SET datafusion.runtime.memory_limit = 'N'` at the top of the `.slt`. The wrapping `AccountingMemoryPool` then
 tightens its allocator-level bank to `N * 1.10` (10% headroom). If the test
 allocates more than that — including bytes DataFusion's tracker didn't see
 — the test panics with an `OverdraftPanic` reporting the actual balance at
