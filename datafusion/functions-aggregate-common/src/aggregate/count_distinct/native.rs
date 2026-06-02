@@ -545,7 +545,18 @@ impl BooleanDistinctCountAccumulator {
 
     #[inline]
     fn count(&self) -> i64 {
-        self.has_seen_false as i64 + self.has_seen_true as i64
+        (self.has_seen_false as u8 + self.has_seen_true as u8) as i64
+    }
+
+    /// Update flags from a `BooleanArray`, short-circuiting per-flag once set.
+    #[inline]
+    fn observe(&mut self, arr: &BooleanArray) {
+        if !self.has_seen_false && arr.has_false() {
+            self.has_seen_false = true;
+        }
+        if !self.has_seen_true && arr.has_true() {
+            self.has_seen_true = true;
+        }
     }
 }
 
@@ -562,12 +573,7 @@ impl Accumulator for BooleanDistinctCountAccumulator {
         }
 
         let arr = as_boolean_array(&values[0])?;
-        if !self.has_seen_false && arr.has_false() {
-            self.has_seen_false = true;
-        }
-        if !self.has_seen_true && arr.has_true() {
-            self.has_seen_true = true;
-        }
+        self.observe(arr);
         Ok(())
     }
 
@@ -582,13 +588,7 @@ impl Accumulator for BooleanDistinctCountAccumulator {
                 return Ok(());
             }
             if let Some(list) = maybe_list {
-                let list = as_boolean_array(&list)?;
-                if !self.has_seen_false && list.has_false() {
-                    self.has_seen_false = true;
-                }
-                if !self.has_seen_true && list.has_true() {
-                    self.has_seen_true = true;
-                }
+                self.observe(as_boolean_array(&list)?);
             };
             Ok(())
         })
