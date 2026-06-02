@@ -1,0 +1,7 @@
+subgroup nulls
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+SUBGROUP=nulls
+QPAD=91
+DATASET=nulls
+NAME=nulls_q91_half_null

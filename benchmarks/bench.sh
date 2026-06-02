@@ -103,6 +103,9 @@ push_down_topk:         Benchmark of ORDER BY ... LIMIT over outer joins on TPC-
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
 wide_schema:            Small-projection queries on a wide synthetic dataset (1024 cols × 256 files) — measures per-file metadata overhead
                           (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
+predicate_eval:         Implementation-agnostic conjunctive (AND) filter-evaluation micro-benchmarks (synthetic data, generated inline)
+                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift, nulls)
+                          (toggle a system under test with its native DATAFUSION_* env var; size data with PRED_ROWS, string width with PRED_FILL)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
@@ -245,6 +248,10 @@ main() {
                     ;;
                 wide_schema)
                     data_wide_schema
+                    ;;
+                predicate_eval)
+                    # Data is generated inline by the suite's load SQL.
+                    echo "predicate_eval: no external data to generate"
                     ;;
                 tpcds)
                     data_tpcds
@@ -462,6 +469,9 @@ main() {
                     ;;
                 wide_schema)
                     run_wide_schema
+                    ;;
+                predicate_eval)
+                    run_predicate_eval
                     ;;
                 tpcds)
                     run_tpcds
@@ -796,6 +806,30 @@ run_push_down_topk() {
       BENCH_SIZE="1" \
       DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the predicate_eval benchmark suite. Data is generated inline by the
+# suite's load SQL, so there is no data step. The suite is implementation-
+# agnostic and sets no engine config of its own; by default it measures
+# DataFusion's built-in left-deep AND short-circuit. To evaluate a
+# predicate-ordering system under test, export its native config as a
+# DATAFUSION_* env var before invoking bench.sh -- the bench harness reads
+# SessionConfig::from_env, and that environment is inherited here, e.g.
+#   DATAFUSION_EXECUTION_ADAPTIVE_FILTER_REORDERING=true ./bench.sh run predicate_eval
+# Suite-specific knobs (string-substituted into the load SQL, not engine config):
+#   BENCH_SUBGROUP   run one subgroup (costsel, cost, selectivity, cardinality,
+#                    width, scale, neutral, correlation, drift)
+#   PRED_ROWS        synthetic row count (default 1_000_000; the scale subgroup
+#                    overrides this per query)
+#   PRED_FILL        filler chars per marker = string-column width knob
+run_predicate_eval() {
+    echo "Running predicate_eval benchmark (subgroup=${BENCH_SUBGROUP:-all}, rows=${PRED_ROWS:-1000000})..."
+    debug_run env BENCH_NAME=predicate_eval \
+      ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
+      PRED_ROWS="${PRED_ROWS:-1000000}" \
+      ${PRED_FILL:+PRED_FILL="${PRED_FILL}"} \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 }

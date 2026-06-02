@@ -43,6 +43,7 @@ in the community:
 | `tpcds`               | TPC‑DS queries                                                     |
 | `tpch`                | TPC‑H queries                                                      |
 | `wide_schema`         | Small-projection queries on a wide (1024-col, 256-file) synthetic dataset; runs `wide` + `narrow` subgroups for comparison |
+| `predicate_eval`      | Implementation-agnostic conjunctive (AND) filter-evaluation micro-benchmarks; subgroups (`BENCH_SUBGROUP`): `costsel`, `cost`, `selectivity`, `cardinality`, `width`, `scale`, `neutral`, `correlation`, `drift`, `nulls`. Toggle a system under test with its native `DATAFUSION_*` env var |
 
 # Running Benchmarks
 
@@ -95,6 +96,8 @@ Some benchmarks use custom environment variables as outlined below:
 | BENCH_SORTED                 | Used in the sort_tpch benchmark to indicate whether the lineitem table should be sorted.                                 | false         |
 | SORTED_BY                    | Used in the clickbench_sorted benchmark to indicate the column to sort by.                                               | `EventTime`   |
 | SORTED_ORDER                 | Used in the clickbench_sorted benchmark to indicate the sort order of the column.                                        | `ASC`         |
+| PRED_ROWS                    | Used in the predicate_eval benchmark to size the synthetic table (the `scale` subgroup overrides this per query).        | `1000000`     |
+| PRED_FILL                    | Used in the predicate_eval benchmark as the string-column width knob (filler chars per marker).                          | `30`          |
 
 ## How it works
 
