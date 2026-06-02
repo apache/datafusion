@@ -61,8 +61,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
-    JoinSide, Result, ScalarValue, Statistics, arrow_err, assert_eq_or_internal_err,
-    internal_datafusion_err, internal_err, project_schema, unwrap_or_internal_err,
+    JoinSide, NullEquality, Result, ScalarValue, Statistics, arrow_err,
+    assert_eq_or_internal_err, internal_datafusion_err, internal_err, project_schema,
+    unwrap_or_internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -713,6 +714,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             left_stats,
             right_stats,
             &join_columns,
+            NullEquality::NullEqualsNothing,
             &self.join_type,
             &self.join_schema,
         )?;
