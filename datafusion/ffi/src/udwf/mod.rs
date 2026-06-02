@@ -90,7 +90,7 @@ pub struct FFI_WindowUDF {
         args: FFI_ExpressionArgs,
     ) -> SVec<FFI_PhysicalExpr>,
 
-    /// Serializes WindowFunction via DefaultLogicalExtensionCodec; 
+    /// Serializes WindowFunction via DefaultLogicalExtensionCodec;
     /// returns None variant if no simplification; only called when has_simplify=true
     pub simplify: unsafe extern "C" fn(
         udwf: &Self,
