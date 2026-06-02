@@ -6649,10 +6649,13 @@ async fn test_fill_nan_unknown_column() -> Result<()> {
 
     // A column name that is not in the schema is propagated as an error.
     let err = df
-        .fill_nan(ScalarValue::Float64(Some(0.0)), vec!["does_not_exist".to_string()])
+        .fill_nan(
+            ScalarValue::Float64(Some(0.0)),
+            vec!["does_not_exist".to_string()],
+        )
         .unwrap_err();
 
-    assert_snapshot!(err.to_string(), @"Error during planning: Column 'does_not_exist' not found");
+    assert_snapshot!(err.strip_backtrace(), @"Error during planning: Column 'does_not_exist' not found");
 
     Ok(())
 }
@@ -6663,8 +6666,10 @@ async fn test_fill_nan_uncastable_value() -> Result<()> {
 
     // The float column "a" is targeted, but "abc" cannot be cast to Float64, so
     // the fill is skipped and column "a" keeps its original NaN value.
-    let df_filled =
-        df.fill_nan(ScalarValue::Utf8(Some("abc".to_string())), vec!["a".to_string()])?;
+    let df_filled = df.fill_nan(
+        ScalarValue::Utf8(Some("abc".to_string())),
+        vec!["a".to_string()],
+    )?;
 
     let results = df_filled.collect().await?;
     assert_snapshot!(
