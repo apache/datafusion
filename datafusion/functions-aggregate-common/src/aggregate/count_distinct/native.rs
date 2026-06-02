@@ -526,17 +526,26 @@ impl Accumulator for Bitmap65536DistinctCountAccumulatorI16 {
 /// Result is always 0, 1, or 2.
 #[derive(Debug)]
 pub struct BooleanDistinctCountAccumulator {
-    seen: [bool; 2],
+    has_seen_false: bool,
+    has_seen_true: bool,
 }
 
 impl BooleanDistinctCountAccumulator {
     pub fn new() -> Self {
-        Self { seen: [false; 2] }
+        Self {
+            has_seen_false: false,
+            has_seen_true: false,
+        }
+    }
+
+    #[inline]
+    fn seen_both(&self) -> bool {
+        self.has_seen_false && self.has_seen_true
     }
 
     #[inline]
     fn count(&self) -> i64 {
-        self.seen.iter().filter(|&&b| b).count() as i64
+        self.has_seen_false as i64 + self.has_seen_true as i64
     }
 }
 
@@ -548,37 +557,37 @@ impl Default for BooleanDistinctCountAccumulator {
 
 impl Accumulator for BooleanDistinctCountAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
-        if values.is_empty() || (self.seen[0] && self.seen[1]) {
+        if values.is_empty() || self.seen_both() {
             return Ok(());
         }
 
         let arr = as_boolean_array(&values[0])?;
-        if !self.seen[0] && arr.has_false() {
-            self.seen[0] = true;
+        if !self.has_seen_false && arr.has_false() {
+            self.has_seen_false = true;
         }
-        if !self.seen[1] && arr.has_true() {
-            self.seen[1] = true;
+        if !self.has_seen_true && arr.has_true() {
+            self.has_seen_true = true;
         }
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
-        if states.is_empty() || (self.seen[0] && self.seen[1]) {
+        if states.is_empty() || self.seen_both() {
             return Ok(());
         }
 
         let arr = as_list_array(&states[0])?;
         arr.iter().try_for_each(|maybe_list| {
-            if self.seen[0] && self.seen[1] {
+            if self.seen_both() {
                 return Ok(());
             }
             if let Some(list) = maybe_list {
                 let list = as_boolean_array(&list)?;
-                if !self.seen[0] && list.has_false() {
-                    self.seen[0] = true;
+                if !self.has_seen_false && list.has_false() {
+                    self.has_seen_false = true;
                 }
-                if !self.seen[1] && list.has_true() {
-                    self.seen[1] = true;
+                if !self.has_seen_true && list.has_true() {
+                    self.has_seen_true = true;
                 }
             };
             Ok(())
@@ -586,12 +595,13 @@ impl Accumulator for BooleanDistinctCountAccumulator {
     }
 
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
-        let values: Vec<bool> = self
-            .seen
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, &seen)| if seen { Some(idx != 0) } else { None })
-            .collect();
+        let mut values: Vec<bool> = Vec::with_capacity(2);
+        if self.has_seen_false {
+            values.push(false);
+        }
+        if self.has_seen_true {
+            values.push(true);
+        }
 
         let arr = Arc::new(BooleanArray::from(values));
         Ok(vec![
