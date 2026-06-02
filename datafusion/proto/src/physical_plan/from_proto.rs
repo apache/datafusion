@@ -723,6 +723,11 @@ impl TryFromProto<&protobuf::PartitionedFile> for PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
         );
+        if let Some(proto_schema) = val.arrow_schema.as_ref() {
+            pf = pf.with_arrow_schema(Arc::new(
+                proto_schema.try_into().map_err(DataFusionError::from)?,
+            ));
+        }
         if let Some(range) = val.range.as_ref() {
             let file_range = FileRange::try_from_proto(range)?;
             pf = pf.with_range(file_range.start, file_range.end);
@@ -900,8 +905,36 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_file_arrow_schema_roundtrip() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::collections::HashMap;
+
+        let arrow_schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("value", DataType::Utf8, true).with_metadata(HashMap::from([
+                    ("field_meta".to_string(), "field_value".to_string()),
+                ])),
+            ],
+            HashMap::from([("schema_meta".to_string(), "schema_value".to_string())]),
+        ));
+        let pf = PartitionedFile::new("foo/bar.parquet", 10)
+            .with_arrow_schema(Arc::clone(&arrow_schema));
+
+        let proto = protobuf::PartitionedFile::try_from_proto(&pf).unwrap();
+        assert!(proto.arrow_schema.is_some());
+
+        let decoded = PartitionedFile::try_from_proto(&proto).unwrap();
+        assert_eq!(
+            decoded.arrow_schema.as_ref().map(|s| s.as_ref()),
+            Some(arrow_schema.as_ref())
+        );
+    }
+
+    #[test]
     fn partitioned_file_from_proto_invalid_path() {
         let proto = protobuf::PartitionedFile {
+            arrow_schema: None,
             path: "foo//bar".to_string(),
             size: 1,
             last_modified_ns: 0,

@@ -1439,6 +1439,7 @@ message PartitionedFile {
   repeated datafusion_common.ScalarValue partition_values = 4;
   FileRange range = 5;
   datafusion_common.Statistics statistics = 6;
+  datafusion_common.Schema arrow_schema = 7;
 }
 
 message FileRange {
