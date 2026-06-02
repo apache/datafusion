@@ -71,7 +71,20 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
     }
 
     fn push_offset(&mut self, additional: usize) -> Result<()> {
-        let next = self.current_end().as_usize() + additional;
+        // Guard against usize overflow first (cheap, defense in depth: a
+        // List<i32> with cumulative length close to i32::MAX could wrap
+        // before the `O::from_usize` range check below would fire).
+        let next = self
+            .current_end()
+            .as_usize()
+            .checked_add(additional)
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "List offset usize overflow: current={} additional={}",
+                    self.current_end().as_usize(),
+                    additional
+                )
+            })?;
         let next_o = O::from_usize(next)
             .ok_or_else(|| internal_datafusion_err!("List offset overflows {}", next))?;
         self.offsets.push(next_o);

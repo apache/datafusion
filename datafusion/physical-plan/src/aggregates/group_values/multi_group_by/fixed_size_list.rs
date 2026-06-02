@@ -102,12 +102,11 @@ impl<T: ArrowPrimitiveType> GroupColumn for FixedSizeListGroupValueBuilder<T> {
         self.outer_len += 1;
         let child_array = list_array.values();
         let list_len = self.list_len_usize();
-        // FixedSizeList layout: outer row `row` owns child indices
-        // [row * list_len .. (row + 1) * list_len). The Arrow logical offset
-        // is already folded into `array.value(row)`; we use it indirectly via
-        // `values()` which is the unsliced child array, so include the outer
-        // array's offset here.
-        let start = (list_array.offset() + row) * list_len;
+        // Use the array's own `value_offset` rather than computing `(offset
+        // + row) * list_len` ourselves. For sliced FixedSizeListArrays the
+        // `values()` slice is already advanced, so doing the arithmetic
+        // manually risks double-applying any future offset behavior.
+        let start = list_array.value_offset(row) as usize;
         for j in 0..list_len {
             self.child.append_val(child_array, start + j)?;
         }

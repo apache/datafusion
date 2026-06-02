@@ -1268,7 +1268,10 @@ fn supported_type(data_type: &DataType) -> bool {
                 | DataType::LargeBinary
                 | DataType::Date32
                 | DataType::Date64
-                | DataType::Time32(_)
+                | DataType::Time32(TimeUnit::Second)
+                | DataType::Time32(TimeUnit::Millisecond)
+                | DataType::Time64(TimeUnit::Microsecond)
+                | DataType::Time64(TimeUnit::Nanosecond)
                 | DataType::Timestamp(_, _)
                 | DataType::Utf8View
                 | DataType::BinaryView
@@ -1320,10 +1323,42 @@ mod tests {
         // Float16 and Decimal256 are not in the supported set.
         assert!(!supported_type(&DataType::Float16));
         assert!(!supported_type(&DataType::Decimal256(76, 10)));
-        // Time64(Second) and Time64(Millisecond) variants are not supported
-        // (only the more precise Microsecond/Nanosecond are).
+        // Time64(Second) and Time64(Millisecond) are not valid Arrow types
+        // (Time64 is defined only for Microsecond/Nanosecond), but the
+        // TimeUnit enum allows constructing them. supported_type rejects
+        // them so the dispatcher and the allow-list stay in lockstep.
         assert!(!supported_type(&DataType::Time64(
             arrow::datatypes::TimeUnit::Second
+        )));
+        assert!(!supported_type(&DataType::Time64(
+            arrow::datatypes::TimeUnit::Millisecond
+        )));
+        // Symmetric for Time32: only Second / Millisecond are valid; the
+        // higher-precision variants are rejected.
+        assert!(!supported_type(&DataType::Time32(
+            arrow::datatypes::TimeUnit::Microsecond
+        )));
+        assert!(!supported_type(&DataType::Time32(
+            arrow::datatypes::TimeUnit::Nanosecond
+        )));
+    }
+
+    #[test]
+    fn supported_type_accepts_valid_time_variants() {
+        // Pin the corollary: only the dispatcher-supported Time variants
+        // pass supported_type, so make_group_column never gets a request
+        // for a type it would reject.
+        assert!(supported_type(&DataType::Time32(
+            arrow::datatypes::TimeUnit::Second
+        )));
+        assert!(supported_type(&DataType::Time32(
+            arrow::datatypes::TimeUnit::Millisecond
+        )));
+        assert!(supported_type(&DataType::Time64(
+            arrow::datatypes::TimeUnit::Microsecond
+        )));
+        assert!(supported_type(&DataType::Time64(
+            arrow::datatypes::TimeUnit::Nanosecond
         )));
     }
 
@@ -1453,7 +1488,10 @@ mod tests {
             DataType::Utf8View,
             DataType::Boolean,
             DataType::Date32,
+            DataType::Time32(arrow::datatypes::TimeUnit::Second),
             DataType::Time32(arrow::datatypes::TimeUnit::Millisecond),
+            DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+            DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
             DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
             // Nested
             DataType::FixedSizeList(Arc::new(int32()), 4),
@@ -1491,7 +1529,13 @@ mod tests {
         let unsupported_cases: Vec<DataType> = vec![
             DataType::Float16,
             DataType::Decimal256(76, 10),
+            // Invalid Time-unit combinations: Time32 is only Second/Millisecond,
+            // Time64 is only Microsecond/Nanosecond. These pin that
+            // supported_type and the dispatcher reject the same set.
             DataType::Time64(arrow::datatypes::TimeUnit::Second),
+            DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
+            DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
+            DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
             // Nested with an unsupported leaf
             DataType::List(Arc::new(f16())),
             DataType::LargeList(Arc::new(f16())),
