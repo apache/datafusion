@@ -224,13 +224,6 @@ where
 }
 
 #[cfg(test)]
-impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
-    fn values_capacity(&self) -> usize {
-        self.values.capacity()
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::types::Int32Type;
@@ -257,7 +250,7 @@ mod tests {
         let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..20i32));
         let mut groups = vec![];
         gv.intern(&[arr], &mut groups)?;
-        let capacity_before = gv.values_capacity(); // 128
+        let capacity_before = gv.values.capacity(); // 128
 
         // n=4, n*2=8 <= len=20 -> drain branch
         let emitted = gv.emit(EmitTo::First(4))?;
@@ -267,10 +260,10 @@ mod tests {
         // `self.values` must retain its original large allocation.
         // Old split_off+swap left it with a fresh small allocation (~16).
         assert_eq!(
-            gv.values_capacity(),
+            gv.values.capacity(),
             capacity_before,
             "self.values capacity {} should equal original {} after small First(n) emit",
-            gv.values_capacity(),
+            gv.values.capacity(),
             capacity_before,
         );
 
