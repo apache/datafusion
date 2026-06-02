@@ -1419,3 +1419,47 @@ FROM (
 
 statement ok
 DROP TABLE unused_unnest_pruning;
+
+## Regression: pushing a leaf-extracted projection (containing get_field,
+## which has MoveTowardsLeafNodes placement) through an `Unnest` used to
+## trip `Assertion failed: expr.is_empty(): Unnest` inside
+## `PushDownLeafProjections`. The optimizer must not try to pushdown these 
+## projections through an `Unnest` and should produce a valid plan.
+
+statement ok
+CREATE TABLE struct_and_list_table
+AS VALUES
+    (struct(1, 2), [10, 20, 30]),
+    (struct(3, 4), [40, 50]);
+
+query I
+SELECT sum(get_field(s, 'c0'))
+FROM (SELECT s, unnest(arr)
+      FROM (SELECT column1 AS s, column2 AS arr
+            FROM struct_and_list_table));
+----
+9
+
+statement ok
+DROP TABLE struct_and_list_table;
+
+## Regression: get_field directly references the struct produced by unnest.
+## This covers the case where the leaf-extracted expression depends on the
+## unnested column itself rather than a sibling input column below the Unnest.
+
+statement ok
+CREATE TABLE list_struct_table
+AS VALUES
+    ([struct(1, 'a'), struct(2, 'b')]),
+    ([struct(3, 'c')]);
+
+query IT
+SELECT get_field(unnest(column1), 'c0'), get_field(unnest(column1), 'c1')
+FROM list_struct_table;
+----
+1 a
+2 b
+3 c
+
+statement ok
+DROP TABLE list_struct_table;
