@@ -4140,7 +4140,7 @@ array_prepend(element, array)
 
 ### `array_product`
 
-Returns the product of the elements in the input numeric array. NULL elements inside the array are skipped (matching SQL aggregate convention). Returns NULL if the whole input is NULL or if every element is NULL. Returns 1.0 for an empty array (multiplicative identity). The result is always returned as `Float64`.
+Returns the product of the elements in the input numeric array. NULL elements inside the array are skipped (matching SQL aggregate convention). Returns NULL if the input is NULL, every element is NULL, or the array is empty. The result is always returned as `Float64`.
 
 ```sql
 array_product(array)
