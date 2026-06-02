@@ -36,9 +36,9 @@ mod test_file;
 #[cfg(feature = "memory-accounting")]
 pub use accounting::{
     AccountingAllocator, OverdraftPanic, account_balance, current_context_id,
-    local_balance, memory_tracker_limit, next_context_id, set_account_balance,
-    set_default_budget, set_memory_tracker_limit, set_thread_context_id,
-    settle_thread_local,
+    default_budget, local_balance, memory_tracker_limit, next_context_id,
+    reset_account_to_default, set_account_balance, set_default_budget,
+    set_memory_tracker_limit, set_thread_context_id, settle_thread_local,
 };
 #[cfg(feature = "memory-accounting")]
 pub use accounting_pool::AccountingMemoryPool;

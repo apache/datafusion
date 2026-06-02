@@ -108,6 +108,8 @@ impl DataFusion {
                             self.relative_path.display(),
                             od.account_balance,
                         );
+                        // Restore the bank so the next statement starts clean
+                        crate::reset_account_to_default();
                         Err(DFSqlLogicTestError::Other(format!(
                             "allocator overdraft: account balance at panic = {} bytes",
                             od.account_balance,

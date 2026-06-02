@@ -148,6 +148,21 @@ pub fn set_default_budget(value: isize) {
     DEFAULT_BUDGET.store(value, Ordering::Relaxed);
 }
 
+/// Current default budget — what a fresh account starts at and what
+/// [`reset_account_to_default`] restores to.
+pub fn default_budget() -> isize {
+    DEFAULT_BUDGET.load(Ordering::Relaxed)
+}
+
+/// Restore the current thread's account to [`default_budget`]. Used by the
+/// SLT runner after catching an [`OverdraftPanic`] so the next statement
+/// starts clean — otherwise the bank stays negative and every subsequent
+/// allocation refires, which is unsafe (allocator hooks must not panic
+/// repeatedly within a single thread).
+pub fn reset_account_to_default() {
+    set_account_balance(default_budget());
+}
+
 /// Set the current thread's account balance to `value`. No-op on untracked
 /// threads (`CONTEXT_ID == 0`).
 pub fn set_account_balance(value: isize) {

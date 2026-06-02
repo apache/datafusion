@@ -314,6 +314,10 @@ async fn run_tests() -> Result<()> {
             let spawned = {
                 let context_id = datafusion_sqllogictest::next_context_id();
                 SpawnedTask::spawn_blocking(move || {
+                    // Stamp this thread too — `block_on` polls `body` here, so
+                    // statements that don't suspend (e.g. `SET memory_limit`,
+                    // pool construction) run on this thread, not a worker.
+                    datafusion_sqllogictest::set_thread_context_id(context_id);
                     let runtime = tokio::runtime::Builder::new_multi_thread()
                         .enable_all()
                         .worker_threads(datafusion_sqllogictest::SLT_TARGET_PARTITIONS)
