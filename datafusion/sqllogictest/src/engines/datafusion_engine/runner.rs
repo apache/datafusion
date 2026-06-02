@@ -84,7 +84,7 @@ impl DataFusion {
     }
 
     /// Run a single query through the engine. Under the `memory-accounting`
-    /// feature, allocator-detected overdrafts panic with [`OverdraftPanic`];
+    /// feature, allocator-detected overdrafts panic with `OverdraftPanic`;
     /// catch them here and translate to a clean `Err`.
     async fn run_one(&self, sql: &str) -> Result<DFOutput> {
         #[cfg(feature = "memory-accounting")]
