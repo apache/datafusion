@@ -34,10 +34,10 @@ use std::mem::size_of;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::types::{Float64Type, Int64Type, UInt64Type};
+use arrow::array::types::{Float64Type, UInt64Type};
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int64Array, NullBufferBuilder,
-    UInt64Array, new_null_array,
+    Array, ArrayRef, AsArray, BooleanArray, Float64Array, NullBufferBuilder, UInt64Array,
+    new_null_array,
 };
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -46,6 +46,7 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
@@ -101,33 +102,49 @@ struct EvaluatedAggregateBatch {
     accumulator_args: Vec<EvaluatedHashAggregateAccumulator>,
 }
 
+/// Avg accumulator for primitive types.
+///
+/// It is mostly equivalent to `AvgGroupsAccumulator`, but uses a block-based
+/// allocation policy for internal buffers:
+///
+/// block_size: 100
+/// counts: [100 states], [100 states], [100 states], ...
+/// sums  : [100 states], [100 states], [100 states], ...
+///
+/// The `group` index passed to `GroupsAccumulator` APIs is interpreted relative
+/// to the accumulator's start. The block index and index within that block are
+/// handled internally.
+///
+/// For example, with `block_size` 100, group index 101 maps to block index
+/// `101 / 100 == 1` and index within the block `101 % 100 == 1`.
 #[derive(Debug)]
 struct BlockedAvgGroupsAccumulator {
-    state_layout: AvgStateLayout,
     block_size: usize,
     counts: Vec<Box<[u64]>>,
     sums: Vec<Box<[f64]>>,
+    null_state: NullState,
     len: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum AvgStateLayout {
-    CountSumUInt64,
-    SumCountInt64,
-}
-
 impl BlockedAvgGroupsAccumulator {
-    fn new(state_layout: AvgStateLayout, block_size: usize) -> Self {
+    fn new(block_size: usize) -> Self {
         assert!(block_size > 0);
         Self {
-            state_layout,
             block_size,
             counts: vec![],
             sums: vec![],
+            null_state: NullState::new(),
             len: 0,
         }
     }
 
+    /// Ensure there is enough capacity by allocating enough blocks.
+    ///
+    /// For example:
+    /// 1. There are 2 blocks with size 100
+    /// 2. Call `self.ensure_capacity(260)`
+    /// 3. A new block with the configured block size is allocated, so there is enough
+    ///    room for 260 groups
     fn ensure_capacity(&mut self, total_num_groups: usize) {
         let required_blocks = total_num_groups.div_ceil(self.block_size);
         while self.counts.len() < required_blocks {
@@ -137,22 +154,6 @@ impl BlockedAvgGroupsAccumulator {
                 .push(vec![0.0; self.block_size].into_boxed_slice());
         }
         self.len = self.len.max(total_num_groups);
-    }
-
-    fn add_value(&mut self, group_index: usize, value: f64) {
-        debug_assert!(group_index < self.len);
-        let block_idx = group_index / self.block_size;
-        let value_idx = group_index % self.block_size;
-        self.counts[block_idx][value_idx] += 1;
-        self.sums[block_idx][value_idx] += value;
-    }
-
-    fn merge_value(&mut self, group_index: usize, count: u64, sum: f64) {
-        debug_assert!(group_index < self.len);
-        let block_idx = group_index / self.block_size;
-        let value_idx = group_index % self.block_size;
-        self.counts[block_idx][value_idx] += count;
-        self.sums[block_idx][value_idx] += sum;
     }
 
     fn values_range<T: Copy>(
@@ -233,6 +234,7 @@ impl BlockedAvgGroupsAccumulator {
     }
 
     fn take_values(&mut self, emit_to: EmitTo) -> (Vec<u64>, Vec<f64>) {
+        self.null_state = NullState::new();
         match emit_to {
             EmitTo::All => self.take_all_values(),
             EmitTo::Block => self.take_block_values(),
@@ -257,10 +259,6 @@ impl BlockedAvgGroupsAccumulator {
             .map(|filter| filter.is_valid(row) && filter.value(row))
             .unwrap_or(true)
     }
-
-    fn count_state_i64(counts: &[u64]) -> Vec<i64> {
-        counts.iter().map(|count| *count as i64).collect()
-    }
 }
 
 impl GroupsAccumulator for BlockedAvgGroupsAccumulator {
@@ -275,19 +273,24 @@ impl GroupsAccumulator for BlockedAvgGroupsAccumulator {
         let values = values[0].as_primitive::<Float64Type>();
         self.ensure_capacity(total_num_groups);
 
-        if values.null_count() == 0 && opt_filter.is_none() {
-            for (&group_index, &value) in group_indices.iter().zip(values.values().iter())
-            {
-                self.add_value(group_index, value);
-            }
-        } else {
-            for (row, &group_index) in group_indices.iter().enumerate() {
-                if !Self::filter_is_valid(opt_filter, row) || values.is_null(row) {
-                    continue;
-                }
-                self.add_value(group_index, values.value(row));
-            }
-        }
+        let counts = &mut self.counts;
+        let sums = &mut self.sums;
+        let block_size = self.block_size;
+        let len = self.len;
+
+        self.null_state.accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            |group_index, value| {
+                debug_assert!(group_index < len);
+                let block_idx = group_index / block_size;
+                let value_idx = group_index % block_size;
+                counts[block_idx][value_idx] += 1;
+                sums[block_idx][value_idx] += value;
+            },
+        );
 
         Ok(())
     }
@@ -314,19 +317,10 @@ impl GroupsAccumulator for BlockedAvgGroupsAccumulator {
         let (counts, sums) = self.take_values(emit_to);
         let nulls = Self::nulls_for_counts(&counts);
 
-        match self.state_layout {
-            AvgStateLayout::CountSumUInt64 => Ok(vec![
-                Arc::new(UInt64Array::new(counts.into(), nulls.clone())) as ArrayRef,
-                Arc::new(Float64Array::new(sums.into(), nulls)) as ArrayRef,
-            ]),
-            AvgStateLayout::SumCountInt64 => Ok(vec![
-                Arc::new(Float64Array::new(sums.into(), nulls.clone())) as ArrayRef,
-                Arc::new(Int64Array::new(
-                    Self::count_state_i64(&counts).into(),
-                    nulls,
-                )) as ArrayRef,
-            ]),
-        }
+        Ok(vec![
+            Arc::new(UInt64Array::new(counts.into(), nulls.clone())) as ArrayRef,
+            Arc::new(Float64Array::new(sums.into(), nulls)) as ArrayRef,
+        ])
     }
 
     fn merge_batch(
@@ -339,46 +333,38 @@ impl GroupsAccumulator for BlockedAvgGroupsAccumulator {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
         self.ensure_capacity(total_num_groups);
 
-        match self.state_layout {
-            AvgStateLayout::CountSumUInt64 => {
-                let partial_counts = values[0].as_primitive::<UInt64Type>();
-                let partial_sums = values[1].as_primitive::<Float64Type>();
+        let partial_counts = values[0].as_primitive::<UInt64Type>();
+        let partial_sums = values[1].as_primitive::<Float64Type>();
 
-                for (row, &group_index) in group_indices.iter().enumerate() {
-                    if !Self::filter_is_valid(opt_filter, row)
-                        || partial_counts.is_null(row)
-                        || partial_sums.is_null(row)
-                    {
-                        continue;
-                    }
+        let counts = &mut self.counts;
+        let block_size = self.block_size;
+        let len = self.len;
+        self.null_state.accumulate(
+            group_indices,
+            partial_counts,
+            opt_filter,
+            total_num_groups,
+            |group_index, partial_count| {
+                debug_assert!(group_index < len);
+                let block_idx = group_index / block_size;
+                let value_idx = group_index % block_size;
+                counts[block_idx][value_idx] += partial_count;
+            },
+        );
 
-                    self.merge_value(
-                        group_index,
-                        partial_counts.value(row),
-                        partial_sums.value(row),
-                    );
-                }
-            }
-            AvgStateLayout::SumCountInt64 => {
-                let partial_sums = values[0].as_primitive::<Float64Type>();
-                let partial_counts = values[1].as_primitive::<Int64Type>();
-
-                for (row, &group_index) in group_indices.iter().enumerate() {
-                    if !Self::filter_is_valid(opt_filter, row)
-                        || partial_counts.is_null(row)
-                        || partial_sums.is_null(row)
-                    {
-                        continue;
-                    }
-
-                    self.merge_value(
-                        group_index,
-                        partial_counts.value(row) as u64,
-                        partial_sums.value(row),
-                    );
-                }
-            }
-        }
+        let sums = &mut self.sums;
+        self.null_state.accumulate(
+            group_indices,
+            partial_sums,
+            opt_filter,
+            total_num_groups,
+            |group_index, partial_sum| {
+                debug_assert!(group_index < len);
+                let block_idx = group_index / block_size;
+                let value_idx = group_index % block_size;
+                sums[block_idx][value_idx] += partial_sum;
+            },
+        );
 
         Ok(())
     }
@@ -407,19 +393,10 @@ impl GroupsAccumulator for BlockedAvgGroupsAccumulator {
         }
 
         let nulls = nulls.finish();
-        match self.state_layout {
-            AvgStateLayout::CountSumUInt64 => Ok(vec![
-                Arc::new(UInt64Array::new(counts.into(), nulls.clone())) as ArrayRef,
-                Arc::new(Float64Array::new(sums.into(), nulls)) as ArrayRef,
-            ]),
-            AvgStateLayout::SumCountInt64 => Ok(vec![
-                Arc::new(Float64Array::new(sums.into(), nulls.clone())) as ArrayRef,
-                Arc::new(Int64Array::new(
-                    Self::count_state_i64(&counts).into(),
-                    nulls,
-                )) as ArrayRef,
-            ]),
-        }
+        Ok(vec![
+            Arc::new(UInt64Array::new(counts.into(), nulls.clone())) as ArrayRef,
+            Arc::new(Float64Array::new(sums.into(), nulls)) as ArrayRef,
+        ])
     }
 
     fn supports_convert_to_state(&self) -> bool {
@@ -431,47 +408,34 @@ impl GroupsAccumulator for BlockedAvgGroupsAccumulator {
             + self.sums.len() * self.block_size * size_of::<f64>()
             + self.counts.allocated_size()
             + self.sums.allocated_size()
+            + self.null_state.size()
     }
 }
 
-fn blocked_avg_state_layout(
-    agg_expr: &Arc<AggregateFunctionExpr>,
-) -> Result<Option<AvgStateLayout>> {
+fn supports_blocked_avg_state(agg_expr: &Arc<AggregateFunctionExpr>) -> Result<bool> {
     if agg_expr.fun().name() != "avg" || agg_expr.is_distinct() {
-        return Ok(None);
+        return Ok(false);
     }
 
     let state_fields = agg_expr.state_fields()?;
-    let state_layout = match state_fields.as_slice() {
+    Ok(matches!(
+        state_fields.as_slice(),
         [count, sum]
             if matches!(count.data_type(), DataType::UInt64)
                 && matches!(sum.data_type(), DataType::Float64)
-                && matches!(agg_expr.field().data_type(), DataType::Float64) =>
-        {
-            Some(AvgStateLayout::CountSumUInt64)
-        }
-        [sum, count]
-            if matches!(sum.data_type(), DataType::Float64)
-                && matches!(count.data_type(), DataType::Int64)
-                && matches!(agg_expr.field().data_type(), DataType::Float64) =>
-        {
-            Some(AvgStateLayout::SumCountInt64)
-        }
-        _ => None,
-    };
-
-    Ok(state_layout)
+                && matches!(agg_expr.field().data_type(), DataType::Float64)
+    ))
 }
 
 fn create_blocked_group_accumulator(
     agg_expr: &Arc<AggregateFunctionExpr>,
     block_size: usize,
 ) -> Result<Option<Box<dyn GroupsAccumulator>>> {
-    let state_layout = blocked_avg_state_layout(agg_expr)?;
-    Ok(state_layout.map(|state_layout| {
-        Box::new(BlockedAvgGroupsAccumulator::new(state_layout, block_size))
-            as Box<dyn GroupsAccumulator>
-    }))
+    if supports_blocked_avg_state(agg_expr)? {
+        Ok(Some(Box::new(BlockedAvgGroupsAccumulator::new(block_size))))
+    } else {
+        Ok(None)
+    }
 }
 
 fn create_blocked_group_accumulators(
@@ -500,7 +464,7 @@ pub(crate) fn can_use_blocked_hash_aggregate(agg: &AggregateExec) -> Result<bool
     }
 
     for agg_expr in agg.aggr_expr.iter() {
-        if blocked_avg_state_layout(agg_expr)?.is_none() {
+        if !supports_blocked_avg_state(agg_expr)? {
             return Ok(false);
         }
     }
@@ -1435,8 +1399,7 @@ mod tests {
 
     #[test]
     fn blocked_avg_state_emit_blocks() -> Result<()> {
-        let mut accumulator =
-            BlockedAvgGroupsAccumulator::new(AvgStateLayout::CountSumUInt64, 3);
+        let mut accumulator = BlockedAvgGroupsAccumulator::new(3);
         let values: ArrayRef = Arc::new(Float64Array::from(vec![
             Some(1.0),
             Some(2.0),
@@ -1483,8 +1446,7 @@ mod tests {
 
     #[test]
     fn blocked_avg_merge_evaluate_blocks() -> Result<()> {
-        let mut accumulator =
-            BlockedAvgGroupsAccumulator::new(AvgStateLayout::CountSumUInt64, 2);
+        let mut accumulator = BlockedAvgGroupsAccumulator::new(2);
         let counts: ArrayRef = Arc::new(UInt64Array::from(vec![2, 1, 3, 4, 5]));
         let sums: ArrayRef =
             Arc::new(Float64Array::from(vec![10.0, 4.0, 9.0, 20.0, 15.0]));
@@ -1509,35 +1471,6 @@ mod tests {
             output.as_primitive::<Float64Type>().values().as_ref(),
             &[3.0]
         );
-
-        Ok(())
-    }
-
-    #[test]
-    fn blocked_avg_spark_state_layout() -> Result<()> {
-        let mut accumulator =
-            BlockedAvgGroupsAccumulator::new(AvgStateLayout::SumCountInt64, 2);
-        let values: ArrayRef = Arc::new(Float64Array::from(vec![2.0, 4.0, 6.0]));
-        let group_indices = vec![0, 1, 2];
-
-        accumulator.update_batch(&[values], &group_indices, None, 3)?;
-
-        let state = accumulator.state(EmitTo::Block)?;
-        assert_eq!(
-            state[0].as_primitive::<Float64Type>().values().as_ref(),
-            &[2.0, 4.0]
-        );
-        assert_eq!(
-            state[1].as_primitive::<Int64Type>().values().as_ref(),
-            &[1, 1]
-        );
-
-        let state = accumulator.state(EmitTo::Block)?;
-        assert_eq!(
-            state[0].as_primitive::<Float64Type>().values().as_ref(),
-            &[6.0]
-        );
-        assert_eq!(state[1].as_primitive::<Int64Type>().values().as_ref(), &[1]);
 
         Ok(())
     }
