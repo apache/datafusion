@@ -23,7 +23,6 @@ pub mod bytes_view;
 mod fixed_size_list;
 mod list;
 pub mod primitive;
-#[allow(non_snake_case)]
 mod struct_;
 
 use std::mem::{self, size_of};
@@ -1002,7 +1001,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
             macro_rules! instantiate_fsl {
                 ($t:ty) => {{
                     let b = fixed_size_list::FixedSizeListGroupValueBuilder::<$t>::new(
-                        data_type.clone(),
+                        data_type,
                     );
                     v.push(Box::new(b) as _);
                 }};
@@ -1613,7 +1612,8 @@ mod tests {
     ) {
         use super::super::row::GroupValuesRows;
 
-        let mut col_gv = GroupValuesColumn::<false>::try_new(schema.clone()).unwrap();
+        let mut col_gv =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
         let mut groups = Vec::new();
         col_gv.intern(cols, &mut groups).unwrap();
         let col_size = col_gv.size();
@@ -1632,8 +1632,7 @@ mod tests {
              col_size={col_size}, row_size={row_size}, ratio={ratio:.2}x",
         );
         eprintln!(
-            "{label}: col_size={col_size} B, row_size={row_size} B, savings={:.1}x",
-            ratio,
+            "{label}: col_size={col_size} B, row_size={row_size} B, savings={ratio:.1}x"
         );
     }
 
@@ -1716,9 +1715,9 @@ mod tests {
             s.field_builder::<StringBuilder>(0)
                 .unwrap()
                 .append_value(format!("id-{i}-bbbbbbbbbbbbbbbb"));
-            s.field_builder::<StringBuilder>(1).unwrap().append_value(
-                format!("second description for entry {i}.....").to_string(),
-            );
+            s.field_builder::<StringBuilder>(1)
+                .unwrap()
+                .append_value(format!("second description for entry {i}....."));
             s.append(true);
             list_b.append(true);
         }

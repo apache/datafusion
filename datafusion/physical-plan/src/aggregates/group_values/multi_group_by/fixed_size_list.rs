@@ -48,8 +48,8 @@ pub struct FixedSizeListGroupValueBuilder<T: ArrowPrimitiveType> {
 }
 
 impl<T: ArrowPrimitiveType> FixedSizeListGroupValueBuilder<T> {
-    pub fn new(data_type: DataType) -> Self {
-        let (field, list_len) = match &data_type {
+    pub fn new(data_type: &DataType) -> Self {
+        let (field, list_len) = match data_type {
             DataType::FixedSizeList(f, n) => (Arc::clone(f), *n),
             other => unreachable!(
                 "FixedSizeListGroupValueBuilder built with non-FixedSizeList type {other:?}"
@@ -254,7 +254,7 @@ mod tests {
             Some([Some(1), Some(2)]),
         ]);
         let mut builder: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
 
         for i in 0..input.len() {
             builder.append_val(&input, i).unwrap();
@@ -289,7 +289,7 @@ mod tests {
     fn equal_to_matches_identical_rows_and_rejects_different() {
         let stored = fsl_array(&[Some([Some(1), Some(2)]), Some([Some(3), Some(4)])]);
         let mut builder: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         builder.append_val(&stored, 0).unwrap();
         builder.append_val(&stored, 1).unwrap();
 
@@ -311,7 +311,7 @@ mod tests {
     fn equal_to_handles_outer_nulls() {
         let stored = fsl_array(&[None, Some([Some(1), Some(2)])]);
         let mut builder: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         builder.append_val(&stored, 0).unwrap();
         builder.append_val(&stored, 1).unwrap();
 
@@ -329,7 +329,7 @@ mod tests {
     fn equal_to_handles_inner_nulls() {
         let stored = fsl_array(&[Some([Some(1), None]), Some([None, None])]);
         let mut builder: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         builder.append_val(&stored, 0).unwrap();
         builder.append_val(&stored, 1).unwrap();
 
@@ -416,7 +416,7 @@ mod tests {
             Some([Some(5), Some(6)]),
         ]);
         let mut builder: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         for i in 0..input.len() {
             builder.append_val(&input, i).unwrap();
         }
@@ -462,7 +462,7 @@ mod tests {
         let sliced = full.slice(2, 3);
 
         let mut builder: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         for i in 0..sliced.len() {
             builder.append_val(&sliced, i).unwrap();
         }
@@ -509,7 +509,7 @@ mod tests {
     fn take_n_zero_and_full() {
         let input = fsl_array(&[Some([Some(1), Some(2)]), Some([Some(3), Some(4)])]);
         let mut builder: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         for i in 0..input.len() {
             builder.append_val(&input, i).unwrap();
         }
@@ -538,7 +538,7 @@ mod tests {
         let input =
             fsl_array(&[Some([Some(1), Some(2)]), None, Some([Some(3), Some(4)])]);
         let mut builder: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         for i in 0..input.len() {
             builder.append_val(&input, i).unwrap();
         }
@@ -573,13 +573,13 @@ mod tests {
         ]);
 
         let mut per_row: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         for i in 0..input.len() {
             per_row.append_val(&input, i).unwrap();
         }
 
         let mut vec_b: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         vec_b.vectorized_append(&input, &[0, 1, 2, 3]).unwrap();
         assert_eq!(vec_b.len(), per_row.len());
 
@@ -611,7 +611,7 @@ mod tests {
     fn size_grows_with_appends() {
         let input = fsl_array(&[Some([Some(1), Some(2)])]);
         let mut builder: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         let s0 = builder.size();
         for _ in 0..16 {
             builder.append_val(&input, 0).unwrap();
@@ -623,7 +623,7 @@ mod tests {
     #[test]
     fn build_empty_builder_returns_empty_array() {
         let builder: FixedSizeListGroupValueBuilder<Int32Type> =
-            FixedSizeListGroupValueBuilder::new(data_type(true));
+            FixedSizeListGroupValueBuilder::new(&data_type(true));
         let out = Box::new(builder).build();
         let out = out.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
         assert_eq!(out.len(), 0);

@@ -59,7 +59,7 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
         }
     }
 
-    fn list_array<'a>(array: &'a ArrayRef) -> &'a GenericListArray<O> {
+    fn list_array(array: &ArrayRef) -> &GenericListArray<O> {
         array
             .as_any()
             .downcast_ref::<GenericListArray<O>>()
@@ -412,11 +412,12 @@ mod tests {
 
         // Build LargeList<Struct<id: Utf8, n: Int32>> arrays.
         //
-        // notes_v(rows) where each row is Option<Vec<(Option<&str>, Option<i32>)>>:
+        // NotesRow models one outer LargeList row of Struct<id, n>:
         //   None       -> null outer list
         //   Some(vec![]) -> empty list
         //   Some(vec![(id, n), ...]) -> list with struct entries
-        let notes_v = |rows: &[Option<Vec<(Option<&str>, Option<i32>)>>]| -> ArrayRef {
+        type NotesRow<'a> = Option<Vec<(Option<&'a str>, Option<i32>)>>;
+        let notes_v = |rows: &[NotesRow<'_>]| -> ArrayRef {
             let struct_builder = StructBuilder::new(
                 struct_fields.clone(),
                 vec![
@@ -768,9 +769,12 @@ mod tests {
             true,
         )]));
 
-        // Helper: produce a List<List<Int32>> from
-        //   Option<Vec<Option<Vec<Option<i32>>>>>
-        let mk = |rows: &[Option<Vec<Option<Vec<Option<i32>>>>>]| -> ArrayRef {
+        // MatrixRow models one outer List<List<Int32>> row:
+        //   None             -> null outer list
+        //   Some(vec![...])  -> list of sublists, each sublist itself
+        //                       Option<Vec<Option<i32>>>
+        type MatrixRow = Option<Vec<Option<Vec<Option<i32>>>>>;
+        let mk = |rows: &[MatrixRow]| -> ArrayRef {
             let inner = ListBuilder::new(Int32Builder::new())
                 .with_field(Arc::clone(&inner_field));
             let mut outer = ListBuilder::new(inner).with_field(Arc::clone(&outer_field));

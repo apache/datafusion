@@ -477,48 +477,51 @@ mod tests {
 
         // Build a Struct<Struct<id: Utf8, n: Int32>, tag: Int32> array with
         // four rows: two identical, one distinct, one null outer.
-        let mk_array =
-            |rows: &[Option<((Option<&str>, Option<i32>), Option<i32>)>]| -> ArrayRef {
-                // Inner struct children
-                let mut inner_ids: Vec<Option<&str>> = Vec::with_capacity(rows.len());
-                let mut inner_ns: Vec<Option<i32>> = Vec::with_capacity(rows.len());
-                let mut tags: Vec<Option<i32>> = Vec::with_capacity(rows.len());
-                let mut outer_validity: Vec<bool> = Vec::with_capacity(rows.len());
-                let mut inner_validity: Vec<bool> = Vec::with_capacity(rows.len());
-                for row in rows {
-                    match row {
-                        None => {
-                            inner_ids.push(None);
-                            inner_ns.push(None);
-                            tags.push(None);
-                            outer_validity.push(false);
-                            inner_validity.push(false);
-                        }
-                        Some(((id, n), tag)) => {
-                            inner_ids.push(*id);
-                            inner_ns.push(*n);
-                            tags.push(*tag);
-                            outer_validity.push(true);
-                            inner_validity.push(true);
-                        }
+        //
+        // OuterRow models one outer struct row: outer null is `None`,
+        // otherwise `Some((inner, tag))` where `inner = (id, n)`.
+        type OuterRow<'a> = Option<((Option<&'a str>, Option<i32>), Option<i32>)>;
+        let mk_array = |rows: &[OuterRow<'_>]| -> ArrayRef {
+            // Inner struct children
+            let mut inner_ids: Vec<Option<&str>> = Vec::with_capacity(rows.len());
+            let mut inner_ns: Vec<Option<i32>> = Vec::with_capacity(rows.len());
+            let mut tags: Vec<Option<i32>> = Vec::with_capacity(rows.len());
+            let mut outer_validity: Vec<bool> = Vec::with_capacity(rows.len());
+            let mut inner_validity: Vec<bool> = Vec::with_capacity(rows.len());
+            for row in rows {
+                match row {
+                    None => {
+                        inner_ids.push(None);
+                        inner_ns.push(None);
+                        tags.push(None);
+                        outer_validity.push(false);
+                        inner_validity.push(false);
+                    }
+                    Some(((id, n), tag)) => {
+                        inner_ids.push(*id);
+                        inner_ns.push(*n);
+                        tags.push(*tag);
+                        outer_validity.push(true);
+                        inner_validity.push(true);
                     }
                 }
-                let inner_id_arr: ArrayRef = Arc::new(StringArray::from(inner_ids));
-                let inner_n_arr: ArrayRef = Arc::new(Int32Array::from(inner_ns));
-                let inner_null = arrow::buffer::NullBuffer::from(inner_validity);
-                let inner = Arc::new(StructArray::new(
-                    inner_fields.clone(),
-                    vec![inner_id_arr, inner_n_arr],
-                    Some(inner_null),
-                )) as ArrayRef;
-                let tag_arr: ArrayRef = Arc::new(Int32Array::from(tags));
-                let outer_null = arrow::buffer::NullBuffer::from(outer_validity);
-                Arc::new(StructArray::new(
-                    outer_fields.clone(),
-                    vec![inner, tag_arr],
-                    Some(outer_null),
-                ))
-            };
+            }
+            let inner_id_arr: ArrayRef = Arc::new(StringArray::from(inner_ids));
+            let inner_n_arr: ArrayRef = Arc::new(Int32Array::from(inner_ns));
+            let inner_null = arrow::buffer::NullBuffer::from(inner_validity);
+            let inner = Arc::new(StructArray::new(
+                inner_fields.clone(),
+                vec![inner_id_arr, inner_n_arr],
+                Some(inner_null),
+            )) as ArrayRef;
+            let tag_arr: ArrayRef = Arc::new(Int32Array::from(tags));
+            let outer_null = arrow::buffer::NullBuffer::from(outer_validity);
+            Arc::new(StructArray::new(
+                outer_fields.clone(),
+                vec![inner, tag_arr],
+                Some(outer_null),
+            ))
+        };
 
         let mut gv = new_group_values(schema, &GroupOrdering::None).unwrap();
         let batch = mk_array(&[
