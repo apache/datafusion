@@ -45,6 +45,8 @@ use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
 use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
+use crate::repartition::RepartitionExec;
+use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
@@ -1220,15 +1222,31 @@ pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
     Ok(())
 }
 
-/// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
-/// especially for the distributed engine to judge whether need to deal with shuffling.
-/// Currently, there are 3 kinds of execution plan which needs data exchange
-///     1. RepartitionExec for changing the partition number between two `ExecutionPlan`s
-///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
-///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
+/// Indicate whether a data exchange is needed for the input of `plan`.
+///
+/// This identifies physical operators that redistribute child partitions or
+/// gather multiple child partitions into one output partition:
+///
+/// 1. RepartitionExec for non-round-robin repartitioning
+/// 2. CoalescePartitionsExec for collapsing multiple partitions into one without ordering guarantee
+/// 3. SortPreservingMergeExec for collapsing multiple sorted partitions into one with ordering guarantee
 #[expect(clippy::needless_pass_by_value)]
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
-    plan.properties().evaluation_type == EvaluationType::Eager
+    if let Some(repartition) = plan.downcast_ref::<RepartitionExec>() {
+        !matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_))
+    } else if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
+        coalesce.input().output_partitioning().partition_count() > 1
+    } else if let Some(sort_preserving_merge) =
+        plan.downcast_ref::<SortPreservingMergeExec>()
+    {
+        sort_preserving_merge
+            .input()
+            .output_partitioning()
+            .partition_count()
+            > 1
+    } else {
+        false
+    }
 }
 
 /// Returns a copy of this plan if we change any child according to the pointer comparison.
@@ -1567,6 +1585,8 @@ pub(crate) fn stub_properties() -> Arc<PlanProperties> {
 mod tests {
 
     use super::*;
+    use crate::buffer::BufferExec;
+    use crate::test::exec::MockExec;
     use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
     use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
@@ -1777,6 +1797,15 @@ mod tests {
     #[expect(unused)]
     fn use_execution_plan_as_trait_object(plan: &dyn ExecutionPlan) {
         let _ = plan.name();
+    }
+
+    #[test]
+    fn buffer_exec_does_not_need_data_exchange() {
+        let schema = Arc::new(Schema::empty());
+        let input: Arc<dyn ExecutionPlan> = Arc::new(MockExec::new(vec![], schema));
+        let buffer: Arc<dyn ExecutionPlan> = Arc::new(BufferExec::new(input, 1024));
+
+        assert!(!need_data_exchange(buffer));
     }
 
     #[test]
