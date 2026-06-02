@@ -6491,6 +6491,50 @@ FROM (VALUES (1)) AS t(x)
 ----
 NULL
 
+# Grouped first_value/last_value must apply aggregate FILTER with Some(true)
+# semantics: a row passes only when the predicate is TRUE. Rows where the
+# predicate evaluates to NULL or FALSE must be excluded.
+#
+# Rows per group (predicate is b < 1):
+#   g=1: (a=10, b=NULL -> NULL), (a=20, b=2 -> FALSE)        => no rows pass
+#   g=2: (a=30, b=0 -> TRUE), (a=40, b=NULL -> NULL),
+#        (a=50, b=-5 -> TRUE)                                => a=30 and a=50 pass
+#   g=3: (a=60, b=NULL -> NULL)                              => no rows pass
+statement ok
+CREATE TABLE first_last_filter_null_tests(g INT, a INT, b INT) AS VALUES
+(1, 10, CAST(NULL AS INT)),
+(1, 20, 2),
+(2, 30, 0),
+(2, 40, CAST(NULL AS INT)),
+(2, 50, -5),
+(3, 60, CAST(NULL AS INT));
+
+# Groups 1 and 3 have no rows passing the filter -> NULL.
+# Group 2 has a=30 and a=50 passing -> first_value ORDER BY a = 30.
+query II
+SELECT g, first_value(a ORDER BY a) FILTER (WHERE b < 1) AS fv
+FROM first_last_filter_null_tests
+GROUP BY g
+ORDER BY g;
+----
+1 NULL
+2 30
+3 NULL
+
+# Same groups via last_value: group 2 picks the largest passing a = 50.
+query II
+SELECT g, last_value(a ORDER BY a) FILTER (WHERE b < 1) AS lv
+FROM first_last_filter_null_tests
+GROUP BY g
+ORDER BY g;
+----
+1 NULL
+2 50
+3 NULL
+
+statement ok
+DROP TABLE first_last_filter_null_tests;
+
 # query_with_and_without_filter
 query III rowsort
 SELECT
