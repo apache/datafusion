@@ -58,7 +58,7 @@ use datafusion_common::{
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
+    ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
     dml::InsertOp,
     expr::{Alias, ScalarFunction},
     is_null, lit,
@@ -2473,45 +2473,7 @@ impl DataFrame {
         value: ScalarValue,
         columns: Vec<String>,
     ) -> Result<DataFrame> {
-        let cols = if columns.is_empty() {
-            self.logical_plan()
-                .schema()
-                .fields()
-                .iter()
-                .map(Arc::clone)
-                .collect()
-        } else {
-            self.find_columns(&columns)?
-        };
-
-        // Create projections for each column
-        let projections = self
-            .logical_plan()
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| {
-                if cols.contains(field) {
-                    // Try to cast fill value to column type. If the cast fails, fallback to the original column.
-                    match value.clone().cast_to(field.data_type()) {
-                        Ok(fill_value) => Expr::Alias(Alias {
-                            expr: Box::new(Expr::ScalarFunction(ScalarFunction {
-                                func: coalesce(),
-                                args: vec![col(field.name()), lit(fill_value)],
-                            })),
-                            relation: None,
-                            name: field.name().to_string(),
-                            metadata: None,
-                        }),
-                        Err(_) => col(field.name()),
-                    }
-                } else {
-                    col(field.name())
-                }
-            })
-            .collect::<Vec<_>>();
-
-        self.clone().select(projections)
+        self.fill_columns(value, &columns, coalesce(), |_| true)
     }
 
     // Helper to find columns from names
@@ -2560,6 +2522,19 @@ impl DataFrame {
         value: ScalarValue,
         columns: Vec<String>,
     ) -> Result<DataFrame> {
+        self.fill_columns(value, &columns, nanvl(), |field| {
+            field.data_type().is_floating()
+        })
+    }
+
+    #[expect(clippy::needless_pass_by_value)]
+    fn fill_columns(
+        &self,
+        value: ScalarValue,
+        columns: &[String],
+        func: Arc<ScalarUDF>,
+        applies: impl Fn(&FieldRef) -> bool,
+    ) -> Result<DataFrame> {
         let cols = if columns.is_empty() {
             self.logical_plan()
                 .schema()
@@ -2568,7 +2543,7 @@ impl DataFrame {
                 .map(Arc::clone)
                 .collect()
         } else {
-            self.find_columns(&columns)?
+            self.find_columns(columns)?
         };
 
         let projections = self
@@ -2577,12 +2552,12 @@ impl DataFrame {
             .fields()
             .iter()
             .map(|field| {
-                if cols.contains(field) && field.data_type().is_floating() {
+                if cols.contains(field) && applies(field) {
                     // Try to cast fill value to column type. If the cast fails, fallback to the original column.
                     match value.clone().cast_to(field.data_type()) {
                         Ok(fill_value) => Expr::Alias(Alias {
                             expr: Box::new(Expr::ScalarFunction(ScalarFunction {
-                                func: nanvl(),
+                                func: Arc::clone(&func),
                                 args: vec![col(field.name()), lit(fill_value)],
                             })),
                             relation: None,
