@@ -46,24 +46,25 @@ Rule order matters. The default pipeline may change between releases.
 | 7     | `decorrelate_predicate_subquery`          | Converts eligible `IN` and `EXISTS` predicate subqueries into semi or anti joins.                                           |
 | 8     | `scalar_subquery_to_join`                 | Rewrites eligible scalar subqueries into joins and adds schema-preserving projections.                                      |
 | 9     | `decorrelate_lateral_join`                | Rewrites eligible lateral joins into regular joins.                                                                         |
-| 10    | `extract_equijoin_predicate`              | Splits join filters into equijoin keys and residual predicates.                                                             |
-| 11    | `eliminate_duplicated_expr`               | Removes duplicate expressions from projections, aggregates, and similar operators.                                          |
-| 12    | `eliminate_filter`                        | Drops always-true filters and replaces always-false or NULL filters with empty relations.                                   |
-| 13    | `eliminate_cross_join`                    | Uses filter predicates to replace cross joins with inner joins when join keys can be found.                                 |
-| 14    | `eliminate_limit`                         | Removes no-op limits and simplifies trivial limit shapes.                                                                   |
-| 15    | `propagate_empty_relation`                | Pushes empty-relation knowledge upward so operators fed by no rows collapse early.                                          |
-| 16    | `filter_null_join_keys`                   | Adds `IS NOT NULL` filters to nullable equijoin keys that can never match.                                                  |
-| 17    | `eliminate_outer_join`                    | Rewrites outer joins to inner joins when later filters reject the NULL-extended rows.                                       |
-| 18    | `push_down_limit`                         | Moves literal limits closer to scans and unions and merges adjacent limits.                                                 |
-| 19    | `push_down_filter`                        | Moves filters as early as possible through filter-commutative operators.                                                    |
-| 20    | `inline_cte`                              | Inlines materialized CTEs where materialization is not beneficial (cheap, limited, or disjoint-filtered).                   |
-| 21    | `cte_filter_pusher`                       | Pushes OR-combined filters from CTE readers into the materialized CTE body to reduce materialization volume.                |
-| 22    | `single_distinct_aggregation_to_group_by` | Rewrites single-column `DISTINCT` aggregations into two-stage `GROUP BY` plans.                                             |
-| 23    | `eliminate_group_by_constant`             | Removes constant or functionally redundant expressions from `GROUP BY`.                                                     |
-| 24    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
-| 25    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
-| 26    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
-| 27    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
+| 10    | `common_subplan_eliminate`                | Detects duplicate subplans and materializes them so they are computed once and read multiple times.                         |
+| 11    | `extract_equijoin_predicate`              | Splits join filters into equijoin keys and residual predicates.                                                             |
+| 12    | `eliminate_duplicated_expr`               | Removes duplicate expressions from projections, aggregates, and similar operators.                                          |
+| 13    | `eliminate_filter`                        | Drops always-true filters and replaces always-false or NULL filters with empty relations.                                   |
+| 14    | `eliminate_cross_join`                    | Uses filter predicates to replace cross joins with inner joins when join keys can be found.                                 |
+| 15    | `eliminate_limit`                         | Removes no-op limits and simplifies trivial limit shapes.                                                                   |
+| 16    | `propagate_empty_relation`                | Pushes empty-relation knowledge upward so operators fed by no rows collapse early.                                          |
+| 17    | `filter_null_join_keys`                   | Adds `IS NOT NULL` filters to nullable equijoin keys that can never match.                                                  |
+| 18    | `eliminate_outer_join`                    | Rewrites outer joins to inner joins when later filters reject the NULL-extended rows.                                       |
+| 19    | `push_down_limit`                         | Moves literal limits closer to scans and unions and merges adjacent limits.                                                 |
+| 20    | `push_down_filter`                        | Moves filters as early as possible through filter-commutative operators.                                                    |
+| 21    | `inline_cte`                              | Inlines materialized CTEs where materialization is not beneficial (cheap, limited, or disjoint-filtered).                   |
+| 22    | `cte_filter_pusher`                       | Pushes OR-combined filters from CTE readers into the materialized CTE body to reduce materialization volume.                |
+| 23    | `single_distinct_aggregation_to_group_by` | Rewrites single-column `DISTINCT` aggregations into two-stage `GROUP BY` plans.                                             |
+| 24    | `eliminate_group_by_constant`             | Removes constant or functionally redundant expressions from `GROUP BY`.                                                     |
+| 25    | `common_sub_expression_eliminate`         | Computes repeated subexpressions once and reuses the result.                                                                |
+| 26    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
+| 27    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
+| 28    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
 
 ### Physical Optimizer Rules
 

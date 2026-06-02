@@ -42,6 +42,7 @@ use datafusion_expr::{
 };
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
+use crate::common_subplan_eliminate::CommonSubplanEliminate;
 use crate::cte_filter_pusher::CteFilterPusher;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
@@ -299,6 +300,7 @@ impl Optimizer {
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(DecorrelateLateralJoin::new()),
+            Arc::new(CommonSubplanEliminate::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),

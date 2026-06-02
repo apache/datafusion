@@ -78,7 +78,11 @@ pub mod filter;
 pub mod filter_pushdown;
 pub mod joins;
 pub mod limit;
-pub mod materialized_cte;
+pub mod materialize;
+/// Backward-compatible re-export of [`materialize`] under its old name.
+pub mod materialized_cte {
+    pub use super::materialize::*;
+}
 pub mod memory;
 pub mod metrics;
 pub mod operator_statistics;

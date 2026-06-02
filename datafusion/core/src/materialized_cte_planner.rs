@@ -28,9 +28,9 @@ use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::{MaterializedCteProducer, MaterializedCteReader};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
-use datafusion_physical_plan::materialized_cte::{
-    MaterializedCteCache, MaterializedCteExec, MaterializedCteReaderExec,
-    materialized_cte_statistics, replace_materialized_cte_readers,
+use datafusion_physical_plan::materialize::{
+    MaterializeExec, MaterializedCache, MaterializedScanExec, materialized_statistics,
+    replace_materialized_scans,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -44,7 +44,7 @@ use crate::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 #[derive(Debug)]
 pub struct MaterializedCtePlanner {
     /// Map of CTE name to shared cache
-    caches: Mutex<HashMap<String, Arc<MaterializedCteCache>>>,
+    caches: Mutex<HashMap<String, Arc<MaterializedCache>>>,
     /// Map of CTE name to the number of partitions readers should expose
     partition_counts: Mutex<HashMap<String, usize>>,
 }
@@ -59,17 +59,17 @@ impl MaterializedCtePlanner {
     }
 
     /// Get or create a cache for the given CTE name.
-    fn get_or_create_cache(&self, name: &str) -> Arc<MaterializedCteCache> {
+    fn get_or_create_cache(&self, name: &str) -> Arc<MaterializedCache> {
         let mut caches = self.caches.lock().unwrap();
         Arc::clone(
             caches
                 .entry(name.to_string())
-                .or_insert_with(|| Arc::new(MaterializedCteCache::new(name.to_string()))),
+                .or_insert_with(|| Arc::new(MaterializedCache::new(name.to_string()))),
         )
     }
 
-    fn create_cache(&self, name: &str) -> Arc<MaterializedCteCache> {
-        let cache = Arc::new(MaterializedCteCache::new(name.to_string()));
+    fn create_cache(&self, name: &str) -> Arc<MaterializedCache> {
+        let cache = Arc::new(MaterializedCache::new(name.to_string()));
         self.caches
             .lock()
             .unwrap()
@@ -115,16 +115,16 @@ impl ExtensionPlanner for MaterializedCtePlanner {
             let cache = self.create_cache(&producer.name);
             let cte_plan = Arc::clone(&physical_inputs[0]);
             let partition_count = cte_plan.output_partitioning().partition_count();
-            let statistics = materialized_cte_statistics(cte_plan.as_ref())?;
+            let statistics = materialized_statistics(cte_plan.as_ref())?;
             self.set_partition_count(&producer.name, partition_count);
-            let continuation = replace_materialized_cte_readers(
+            let continuation = replace_materialized_scans(
                 Arc::clone(&physical_inputs[1]),
                 &producer.name,
                 &cache,
                 partition_count,
                 &statistics,
             )?;
-            let exec = MaterializedCteExec::new(
+            let exec = MaterializeExec::new(
                 producer.name.clone(),
                 cte_plan,
                 continuation,
@@ -139,7 +139,7 @@ impl ExtensionPlanner for MaterializedCtePlanner {
             let schema = Arc::clone(reader.schema.inner());
             let statistics =
                 Arc::new(datafusion_physical_plan::Statistics::new_unknown(&schema));
-            let exec = MaterializedCteReaderExec::new(
+            let exec = MaterializedScanExec::new(
                 reader.name.clone(),
                 schema,
                 cache,

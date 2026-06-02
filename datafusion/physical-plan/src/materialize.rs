@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical plan nodes for materialized CTEs.
+//! Physical plan nodes for materialized compute-once, read-many patterns.
 
 use std::fmt;
 use std::future::Future;
@@ -41,23 +41,23 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use futures::TryStreamExt;
 
-/// A shared cache that stores the materialized CTE results.
-/// The cache uses `OnceAsync` to ensure the CTE is only computed once,
+/// A shared cache that stores materialized results.
+/// The cache uses `OnceAsync` to ensure the computation is only performed once,
 /// while allowing multiple consumers to await the result concurrently.
 #[derive(Debug)]
-pub struct MaterializedCteCache {
-    /// Name of the CTE (for debugging)
+pub struct MaterializedCache {
+    /// Label for this materialized computation (for debugging)
     #[expect(dead_code)]
-    name: String,
-    /// The shared one-time async computation of the CTE batches
+    label: String,
+    /// The shared one-time async computation of the batches
     once: OnceAsync<Vec<Vec<RecordBatch>>>,
 }
 
-impl MaterializedCteCache {
-    /// Create a new empty cache for the given CTE name.
-    pub fn new(name: String) -> Self {
+impl MaterializedCache {
+    /// Create a new empty cache with the given label.
+    pub fn new(label: String) -> Self {
         Self {
-            name,
+            label,
             once: OnceAsync::default(),
         }
     }
@@ -73,36 +73,36 @@ impl MaterializedCteCache {
     }
 }
 
-/// Physical execution plan that materializes a CTE and then executes
-/// a continuation plan. The CTE results are cached in a shared
-/// `MaterializedCteCache` for use by `MaterializedCteReaderExec` nodes.
+/// Physical execution plan that materializes a subplan and then executes
+/// a continuation plan. The results are cached in a shared
+/// `MaterializedCache` for use by `MaterializedScanExec` nodes.
 #[derive(Debug)]
-pub struct MaterializedCteExec {
-    /// Name of the CTE
-    name: String,
-    /// The plan that computes the CTE
+pub struct MaterializeExec {
+    /// Label for this materialized computation
+    label: String,
+    /// The plan that computes the materialized result
     cte_plan: Arc<dyn ExecutionPlan>,
-    /// The continuation plan that uses the materialized CTE
+    /// The continuation plan that uses the materialized result
     continuation: Arc<dyn ExecutionPlan>,
-    /// Shared cache for the CTE results
-    cache: Arc<MaterializedCteCache>,
+    /// Shared cache for the results
+    cache: Arc<MaterializedCache>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties
     properties: Arc<PlanProperties>,
 }
 
-impl MaterializedCteExec {
-    /// Create a new MaterializedCteExec.
+impl MaterializeExec {
+    /// Create a new MaterializeExec.
     pub fn new(
-        name: String,
+        label: String,
         cte_plan: Arc<dyn ExecutionPlan>,
         continuation: Arc<dyn ExecutionPlan>,
-        cache: Arc<MaterializedCteCache>,
+        cache: Arc<MaterializedCache>,
     ) -> Self {
         let properties = Arc::clone(continuation.properties());
         Self {
-            name,
+            label,
             cte_plan,
             continuation,
             cache,
@@ -112,22 +112,22 @@ impl MaterializedCteExec {
     }
 }
 
-impl DisplayAs for MaterializedCteExec {
+impl DisplayAs for MaterializeExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "MaterializedCteExec: name={}", self.name)
+                write!(f, "MaterializeExec: label={}", self.label)
             }
             DisplayFormatType::TreeRender => {
-                write!(f, "name={}", self.name)
+                write!(f, "label={}", self.label)
             }
         }
     }
 }
 
-impl ExecutionPlan for MaterializedCteExec {
+impl ExecutionPlan for MaterializeExec {
     fn name(&self) -> &'static str {
-        "MaterializedCteExec"
+        "MaterializeExec"
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -144,22 +144,22 @@ impl ExecutionPlan for MaterializedCteExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 2 {
             return internal_err!(
-                "MaterializedCteExec expected 2 children, got {}",
+                "MaterializeExec expected 2 children, got {}",
                 children.len()
             );
         }
         let cte_plan = Arc::clone(&children[0]);
         let partition_count = cte_plan.output_partitioning().partition_count();
-        let statistics = materialized_cte_statistics(cte_plan.as_ref())?;
-        let continuation = replace_materialized_cte_readers(
+        let statistics = materialized_statistics(cte_plan.as_ref())?;
+        let continuation = replace_materialized_scans(
             Arc::clone(&children[1]),
-            &self.name,
+            &self.label,
             &self.cache,
             partition_count,
             &statistics,
         )?;
         Ok(Arc::new(Self::new(
-            self.name.clone(),
+            self.label.clone(),
             cte_plan,
             continuation,
             Arc::clone(&self.cache),
@@ -174,17 +174,17 @@ impl ExecutionPlan for MaterializedCteExec {
         let output_partitions = self.properties.output_partitioning().partition_count();
         if partition >= output_partitions {
             return internal_err!(
-                "MaterializedCteExec got partition {partition}, expected less than {output_partitions}"
+                "MaterializeExec got partition {partition}, expected less than {output_partitions}"
             );
         }
 
         let cte_plan = Arc::clone(&self.cte_plan);
         let continuation = Arc::clone(&self.continuation);
-        let name = self.name.clone();
+        let label = self.label.clone();
         let ctx = Arc::clone(&context);
         let schema = Arc::clone(&self.continuation.schema());
 
-        // Use OnceAsync to ensure the CTE is materialized exactly once,
+        // Use OnceAsync to ensure the subplan is materialized exactly once,
         // even when multiple partitions call execute() concurrently.
         let mut once_fut = self.cache.try_once(move || {
             Ok(async move {
@@ -195,7 +195,7 @@ impl ExecutionPlan for MaterializedCteExec {
                 let num_rows: usize =
                     partitions.iter().flatten().map(|b| b.num_rows()).sum();
                 log::info!(
-                    "Materializing CTE '{name}': {num_partitions} partitions, {num_batches} batches, {num_rows} rows"
+                    "Materializing '{label}': {num_partitions} partitions, {num_batches} batches, {num_rows} rows"
                 );
 
                 Ok(partitions)
@@ -204,7 +204,7 @@ impl ExecutionPlan for MaterializedCteExec {
 
         let ctx = Arc::clone(&context);
         let fut = async move {
-            // Wait for the CTE to be materialized
+            // Wait for the subplan to be materialized
             std::future::poll_fn(|cx| once_fut.get_shared(cx)).await?;
             // Now execute the continuation
             continuation.execute(partition, ctx)
@@ -225,38 +225,38 @@ impl ExecutionPlan for MaterializedCteExec {
     }
 }
 
-/// Physical execution plan that reads from a previously materialized CTE cache.
+/// Physical execution plan that reads from a previously materialized cache.
 /// This is a leaf node that retrieves the cached batches from the shared
-/// `MaterializedCteCache`.
+/// `MaterializedCache`.
 #[derive(Debug)]
-pub struct MaterializedCteReaderExec {
-    /// Name of the CTE
-    name: String,
-    /// The schema of the CTE output
+pub struct MaterializedScanExec {
+    /// Label for the materialized computation this reads from
+    label: String,
+    /// The schema of the output
     schema: SchemaRef,
     /// Shared cache to read from
-    cache: Arc<MaterializedCteCache>,
+    cache: Arc<MaterializedCache>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Statistics from the plan that produces the materialized CTE
+    /// Statistics from the plan that produces the materialized result
     statistics: Arc<Statistics>,
     /// Cache holding plan properties
     properties: Arc<PlanProperties>,
 }
 
-impl MaterializedCteReaderExec {
-    /// Create a new MaterializedCteReaderExec.
+impl MaterializedScanExec {
+    /// Create a new MaterializedScanExec.
     pub fn new(
-        name: String,
+        label: String,
         schema: SchemaRef,
-        cache: Arc<MaterializedCteCache>,
+        cache: Arc<MaterializedCache>,
         partition_count: usize,
         statistics: Arc<Statistics>,
     ) -> Self {
         let partition_count = reader_partition_count(partition_count, &statistics);
         let properties = Self::compute_properties(Arc::clone(&schema), partition_count);
         Self {
-            name,
+            label,
             schema,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -265,9 +265,9 @@ impl MaterializedCteReaderExec {
         }
     }
 
-    /// The CTE this reader reads from.
-    pub fn cte_name(&self) -> &str {
-        &self.name
+    /// The label identifying which materialized computation this reads from.
+    pub fn label(&self) -> &str {
+        &self.label
     }
 
     fn compute_properties(schema: SchemaRef, partition_count: usize) -> PlanProperties {
@@ -280,22 +280,22 @@ impl MaterializedCteReaderExec {
     }
 }
 
-impl DisplayAs for MaterializedCteReaderExec {
+impl DisplayAs for MaterializedScanExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "MaterializedCteReaderExec: name={}", self.name)
+                write!(f, "MaterializedScanExec: label={}", self.label)
             }
             DisplayFormatType::TreeRender => {
-                write!(f, "name={}", self.name)
+                write!(f, "label={}", self.label)
             }
         }
     }
 }
 
-impl ExecutionPlan for MaterializedCteReaderExec {
+impl ExecutionPlan for MaterializedScanExec {
     fn name(&self) -> &'static str {
-        "MaterializedCteReaderExec"
+        "MaterializedScanExec"
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -321,22 +321,22 @@ impl ExecutionPlan for MaterializedCteReaderExec {
         let output_partitions = self.properties.output_partitioning().partition_count();
         if partition >= output_partitions {
             return internal_err!(
-                "MaterializedCteReaderExec got partition {partition}, expected less than {output_partitions}"
+                "MaterializedScanExec got partition {partition}, expected less than {output_partitions}"
             );
         }
 
         let schema = Arc::clone(&self.schema);
-        let name = self.name.clone();
+        let label = self.label.clone();
 
         // Get a OnceFut handle to the shared computation. The producer
-        // (MaterializedCteExec) triggers the actual work; here we just
+        // (MaterializeExec) triggers the actual work; here we just
         // await the result which will be ready immediately if the producer
         // has already finished.
         let mut once_fut =
             self.cache.try_once(move || -> Result<std::future::Ready<_>> {
                 internal_err!(
-                    "MaterializedCteReaderExec: cache for CTE '{}' was never initialized by the producer.",
-                    name
+                    "MaterializedScanExec: cache for '{}' was never initialized by the producer.",
+                    label
                 )
             })?;
 
@@ -379,8 +379,8 @@ fn reader_partition_count(partition_count: usize, statistics: &Statistics) -> us
     }
 }
 
-/// Estimate the statistics exposed by materialized CTE readers.
-pub fn materialized_cte_statistics(plan: &dyn ExecutionPlan) -> Result<Arc<Statistics>> {
+/// Estimate the statistics exposed by materialized scan readers.
+pub fn materialized_statistics(plan: &dyn ExecutionPlan) -> Result<Arc<Statistics>> {
     Ok(Arc::clone(
         StatisticsRegistry::default_with_builtin_providers()
             .compute(plan)?
@@ -388,26 +388,26 @@ pub fn materialized_cte_statistics(plan: &dyn ExecutionPlan) -> Result<Arc<Stati
     ))
 }
 
-/// Replace readers for a materialized CTE with readers that use the provided
-/// cache and expose the provided partition count and statistics.
-pub fn replace_materialized_cte_readers(
+/// Replace scan nodes for a materialized computation with readers that use the
+/// provided cache and expose the provided partition count and statistics.
+pub fn replace_materialized_scans(
     plan: Arc<dyn ExecutionPlan>,
-    name: &str,
-    cache: &Arc<MaterializedCteCache>,
+    label: &str,
+    cache: &Arc<MaterializedCache>,
     partition_count: usize,
     statistics: &Arc<Statistics>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     plan.transform_up(|plan| {
-        let Some(reader) = plan.downcast_ref::<MaterializedCteReaderExec>() else {
+        let Some(reader) = plan.downcast_ref::<MaterializedScanExec>() else {
             return Ok(Transformed::no(plan));
         };
 
-        if reader.cte_name() != name {
+        if reader.label() != label {
             return Ok(Transformed::no(plan));
         }
 
-        Ok(Transformed::yes(Arc::new(MaterializedCteReaderExec::new(
-            name.to_string(),
+        Ok(Transformed::yes(Arc::new(MaterializedScanExec::new(
+            label.to_string(),
             plan.schema(),
             Arc::clone(cache),
             partition_count,
@@ -415,6 +415,30 @@ pub fn replace_materialized_cte_readers(
         )) as Arc<dyn ExecutionPlan>))
     })
     .data()
+}
+
+// Backward-compatible type aliases
+/// Backward-compatible alias for [`MaterializedCache`].
+pub type MaterializedCteCache = MaterializedCache;
+/// Backward-compatible alias for [`MaterializeExec`].
+pub type MaterializedCteExec = MaterializeExec;
+/// Backward-compatible alias for [`MaterializedScanExec`].
+pub type MaterializedCteReaderExec = MaterializedScanExec;
+
+/// Backward-compatible alias for [`materialized_statistics`].
+pub fn materialized_cte_statistics(plan: &dyn ExecutionPlan) -> Result<Arc<Statistics>> {
+    materialized_statistics(plan)
+}
+
+/// Backward-compatible alias for [`replace_materialized_scans`].
+pub fn replace_materialized_cte_readers(
+    plan: Arc<dyn ExecutionPlan>,
+    label: &str,
+    cache: &Arc<MaterializedCache>,
+    partition_count: usize,
+    statistics: &Arc<Statistics>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    replace_materialized_scans(plan, label, cache, partition_count, statistics)
 }
 
 #[cfg(test)]
@@ -444,7 +468,7 @@ mod tests {
     }
 
     /// Helper: pre-populate the cache by triggering `try_once` with a ready value.
-    fn prepopulate_cache(cache: &MaterializedCteCache, batches: Vec<Vec<RecordBatch>>) {
+    fn prepopulate_cache(cache: &MaterializedCache, batches: Vec<Vec<RecordBatch>>) {
         cache
             .try_once(move || Ok(async move { Ok(batches) }))
             .expect("try_once should succeed on first call");
@@ -452,7 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_try_once_populates() {
-        let cache = MaterializedCteCache::new("test".into());
+        let cache = MaterializedCache::new("test".into());
 
         let schema = test_schema();
         let batch = test_batch(&schema);
@@ -469,7 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_try_once_returns_same_result() {
-        let cache = MaterializedCteCache::new("test".into());
+        let cache = MaterializedCache::new("test".into());
         let schema = test_schema();
         let batch = test_batch(&schema);
 
@@ -494,10 +518,10 @@ mod tests {
     async fn test_reader_exec_reads_from_cache() {
         let schema = test_schema();
         let batch = test_batch(&schema);
-        let cache = Arc::new(MaterializedCteCache::new("test".into()));
+        let cache = Arc::new(MaterializedCache::new("test".into()));
         prepopulate_cache(&cache, vec![vec![batch.clone()]]);
 
-        let reader = MaterializedCteReaderExec::new(
+        let reader = MaterializedScanExec::new(
             "test".into(),
             Arc::clone(&schema),
             cache,
@@ -519,10 +543,10 @@ mod tests {
     async fn test_reader_exec_preserves_cache_partitions() {
         let schema = test_schema();
         let batch = test_batch(&schema);
-        let cache = Arc::new(MaterializedCteCache::new("test".into()));
+        let cache = Arc::new(MaterializedCache::new("test".into()));
         prepopulate_cache(&cache, vec![vec![batch.clone()], vec![batch.clone()]]);
 
-        let reader = MaterializedCteReaderExec::new(
+        let reader = MaterializedScanExec::new(
             "test".into(),
             Arc::clone(&schema),
             cache,
@@ -553,10 +577,10 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![1]))],
         )
         .unwrap();
-        let cache = Arc::new(MaterializedCteCache::new("test".into()));
+        let cache = Arc::new(MaterializedCache::new("test".into()));
         prepopulate_cache(&cache, vec![vec![], vec![batch.clone()]]);
 
-        let reader = MaterializedCteReaderExec::new(
+        let reader = MaterializedScanExec::new(
             "test".into(),
             Arc::clone(&schema),
             cache,
@@ -580,9 +604,9 @@ mod tests {
     #[tokio::test]
     async fn test_reader_exec_fails_when_cache_empty() {
         let schema = test_schema();
-        let cache = Arc::new(MaterializedCteCache::new("test".into()));
+        let cache = Arc::new(MaterializedCache::new("test".into()));
 
-        let reader = MaterializedCteReaderExec::new(
+        let reader = MaterializedScanExec::new(
             "test".into(),
             Arc::clone(&schema),
             cache,

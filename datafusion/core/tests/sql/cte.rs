@@ -19,9 +19,7 @@ use super::*;
 use arrow::array::StringArray;
 use datafusion::catalog::MemTable;
 use datafusion::physical_plan::ExecutionPlanProperties;
-use datafusion::physical_plan::materialized_cte::{
-    MaterializedCteExec, MaterializedCteReaderExec,
-};
+use datafusion::physical_plan::materialize::{MaterializeExec, MaterializedScanExec};
 use datafusion::physical_plan::{collect_partitioned, visit_execution_plan};
 use datafusion_common::assert_batches_eq;
 use datafusion_common::stats::Precision;
@@ -42,8 +40,8 @@ async fn multi_reference_cte_materialization_heuristic() -> Result<()> {
         .await?;
     let physical_plan = reused_scan.create_physical_plan().await?;
     let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_contains!(&plan, "MaterializedCteExec");
-    assert_contains!(&plan, "MaterializedCteReaderExec");
+    assert_contains!(&plan, "MaterializeExec");
+    assert_contains!(&plan, "MaterializedScanExec");
 
     let cheap_literal = ctx
         .sql(
@@ -53,8 +51,8 @@ async fn multi_reference_cte_materialization_heuristic() -> Result<()> {
         .await?;
     let physical_plan = cheap_literal.create_physical_plan().await?;
     let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_not_contains!(&plan, "MaterializedCteExec");
-    assert_not_contains!(&plan, "MaterializedCteReaderExec");
+    assert_not_contains!(&plan, "MaterializeExec");
+    assert_not_contains!(&plan, "MaterializedScanExec");
 
     let limited_reuse = ctx
         .sql(
@@ -64,8 +62,8 @@ async fn multi_reference_cte_materialization_heuristic() -> Result<()> {
         .await?;
     let physical_plan = limited_reuse.create_physical_plan().await?;
     let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_not_contains!(&plan, "MaterializedCteExec");
-    assert_not_contains!(&plan, "MaterializedCteReaderExec");
+    assert_not_contains!(&plan, "MaterializeExec");
+    assert_not_contains!(&plan, "MaterializedScanExec");
 
     Ok(())
 }
@@ -104,11 +102,11 @@ async fn materialized_cte_reader_preserves_input_partitions() -> Result<()> {
         type Error = std::convert::Infallible;
 
         fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            if plan.is::<MaterializedCteExec>() {
+            if plan.is::<MaterializeExec>() {
                 self.producer_partitions
                     .push(plan.output_partitioning().partition_count());
             }
-            if plan.is::<MaterializedCteReaderExec>() {
+            if plan.is::<MaterializedScanExec>() {
                 self.reader_partitions
                     .push(plan.output_partitioning().partition_count());
             }
@@ -194,7 +192,7 @@ async fn materialized_cte_cache_is_per_physical_plan() -> Result<()> {
         .await?;
     let physical_plan = first.create_physical_plan().await?;
     let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_contains!(&plan, "MaterializedCteExec");
+    assert_contains!(&plan, "MaterializeExec");
     let results = first.collect().await?;
     let expected = ["+---+", "| a |", "+---+", "| 1 |", "+---+"];
     assert_batches_eq!(expected, &results);
@@ -207,7 +205,7 @@ async fn materialized_cte_cache_is_per_physical_plan() -> Result<()> {
         .await?;
     let physical_plan = second.create_physical_plan().await?;
     let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_contains!(&plan, "MaterializedCteExec");
+    assert_contains!(&plan, "MaterializeExec");
     let results = second.collect().await?;
     let expected = ["+---+", "| a |", "+---+", "| 2 |", "+---+"];
     assert_batches_eq!(expected, &results);
@@ -242,7 +240,7 @@ async fn materialized_cte_reader_preserves_producer_statistics() -> Result<()> {
         type Error = datafusion::error::DataFusionError;
 
         fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            if plan.is::<MaterializedCteReaderExec>() {
+            if plan.is::<MaterializedScanExec>() {
                 self.reader_rows
                     .push(plan.partition_statistics(None)?.num_rows);
             }
@@ -361,7 +359,7 @@ async fn volatile_cte_is_materialized() -> Result<()> {
         .await?;
     let physical_plan = df.create_physical_plan().await?;
     let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_contains!(&plan, "MaterializedCteExec");
+    assert_contains!(&plan, "MaterializeExec");
 
     // Verify the values are actually the same (materialized = one evaluation)
     let results = ctx
