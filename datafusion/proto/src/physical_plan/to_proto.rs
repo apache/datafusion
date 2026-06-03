@@ -343,27 +343,6 @@ pub fn serialize_physical_expr_with_converter(
                 ),
             ),
         })
-<<<<<<< HEAD
-    } else if let Some(lit) = expr.downcast_ref::<Literal>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
-                lit.value().try_into()?,
-            )),
-=======
-    } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(Box::new(
-                protobuf::PhysicalTryCastNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(cast.expr(), codec)?,
-                    )),
-                    arrow_type: Some(cast.cast_type().try_into()?),
-                },
-            ))),
->>>>>>> 69352ffb1 (feat(physical-expr): port Literal to try_to_proto / try_from_proto hooks)
-        })
     } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
         let mut buf = Vec::new();
         codec.try_encode_udf(expr.fun(), &mut buf)?;
