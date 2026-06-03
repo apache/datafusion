@@ -65,11 +65,29 @@ select
 
 #TODO: https://github.com/apache/datafusion/issues/7142
 # follow PostgreSQL behavior
-#query ?
-#select
-#  array_remove(NULL, 1)
-#----
-#NULL
+# A NULL-typed array argument returns NULL, matching array_replace and SQL
+# three-valued logic.
+query ?
+select array_remove(NULL, 1);
+----
+NULL
+
+query ?
+select array_remove_n(NULL, 1, 2);
+----
+NULL
+
+query ?
+select array_remove_all(NULL, 1);
+----
+NULL
+
+query ?
+select array_remove(column1, 1) from (values (NULL), (NULL), (NULL));
+----
+NULL
+NULL
+NULL
 
 query ??
 select
