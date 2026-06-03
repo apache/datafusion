@@ -1215,6 +1215,10 @@ NULL 3917
 -1114 -1114
 15673 15673
 
+statement error Execution error: The second argument of nth_value must not be i64::MIN
+SELECT nth_value(x, -9223372036854775808) OVER (ORDER BY x)
+FROM (VALUES (1)) AS t(x);
+
 
 
 
