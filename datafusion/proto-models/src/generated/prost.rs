@@ -2138,6 +2138,8 @@ pub struct PartitionedFile {
     pub range: ::core::option::Option<FileRange>,
     #[prost(message, optional, tag = "6")]
     pub statistics: ::core::option::Option<super::datafusion_common::Statistics>,
+    #[prost(message, optional, tag = "7")]
+    pub arrow_schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FileRange {
