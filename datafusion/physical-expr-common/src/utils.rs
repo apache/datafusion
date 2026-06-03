@@ -614,11 +614,9 @@ mod tests {
 
     #[test]
     fn scatter_fixed_size_binary_test() -> Result<()> {
-        let truthy = Arc::new(FixedSizeBinaryArray::from(vec![
-            &[1u8, 2][..],
-            &[3, 4][..],
-            &[5, 6][..],
-        ]));
+        let truthy = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            vec![&[1u8, 2][..], &[3, 4][..], &[5, 6][..]].into_iter(),
+        )?);
         let mask = BooleanArray::from(vec![true, false, true, false, true]);
 
         let result = scatter(&mask, truthy.as_ref())?;
