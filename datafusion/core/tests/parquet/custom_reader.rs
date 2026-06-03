@@ -38,6 +38,7 @@ use bytes::Bytes;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource_parquet::metadata::DFParquetMetadata;
+use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 use insta::assert_snapshot;
@@ -49,6 +50,7 @@ use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::file::properties::WriterProperties;
 
 const EXPECTED_USER_DEFINED_METADATA: &str = "some-user-defined-metadata";
 
@@ -71,7 +73,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         .into_iter()
         .map(|meta| {
             PartitionedFile::new_from_meta(meta)
-                .with_extensions(Arc::new(String::from(EXPECTED_USER_DEFINED_METADATA)))
+                .with_extension(String::from(EXPECTED_USER_DEFINED_METADATA))
         })
         .collect();
 
@@ -107,6 +109,82 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     ");
 }
 
+/// Regression test for the type-keyed extensions map: independent components
+/// must be able to attach their own per-file payloads on the same
+/// [`PartitionedFile`] without colliding. Here we attach a custom reader
+/// payload (the `String` checked by [`InMemoryParquetFileReaderFactory`])
+/// *and* a [`ParquetAccessPlan`] that skips the first row group, then verify
+/// (a) the factory still sees its payload (its internal `assert_eq!` would
+/// fire if the slot got overwritten) and (b) the access plan is honored — so
+/// only the second row group's 5 rows come out, not all 10.
+#[tokio::test]
+async fn custom_payload_and_access_plan_coexist() {
+    // Two row groups of 5 rows each: values 0..=4 in row group 0, 5..=9 in
+    // row group 1.
+    let c1: ArrayRef = Arc::new(Int64Array::from((0..10).collect::<Vec<i64>>()));
+    let batch = create_batch(vec![("c1", c1)]);
+    let file_schema = batch.schema().clone();
+
+    let in_memory = InMemory::new();
+    let mut buf = Vec::<u8>::with_capacity(32 * 1024);
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(5))
+        .build();
+    let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let location = Path::parse("two-row-groups.parquet").unwrap();
+    let size = buf.len() as u64;
+    in_memory
+        .put(&location, Bytes::from(buf).into())
+        .await
+        .unwrap();
+    let meta = ObjectMeta {
+        location,
+        last_modified: chrono::DateTime::from(SystemTime::now()),
+        size,
+        e_tag: None,
+        version: None,
+    };
+
+    let access_plan =
+        ParquetAccessPlan::new(vec![RowGroupAccess::Skip, RowGroupAccess::Scan]);
+    let pf = PartitionedFile::new_from_meta(meta)
+        .with_extension(String::from(EXPECTED_USER_DEFINED_METADATA))
+        .with_extension(access_plan);
+
+    let store: Arc<dyn ObjectStore> = Arc::new(in_memory);
+    let source = Arc::new(
+        ParquetSource::new(file_schema.clone()).with_parquet_file_reader_factory(
+            Arc::new(InMemoryParquetFileReaderFactory(Arc::clone(&store))),
+        ),
+    );
+    let base_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+            .with_file_group(vec![pf].into())
+            .build();
+    let parquet_exec = DataSourceExec::from_data_source(base_config);
+
+    let session_ctx = SessionContext::new();
+    let read = collect(parquet_exec, session_ctx.task_ctx()).await.unwrap();
+
+    let total: usize = read.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total, 5,
+        "access plan should have skipped the first row group"
+    );
+
+    let values: Vec<i64> = read
+        .iter()
+        .flat_map(|b| {
+            let arr = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+            (0..arr.len()).map(|i| arr.value(i)).collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(values, vec![5, 6, 7, 8, 9]);
+}
+
 #[derive(Debug)]
 struct InMemoryParquetFileReaderFactory(Arc<dyn ObjectStore>);
 
@@ -119,12 +197,8 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {
         let metadata = partitioned_file
-            .extensions
-            .as_ref()
+            .extension::<String>()
             .expect("has user defined metadata");
-        let metadata = metadata
-            .downcast_ref::<String>()
-            .expect("has string metadata");
 
         assert_eq!(EXPECTED_USER_DEFINED_METADATA, &metadata[..]);
 

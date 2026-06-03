@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
+use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 
@@ -28,6 +29,13 @@ use super::static_filter::StaticFilter;
 pub(super) fn instantiate_static_filter(
     in_array: ArrayRef,
 ) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
+    // Flatten dictionary-encoded haystacks to their value type so that
+    // specialized filters (e.g. Int32StaticFilter) are used instead of
+    // falling through to the generic ArrayStaticFilter.
+    let in_array = match in_array.data_type() {
+        DataType::Dictionary(_, value_type) => cast(&in_array, value_type.as_ref())?,
+        _ => in_array,
+    };
     match in_array.data_type() {
         // Integer primitive types
         DataType::Int8 => Ok(Arc::new(Int8StaticFilter::try_new(&in_array)?)),

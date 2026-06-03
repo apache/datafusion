@@ -50,6 +50,7 @@ use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_filter, update_join_on,
 };
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -65,7 +66,6 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
     HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
@@ -457,23 +457,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to join keys from both sides
-        let mut tnr = TreeNodeRecursion::Continue;
-        for (left, right) in &self.on {
-            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
-            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
-        }
-        // Apply to join filter expressions if present
-        if let Some(filter) = &self.filter {
-            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
-        }
-        Ok(tnr)
     }
 
     fn with_new_children(
@@ -1406,6 +1389,19 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
         }
     }
+
+    /// Release the right input pipeline's resources.
+    fn cleanup_depleted_right_stream(&mut self) {
+        let right_schema = self.right_stream.schema();
+        self.right_stream = Box::pin(EmptyRecordBatchStream::new(right_schema));
+    }
+
+    /// Release the left input pipeline's resources.
+    fn cleanup_depleted_left_stream(&mut self) {
+        let left_schema = self.left_stream.schema();
+        self.left_stream = Box::pin(EmptyRecordBatchStream::new(left_schema));
+    }
+
     /// Asynchronously pulls the next batch from the right stream.
     ///
     /// This default implementation checks for the next value in the right stream.
@@ -1429,6 +1425,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_right_stream();
                 self.set_state(SHJStreamState::RightExhausted);
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -1458,6 +1455,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_left_stream();
                 self.set_state(SHJStreamState::LeftExhausted);
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -1487,6 +1485,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_left_stream();
                 self.set_state(SHJStreamState::BothExhausted {
                     final_result: false,
                 });
@@ -1518,6 +1517,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_right_stream();
                 self.set_state(SHJStreamState::BothExhausted {
                     final_result: false,
                 });

@@ -381,8 +381,6 @@ mod test {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, scan)?);
         let full_statistics = filter.partition_statistics(None)?;
-        // Filter preserves original total_rows and byte_size from input
-        // (4 total rows = 2 partitions * 2 rows each, byte_size = 4 * 4 = 16 bytes for int32)
         let expected_full_statistic = Statistics {
             num_rows: Precision::Inexact(0),
             total_byte_size: Precision::Inexact(0),
@@ -393,7 +391,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Int32(None)),
                     sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
-                    byte_size: Precision::Exact(16),
+                    byte_size: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
@@ -401,7 +399,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Date32(None)),
                     sum_value: Precision::Exact(ScalarValue::Date32(None)),
                     distinct_count: Precision::Exact(0),
-                    byte_size: Precision::Exact(16), // 4 rows * 4 bytes (Date32)
+                    byte_size: Precision::Exact(0),
                 },
             ],
         };
@@ -411,7 +409,6 @@ mod test {
             .map(|idx| filter.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
-        // Per-partition stats: each partition has 2 rows, byte_size = 2 * 4 = 8
         let expected_partition_statistic = Statistics {
             num_rows: Precision::Inexact(0),
             total_byte_size: Precision::Inexact(0),
@@ -422,7 +419,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Int32(None)),
                     sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
-                    byte_size: Precision::Exact(8),
+                    byte_size: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
@@ -430,7 +427,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Date32(None)),
                     sum_value: Precision::Exact(ScalarValue::Date32(None)),
                     distinct_count: Precision::Exact(0),
-                    byte_size: Precision::Exact(8), // 2 rows * 4 bytes (Date32)
+                    byte_size: Precision::Exact(0),
                 },
             ],
         };
@@ -559,10 +556,10 @@ mod test {
         // Check that we have 2 partitions
         assert_eq!(statistics.len(), 2);
         // Cross join output schema: [left.id, left.date, right.id]
-        // Cross join doesn't propagate Column's byte_size
         let expected_statistic_partition_1 = Statistics {
             num_rows: Precision::Exact(8),
-            total_byte_size: Precision::Exact(512),
+            total_byte_size: Precision::Exact(96),
+            // Cross join doesn't propagate Column's byte_size
             column_statistics: vec![
                 // column 0: left.id (Int32, file column from t1)
                 ColumnStatistics {
@@ -596,7 +593,7 @@ mod test {
         };
         let expected_statistic_partition_2 = Statistics {
             num_rows: Precision::Exact(8),
-            total_byte_size: Precision::Exact(512),
+            total_byte_size: Precision::Exact(96),
             column_statistics: vec![
                 // column 0: left.id (Int32, file column from t1)
                 ColumnStatistics {

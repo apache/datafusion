@@ -158,15 +158,15 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
 /// argument must be coerced to match `signature`.
 /// For lambda arguments, returns a clone of the associated data
 ///
-/// Note this does not invokes [HigherOrderUDF::coerce_values_for_lambdas]
-/// if requested by the function signature. If that's required, use
-/// [value_fields_with_higher_order_udf_and_lambdas] instead
+/// Note this does not invokes [crate::HigherOrderUDFImpl::coerce_values_for_lambdas].
+/// If that's required, use [value_fields_with_higher_order_udf_and_lambdas]
+/// instead
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn value_fields_with_higher_order_udf<L: Clone>(
     current_fields: &[ValueOrLambda<FieldRef, L>],
-    func: &dyn HigherOrderUDF,
+    func: &HigherOrderUDF,
 ) -> Result<Vec<ValueOrLambda<FieldRef, L>>> {
     match func.signature().type_signature {
         HigherOrderTypeSignature::UserDefined => {
@@ -230,13 +230,85 @@ pub fn value_fields_with_higher_order_udf<L: Clone>(
 
             Ok(current_fields.to_vec())
         }
+        HigherOrderTypeSignature::Exact(ref expected) => {
+            if current_fields.len() != expected.len() {
+                let name = func.name();
+                let expected_len = expected.len();
+                let actual_len = current_fields.len();
+                return plan_err!(
+                    "The function '{name}' expected {expected_len} argument(s) but received {actual_len}"
+                );
+            }
+
+            for (i, (actual, expected)) in
+                current_fields.iter().zip(expected.iter()).enumerate()
+            {
+                match (actual, expected) {
+                    (ValueOrLambda::Value(_), ValueOrLambda::Value(_)) => {}
+                    (ValueOrLambda::Lambda(_), ValueOrLambda::Lambda(_)) => {}
+                    (ValueOrLambda::Value(_), ValueOrLambda::Lambda(_)) => {
+                        let name = func.name();
+                        return plan_err!(
+                            "The function '{name}' expected a lambda at position {i} but received a value"
+                        );
+                    }
+                    (ValueOrLambda::Lambda(_), ValueOrLambda::Value(_)) => {
+                        let name = func.name();
+                        return plan_err!(
+                            "The function '{name}' expected a value at position {i} but received a lambda"
+                        );
+                    }
+                }
+            }
+
+            let arg_types = current_fields
+                .iter()
+                .filter_map(|p| match p {
+                    ValueOrLambda::Value(field) => Some(field.data_type().clone()),
+                    ValueOrLambda::Lambda(_) => None,
+                })
+                .collect::<Vec<_>>();
+
+            let coerced_types = func.coerce_value_types(&arg_types)?;
+
+            if coerced_types.len() != arg_types.len() {
+                return plan_err!(
+                    "{} coerce_value_types should have returned {} items but returned {}",
+                    func.name(),
+                    arg_types.len(),
+                    coerced_types.len()
+                );
+            }
+
+            let mut coerced_types = coerced_types.into_iter();
+
+            current_fields
+                .iter()
+                .map(|current_field| match current_field {
+                    ValueOrLambda::Value(field) => {
+                        let data_type = coerced_types.next().ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "coerced_types len should have been checked above"
+                            )
+                        })?;
+
+                        Ok(ValueOrLambda::Value(Arc::new(
+                            field.as_ref().clone().with_data_type(data_type),
+                        )))
+                    }
+                    ValueOrLambda::Lambda(lambda) => {
+                        Ok(ValueOrLambda::Lambda(lambda.clone()))
+                    }
+                })
+                .collect()
+        }
     }
 }
 
 /// Performs type coercion for higher order function arguments,
-/// including those defined by [HigherOrderUDF::coerce_values_for_lambdas],
-/// if defined by the signature. Note that compared to
-/// [value_fields_with_higher_order_udf], this function requires
+/// including those defined by [crate::HigherOrderUDFImpl::coerce_values_for_lambdas],
+/// if it returns `Some(...)` instead of the default `None`. Note that
+/// compared to [value_fields_with_higher_order_udf], this function requires
 /// the [ValueOrLambda::Lambda] variant to contain the output field of the lambda.
 ///
 /// For value arguments, returns the field to which each
@@ -247,20 +319,20 @@ pub fn value_fields_with_higher_order_udf<L: Clone>(
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn value_fields_with_higher_order_udf_and_lambdas(
     current_fields: &[ValueOrLambda<FieldRef, FieldRef>],
-    func: &dyn HigherOrderUDF,
+    func: &HigherOrderUDF,
 ) -> Result<Vec<ValueOrLambda<FieldRef, FieldRef>>> {
     let mut new_fields = value_fields_with_higher_order_udf(current_fields, func)?;
 
-    if func.signature().coerce_values_for_lambdas {
-        let new_types = new_fields
-            .iter()
-            .map(|f| match f {
-                ValueOrLambda::Value(f) => ValueOrLambda::Value(f.data_type().clone()),
-                ValueOrLambda::Lambda(f) => ValueOrLambda::Lambda(f.data_type().clone()),
-            })
-            .collect::<Vec<_>>();
+    let new_types = new_fields
+        .iter()
+        .map(|f| match f {
+            ValueOrLambda::Value(f) => ValueOrLambda::Value(f.data_type().clone()),
+            ValueOrLambda::Lambda(f) => ValueOrLambda::Lambda(f.data_type().clone()),
+        })
+        .collect::<Vec<_>>();
 
-        let mut new_value_types = func.coerce_values_for_lambdas(&new_types)?.into_iter();
+    if let Some(new_value_types) = func.coerce_values_for_lambdas(&new_types)? {
+        let mut new_value_types = new_value_types.into_iter();
 
         let value_types_count = new_types
             .iter()
@@ -1097,7 +1169,7 @@ fn coerced_from<'a>(
 mod tests {
     use crate::{
         HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
-        Volatility,
+        HigherOrderUDFImpl, Volatility,
     };
 
     use super::*;
@@ -1829,7 +1901,7 @@ mod tests {
         coerced_value_types: Vec<DataType>,
     }
 
-    impl HigherOrderUDF for MockHigherOrderUDF {
+    impl HigherOrderUDFImpl for MockHigherOrderUDF {
         fn name(&self) -> &str {
             "mock_higher_order_function"
         }
@@ -1851,7 +1923,7 @@ mod tests {
         fn coerce_values_for_lambdas(
             &self,
             fields: &[ValueOrLambda<DataType, DataType>],
-        ) -> Result<Vec<DataType>> {
+        ) -> Result<Option<Vec<DataType>>> {
             // thoerical impl of array_reduce without finish
             let [
                 ValueOrLambda::Value(list),
@@ -1862,7 +1934,7 @@ mod tests {
                 unreachable!()
             };
 
-            Ok(vec![list.clone(), merge.clone()])
+            Ok(Some(vec![list.clone(), merge.clone()]))
         }
 
         fn lambda_parameters(
@@ -1890,10 +1962,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_user_defined_type_coercion() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::user_defined(Volatility::Immutable),
             coerced_value_types: vec![DataType::new_large_list(DataType::Int32, false)],
-        };
+        });
 
         let new_fields = value_fields_with_higher_order_udf(
             &[
@@ -1924,11 +1996,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_coerce_values_for_lambdas() {
-        let fun = MockHigherOrderUDF {
-            signature: HigherOrderSignature::variadic_any(Volatility::Immutable)
-                .with_coerce_values_for_lambdas(),
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
             coerced_value_types: vec![],
-        };
+        });
 
         let new_fields = value_fields_with_higher_order_udf_and_lambdas(
             &[
@@ -1961,10 +2032,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_user_defined_type_coercion_bad_args() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::user_defined(Volatility::Immutable),
             coerced_value_types: vec![DataType::Int32],
-        };
+        });
 
         let err = value_fields_with_higher_order_udf::<()>(&[], &fun).unwrap_err();
 
@@ -1976,10 +2047,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_faulty_user_defined_type_coercion() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::user_defined(Volatility::Immutable),
             coerced_value_types: vec![DataType::Int32, DataType::Int32],
-        };
+        });
 
         let err = value_fields_with_higher_order_udf::<()>(
             &[ValueOrLambda::Value(Arc::new(Field::new(
@@ -1999,10 +2070,10 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_any_signature() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::any(1, Volatility::Immutable),
             coerced_value_types: vec![],
-        };
+        });
 
         let new_fields =
             value_fields_with_higher_order_udf(&[ValueOrLambda::Lambda(())], &fun)
@@ -2014,16 +2085,100 @@ mod tests {
 
     #[test]
     fn test_higher_order_function_any_signature_bad_args() {
-        let fun = MockHigherOrderUDF {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
             signature: HigherOrderSignature::any(1, Volatility::Immutable),
             coerced_value_types: vec![],
-        };
+        });
 
         let err = value_fields_with_higher_order_udf::<()>(&[], &fun).unwrap_err();
 
         assert_contains!(
             err.to_string(),
             "The function 'mock_higher_order_function' expected 1 arguments but received 0"
+        );
+    }
+
+    #[test]
+    fn test_higher_order_function_exact_signature() {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
+            coerced_value_types: vec![DataType::new_large_list(DataType::Int32, false)],
+        });
+
+        let new_fields = value_fields_with_higher_order_udf(
+            &[
+                ValueOrLambda::Value(Arc::new(Field::new_list(
+                    "",
+                    Field::new_list_field(DataType::Int32, false),
+                    false,
+                ))),
+                ValueOrLambda::Lambda(()),
+            ],
+            &fun,
+        )
+        .unwrap();
+
+        // type coercion applied: List(Int32) -> LargeList(Int32)
+        assert_eq!(
+            new_fields,
+            vec![
+                ValueOrLambda::Value(Arc::new(Field::new_large_list(
+                    "",
+                    Field::new_list_field(DataType::Int32, false),
+                    false
+                ))),
+                ValueOrLambda::Lambda(()),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_higher_order_function_exact_signature_wrong_value_count() {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
+            coerced_value_types: vec![],
+        });
+
+        let err = value_fields_with_higher_order_udf::<()>(
+            &[ValueOrLambda::Lambda(()), ValueOrLambda::Lambda(())],
+            &fun,
+        )
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "expected a value at position 0 but received a lambda"
+        );
+    }
+
+    #[test]
+    fn test_higher_order_function_exact_signature_wrong_lambda_count() {
+        let fun = HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
+            signature: HigherOrderSignature::exact(
+                vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+                Volatility::Immutable,
+            ),
+            coerced_value_types: vec![],
+        });
+
+        let err = value_fields_with_higher_order_udf::<()>(
+            &[
+                ValueOrLambda::Value(Arc::new(Field::new("", DataType::Int32, false))),
+                ValueOrLambda::Value(Arc::new(Field::new("", DataType::Int32, false))),
+            ],
+            &fun,
+        )
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "expected a lambda at position 1 but received a value"
         );
     }
 }

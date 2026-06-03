@@ -125,12 +125,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::RecordBatchStream;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
 };
 use crate::spill::spill_manager::SpillManager;
+use crate::{EmptyRecordBatchStream, RecordBatchStream};
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
 use arrow::datatypes::SchemaRef;
@@ -475,7 +475,12 @@ impl BitwiseSortMergeJoinStream {
     fn poll_next_outer_batch(&mut self, cx: &mut Context<'_>) -> Poll<Result<bool>> {
         loop {
             match ready!(self.outer.poll_next_unpin(cx)) {
-                None => return Poll::Ready(Ok(false)),
+                None => {
+                    // Release the outer input pipeline's resources.
+                    let outer_schema = self.outer.schema();
+                    self.outer = Box::pin(EmptyRecordBatchStream::new(outer_schema));
+                    return Poll::Ready(Ok(false));
+                }
                 Some(Err(e)) => return Poll::Ready(Err(e)),
                 Some(Ok(batch)) => {
                     let batch_num_rows = batch.num_rows();
@@ -503,7 +508,12 @@ impl BitwiseSortMergeJoinStream {
     fn poll_next_inner_batch(&mut self, cx: &mut Context<'_>) -> Poll<Result<bool>> {
         loop {
             match ready!(self.inner.poll_next_unpin(cx)) {
-                None => return Poll::Ready(Ok(false)),
+                None => {
+                    // Release the inner input pipeline's resources.
+                    let inner_schema = self.inner.schema();
+                    self.inner = Box::pin(EmptyRecordBatchStream::new(inner_schema));
+                    return Poll::Ready(Ok(false));
+                }
                 Some(Err(e)) => return Poll::Ready(Err(e)),
                 Some(Ok(batch)) => {
                     let batch_num_rows = batch.num_rows();

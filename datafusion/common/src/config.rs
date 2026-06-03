@@ -456,6 +456,53 @@ impl Display for SpillCompression {
     }
 }
 
+/// Policy for handling duplicate keys in Spark-compatible map-construction
+/// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
+/// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum MapKeyDedupPolicy {
+    /// Raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
+    #[default]
+    Exception,
+    /// Keep the last occurrence of each duplicate key.
+    LastWin,
+}
+
+impl FromStr for MapKeyDedupPolicy {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_uppercase().as_str() {
+            "EXCEPTION" => Ok(Self::Exception),
+            "LAST_WIN" => Ok(Self::LastWin),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid MapKeyDedupPolicy: {other}. Expected one of: EXCEPTION, LAST_WIN"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for MapKeyDedupPolicy {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = MapKeyDedupPolicy::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for MapKeyDedupPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Exception => "EXCEPTION",
+            Self::LastWin => "LAST_WIN",
+        };
+        write!(f, "{str}")
+    }
+}
+
 impl From<SpillCompression> for Option<CompressionType> {
     fn from(c: SpillCompression) -> Self {
         match c {
@@ -908,6 +955,16 @@ config_namespace! {
         /// nanosecond resolution.
         pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
 
+        /// (reading) Optional timezone applied to INT96 columns when `coerce_int96`
+        /// is set. When `Some`, INT96 columns coerce to
+        /// `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+        /// `Timestamp(<coerce_int96>, None)`. Spark and other systems write INT96
+        /// values as UTC-adjusted instants, so callers that need the resulting
+        /// Arrow type to be timezone-aware (e.g. for Spark `TimestampType`
+        /// semantics) should set this to `"UTC"`. No effect when `coerce_int96`
+        /// is `None`.
+        pub coerce_int96_tz: Option<String>, default = None
+
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
@@ -1114,6 +1171,22 @@ config_namespace! {
         /// into the file scan phase.
         pub enable_topk_dynamic_filter_pushdown: bool, default = true
 
+        /// When set to true, uncorrelated scalar subqueries are
+        /// left in the logical plan and executed by `ScalarSubqueryExec` during
+        /// physical execution. When set to false, all scalar subqueries
+        /// (including uncorrelated ones) are rewritten to left joins by the
+        /// `ScalarSubqueryToJoin` optimizer rule.
+        ///
+        /// Note disabling this option is not recommended. It restores
+        /// pre <https://github.com/apache/datafusion/pull/21240>
+        /// behavior, which silently produces incorrect results for
+        /// multi-row subqueries and does not support scalar subqueries in
+        /// ORDER BY / JOIN ON / aggregate-function arguments. This option is
+        /// intended as a temporary escape hatch for distributed execution
+        /// frameworks and is planned to be removed in a future DataFusion
+        /// release.
+        pub enable_physical_uncorrelated_scalar_subquery: bool, default = true
+
         /// When set to true, the optimizer will attempt to push down Join dynamic filters
         /// into the file scan phase.
         pub enable_join_dynamic_filter_pushdown: bool, default = true
@@ -1141,8 +1214,13 @@ config_namespace! {
         /// in parallel using the provided `target_partitions` level
         pub repartition_aggregations: bool, default = true
 
-        /// Minimum total files size in bytes to perform file scan repartitioning.
-        pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
+        /// Minimum total file size in bytes for file-group byte-range
+        /// splitting to fire. Files (or merged file groups) smaller than this
+        /// stay as one partition. Lower values produce more, smaller
+        /// partitions — better at filling `target_partitions` worth of cores
+        /// when files are modestly sized, at the cost of slightly more
+        /// per-partition open / metadata-load overhead.
+        pub repartition_file_min_size: usize, default = 1024 * 1024
 
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
         /// using the provided `target_partitions` level
@@ -1348,6 +1426,13 @@ config_namespace! {
         /// closer to the leaf table scans, and push those projections down
         /// towards the leaf nodes.
         pub enable_leaf_expression_pushdown: bool, default = true
+
+        /// When set to true, the logical optimizer will rewrite `UNION DISTINCT` branches that
+        /// read from the same source and differ only by filter predicates into a single branch
+        /// with a combined filter. This optimization is conservative and only applies when the
+        /// branches share the same source and compatible wrapper nodes such as identical
+        /// projections or aliases.
+        pub enable_unions_to_filter: bool, default = false
     }
 }
 
@@ -1461,6 +1546,24 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
     }
 }
 
+config_namespace! {
+    /// Options controlling DataFusion's Spark-compatibility layer (functions
+    /// under `datafusion/spark`). Keys here mirror their `spark.sql.*`
+    /// equivalents in Apache Spark.
+    pub struct SparkOptions {
+        /// Policy for handling duplicate keys in Spark-compatible map-construction
+        /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`).
+        ///
+        /// Mirrors Spark's
+        /// [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961):
+        /// - `EXCEPTION` (default): raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
+        /// - `LAST_WIN`: keep the last occurrence of each duplicate key.
+        ///
+        /// Values are case-insensitive.
+        pub map_key_dedup_policy: MapKeyDedupPolicy, default = MapKeyDedupPolicy::Exception
+    }
+}
+
 /// A key value pair, with a corresponding description
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
@@ -1492,6 +1595,8 @@ pub struct ConfigOptions {
     pub extensions: Extensions,
     /// Formatting options when printing batches
     pub format: FormatOptions,
+    /// Spark-compatibility options (functions under `datafusion/spark`)
+    pub spark: SparkOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -1502,6 +1607,7 @@ impl ConfigField for ConfigOptions {
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
         self.format.visit(v, "datafusion.format", "");
+        self.spark.visit(v, "datafusion.spark", "");
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -1514,6 +1620,7 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
             "format" => self.format.set(rem, value),
+            "spark" => self.spark.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -1553,6 +1660,7 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.reset(rem),
             "sql_parser" => self.sql_parser.reset(rem),
             "format" => self.format.reset(rem),
+            "spark" => self.spark.reset(rem),
             other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
     }
@@ -2862,10 +2970,15 @@ impl ConfigField for ConfigFileEncryptionProperties {
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
-    fn from(val: ConfigFileEncryptionProperties) -> Self {
+impl TryFrom<ConfigFileEncryptionProperties> for FileEncryptionProperties {
+    type Error = DataFusionError;
+
+    fn try_from(val: ConfigFileEncryptionProperties) -> Result<Self> {
         let mut fep = FileEncryptionProperties::builder(
-            hex::decode(val.footer_key_as_hex).unwrap(),
+            hex::decode(val.footer_key_as_hex)
+            .map_err(|e| {
+                DataFusionError::Configuration(format!("Unable to decode hex footer key from ConfigFileEncryptionProperties: {e}"))
+            })?,
         )
         .with_plaintext_footer(!val.encrypt_footer)
         .with_aad_prefix_storage(val.store_aad_prefix);
@@ -2873,17 +2986,26 @@ impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
         if !val.footer_key_metadata_as_hex.is_empty() {
             fep = fep.with_footer_key_metadata(
                 hex::decode(&val.footer_key_metadata_as_hex)
-                    .expect("Invalid footer key metadata"),
+                    .map_err(|e| {
+                        DataFusionError::Configuration(format!("Unable to decode hex footer key metadata from ConfigFileEncryptionProperties: {e}"))
+                    })?,
             );
         }
 
         for (column_name, encryption_props) in val.column_encryption_properties.iter() {
             let encryption_key = hex::decode(&encryption_props.column_key_as_hex)
-                .expect("Invalid column encryption key");
+                .map_err(|e| {
+                    DataFusionError::Configuration(format!("Unable to decode hex encryption key for column {column_name}: {e}"))
+                })?;
             let key_metadata = encryption_props
                 .column_metadata_as_hex
                 .as_ref()
-                .map(|x| hex::decode(x).expect("Invalid column metadata"));
+                .map(hex::decode)
+                .transpose()
+                .map_err(|e| {
+                    DataFusionError::Configuration(format!("Unable to decode hex column metadata for column {column_name}: {e}"))
+                })?;
+
             match key_metadata {
                 Some(key_metadata) => {
                     fep = fep.with_column_key_and_metadata(
@@ -2899,11 +3021,18 @@ impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
         }
 
         if !val.aad_prefix_as_hex.is_empty() {
-            let aad_prefix: Vec<u8> =
-                hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
+            let aad_prefix: Vec<u8> = hex::decode(&val.aad_prefix_as_hex).map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "Unable to decode hex AAD prefix from ConfigFileEncryptionProperties: {e}"
+                ))
+            })?;
             fep = fep.with_aad_prefix(aad_prefix);
         }
-        Arc::unwrap_or_clone(fep.build().unwrap())
+        Ok(Arc::unwrap_or_clone(fep.build().map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not build FileEncryptionProperties: {e}"
+            ))
+        })?))
     }
 }
 
@@ -3019,36 +3148,54 @@ impl ConfigField for ConfigFileDecryptionProperties {
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
-    fn from(val: ConfigFileDecryptionProperties) -> Self {
+impl TryFrom<ConfigFileDecryptionProperties> for FileDecryptionProperties {
+    type Error = DataFusionError;
+
+    fn try_from(val: ConfigFileDecryptionProperties) -> Result<Self> {
         let mut column_names: Vec<&str> = Vec::new();
         let mut column_keys: Vec<Vec<u8>> = Vec::new();
 
         for (col_name, decryption_properties) in val.column_decryption_properties.iter() {
+            let column_key = hex::decode(&decryption_properties.column_key_as_hex).map_err(|e| {
+                        DataFusionError::Configuration(format!
+                            ("Could not decode hex column key from ConfigFileDecryptionProperties for column name {col_name}: {e}."))
+                    })?;
             column_names.push(col_name.as_str());
-            column_keys.push(
-                hex::decode(&decryption_properties.column_key_as_hex)
-                    .expect("Invalid column decryption key"),
-            );
+            column_keys.push(column_key);
         }
 
-        let mut fep = FileDecryptionProperties::builder(
-            hex::decode(val.footer_key_as_hex).expect("Invalid footer key"),
-        )
-        .with_column_keys(column_names, column_keys)
-        .unwrap();
+        let footer_key = hex::decode(val.footer_key_as_hex).map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not decode hex footer key from ConfigFileDecryptionProperties: {e}."
+            ))
+        })?;
+
+        let mut fep = FileDecryptionProperties::builder(footer_key)
+            .with_column_keys(column_names, column_keys)
+            .map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "Could not set column keys on FileDecryptionPropertiesBuilder: {e}."
+                ))
+            })?;
 
         if !val.footer_signature_verification {
             fep = fep.disable_footer_signature_verification();
         }
 
         if !val.aad_prefix_as_hex.is_empty() {
-            let aad_prefix =
-                hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
+            let aad_prefix = hex::decode(&val.aad_prefix_as_hex).map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "Could not decode hex AAD prefix from ConfigFileDecryptionProperties: {e}."
+                ))
+            })?;
             fep = fep.with_aad_prefix(aad_prefix);
         }
 
-        Arc::unwrap_or_clone(fep.build().unwrap())
+        Ok(Arc::unwrap_or_clone(fep.build().map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not build FileDecryptionProperties: {e}."
+            ))
+        })?))
     }
 }
 
@@ -3586,13 +3733,13 @@ mod tests {
         let config_encrypt =
             ConfigFileEncryptionProperties::from(&file_encryption_properties);
         let encryption_properties_built =
-            Arc::new(FileEncryptionProperties::from(config_encrypt.clone()));
+            Arc::new(FileEncryptionProperties::try_from(config_encrypt.clone()).unwrap());
         assert_eq!(file_encryption_properties, encryption_properties_built);
 
         let config_decrypt =
             ConfigFileDecryptionProperties::try_from(&decryption_properties).unwrap();
         let decryption_properties_built =
-            Arc::new(FileDecryptionProperties::from(config_decrypt.clone()));
+            Arc::new(FileDecryptionProperties::try_from(config_decrypt.clone()).unwrap());
         assert_eq!(decryption_properties, decryption_properties_built);
 
         ///////////////////////////////////////////////////////////////////////////////////
@@ -3676,6 +3823,124 @@ mod tests {
             table_config.parquet.crypto.file_decryption,
             Some(config_decrypt.clone())
         );
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
+    fn parquet_encryption_invalid_hex_errors_encryption() {
+        use crate::config::ColumnEncryptionProperties;
+        use crate::config::ConfigFileEncryptionProperties;
+        use parquet::encryption::encrypt::FileEncryptionProperties;
+        use std::collections::HashMap;
+
+        let valid_footer_key_as_hex = hex::encode(b"0123456789012345");
+
+        let mut enc = ConfigFileEncryptionProperties {
+            encrypt_footer: true,
+            footer_key_as_hex: valid_footer_key_as_hex.clone(),
+            footer_key_metadata_as_hex: String::new(),
+            column_encryption_properties: HashMap::new(),
+            aad_prefix_as_hex: String::new(),
+            store_aad_prefix: false,
+        };
+
+        // Encryption: invalid footer key hex
+        enc.footer_key_as_hex = "not_hex".to_string();
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex footer key"));
+        enc.footer_key_as_hex = valid_footer_key_as_hex.clone();
+
+        // Encryption: invalid footer key metadata hex
+        enc.footer_key_metadata_as_hex = "zz".to_string();
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex footer key metadata"));
+        enc.footer_key_metadata_as_hex = String::new();
+
+        // Encryption: invalid column key hex
+        enc.column_encryption_properties.insert(
+            "col1".to_string(),
+            ColumnEncryptionProperties {
+                column_key_as_hex: "bad".to_string(),
+                column_metadata_as_hex: None,
+            },
+        );
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex encryption key for column col1"));
+        enc.column_encryption_properties.clear();
+
+        // Encryption: invalid column metadata hex
+        enc.column_encryption_properties.insert(
+            "col1".to_string(),
+            ColumnEncryptionProperties {
+                column_key_as_hex: hex::encode(b"1234567890123450"),
+                column_metadata_as_hex: Some("zz".to_string()),
+            },
+        );
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex column metadata for column col1"));
+        enc.column_encryption_properties.clear();
+
+        // Encryption: invalid AAD prefix hex
+        enc.aad_prefix_as_hex = "zz".to_string();
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex AAD prefix"));
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
+    fn parquet_encryption_invalid_hex_errors_decryption() {
+        use crate::config::ColumnDecryptionProperties;
+        use crate::config::ConfigFileDecryptionProperties;
+        use parquet::encryption::decrypt::FileDecryptionProperties;
+        use std::collections::HashMap;
+
+        let valid_footer_key_as_hex = hex::encode(b"0123456789012345");
+
+        let mut dec = ConfigFileDecryptionProperties {
+            footer_key_as_hex: valid_footer_key_as_hex.clone(),
+            column_decryption_properties: HashMap::new(),
+            aad_prefix_as_hex: String::new(),
+            footer_signature_verification: true,
+        };
+
+        // Decryption: invalid column key hex
+        dec.column_decryption_properties.insert(
+            "col1".to_string(),
+            ColumnDecryptionProperties {
+                column_key_as_hex: "bad".to_string(),
+            },
+        );
+        let err = FileDecryptionProperties::try_from(dec.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Could not decode hex column key"));
+        assert!(err.contains("col1"));
+        dec.column_decryption_properties.clear();
+
+        // Decryption: invalid footer key hex
+        dec.footer_key_as_hex = "bad".to_string();
+        let err = FileDecryptionProperties::try_from(dec.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Could not decode hex footer key"));
+        dec.footer_key_as_hex = valid_footer_key_as_hex;
+
+        // Decryption: invalid AAD prefix hex
+        dec.aad_prefix_as_hex = "zz".to_string();
+        let err = FileDecryptionProperties::try_from(dec.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Could not decode hex AAD prefix"));
     }
 
     #[cfg(feature = "parquet_encryption")]

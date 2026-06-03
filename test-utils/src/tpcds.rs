@@ -15,12 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::TableDef;
+use crate::{TableDef, primary_key};
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::Constraints;
 
 pub fn tpcds_schemas() -> Vec<TableDef> {
+    let def = |name, schema: Schema| {
+        let constraints = tpcds_constraints(name, &schema);
+        TableDef::new(name, schema).with_constraints(constraints)
+    };
+
     vec![
-        TableDef::new(
+        def(
             "catalog_sales",
             Schema::new(vec![
                 Field::new("cs_sold_date_sk", DataType::Int32, false),
@@ -63,7 +69,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("cs_net_profit", DataType::Decimal128(7, 2), false),
             ]),
         ),
-        TableDef::new(
+        def(
             "catalog_returns",
             Schema::new(vec![
                 Field::new("cr_returned_date_sk", DataType::Int32, false),
@@ -95,7 +101,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("cr_net_loss", DataType::Decimal128(7, 2), false),
             ]),
         ),
-        TableDef::new(
+        def(
             "inventory",
             Schema::new(vec![
                 Field::new("inv_date_sk", DataType::Int32, false),
@@ -104,7 +110,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("inv_quantity_on_hand", DataType::Int32, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "store_sales",
             Schema::new(vec![
                 Field::new("ss_sold_date_sk", DataType::Int32, false),
@@ -132,7 +138,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("ss_net_profit", DataType::Decimal128(7, 2), false),
             ]),
         ),
-        TableDef::new(
+        def(
             "store_returns",
             Schema::new(vec![
                 Field::new("sr_returned_date_sk", DataType::Int32, false),
@@ -157,7 +163,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("sr_net_loss", DataType::Decimal128(7, 2), false),
             ]),
         ),
-        TableDef::new(
+        def(
             "web_sales",
             Schema::new(vec![
                 Field::new("ws_sold_date_sk", DataType::Int32, false),
@@ -200,7 +206,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("ws_net_profit", DataType::Decimal128(7, 2), false),
             ]),
         ),
-        TableDef::new(
+        def(
             "web_returns",
             Schema::new(vec![
                 Field::new("wr_returned_date_sk", DataType::Int32, false),
@@ -229,7 +235,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("wr_net_loss", DataType::Decimal128(7, 2), false),
             ]),
         ),
-        TableDef::new(
+        def(
             "call_center",
             Schema::new(vec![
                 Field::new("cc_call_center_sk", DataType::Int32, false),
@@ -265,7 +271,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("cc_tax_percentage", DataType::Decimal128(5, 2), false),
             ]),
         ),
-        TableDef::new(
+        def(
             "catalog_page",
             Schema::new(vec![
                 Field::new("cp_catalog_page_sk", DataType::Int32, false),
@@ -279,7 +285,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("cp_type", DataType::Utf8, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "customer",
             Schema::new(vec![
                 Field::new("c_customer_sk", DataType::Int32, false),
@@ -299,10 +305,10 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("c_birth_country", DataType::Utf8, false),
                 Field::new("c_login", DataType::Utf8, false),
                 Field::new("c_email_address", DataType::Utf8, false),
-                Field::new("c_last_review_date", DataType::Utf8, false),
+                Field::new("c_last_review_date_sk", DataType::Int32, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "customer_address",
             Schema::new(vec![
                 Field::new("ca_address_sk", DataType::Int32, false),
@@ -320,7 +326,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("ca_location_type", DataType::Utf8, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "customer_demographics",
             Schema::new(vec![
                 Field::new("cd_demo_sk", DataType::Int32, false),
@@ -334,7 +340,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("cd_dep_college_count", DataType::Int32, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "date_dim",
             Schema::new(vec![
                 Field::new("d_date_sk", DataType::Int32, false),
@@ -367,7 +373,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("d_current_year", DataType::Utf8, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "household_demographics",
             Schema::new(vec![
                 Field::new("hd_demo_sk", DataType::Int32, false),
@@ -377,7 +383,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("hd_vehicle_count", DataType::Int32, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "income_band",
             Schema::new(vec![
                 Field::new("ib_income_band_sk", DataType::Int32, false),
@@ -385,7 +391,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("ib_upper_bound", DataType::Int32, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "item",
             Schema::new(vec![
                 Field::new("i_item_sk", DataType::Int32, false),
@@ -412,7 +418,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("i_product_name", DataType::Utf8, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "promotion",
             Schema::new(vec![
                 Field::new("p_promo_sk", DataType::Int32, false),
@@ -436,7 +442,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("p_discount_active", DataType::Utf8, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "reason",
             Schema::new(vec![
                 Field::new("r_reason_sk", DataType::Int32, false),
@@ -444,7 +450,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("r_reason_desc", DataType::Utf8, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "ship_mode",
             //),
             Schema::new(vec![
@@ -456,7 +462,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("sm_contract", DataType::Utf8, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "store",
             Schema::new(vec![
                 Field::new("s_store_sk", DataType::Int32, false),
@@ -490,7 +496,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("s_tax_precentage", DataType::Decimal128(5, 2), false),
             ]),
         ),
-        TableDef::new(
+        def(
             "time_dim",
             Schema::new(vec![
                 Field::new("t_time_sk", DataType::Int32, false),
@@ -505,7 +511,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("t_meal_time", DataType::Utf8, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "warehouse",
             //),
             Schema::new(vec![
@@ -525,7 +531,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("w_gmt_offset", DataType::Decimal128(5, 2), false),
             ]),
         ),
-        TableDef::new(
+        def(
             "web_page",
             Schema::new(vec![
                 Field::new("wp_web_page_sk", DataType::Int32, false),
@@ -544,7 +550,7 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
                 Field::new("wp_max_ad_count", DataType::Int32, false),
             ]),
         ),
-        TableDef::new(
+        def(
             "web_site",
             Schema::new(vec![
                 Field::new("web_site_sk", DataType::Int32, false),
@@ -576,4 +582,44 @@ pub fn tpcds_schemas() -> Vec<TableDef> {
             ]),
         ),
     ]
+}
+
+static TPCDS_PRIMARY_KEYS: &[(&str, &[&str])] = &[
+    ("call_center", &["cc_call_center_sk"]),
+    ("catalog_page", &["cp_catalog_page_sk"]),
+    ("catalog_returns", &["cr_item_sk", "cr_order_number"]),
+    ("catalog_sales", &["cs_item_sk", "cs_order_number"]),
+    ("customer", &["c_customer_sk"]),
+    ("customer_address", &["ca_address_sk"]),
+    ("customer_demographics", &["cd_demo_sk"]),
+    ("date_dim", &["d_date_sk"]),
+    ("household_demographics", &["hd_demo_sk"]),
+    ("income_band", &["ib_income_band_sk"]),
+    (
+        "inventory",
+        &["inv_date_sk", "inv_item_sk", "inv_warehouse_sk"],
+    ),
+    ("item", &["i_item_sk"]),
+    ("promotion", &["p_promo_sk"]),
+    ("reason", &["r_reason_sk"]),
+    ("ship_mode", &["sm_ship_mode_sk"]),
+    ("store", &["s_store_sk"]),
+    ("store_returns", &["sr_item_sk", "sr_ticket_number"]),
+    ("store_sales", &["ss_item_sk", "ss_ticket_number"]),
+    ("time_dim", &["t_time_sk"]),
+    ("warehouse", &["w_warehouse_sk"]),
+    ("web_page", &["wp_web_page_sk"]),
+    ("web_returns", &["wr_item_sk", "wr_order_number"]),
+    ("web_sales", &["ws_item_sk", "ws_order_number"]),
+    ("web_site", &["web_site_sk"]),
+];
+
+fn tpcds_constraints(table: &str, schema: &Schema) -> Constraints {
+    let columns = TPCDS_PRIMARY_KEYS
+        .iter()
+        .find(|(name, _)| *name == table)
+        .map(|(_, columns)| *columns)
+        .unwrap_or_else(|| unimplemented!("unknown TPC-DS table: {table}"));
+
+    Constraints::new_unverified(vec![primary_key(schema, columns)])
 }

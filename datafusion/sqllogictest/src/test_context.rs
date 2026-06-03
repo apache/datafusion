@@ -23,12 +23,14 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray,
-    LargeStringArray, StringArray, TimestampNanosecondArray, UnionArray,
+    Array, ArrayRef, BinaryArray, DictionaryArray, Float64Array, Int32Array,
+    LargeBinaryArray, LargeStringArray, StringArray, StructArray,
+    TimestampNanosecondArray, UInt32Array, UnionArray,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit, UnionFields,
+    DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit, UInt32Type,
+    UnionFields,
 };
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
@@ -51,13 +53,25 @@ use datafusion::{
 use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
+use range_partitioning::register_range_partitioned_table;
+
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnv;
+#[cfg(feature = "memory-accounting")]
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
+
+mod range_partitioning;
+
+/// Target partition count used for every SLT file's `SessionConfig`. Hardcoded
+/// so query plans are deterministic across machines. The SLT binary also
+/// sizes each file's per-file Tokio runtime to this value so partition streams
+/// each get a worker rather than contending.
+pub const SLT_TARGET_PARTITIONS: usize = 4;
 
 /// Context for running tests
 pub struct TestContext {
@@ -84,6 +98,33 @@ impl TypePlanner for SqlLogicTestTypePlanner {
     }
 }
 
+/// Construct the per-file `RuntimeEnv`. With the `memory-accounting` feature
+/// on and a non-zero `memory_tracker_limit()` configured, this wraps the
+/// usual `TrackConsumersPool(GreedyMemoryPool)` in an `AccountingMemoryPool`
+/// so the allocator-level bank retunes on every `SET datafusion.runtime.
+/// memory_limit`. Otherwise falls back to the historical default.
+fn build_runtime_env() -> RuntimeEnv {
+    #[cfg(feature = "memory-accounting")]
+    {
+        use datafusion::execution::memory_pool::{GreedyMemoryPool, TrackConsumersPool};
+        use std::num::NonZeroUsize;
+
+        let limit = crate::memory_tracker_limit();
+        if limit > 0 {
+            let tracked = TrackConsumersPool::new(
+                GreedyMemoryPool::new(limit),
+                NonZeroUsize::new(5).unwrap(),
+            );
+            let wrapped = crate::AccountingMemoryPool::new(Arc::new(tracked), limit);
+            return RuntimeEnvBuilder::new()
+                .with_memory_pool(Arc::new(wrapped))
+                .build()
+                .expect("RuntimeEnvBuilder::build with accounting pool");
+        }
+    }
+    RuntimeEnv::default()
+}
+
 impl TestContext {
     pub fn new(ctx: SessionContext) -> Self {
         Self {
@@ -100,8 +141,8 @@ impl TestContext {
     pub async fn try_new_for_test_file(relative_path: &Path) -> Option<Self> {
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
-            .with_target_partitions(4);
-        let runtime = Arc::new(RuntimeEnv::default());
+            .with_target_partitions(SLT_TARGET_PARTITIONS);
+        let runtime = Arc::new(build_runtime_env());
 
         let mut state_builder = SessionStateBuilder::new()
             .with_config(config)
@@ -165,6 +206,10 @@ impl TestContext {
                 info!("Registering table with many types");
                 register_table_with_many_types(test_ctx.session_ctx()).await;
             }
+            "range_partitioning.slt" => {
+                info!("Registering range partitioned table");
+                register_range_partitioned_table(test_ctx.session_ctx());
+            }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx()).await;
@@ -172,6 +217,10 @@ impl TestContext {
             "union_function.slt" => {
                 info!("Registering table with union column");
                 register_union_table(test_ctx.session_ctx())
+            }
+            "dictionary_struct.slt" => {
+                info!("Registering table with dictionary-encoded struct column");
+                register_dictionary_struct_table(test_ctx.session_ctx());
             }
             "async_udf.slt" => {
                 info!("Registering dummy async udf");
@@ -573,6 +622,97 @@ fn register_union_table(ctx: &SessionContext) {
         RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(union)]).unwrap();
 
     ctx.register_batch("union_table", batch).unwrap();
+}
+
+fn register_dictionary_struct_table(ctx: &SessionContext) {
+    // Build deduplicated struct values: 3 unique structs
+    let names = Arc::new(StringArray::from(vec!["Alice", "Bob", "Carol"])) as ArrayRef;
+    let ids = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+
+    let struct_fields: Fields = vec![
+        Field::new("name", DataType::Utf8, false),
+        Field::new("id", DataType::Int32, false),
+    ]
+    .into();
+
+    let values_struct = Arc::new(
+        StructArray::try_new(struct_fields.clone(), vec![names, ids], None).unwrap(),
+    ) as ArrayRef;
+
+    // Dictionary keys index into the 3-element struct array.
+    // 5 rows with repeated references to test dictionary deduplication.
+    let keys = UInt32Array::from(vec![0u32, 1, 2, 0, 1]);
+    let dict =
+        DictionaryArray::<UInt32Type>::try_new(keys, Arc::clone(&values_struct)).unwrap();
+
+    // Also build a non-dictionary plain struct column for comparison.
+    let plain_names = Arc::new(StringArray::from(vec![
+        "Alice", "Bob", "Carol", "Alice", "Bob",
+    ])) as ArrayRef;
+    let plain_ids = Arc::new(Int32Array::from(vec![1, 2, 3, 1, 2])) as ArrayRef;
+    let plain_struct =
+        StructArray::try_new(struct_fields.clone(), vec![plain_names, plain_ids], None)
+            .unwrap();
+
+    let dict_type = DataType::Dictionary(
+        Box::new(DataType::UInt32),
+        Box::new(DataType::Struct(struct_fields.clone())),
+    );
+
+    let schema = Schema::new(vec![
+        Field::new("dict_struct", dict_type, false),
+        Field::new(
+            "plain_struct",
+            DataType::Struct(struct_fields.clone()),
+            false,
+        ),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(dict) as ArrayRef,
+            Arc::new(plain_struct) as ArrayRef,
+        ],
+    )
+    .unwrap();
+
+    ctx.register_batch("dict_struct_table", batch).unwrap();
+
+    // Second table: dictionary-encoded struct with nullable entries
+    let names_nullable = Arc::new(StringArray::from(vec!["X", "Y"])) as ArrayRef;
+    let ids_nullable = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
+    let struct_fields_nullable: Fields = vec![
+        Field::new("name", DataType::Utf8, false),
+        Field::new("id", DataType::Int32, false),
+    ]
+    .into();
+    let values_struct_nullable = Arc::new(
+        StructArray::try_new(
+            struct_fields_nullable.clone(),
+            vec![names_nullable, ids_nullable],
+            None,
+        )
+        .unwrap(),
+    ) as ArrayRef;
+    let keys_nullable = UInt32Array::from(vec![Some(0), None, Some(1), None]);
+    let dict_nullable =
+        DictionaryArray::<UInt32Type>::try_new(keys_nullable, values_struct_nullable)
+            .unwrap();
+
+    let dict_type_nullable = DataType::Dictionary(
+        Box::new(DataType::UInt32),
+        Box::new(DataType::Struct(struct_fields_nullable)),
+    );
+
+    let schema_nullable = Schema::new(vec![Field::new("ds", dict_type_nullable, true)]);
+    let batch_nullable = RecordBatch::try_new(
+        Arc::new(schema_nullable),
+        vec![Arc::new(dict_nullable) as ArrayRef],
+    )
+    .unwrap();
+    ctx.register_batch("dict_struct_nullable", batch_nullable)
+        .unwrap();
 }
 
 fn register_async_abs_udf(ctx: &SessionContext) {

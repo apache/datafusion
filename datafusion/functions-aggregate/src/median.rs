@@ -39,14 +39,15 @@ use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, Decimal32Type, Decimal64Type, FieldRef,
 };
 
+use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err, exec_datafusion_err,
     internal_datafusion_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
-    function::AccumulatorArgs, utils::format_state_name,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature, TypeSignature,
+    TypeSignatureClass, Volatility, function::AccumulatorArgs, utils::format_state_name,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
@@ -99,7 +100,25 @@ impl Default for Median {
 impl Median {
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            // Integer inputs are coerced to Float64 so the average of the two
+            // middle values is not truncated. This matches DuckDB / PostgreSQL / Spark.
+            // Float and Decimal inputs preserve their type.
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Decimal,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Float,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_float64()),
+                        vec![TypeSignatureClass::Integer],
+                        NativeType::Float64,
+                    )]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -263,7 +282,12 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = values[0].as_primitive::<T>();
-        self.all_values.reserve(values.len() - values.null_count());
+        let additional = values.len() - values.null_count();
+        self.all_values.try_reserve(additional).map_err(|e| {
+            exec_datafusion_err!(
+                "failed to reserve {additional} values for median accumulator: {e}"
+            )
+        })?;
         self.all_values.extend(values.iter().flatten());
         Ok(())
     }

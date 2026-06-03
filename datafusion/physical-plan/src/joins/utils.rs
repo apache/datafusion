@@ -144,6 +144,13 @@ pub fn adjust_right_output_partitioning(
                 .collect::<Result<_>>()?;
             Partitioning::Hash(new_exprs, *size)
         }
+        Partitioning::Range(_) => {
+            // Range partitioning optimizer propagation is tracked in
+            // https://github.com/apache/datafusion/issues/22395
+            return not_impl_err!(
+                "Join output partitioning with range partitioning is not implemented"
+            );
+        }
         result => result.clone(),
     };
     Ok(result)
@@ -468,7 +475,7 @@ fn estimate_join_cardinality(
     right_stats: Statistics,
     on: &JoinOn,
 ) -> Option<PartialJoinStatistics> {
-    let (left_col_stats, right_col_stats) = on
+    let (left_key_stats, right_key_stats) = on
         .iter()
         .map(|(left, right)| {
             match (
@@ -493,12 +500,12 @@ fn estimate_join_cardinality(
                 Statistics {
                     num_rows: left_stats.num_rows,
                     total_byte_size: Precision::Absent,
-                    column_statistics: left_col_stats,
+                    column_statistics: left_key_stats,
                 },
                 Statistics {
                     num_rows: right_stats.num_rows,
                     total_byte_size: Precision::Absent,
-                    column_statistics: right_col_stats,
+                    column_statistics: right_key_stats,
                 },
             )?;
 
@@ -538,37 +545,48 @@ fn estimate_join_cardinality(
             let is_left = matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti);
             let is_anti = matches!(join_type, JoinType::LeftAnti | JoinType::RightAnti);
 
-            let ((outer_stats, inner_stats), (outer_col_stats, inner_col_stats)) =
-                if is_left {
-                    (
-                        (&left_stats, &right_stats),
-                        (&left_col_stats, &right_col_stats),
-                    )
-                } else {
-                    (
-                        (&right_stats, &left_stats),
-                        (&right_col_stats, &left_col_stats),
-                    )
-                };
+            let (outer_stats, inner_stats, outer_key_stats, inner_key_stats) = if is_left
+            {
+                (&left_stats, &right_stats, &left_key_stats, &right_key_stats)
+            } else {
+                (&right_stats, &left_stats, &right_key_stats, &left_key_stats)
+            };
 
             let outer_rows = *outer_stats.num_rows.get_value()?;
 
-            let cardinality =
-                if estimate_disjoint_inputs(outer_stats, inner_stats).is_some() {
-                    // Disjoint inputs: semi produces 0, anti keeps all rows.
-                    if is_anti { outer_rows } else { 0 }
+            let outer_join_key_stats = Statistics {
+                num_rows: outer_stats.num_rows,
+                total_byte_size: Precision::Absent,
+                column_statistics: outer_key_stats.clone(),
+            };
+            let inner_join_key_stats = Statistics {
+                num_rows: inner_stats.num_rows,
+                total_byte_size: Precision::Absent,
+                column_statistics: inner_key_stats.clone(),
+            };
+
+            let semi_cardinality =
+                if estimate_disjoint_inputs(&outer_join_key_stats, &inner_join_key_stats)
+                    .is_some()
+                {
+                    // If join keys are disjoint, no rows will match
+                    Some(0)
                 } else {
-                    match estimate_semi_join_cardinality(
+                    estimate_semi_join_cardinality(
                         &outer_stats.num_rows,
                         &inner_stats.num_rows,
-                        outer_col_stats,
-                        inner_col_stats,
-                    ) {
-                        Some(semi) if is_anti => outer_rows.saturating_sub(semi),
-                        Some(semi) => semi,
-                        None => outer_rows,
-                    }
+                        outer_key_stats,
+                        inner_key_stats,
+                    )
                 };
+
+            // Semi joins keep the matching rows; anti joins keep the rest. When no
+            // estimate is available, conservatively assume all outer rows pass.
+            let cardinality = match (semi_cardinality, is_anti) {
+                (Some(semi), true) => outer_rows.saturating_sub(semi),
+                (Some(semi), false) => semi,
+                (None, _) => outer_rows,
+            };
 
             let outer_stats = if is_left { left_stats } else { right_stats };
             Some(PartialJoinStatistics {
@@ -622,8 +640,8 @@ fn estimate_inner_join_cardinality(
         ..
     } = right_stats;
 
-    // The algorithm here is partly based on the non-histogram selectivity estimation
-    // from Spark's Catalyst optimizer.
+    // Follow Spark Catalyst's conservative NDV join estimate: for multi-key
+    // joins, use the most selective key instead of multiplying all key denominators.
     let mut join_selectivity = Precision::Absent;
     for (left_stat, right_stat) in left_column_statistics
         .iter()
@@ -636,7 +654,11 @@ fn estimate_inner_join_cardinality(
             // Seems like there are a few implementations of this algorithm that implement
             // exponential decay for the selectivity (like Hive's Optiq Optimizer). Needs
             // further exploration.
-            join_selectivity = max_distinct;
+            join_selectivity = if join_selectivity.get_value().is_some() {
+                join_selectivity.max(&max_distinct)
+            } else {
+                max_distinct
+            };
         }
     }
 
@@ -752,8 +774,8 @@ fn estimate_disjoint_inputs(
 fn estimate_semi_join_cardinality(
     outer_num_rows: &Precision<usize>,
     inner_num_rows: &Precision<usize>,
-    outer_col_stats: &[ColumnStatistics],
-    inner_col_stats: &[ColumnStatistics],
+    outer_key_stats: &[ColumnStatistics],
+    inner_key_stats: &[ColumnStatistics],
 ) -> Option<usize> {
     let outer_rows = *outer_num_rows.get_value()?;
     if outer_rows == 0 {
@@ -767,7 +789,7 @@ fn estimate_semi_join_cardinality(
     let mut selectivity = 1.0_f64;
     let mut has_selectivity_estimate = false;
 
-    for (outer_stat, inner_stat) in outer_col_stats.iter().zip(inner_col_stats.iter()) {
+    for (outer_stat, inner_stat) in outer_key_stats.iter().zip(inner_key_stats.iter()) {
         let outer_has_stats = outer_stat.distinct_count.get_value().is_some()
             || (outer_stat.min_value.get_value().is_some()
                 && outer_stat.max_value.get_value().is_some());
@@ -1451,7 +1473,7 @@ fn append_probe_indices_in_order(
     for (build_index, probe_index) in build_indices
         .values()
         .into_iter()
-        .zip(probe_indices.values().into_iter())
+        .zip(probe_indices.values())
     {
         // Append values between previous and current probe index with null build index:
         for value in prev_index..*probe_index {
@@ -2713,6 +2735,68 @@ mod tests {
     }
 
     #[test]
+    fn test_join_cardinality_key_order() -> Result<()> {
+        // Reversing join key order should not change estimated cardinality
+        let left_col_stats = vec![
+            create_column_stats(Inexact(0), Inexact(100), Inexact(100), Absent),
+            create_column_stats(Inexact(0), Inexact(500), Inexact(500), Absent),
+            create_column_stats(Inexact(1000), Inexact(10000), Absent, Absent),
+        ];
+
+        let right_col_stats = vec![
+            create_column_stats(Inexact(0), Inexact(100), Inexact(50), Absent),
+            create_column_stats(Inexact(0), Inexact(2000), Inexact(2500), Absent),
+            create_column_stats(Inexact(0), Inexact(100), Absent, Absent),
+        ];
+
+        let join_on_ab = vec![
+            (
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("c", 0)) as _,
+            ),
+            (
+                Arc::new(Column::new("b", 1)) as _,
+                Arc::new(Column::new("d", 1)) as _,
+            ),
+        ];
+        let join_on_ba = vec![
+            (
+                Arc::new(Column::new("b", 1)) as _,
+                Arc::new(Column::new("d", 1)) as _,
+            ),
+            (
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("c", 0)) as _,
+            ),
+        ];
+
+        let stats_ab = estimate_join_cardinality(
+            &JoinType::Inner,
+            create_stats(Some(1000), left_col_stats.clone(), false),
+            create_stats(Some(2000), right_col_stats.clone(), false),
+            &join_on_ab,
+        )
+        .unwrap();
+        let stats_ba = estimate_join_cardinality(
+            &JoinType::Inner,
+            create_stats(Some(1000), left_col_stats.clone(), false),
+            create_stats(Some(2000), right_col_stats.clone(), false),
+            &join_on_ba,
+        )
+        .unwrap();
+
+        assert_eq!(stats_ab.num_rows, 1000);
+        assert_eq!(stats_ba.num_rows, stats_ab.num_rows);
+        assert_eq!(stats_ba.column_statistics, stats_ab.column_statistics);
+        assert_eq!(
+            stats_ab.column_statistics,
+            [left_col_stats, right_col_stats].concat()
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_join_cardinality_when_one_column_is_disjoint() -> Result<()> {
         // Left table (rows=1000)
         //   a: min=0, max=100, distinct=100
@@ -3237,6 +3321,50 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_semi_anti_join_disjoint_check_uses_only_join_keys() {
+        let join_on = vec![(
+            Arc::new(Column::new("l_key", 0)) as _,
+            Arc::new(Column::new("r_key", 0)) as _,
+        )];
+
+        // Ranges for the join key overlap; ranges for the other column are disjoint
+        let left_stats = Statistics {
+            num_rows: Inexact(50),
+            total_byte_size: Absent,
+            column_statistics: vec![
+                create_column_stats(Inexact(1), Inexact(10), Absent, Absent),
+                create_column_stats(Inexact(100), Inexact(200), Absent, Absent),
+            ],
+        };
+        let right_stats = Statistics {
+            num_rows: Inexact(10),
+            total_byte_size: Absent,
+            column_statistics: vec![
+                create_column_stats(Inexact(1), Inexact(10), Absent, Absent),
+                create_column_stats(Inexact(1000), Inexact(2000), Absent, Absent),
+            ],
+        };
+
+        let left_semi = estimate_join_cardinality(
+            &JoinType::LeftSemi,
+            left_stats.clone(),
+            right_stats.clone(),
+            &join_on,
+        )
+        .map(|c| c.num_rows);
+        assert_eq!(left_semi, Some(50));
+
+        let left_anti = estimate_join_cardinality(
+            &JoinType::LeftAnti,
+            left_stats,
+            right_stats,
+            &join_on,
+        )
+        .map(|c| c.num_rows);
+        assert_eq!(left_anti, Some(0));
     }
 
     #[test]

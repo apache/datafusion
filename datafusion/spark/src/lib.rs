@@ -59,7 +59,7 @@
 //! #    fn udafs(&self) -> HashSet<String> { unimplemented!() }
 //! #    fn udwfs(&self) -> HashSet<String> { unimplemented!() }
 //! #    fn udf(&self, _name: &str) -> Result<Arc<ScalarUDF>> { unimplemented!() }
-//! #    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> { unimplemented!() }
+//! #    fn higher_order_function(&self, name: &str) -> Result<Arc<HigherOrderUDF>> { unimplemented!() }
 //! #    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {unimplemented!() }
 //! #    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> { unimplemented!() }
 //! #    fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> { unimplemented!() }

@@ -34,7 +34,7 @@ impl ExprPlanner for CoreFunctionPlanner {
         _schema: &DFSchema,
     ) -> Result<PlannerResult<RawDictionaryExpr>> {
         let mut args = vec![];
-        for (k, v) in expr.keys.into_iter().zip(expr.values.into_iter()) {
+        for (k, v) in expr.keys.into_iter().zip(expr.values) {
             args.push(k);
             args.push(v);
         }

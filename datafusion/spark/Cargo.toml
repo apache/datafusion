@@ -64,6 +64,7 @@ rand = { workspace = true }
 serde_json = { workspace = true }
 sha1 = "0.11"
 sha2 = { workspace = true }
+twox-hash = "2.1"
 url = { workspace = true }
 
 [dev-dependencies]
@@ -99,3 +100,7 @@ name = "unhex"
 [[bench]]
 harness = false
 name = "sha2"
+
+[[bench]]
+harness = false
+name = "floor"

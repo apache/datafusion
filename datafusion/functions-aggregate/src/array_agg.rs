@@ -256,18 +256,22 @@ impl AggregateUDFImpl for ArrayAgg {
 
 #[derive(Debug)]
 pub struct ArrayAggAccumulator {
-    values: Vec<ArrayRef>,
+    values: VecDeque<ArrayRef>,
     datatype: DataType,
     ignore_nulls: bool,
+    /// Number of elements already consumed (retracted) from the front array.
+    /// Used by sliding window frames to avoid copying on partial retract.
+    front_offset: usize,
 }
 
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
     pub fn try_new(datatype: &DataType, ignore_nulls: bool) -> Result<Self> {
         Ok(Self {
-            values: vec![],
+            values: VecDeque::new(),
             datatype: datatype.clone(),
             ignore_nulls,
+            front_offset: 0,
         })
     }
 
@@ -356,7 +360,7 @@ impl Accumulator for ArrayAggAccumulator {
         };
 
         if !val.is_empty() {
-            self.values.push(val)
+            self.values.push_back(val)
         }
 
         Ok(())
@@ -376,12 +380,12 @@ impl Accumulator for ArrayAggAccumulator {
             Some(values) => {
                 // Make sure we don't insert empty lists
                 if !values.is_empty() {
-                    self.values.push(values);
+                    self.values.push_back(values);
                 }
             }
             None => {
                 for arr in list_arr.iter().flatten() {
-                    self.values.push(arr);
+                    self.values.push_back(arr);
                 }
             }
         }
@@ -394,17 +398,69 @@ impl Accumulator for ArrayAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        // Transform Vec<ListArr> to ListArr
-        let element_arrays: Vec<&dyn Array> =
-            self.values.iter().map(|a| a.as_ref()).collect();
-
-        if element_arrays.is_empty() {
+        if self.values.is_empty() {
             return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
         }
 
-        let concated_array = arrow::compute::concat(&element_arrays)?;
+        let element_arrays: Vec<ArrayRef> = self
+            .values
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                if i == 0 && self.front_offset > 0 {
+                    a.slice(self.front_offset, a.len() - self.front_offset)
+                } else {
+                    Arc::clone(a)
+                }
+            })
+            .collect();
+
+        let element_refs: Vec<&dyn Array> =
+            element_arrays.iter().map(|a| a.as_ref()).collect();
+
+        if element_refs.iter().all(|a| a.is_empty()) {
+            return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
+        }
+
+        let concated_array = arrow::compute::concat(&element_refs)?;
 
         Ok(SingleRowListArrayBuilder::new(concated_array).build_list_scalar())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        assert_eq_or_internal_err!(values.len(), 1, "expects single batch");
+
+        let val = &values[0];
+        let mut to_retract = if self.ignore_nulls {
+            val.len() - val.logical_null_count()
+        } else {
+            val.len()
+        };
+
+        while to_retract > 0 {
+            let Some(front) = self.values.front() else {
+                break;
+            };
+            let available = front.len() - self.front_offset;
+            if to_retract >= available {
+                self.values.pop_front();
+                to_retract -= available;
+                self.front_offset = 0;
+            } else {
+                self.front_offset += to_retract;
+                to_retract = 0;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
@@ -720,7 +776,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         let offsets = OffsetBuffer::from_repeated_length(1, input.len());
 
         // Filtered rows become null list entries, which merge_batch will skip.
-        let filter_nulls = opt_filter.and_then(filter_to_nulls);
+        let filter_nulls = opt_filter.map(filter_to_nulls);
 
         // With ignore_nulls, null values also become null list entries. Without
         // ignore_nulls, null values stay as [NULL] so merge_batch retains them.
@@ -952,7 +1008,13 @@ impl OrderSensitiveArrayAggAccumulator {
         } else {
             (0..fields.len())
                 .map(|i| {
-                    let column_values = self.ordering_values.iter().map(|x| x[i].clone());
+                    let column_values: Box<dyn Iterator<Item = ScalarValue>> = if self
+                        .reverse
+                    {
+                        Box::new(self.ordering_values.iter().rev().map(|x| x[i].clone()))
+                    } else {
+                        Box::new(self.ordering_values.iter().map(|x| x[i].clone()))
+                    };
                     ScalarValue::iter_to_array(column_values)
                 })
                 .collect::<Result<_>>()?
@@ -1415,7 +1477,7 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 266);
+        assert_eq!(acc1.size(), 282);
 
         Ok(())
     }
@@ -1453,6 +1515,115 @@ mod tests {
         // without compaction, the size is 17112
         assert_eq!(acc.size(), 2224);
 
+        Ok(())
+    }
+
+    // Reproduces the bug where `state()` emits reversed values but non-reversed
+    // orderings when the optimizer sets is_input_pre_ordered=true + reverse=true
+    // (DESC aggregate with ASC pre-sorted input). The partial states are fed into
+    // a final accumulator via merge_batch; without the fix the ordering keys and
+    // values are mismatched so the final sort produces wrong order.
+    #[test]
+    fn desc_order_partial_final_merge_correct() -> Result<()> {
+        use arrow::array::Int64Array;
+        use datafusion_physical_expr::expressions::Column;
+
+        let schema = Schema::new(vec![
+            Field::new("val", DataType::Int64, true),
+            Field::new("ord", DataType::Int64, true),
+        ]);
+        let ord_expr = Arc::new(
+            Column::new_with_schema("ord", &schema).expect("column not in schema"),
+        ) as Arc<dyn PhysicalExpr>;
+
+        // ordering_req for partial = [ord ASC] (reversed, because input is pre-sorted ASC
+        // and the user wants DESC — the optimizer reverses the requirement)
+        let asc_opts = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let desc_opts = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+
+        let asc_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::clone(&ord_expr),
+            asc_opts,
+        )])
+        .unwrap();
+        let desc_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::clone(&ord_expr),
+            desc_opts,
+        )])
+        .unwrap();
+
+        let ordering_dtype = DataType::Int64;
+
+        // Partial acc A: sees rows [0,1,2] arriving in ASC order (pre-ordered).
+        // is_input_pre_ordered=true, reverse=true, ordering_req=[ASC].
+        let mut partial_a = OrderSensitiveArrayAggAccumulator::try_new(
+            &DataType::Int64,
+            std::slice::from_ref(&ordering_dtype),
+            asc_ordering.clone(),
+            /*is_input_pre_ordered=*/ true,
+            /*reverse=*/ true,
+            /*ignore_nulls=*/ false,
+        )?;
+        let vals_a = Arc::new(Int64Array::from(vec![0i64, 1, 2])) as ArrayRef;
+        let ords_a = Arc::new(Int64Array::from(vec![0i64, 1, 2])) as ArrayRef;
+        partial_a.update_batch(&[vals_a, ords_a])?;
+        let state_a = partial_a
+            .state()?
+            .iter()
+            .map(|v| v.to_array())
+            .collect::<Result<Vec<_>>>()?;
+
+        // Partial acc B: sees rows [3,4,5] arriving in ASC order.
+        let mut partial_b = OrderSensitiveArrayAggAccumulator::try_new(
+            &DataType::Int64,
+            std::slice::from_ref(&ordering_dtype),
+            asc_ordering,
+            /*is_input_pre_ordered=*/ true,
+            /*reverse=*/ true,
+            /*ignore_nulls=*/ false,
+        )?;
+        let vals_b = Arc::new(Int64Array::from(vec![3i64, 4, 5])) as ArrayRef;
+        let ords_b = Arc::new(Int64Array::from(vec![3i64, 4, 5])) as ArrayRef;
+        partial_b.update_batch(&[vals_b, ords_b])?;
+        let state_b = partial_b
+            .state()?
+            .iter()
+            .map(|v| v.to_array())
+            .collect::<Result<Vec<_>>>()?;
+
+        // Final acc: not optimized — ordering_req=[DESC], reverse=false.
+        let mut final_acc = OrderSensitiveArrayAggAccumulator::try_new(
+            &DataType::Int64,
+            std::slice::from_ref(&ordering_dtype),
+            desc_ordering,
+            /*is_input_pre_ordered=*/ false,
+            /*reverse=*/ false,
+            /*ignore_nulls=*/ false,
+        )?;
+        final_acc.merge_batch(&state_a)?;
+        final_acc.merge_batch(&state_b)?;
+        let result = final_acc.evaluate()?;
+
+        let ScalarValue::List(list) = result else {
+            return datafusion_common::internal_err!("expected List");
+        };
+        let result_vals: Vec<i64> = list
+            .values()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .iter()
+            .map(|v| v.unwrap())
+            .collect();
+
+        // Expected DESC: [5, 4, 3, 2, 1, 0]
+        assert_eq!(result_vals, vec![5i64, 4, 3, 2, 1, 0]);
         Ok(())
     }
 
@@ -1932,6 +2103,315 @@ mod tests {
         let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
         assert_eq!(vals[0], None); // group 0 got only nulls, all filtered
         assert_eq!(vals[1], Some(vec![Some(1)])); // group 1 got value 1
+
+        Ok(())
+    }
+
+    // ---- retract_batch tests ----
+
+    #[test]
+    fn retract_basic_sliding_window() -> Result<()> {
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, false)?;
+
+        // Simulate ROWS BETWEEN 1 PRECEDING AND CURRENT ROW over [A, B, C, D]
+        // Row 1: frame = [A]
+        acc.update_batch(&[data(["A"])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["A"]);
+
+        // Row 2: frame = [A, B]
+        acc.update_batch(&[data(["B"])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["A", "B"]);
+
+        // Row 3: frame = [B, C] — A leaves
+        acc.update_batch(&[data(["C"])])?;
+        acc.retract_batch(&[data(["A"])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["B", "C"]);
+
+        // Row 4: frame = [C, D] — B leaves
+        acc.update_batch(&[data(["D"])])?;
+        acc.retract_batch(&[data(["B"])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["C", "D"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_multi_element_across_arrays() -> Result<()> {
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, false)?;
+
+        // First batch: 3 elements
+        acc.update_batch(&[data(["A", "B", "C"])])?;
+        // Second batch: 1 element
+        acc.update_batch(&[data(["D"])])?;
+
+        assert_eq!(
+            print_nulls(str_arr(acc.evaluate()?)?),
+            vec!["A", "B", "C", "D"]
+        );
+
+        // Partial retract from front array: A leaves
+        acc.retract_batch(&[data(["A"])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["B", "C", "D"]);
+
+        // Retract spanning two arrays: B, C (rest of first array) + D (second array)
+        acc.retract_batch(&[data(["B", "C", "D"])])?;
+        let result = acc.evaluate()?;
+        assert!(
+            matches!(&result, ScalarValue::List(arr) if arr.is_null(0)),
+            "expected null list after full retract, got {result:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_with_nulls_preserved() -> Result<()> {
+        // ignore_nulls = false: NULLs are stored and counted for retract
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, false)?;
+
+        acc.update_batch(&[data([Some("A"), None, Some("C")])])?;
+        assert_eq!(
+            print_nulls(str_arr(acc.evaluate()?)?),
+            vec!["A", "NULL", "C"]
+        );
+
+        // Retract 2 elements: A and NULL both leave
+        acc.retract_batch(&[data([Some("A"), None])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["C"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_with_ignore_nulls() -> Result<()> {
+        // ignore_nulls = true: NULLs are NOT stored by update_batch,
+        // so retract must only count non-null values
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, true)?;
+
+        // update_batch with [A, NULL, C] → stores only [A, C] (NULL filtered)
+        acc.update_batch(&[data([Some("A"), None, Some("C")])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["A", "C"]);
+
+        // retract_batch receives the original values including NULL: [A, NULL]
+        // But only 1 non-null value (A) should be retracted
+        acc.retract_batch(&[data([Some("A"), None])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["C"]);
+
+        // retract_batch with [NULL, C] — only C (1 non-null) retracted
+        acc.retract_batch(&[data([None, Some("C")])])?;
+        let result = acc.evaluate()?;
+        assert!(
+            matches!(&result, ScalarValue::List(arr) if arr.is_null(0)),
+            "expected null list after full retract, got {result:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_ignore_nulls_all_nulls_batch() -> Result<()> {
+        // When ignore_nulls = true and retract batch is all NULLs, nothing is retracted
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, true)?;
+
+        acc.update_batch(&[data([Some("A"), Some("B")])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["A", "B"]);
+
+        // Retract batch of all NULLs: to_retract = 0, nothing changes
+        acc.retract_batch(&[data::<Option<&str>, 3>([None, None, None])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["A", "B"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_empty_accumulator() -> Result<()> {
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, false)?;
+
+        // Retract on empty accumulator should be a no-op
+        acc.retract_batch(&[data(["A"])])?;
+        let result = acc.evaluate()?;
+        assert!(
+            matches!(&result, ScalarValue::List(arr) if arr.is_null(0)),
+            "expected null list for empty accumulator, got {result:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_front_offset_partial_consume() -> Result<()> {
+        // Reproduces the RANGE BETWEEN 2 PRECEDING AND 2 FOLLOWING scenario:
+        //   ts: 1, 2, 3, 4, 100
+        //
+        // Row 1 (ts=1): update [A,B,C] (3 elements, ts in [-1,3])
+        // Row 2 (ts=2): update [D]     (ts=4 enters)
+        // Row 3 (ts=3): no change      (same frame [0..4))
+        // Row 4 (ts=4): retract [A]    (ts=1 leaves, partial consume)
+        // Row 5 (ts=100): retract [B,C,D] (3-element retract spanning arrays)
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, false)?;
+
+        // Row 1: update_batch(["A","B","C"])
+        acc.update_batch(&[data(["A", "B", "C"])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["A", "B", "C"]);
+
+        // Row 2: update_batch(["D"])
+        acc.update_batch(&[data(["D"])])?;
+        assert_eq!(
+            print_nulls(str_arr(acc.evaluate()?)?),
+            vec!["A", "B", "C", "D"]
+        );
+
+        // Row 4: retract_batch(["A"]) — partial consume, front_offset = 1
+        acc.retract_batch(&[data(["A"])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["B", "C", "D"]);
+
+        // Row 5: update_batch(["E"]), then retract_batch(["B","C","D"])
+        // retract spans: ["A","B","C"] (offset=1, 2 remaining) + ["D"] (1 element)
+        acc.update_batch(&[data(["E"])])?;
+        acc.retract_batch(&[data(["B", "C", "D"])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["E"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_update_after_full_drain() -> Result<()> {
+        // Verify accumulator works correctly after being fully drained
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, false)?;
+
+        acc.update_batch(&[data(["A", "B"])])?;
+        acc.retract_batch(&[data(["A", "B"])])?;
+
+        // Accumulator is empty now
+        let result = acc.evaluate()?;
+        assert!(
+            matches!(&result, ScalarValue::List(arr) if arr.is_null(0)),
+            "expected null list, got {result:?}"
+        );
+
+        // New values should work normally after drain
+        acc.update_batch(&[data(["X", "Y"])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["X", "Y"]);
+
+        acc.retract_batch(&[data(["X"])])?;
+        assert_eq!(print_nulls(str_arr(acc.evaluate()?)?), vec!["Y"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_supports_retract_batch() -> Result<()> {
+        let acc = ArrayAggAccumulator::try_new(&DataType::Utf8, false)?;
+        assert!(acc.supports_retract_batch());
+
+        let acc_ignore = ArrayAggAccumulator::try_new(&DataType::Utf8, true)?;
+        assert!(acc_ignore.supports_retract_batch());
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_ignore_nulls_logical_vs_physical() -> Result<()> {
+        // Regression test: DictionaryArray where logical nulls differ from physical nulls.
+        // Manually construct a DictionaryArray where all indices are valid
+        // (physical null_count = 0) but some point to null dictionary values
+        // (logical_null_count > 0).
+        use arrow::array::{DictionaryArray, Int32Array, StringArray};
+
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let mut acc = ArrayAggAccumulator::try_new(&dict_type, true)?;
+
+        // Dictionary values: ["hello", NULL, "world"]
+        // Keys: [0, 1, 2, 1] — all valid, but keys 1 and 3 point to null value
+        let values = StringArray::from(vec![Some("hello"), None, Some("world")]);
+        let keys = Int32Array::from(vec![0, 1, 2, 1]);
+        let dict_array: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+
+        // Confirm the divergence this test exists to exercise
+        assert_eq!(
+            dict_array.null_count(),
+            0,
+            "physical nulls: none in keys bitmap"
+        );
+        assert_eq!(
+            dict_array.logical_null_count(),
+            2,
+            "logical nulls: keys pointing to null values"
+        );
+
+        // update_batch uses logical_nulls() → stores only ["hello", "world"]
+        acc.update_batch(std::slice::from_ref(&dict_array))?;
+
+        // Verify 2 elements stored
+        let result = acc.evaluate()?;
+        match &result {
+            ScalarValue::List(arr) => {
+                let values = arr.value(0);
+                assert_eq!(values.len(), 2);
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+
+        // retract_batch with same array: should retract 2 (logical non-nulls), not 4 (len) or 0 (physical non-nulls would be len-0=4)
+        acc.retract_batch(&[dict_array])?;
+        let result = acc.evaluate()?;
+        assert!(
+            matches!(&result, ScalarValue::List(arr) if arr.is_null(0)),
+            "expected null list after full retract, got {result:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn retract_ignore_nulls_dict_partial() -> Result<()> {
+        // Partial retraction with DictionaryArray where logical != physical nulls.
+        // Manually construct so keys are all valid but some point to null values.
+        use arrow::array::{DictionaryArray, Int32Array, StringArray};
+
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let mut acc = ArrayAggAccumulator::try_new(&dict_type, true)?;
+
+        // update with ["A", "B", "C"] (no nulls)
+        let values = StringArray::from(vec!["A", "B", "C"]);
+        let keys = Int32Array::from(vec![0, 1, 2]);
+        let update_array: ArrayRef =
+            Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+        acc.update_batch(&[update_array])?;
+
+        // retract with dict ["A", NULL, NULL]:
+        //   keys [0, 1, 1] all valid → physical null_count = 0
+        //   keys 1,2 point to null value → logical_null_count = 2
+        //   non-null count = 3 - 2 = 1 → retract 1 element
+        let values = StringArray::from(vec![Some("A"), None]);
+        let keys = Int32Array::from(vec![0, 1, 1]);
+        let retract_array: ArrayRef =
+            Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+
+        assert_eq!(
+            retract_array.null_count(),
+            0,
+            "physical nulls: none in keys bitmap"
+        );
+        assert_eq!(
+            retract_array.logical_null_count(),
+            2,
+            "logical nulls: keys pointing to null values"
+        );
+
+        acc.retract_batch(&[retract_array])?;
+
+        // Should have retracted only 1 element, leaving ["B", "C"]
+        let result = acc.evaluate()?;
+        match &result {
+            ScalarValue::List(arr) => {
+                let values = arr.value(0);
+                assert_eq!(values.len(), 2);
+            }
+            other => panic!("expected List with 2 elements, got {other:?}"),
+        }
 
         Ok(())
     }
