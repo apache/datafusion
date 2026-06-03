@@ -205,10 +205,49 @@ SELECT * FROM test WHERE column1 ~ 'z'
 Bazzz
 
 query T
+SELECT * FROM test WHERE column1 ~ '^Bazzz$'
+----
+Bazzz
+
+query T
+SELECT * FROM test WHERE column1 ~ '^(foo|Bazzz)$'
+----
+foo
+Bazzz
+
+statement ok
+CREATE TABLE test_regex_utf8view(s VARCHAR) AS VALUES ('foo'), ('Bazzz');
+
+query T
+SELECT * FROM test_regex_utf8view WHERE s ~ '^Bazzz$'
+----
+Bazzz
+
+query T
+SELECT * FROM test_regex_utf8view WHERE s ~ '^(foo|Bazzz)$'
+----
+foo
+Bazzz
+
+statement ok
+DROP TABLE test_regex_utf8view;
+
+query T
 SELECT * FROM test WHERE column1 ~* 'z'
 ----
 Bazzz
 ZZZZZ
+
+query T
+SELECT * FROM test WHERE column1 ~* '^barrr$'
+----
+Barrr
+
+query T
+SELECT * FROM test WHERE column1 ~* '^(barrr|bazzz)$'
+----
+Barrr
+Bazzz
 
 query T
 SELECT * FROM test WHERE column1 !~ 'z'
