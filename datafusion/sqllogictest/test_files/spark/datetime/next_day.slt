@@ -64,6 +64,22 @@ SELECT next_day('2020-01-01'::DATE, 'invalid_day'::string);
 ----
 NULL
 
+# Whitespace must NOT be trimmed — Spark does not accept padded day names (issue #22717)
+query D
+SELECT next_day('2024-01-01'::DATE, ' MO '::string);
+----
+NULL
+
+query D
+SELECT next_day('2024-01-01'::DATE, ' Monday '::string);
+----
+NULL
+
+query D
+SELECT next_day('2024-01-01'::DATE, '  sun  '::string);
+----
+NULL
+
 query error Cast error: Cannot cast string '2015-13-32' to value of Date32 type
 SELECT next_day('2015-13-32'::DATE, 'Sun'::string);
 

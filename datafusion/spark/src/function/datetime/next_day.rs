@@ -210,7 +210,7 @@ where
 fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
     let date = Date32Type::to_naive_date_opt(days)?;
 
-    let day_of_week = day_of_week.trim().to_uppercase();
+    let day_of_week = day_of_week.to_uppercase();
     let day_of_week = match day_of_week.as_str() {
         "MO" | "MON" | "MONDAY" => Some("MONDAY"),
         "TU" | "TUE" | "TUESDAY" => Some("TUESDAY"),
