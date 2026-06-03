@@ -50,8 +50,8 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 /// planning-time validation matches runtime validation, enabling fail-fast behavior
 /// instead of deferring errors to execution. Handles structs at any nesting level
 /// (e.g., `List<Struct>`, `Dictionary<_, Struct>`).
-fn can_cast_named_struct_types(source: &DataType, target: &DataType) -> bool {
-    validate_data_type_compatibility("", source, target).is_ok()
+fn can_cast_named_struct_types(source: &DataType, target: &DataType) -> Result<bool> {
+    validate_data_type_compatibility("", source, target).map(|_| true)
 }
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
@@ -399,7 +399,7 @@ pub fn cast_with_target_field(
         // applied at planning time (now) to fail fast, rather than deferring errors
         // to execution time. The name-based casting logic will be executed at runtime
         // via ColumnarValue::cast_to.
-        can_cast_named_struct_types(&expr_type, cast_type)
+        can_cast_named_struct_types(&expr_type, cast_type)?
     } else {
         can_cast_types(&expr_type, cast_type)
     };
@@ -1046,7 +1046,7 @@ mod tests {
         let err = cast_with_options(col("a", &schema)?, &schema, invalid_target, None)
             .expect_err("missing required struct field should fail");
 
-        assert!(err.to_string().contains("Unsupported CAST"));
+        assert!(err.to_string().contains("Cannot cast struct"));
 
         Ok(())
     }
