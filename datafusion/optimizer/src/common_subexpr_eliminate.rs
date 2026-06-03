@@ -28,7 +28,7 @@ use crate::utils::NamePreserver;
 use datafusion_common::alias::AliasGenerator;
 
 use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, qualified_name};
 use datafusion_expr::expr::{Alias, HigherOrderFunction, ScalarFunction};
 use datafusion_expr::logical_plan::{
@@ -586,12 +586,19 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_) => {
                 // This rule handles recursion itself in a `ApplyOrder::TopDown` like
-                // manner. Process uncorrelated subqueries in expressions
-                // (e.g., Expr::ScalarSubquery), then direct children.
-                plan.map_uncorrelated_subqueries(|c| self.rewrite(c, config))?
-                    .transform_sibling(|plan| {
-                        plan.map_children(|c| self.rewrite(c, config))
-                    })?
+                // manner. In-place recursion via `Arc::make_mut` + `mem::take`
+                // — when a child returns `Transformed::no` its `Arc` is reused
+                // without rebuilding the parent variant. Same shape as the
+                // previous `map_uncorrelated_subqueries` + `map_children` pair
+                // (subqueries first, then direct children).
+                let mut plan = plan;
+                let changed =
+                    crate::optimizer::rewrite_children_in_place(&mut plan, self, config)?;
+                if changed {
+                    Transformed::yes(plan)
+                } else {
+                    Transformed::no(plan)
+                }
             }
         };
 
