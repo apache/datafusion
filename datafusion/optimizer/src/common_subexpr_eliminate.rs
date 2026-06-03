@@ -701,6 +701,8 @@ impl CSEController for ExprCSEController<'_> {
     fn is_valid(node: &Expr) -> bool {
         !node.is_volatile_node()
             && !matches!(node, Expr::Lambda(_) | Expr::LambdaVariable(_))
+            // Volatile scalar subqueries must be evaluated per occurrence.
+            && !matches!(node, Expr::ScalarSubquery(sq) if sq.is_volatile())
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {

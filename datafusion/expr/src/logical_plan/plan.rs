@@ -4389,6 +4389,28 @@ impl Subquery {
             spans: Spans::new(),
         }
     }
+
+    /// Returns `true` if this subquery's plan contains a volatile expression.
+    pub fn is_volatile(&self) -> bool {
+        plan_contains_volatile(&self.subquery)
+    }
+}
+
+/// Returns `true` if any expression in `plan` is volatile.
+fn plan_contains_volatile(plan: &LogicalPlan) -> bool {
+    plan.exists(|node| {
+        let mut found = false;
+        node.apply_expressions(|expr| {
+            if expr.is_volatile() {
+                found = true;
+                Ok(TreeNodeRecursion::Stop)
+            } else {
+                Ok(TreeNodeRecursion::Continue)
+            }
+        })?;
+        Ok(found)
+    })
+    .expect("infallible")
 }
 
 impl Debug for Subquery {

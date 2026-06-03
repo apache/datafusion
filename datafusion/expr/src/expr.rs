@@ -2145,10 +2145,25 @@ impl Expr {
     /// For example the function call `RANDOM()` is volatile as each call will
     /// return a different value.
     ///
+    /// This also descends into subquery-bearing expressions, so
+    /// `(SELECT random())` is volatile even though the scalar subquery node is
+    /// not itself a volatile function.
+    ///
     /// See [`Volatility`] for more information.
     pub fn is_volatile(&self) -> bool {
-        self.exists(|expr| Ok(expr.is_volatile_node()))
-            .expect("exists closure is infallible")
+        self.exists(|expr| {
+            let subquery_is_volatile = match expr {
+                Expr::ScalarSubquery(subquery)
+                | Expr::Exists(Exists { subquery, .. })
+                | Expr::InSubquery(InSubquery { subquery, .. })
+                | Expr::SetComparison(SetComparison { subquery, .. }) => {
+                    subquery.is_volatile()
+                }
+                _ => false,
+            };
+            Ok(expr.is_volatile_node() || subquery_is_volatile)
+        })
+        .expect("exists closure is infallible")
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and
@@ -4183,6 +4198,94 @@ mod test {
             ),
         }));
         assert_eq!(udf.signature().volatility, Volatility::Volatile);
+    }
+
+    #[test]
+    fn test_is_volatile_subquery() -> Result<()> {
+        use crate::logical_plan::{LogicalPlanBuilder, Subquery};
+        use datafusion_common::Spans;
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct VolatileUdf {
+            signature: Signature,
+        }
+        impl ScalarUDFImpl for VolatileUdf {
+            fn name(&self) -> &str {
+                "volatile_udf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int64)
+            }
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(0))))
+            }
+        }
+
+        let vol_udf = Arc::new(ScalarUDF::from(VolatileUdf {
+            signature: Signature::nullary(Volatility::Volatile),
+        }));
+
+        let volatile_plan = Arc::new(
+            LogicalPlanBuilder::empty(true)
+                .project(vec![vol_udf.call(vec![])])?
+                .build()?,
+        );
+        let stable_plan = Arc::new(
+            LogicalPlanBuilder::empty(true)
+                .project(vec![lit(1i64)])?
+                .build()?,
+        );
+
+        let subquery = |plan: &Arc<LogicalPlan>| Subquery {
+            subquery: Arc::clone(plan),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        // Every subquery-bearing expression kind must surface the volatility of
+        // its subquery plan.
+        assert!(Expr::ScalarSubquery(subquery(&volatile_plan)).is_volatile());
+        assert!(Expr::Exists(Exists::new(subquery(&volatile_plan), false)).is_volatile());
+        assert!(
+            Expr::InSubquery(InSubquery::new(
+                Box::new(lit(1i64)),
+                subquery(&volatile_plan),
+                false
+            ))
+            .is_volatile()
+        );
+        assert!(
+            Expr::SetComparison(SetComparison::new(
+                Box::new(lit(1i64)),
+                subquery(&volatile_plan),
+                Operator::Eq,
+                SetQuantifier::Any
+            ))
+            .is_volatile()
+        );
+
+        // Non-volatile subqueries are not reported as volatile.
+        assert!(!Expr::ScalarSubquery(subquery(&stable_plan)).is_volatile());
+        assert!(!Expr::Exists(Exists::new(subquery(&stable_plan), false)).is_volatile());
+
+        // Volatility hidden behind a nested subquery is still detected.
+        let nested_plan = Arc::new(
+            LogicalPlanBuilder::empty(true)
+                .project(vec![Expr::Exists(Exists::new(
+                    subquery(&volatile_plan),
+                    false,
+                ))])?
+                .build()?,
+        );
+        assert!(Expr::ScalarSubquery(subquery(&nested_plan)).is_volatile());
+
+        Ok(())
     }
 
     use super::*;

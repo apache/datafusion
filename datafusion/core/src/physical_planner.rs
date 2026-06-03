@@ -79,7 +79,9 @@ use datafusion_common::{
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
-use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_expr::execution_props::{
+    ScalarSubqueryResults, SubqueryIndex, SubqueryKey,
+};
 use datafusion_expr::expr::{
     Alias, GroupingSet, NullTreatment, WindowFunction, WindowFunctionParams,
     physical_name,
@@ -112,7 +114,7 @@ use datafusion_physical_plan::unnest::ListUnnest;
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::{StreamExt, TryStreamExt};
-use indexmap::IndexSet;
+use indexmap::IndexMap;
 use itertools::{Itertools, multiunzip};
 use log::debug;
 use tokio::sync::Mutex;
@@ -391,14 +393,16 @@ impl DefaultPhysicalPlanner {
     /// at its level and then recurses in order to handle nested subqueries.
     #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Subquery contains Arc with interior mutability but is intentionally used as hash key
     fn collect_scalar_subqueries(plan: &LogicalPlan) -> Vec<Subquery> {
-        let mut subqueries = IndexSet::new();
+        let mut subqueries: IndexMap<SubqueryKey, Subquery> = IndexMap::new();
         plan.apply(|node| {
             for expr in node.expressions() {
                 expr.apply(|e| {
                     if let Expr::ScalarSubquery(sq) = e
                         && sq.outer_ref_columns.is_empty()
                     {
-                        subqueries.insert(sq.clone());
+                        subqueries
+                            .entry(SubqueryKey::new(sq))
+                            .or_insert_with(|| sq.clone());
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
@@ -407,7 +411,35 @@ impl DefaultPhysicalPlanner {
             Ok(TreeNodeRecursion::Continue)
         })
         .expect("infallible");
-        subqueries.into_iter().collect()
+        subqueries.into_values().collect()
+    }
+
+    /// Give each volatile uncorrelated scalar subquery occurrence a fresh plan
+    /// pointer so [`SubqueryKey`] can keep otherwise-identical occurrences
+    /// distinct during physical planning.
+    fn freshen_volatile_subqueries(plan: &LogicalPlan) -> Result<LogicalPlan> {
+        Ok(plan
+            .clone()
+            .transform_down(|node| {
+                node.map_expressions(|expr| {
+                    expr.transform_down(|e| {
+                        if let Expr::ScalarSubquery(sq) = &e
+                            && sq.outer_ref_columns.is_empty()
+                            && sq.is_volatile()
+                        {
+                            let fresh = Subquery {
+                                subquery: Arc::new(sq.subquery.as_ref().clone()),
+                                outer_ref_columns: sq.outer_ref_columns.clone(),
+                                spans: sq.spans.clone(),
+                            };
+                            Ok(Transformed::yes(Expr::ScalarSubquery(fresh)))
+                        } else {
+                            Ok(Transformed::no(e))
+                        }
+                    })
+                })
+            })?
+            .data)
     }
 
     /// Create a physical plan from a logical plan.
@@ -442,15 +474,30 @@ impl DefaultPhysicalPlanner {
             // scalar subqueries to joins, so none should reach this point.
             // Skip collection in that case to avoid creating a no-op
             // `ScalarSubqueryExec` wrapper.
-            let all_subqueries = if session_state
+            if !session_state
                 .config_options()
                 .optimizer
                 .enable_physical_uncorrelated_scalar_subquery
             {
-                Self::collect_scalar_subqueries(logical_plan)
+                return self
+                    .create_initial_plan_inner(logical_plan, session_state)
+                    .await;
+            }
+
+            let mut all_subqueries = Self::collect_scalar_subqueries(logical_plan);
+            let freshened = if all_subqueries.iter().any(Subquery::is_volatile) {
+                Some(Self::freshen_volatile_subqueries(logical_plan)?)
             } else {
-                Vec::new()
+                None
             };
+            let logical_plan = match &freshened {
+                Some(freshened) => {
+                    all_subqueries = Self::collect_scalar_subqueries(freshened);
+                    freshened
+                }
+                None => logical_plan,
+            };
+
             let (links, index_map) = self
                 .plan_scalar_subqueries(all_subqueries, session_state)
                 .await?;
@@ -2932,18 +2979,22 @@ impl DefaultPhysicalPlanner {
     }
 
     /// Build physical plans for scalar subqueries and assign each an ordinal
-    /// `SubqueryIndex`. Returns the links (plan + index) and a map from logical
-    /// `Subquery` to its index.
+    /// `SubqueryIndex`. Returns the links (plan + index) and a map from each
+    /// subquery's `SubqueryKey` to its index.
     async fn plan_scalar_subqueries(
         &self,
         subqueries: Vec<Subquery>,
         session_state: &SessionState,
-    ) -> Result<(Vec<ScalarSubqueryLink>, DFHashMap<Subquery, SubqueryIndex>)> {
+    ) -> Result<(
+        Vec<ScalarSubqueryLink>,
+        DFHashMap<SubqueryKey, SubqueryIndex>,
+    )> {
         let mut links = Vec::with_capacity(subqueries.len());
         let mut index_map = DFHashMap::with_capacity(subqueries.len());
         for sq in subqueries {
+            let key = SubqueryKey::new(&sq);
             // Callers deduplicate, but guard against accidental double-planning.
-            if index_map.contains_key(&sq) {
+            if index_map.contains_key(&key) {
                 continue;
             }
             let physical_plan = self
@@ -2954,7 +3005,7 @@ impl DefaultPhysicalPlanner {
                 plan: physical_plan,
                 index,
             });
-            index_map.insert(sq, index);
+            index_map.insert(key, index);
         }
         Ok((links, index_map))
     }
