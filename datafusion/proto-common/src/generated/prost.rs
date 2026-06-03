@@ -865,7 +865,7 @@ pub struct ParquetOptions {
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "35")]
-    pub content_defined_chunking: ::core::option::Option<CdcOptions>,
+    pub content_defined_chunking: ::core::option::Option<ParquetCdcOptions>,
     #[prost(oneof = "parquet_options::MetadataSizeHintOpt", tags = "4")]
     pub metadata_size_hint_opt: ::core::option::Option<
         parquet_options::MetadataSizeHintOpt,
@@ -974,13 +974,16 @@ pub mod parquet_options {
         CoerceInt96Tz(::prost::alloc::string::String),
     }
 }
+/// Content-defined chunking (CDC) options for writing parquet files.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CdcOptions {
-    #[prost(uint64, tag = "1")]
-    pub min_chunk_size: u64,
+pub struct ParquetCdcOptions {
+    #[prost(bool, tag = "1")]
+    pub enabled: bool,
     #[prost(uint64, tag = "2")]
+    pub min_chunk_size: u64,
+    #[prost(uint64, tag = "3")]
     pub max_chunk_size: u64,
-    #[prost(int32, tag = "3")]
+    #[prost(int32, tag = "4")]
     pub norm_level: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

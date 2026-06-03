@@ -239,6 +239,10 @@ datafusion.execution.parquet.coerce_int96 NULL
 datafusion.execution.parquet.coerce_int96_tz NULL
 datafusion.execution.parquet.column_index_truncate_length 64
 datafusion.execution.parquet.compression zstd(3)
+datafusion.execution.parquet.content_defined_chunking.enabled false
+datafusion.execution.parquet.content_defined_chunking.max_chunk_size 1048576
+datafusion.execution.parquet.content_defined_chunking.min_chunk_size 262144
+datafusion.execution.parquet.content_defined_chunking.norm_level 0
 datafusion.execution.parquet.created_by datafusion
 datafusion.execution.parquet.data_page_row_count_limit 20000
 datafusion.execution.parquet.data_pagesize_limit 1048576
@@ -260,7 +264,6 @@ datafusion.execution.parquet.skip_arrow_metadata false
 datafusion.execution.parquet.skip_metadata true
 datafusion.execution.parquet.statistics_enabled page
 datafusion.execution.parquet.statistics_truncate_length 64
-datafusion.execution.parquet.use_content_defined_chunking NULL
 datafusion.execution.parquet.write_batch_size 1024
 datafusion.execution.parquet.writer_version 1.0
 datafusion.execution.perfect_hash_join_min_key_density 0.15
@@ -390,6 +393,10 @@ datafusion.execution.parquet.coerce_int96 NULL (reading) If true, parquet reader
 datafusion.execution.parquet.coerce_int96_tz NULL (reading) Optional timezone applied to INT96 columns when `coerce_int96` is set. When `Some`, INT96 columns coerce to `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default `Timestamp(<coerce_int96>, None)`. Spark and other systems write INT96 values as UTC-adjusted instants, so callers that need the resulting Arrow type to be timezone-aware (e.g. for Spark `TimestampType` semantics) should set this to `"UTC"`. No effect when `coerce_int96` is `None`.
 datafusion.execution.parquet.column_index_truncate_length 64 (writing) Sets column index truncate length
 datafusion.execution.parquet.compression zstd(3) (writing) Sets default parquet compression codec. Valid values are: uncompressed, snappy, gzip(level), brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting Note that this default setting is not the same as the default parquet writer setting.
+datafusion.execution.parquet.content_defined_chunking.enabled false (writing) EXPERIMENTAL: Enable content-defined chunking (CDC) when writing parquet files. When enabled, parallel writing is automatically disabled since the chunker state must persist across row groups.
+datafusion.execution.parquet.content_defined_chunking.max_chunk_size 1048576 Maximum chunk size in bytes. A split is forced when the accumulated size exceeds this value. Default is 1 MiB.
+datafusion.execution.parquet.content_defined_chunking.min_chunk_size 262144 Minimum chunk size in bytes. The rolling hash will not trigger a split until this many bytes have been accumulated. Default is 256 KiB.
+datafusion.execution.parquet.content_defined_chunking.norm_level 0 Normalization level. Increasing this improves deduplication ratio but increases fragmentation. Recommended range is [-3, 3], default is 0.
 datafusion.execution.parquet.created_by datafusion (writing) Sets "created by" property
 datafusion.execution.parquet.data_page_row_count_limit 20000 (writing) Sets best effort maximum number of rows in data page
 datafusion.execution.parquet.data_pagesize_limit 1048576 (writing) Sets best effort maximum size of data page in bytes
@@ -411,7 +418,6 @@ datafusion.execution.parquet.skip_arrow_metadata false (writing) Skip encoding t
 datafusion.execution.parquet.skip_metadata true (reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata
 datafusion.execution.parquet.statistics_enabled page (writing) Sets if statistics are enabled for any column Valid values are: "none", "chunk", and "page" These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.statistics_truncate_length 64 (writing) Sets statistics truncate length. If NULL, uses default parquet writer setting
-datafusion.execution.parquet.use_content_defined_chunking NULL (writing) EXPERIMENTAL: Enable content-defined chunking (CDC) when writing parquet files. When `Some`, CDC is enabled with the given options; when `None` (the default), CDC is disabled. When CDC is enabled, parallel writing is automatically disabled since the chunker state must persist across row groups.
 datafusion.execution.parquet.write_batch_size 1024 (writing) Sets write_batch_size in rows
 datafusion.execution.parquet.writer_version 1.0 (writing) Sets parquet writer version valid values are "1.0" and "2.0"
 datafusion.execution.perfect_hash_join_min_key_density 0.15 The minimum required density of join keys on the build side to consider a perfect hash join (see `HashJoinExec` for more details). Density is calculated as: `(number of rows) / (max_key - min_key + 1)`. A perfect hash join may be used if the actual key density > this value. Currently only supports cases where build_side.num_rows() < u32::MAX. Support for build_side.num_rows() >= u32::MAX will be added in the future.
