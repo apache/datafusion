@@ -593,6 +593,8 @@ fn get_valid_types(
             large_list: bool,
             fixed_size: Option<i32>,
         ) -> DataType {
+            // Preserve the original list field when possible so field name or
+            // metadata differences do not introduce otherwise unnecessary casts.
             let field = match current_type {
                 DataType::List(field)
                 | DataType::LargeList(field)
