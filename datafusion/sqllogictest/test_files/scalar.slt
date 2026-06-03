@@ -600,14 +600,18 @@ select ln(0);
 ----
 -Infinity
 
+# ln scalar ops with negative edgecases
+statement error cannot take logarithm of a negative number
+select ln(-1.0);
+
 # ln with columns (round is needed to normalize the outputs of different operating systems)
 query RRR rowsort
-select round(ln(a), 5), round(ln(b), 5), round(ln(c), 5) from signed_integers;
+select round(ln(a), 5), round(ln(b), 5), round(ln(c), 5) from unsigned_integers;
 ----
-0.69315 NaN 4.81218
+0 4.60517 6.34036
+0.69315 6.90776 4.81218
+1.09861 9.21034 6.88551
 1.38629 NULL NULL
-NaN 4.60517 NaN
-NaN 9.21034 NaN
 
 ## log
 
@@ -649,6 +653,13 @@ select log(0) a, log(1, 64) b;
 ----
 -Infinity Infinity
 
+# log scalar ops with negative edgecases
+statement error cannot take logarithm of a negative number
+select log(-1.0);
+
+statement error cannot take logarithm of a negative number
+select log(2, -1.0);
+
 # log with columns #1
 query RRR rowsort
 select log(a, 64) a, log(b), log(10, b) from unsigned_integers;
@@ -660,12 +671,12 @@ Infinity 2 2
 
 # log with columns #2
 query RRR rowsort
-select log(a, 64) a, log(b), log(10, b) from signed_integers;
+select log(2, abs(b)) a, log(abs(b)), log(10, abs(b)) from signed_integers;
 ----
-3 NULL NULL
-6 NaN NaN
-NaN 2 2
-NaN 4 4
+13.287712379549 4 4
+6.643856189775 2 2
+9.965784284662 3 3
+NULL NULL NULL
 
 # log overloaded base 10 float64 and float32 casting scalar
 query RR rowsort
@@ -675,12 +686,12 @@ select log(arrow_cast(10, 'Float64')) a ,log(arrow_cast(100, 'Float32')) b;
 
 # log overloaded base 10 float64 and float32 casting with columns
 query RR rowsort
-select log(arrow_cast(a, 'Float64')), log(arrow_cast(b, 'Float32')) from signed_integers;
+select log(arrow_cast(abs(a), 'Float64')), log(arrow_cast(abs(b), 'Float32')) from signed_integers;
 ----
-0.301029995664 NaN
+0 2
+0.301029995664 3
+0.47712125472 4
 0.602059991328 NULL
-NaN 2
-NaN 4
 
 # log float64 and float32 casting scalar
 query RR rowsort
@@ -690,12 +701,12 @@ select log(2,arrow_cast(8, 'Float64')) a, log(2,arrow_cast(16, 'Float32')) b;
 
 # log float64 and float32 casting with columns
 query RR rowsort
-select log(2,arrow_cast(a, 'Float64')), log(4,arrow_cast(b, 'Float32')) from signed_integers;
+select log(2,arrow_cast(abs(a), 'Float64')), log(4,arrow_cast(abs(b), 'Float32')) from signed_integers;
 ----
-1 NaN
+0 3.321928
+1 4.982892
+1.584962500721 6.643856
 2 NULL
-NaN 3.321928
-NaN 6.643856
 
 
 ## log10
@@ -725,14 +736,18 @@ select log10(0);
 ----
 -Infinity
 
+# log10 scalar ops with negative edgecases
+statement error cannot take logarithm of a negative number
+select log10(-1.0);
+
 # log10 with columns (round is needed to normalize the outputs of different operating systems)
 query RRR rowsort
-select round(log(a), 5), round(log(b), 5), round(log(c), 5) from signed_integers;
+select round(log(a), 5), round(log(b), 5), round(log(c), 5) from unsigned_integers;
 ----
-0.30103 NaN 2.08991
+0 2 2.75358
+0.30103 3 2.08991
+0.47712 4 2.99034
 0.60206 NULL NULL
-NaN 2 NaN
-NaN 4 NaN
 
 ## log2
 
@@ -761,14 +776,18 @@ select log2(0);
 ----
 -Infinity
 
+# log2 scalar ops with negative edgecases
+statement error cannot take logarithm of a negative number
+select log2(-1.0);
+
 # log2 with columns (round is needed to normalize the outputs of different operating systems)
 query RRR rowsort
-select round(log2(a), 5), round(log2(b), 5), round(log2(c), 5) from signed_integers;
+select round(log2(a), 5), round(log2(b), 5), round(log2(c), 5) from unsigned_integers;
 ----
-1 NaN 6.94251
+0 6.64386 9.1472
+1 9.96578 6.94251
+1.58496 13.28771 9.93369
 2 NULL NULL
-NaN 13.28771 NaN
-NaN 6.64386 NaN
 
 ## nanvl
 

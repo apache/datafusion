@@ -51,6 +51,14 @@ fn validate_sqrt_input(value: f64) -> Result<()> {
     }
 }
 
+fn validate_log_input(value: f64) -> Result<()> {
+    if value < 0.0 {
+        exec_err!("cannot take logarithm of a negative number")
+    } else {
+        Ok(())
+    }
+}
+
 // Create UDFs
 make_udf_function!(abs::AbsFunc, abs);
 make_math_unary_udf!(
@@ -163,7 +171,8 @@ make_math_unary_udf!(
     ln,
     super::ln_order,
     super::bounds::unbounded_bounds,
-    super::get_ln_doc
+    super::get_ln_doc,
+    Some(super::validate_log_input)
 );
 make_math_unary_udf!(
     Log2Func,
@@ -171,7 +180,8 @@ make_math_unary_udf!(
     log2,
     super::log2_order,
     super::bounds::unbounded_bounds,
-    super::get_log2_doc
+    super::get_log2_doc,
+    Some(super::validate_log_input)
 );
 make_math_unary_udf!(
     Log10Func,
@@ -179,7 +189,8 @@ make_math_unary_udf!(
     log10,
     super::log10_order,
     super::bounds::unbounded_bounds,
-    super::get_log10_doc
+    super::get_log10_doc,
+    Some(super::validate_log_input)
 );
 make_udf_function!(nanvl::NanvlFunc, nanvl);
 make_udf_function!(pi::PiFunc, pi);
