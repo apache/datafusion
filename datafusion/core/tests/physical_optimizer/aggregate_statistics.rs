@@ -411,6 +411,76 @@ async fn utf8_grouping_min_max_limit_fallbacks() -> Result<()> {
 }
 
 #[tokio::test]
+async fn null_min_max_topk_preserves_group_rows() -> Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().optimizer.enable_topk_aggregation = true;
+    let ctx = SessionContext::new_with_config(config);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("g", DataType::Utf8, true),
+        Field::new("x", DataType::Int64, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            Arc::new(Int64Array::from(vec![None, Some(5)])),
+        ],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+
+    let min_topk_df = ctx
+        .sql(
+            "SELECT min_x FROM (SELECT g, MIN(x) AS min_x FROM t GROUP BY g) q \
+             ORDER BY min_x ASC NULLS LAST LIMIT 20",
+        )
+        .await?;
+    let min_topk_plan = min_topk_df.clone().create_physical_plan().await?;
+    let min_topk_batches = min_topk_df.collect().await?;
+
+    let min_topk_plan_display =
+        displayable(min_topk_plan.as_ref()).indent(true).to_string();
+    assert!(
+        min_topk_plan_display.contains("lim=[20]"),
+        "Expected TopK aggregation optimization to remain enabled: {min_topk_plan_display}"
+    );
+    assert_batches_eq!(
+        &[
+            "+-------+",
+            "| min_x |",
+            "+-------+",
+            "| 5     |",
+            "|       |",
+            "+-------+"
+        ],
+        &min_topk_batches
+    );
+
+    let max_topk_batches = ctx
+        .sql(
+            "SELECT max_x FROM (SELECT g, MAX(x) AS max_x FROM t GROUP BY g) q \
+             ORDER BY max_x DESC NULLS FIRST LIMIT 20",
+        )
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(
+        &[
+            "+-------+",
+            "| max_x |",
+            "+-------+",
+            "|       |",
+            "| 5     |",
+            "+-------+"
+        ],
+        &max_topk_batches
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_count_distinct_optimization() -> Result<()> {
     struct TestCase {
         name: &'static str,

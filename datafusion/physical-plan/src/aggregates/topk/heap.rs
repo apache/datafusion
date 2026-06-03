@@ -23,14 +23,16 @@
 //! Supported value types include Arrow primitives (integers, floats, decimals, intervals)
 //! and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`) using lexicographic ordering.
 
-use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_primitive};
+use arrow::array::{
+    Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_primitive,
+};
 use arrow::array::{LargeStringBuilder, StringBuilder, StringViewBuilder};
 use arrow::array::{
     StringArray,
     cast::AsArray,
     types::{IntervalDayTime, IntervalMonthDayNano},
 };
-use arrow::buffer::ScalarBuffer;
+use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_common::exec_datafusion_err;
@@ -93,17 +95,19 @@ pub trait ArrowHeap {
 /// An implementation of `ArrowHeap` that deals with primitive values
 pub struct PrimitiveHeap<VAL: ArrowPrimitiveType>
 where
-    <VAL as ArrowPrimitiveType>::Native: Comparable,
+    <VAL as ArrowPrimitiveType>::Native: Comparable + Default,
+    Option<<VAL as ArrowPrimitiveType>::Native>: Comparable,
 {
     batch: ArrayRef,
-    heap: TopKHeap<VAL::Native>,
+    heap: TopKHeap<Option<VAL::Native>>,
     desc: bool,
     data_type: DataType,
 }
 
 impl<VAL: ArrowPrimitiveType> PrimitiveHeap<VAL>
 where
-    <VAL as ArrowPrimitiveType>::Native: Comparable,
+    <VAL as ArrowPrimitiveType>::Native: Comparable + Default,
+    Option<<VAL as ArrowPrimitiveType>::Native>: Comparable,
 {
     pub fn new(limit: usize, desc: bool, data_type: DataType) -> Self {
         let owned: ArrayRef = Arc::new(PrimitiveArray::<VAL>::builder(0).finish());
@@ -114,11 +118,21 @@ where
             data_type,
         }
     }
+
+    fn value(&self, row_idx: usize) -> Option<VAL::Native> {
+        let vals = self.batch.as_primitive::<VAL>();
+        if vals.is_null(row_idx) {
+            None
+        } else {
+            Some(vals.value(row_idx))
+        }
+    }
 }
 
 impl<VAL: ArrowPrimitiveType> ArrowHeap for PrimitiveHeap<VAL>
 where
-    <VAL as ArrowPrimitiveType>::Native: Comparable,
+    <VAL as ArrowPrimitiveType>::Native: Comparable + Default,
+    Option<<VAL as ArrowPrimitiveType>::Native>: Comparable,
 {
     fn set_batch(&mut self, vals: ArrayRef) {
         self.batch = vals;
@@ -128,10 +142,10 @@ where
         if !self.heap.is_full() {
             return false;
         }
-        let vals = self.batch.as_primitive::<VAL>();
-        let new_val = vals.value(row_idx);
+        let new_val = self.value(row_idx);
         let worst_val = self.heap.worst_val().expect("Missing root");
-        (!self.desc && new_val > *worst_val) || (self.desc && new_val < *worst_val)
+        (!self.desc && new_val.comp(worst_val) == Ordering::Greater)
+            || (self.desc && new_val.comp(worst_val) == Ordering::Less)
     }
 
     fn worst_map_idx(&self) -> usize {
@@ -139,9 +153,8 @@ where
     }
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
-        let vals = self.batch.as_primitive::<VAL>();
-        let new_val = vals.value(row_idx);
-        self.heap.append_or_replace(new_val, map_idx, map);
+        self.heap
+            .append_or_replace(self.value(row_idx), map_idx, map);
     }
 
     fn replace_if_better(
@@ -150,15 +163,37 @@ where
         row_idx: usize,
         map: &mut Vec<(usize, usize)>,
     ) {
-        let vals = self.batch.as_primitive::<VAL>();
-        let new_val = vals.value(row_idx);
-        self.heap.replace_if_better(heap_idx, new_val, map);
+        let new_val = self.value(row_idx);
+        let existing = self.heap.heap[heap_idx]
+            .as_ref()
+            .expect("Missing heap item");
+
+        match (&existing.val, &new_val) {
+            // MIN/MAX ignore null inputs, so a non-null row must replace an
+            // existing null aggregate state for the same group.
+            (None, Some(_)) if !self.desc => {
+                self.heap.heap[heap_idx]
+                    .as_mut()
+                    .expect("Missing heap item")
+                    .val = new_val;
+                self.heap.heapify_up(heap_idx, map);
+            }
+            (Some(_), None) => {}
+            _ => self.heap.replace_if_better(heap_idx, new_val, map),
+        }
     }
 
     fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
-        let nulls = None;
         let (vals, map_idxs) = self.heap.drain();
-        let arr = PrimitiveArray::<VAL>::new(ScalarBuffer::from(vals), nulls)
+        let nulls = vals.iter().any(|val| val.is_none()).then(|| {
+            NullBuffer::from(vals.iter().map(|val| val.is_some()).collect::<Vec<_>>())
+        });
+        let values = ScalarBuffer::from(
+            vals.iter()
+                .map(|val| val.unwrap_or_default())
+                .collect::<Vec<_>>(),
+        );
+        let arr = PrimitiveArray::<VAL>::new(values, nulls)
             .with_data_type(self.data_type.clone());
         (Arc::new(arr), map_idxs)
     }
@@ -273,9 +308,18 @@ impl ArrowHeap for StringHeap {
         // only allocate (`to_string()`) when a replacement is required.
         match &existing.val {
             None => {
-                // Existing is null; new value always wins
+                // MIN/MAX ignore null inputs, so a non-null row must replace an
+                // existing null aggregate state for the same group.
                 let new_val = Some(new_str.to_string());
-                self.heap.replace_if_better(heap_idx, new_val, map);
+                if self.desc {
+                    self.heap.replace_if_better(heap_idx, new_val, map);
+                } else {
+                    self.heap.heap[heap_idx]
+                        .as_mut()
+                        .expect("Missing heap item")
+                        .val = new_val;
+                    self.heap.heapify_up(heap_idx, map);
+                }
             }
             Some(existing_str) => {
                 // Compare borrowed strings first

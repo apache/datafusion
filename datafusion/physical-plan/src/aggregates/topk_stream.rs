@@ -106,8 +106,6 @@ impl GroupedTopKAggregateStream {
             );
         }
 
-        // Note: Null values in aggregate columns are filtered by the aggregation layer
-        // before reaching the heap, so the heap implementations don't need explicit null handling.
         let priority_map = PriorityMap::new(kt, vt, limit, desc)?;
 
         Ok(GroupedTopKAggregateStream {
@@ -145,14 +143,7 @@ impl GroupedTopKAggregateStream {
         self.priority_map
             .set_batch(Arc::clone(ids), Arc::clone(vals));
 
-        let has_nulls = vals.null_count() > 0;
-        if has_nulls && self.is_group_by_only() {
-            self.null_group_seen = true;
-        }
         for row_idx in 0..len {
-            if has_nulls && vals.is_null(row_idx) {
-                continue;
-            }
             self.priority_map.insert(row_idx)?;
         }
         Ok(())
