@@ -325,7 +325,8 @@ fn anchored_alternation_to_exprs(
 
             return Some(literals);
         } else if let HirKind::Literal(l) = sub.kind() {
-            if let Some(safe_literal) = str_from_literal(l).map(|s| string_scalar.to_expr(s))
+            if let Some(safe_literal) =
+                str_from_literal(l).map(|s| string_scalar.to_expr(s))
             {
                 return Some(vec![safe_literal]);
             }
