@@ -59,10 +59,7 @@ use datafusion_common::{
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
-    dml::InsertOp,
-    expr::{Alias, ScalarFunction},
-    is_null, lit,
-    utils::COUNT_STAR_EXPANSION,
+    dml::InsertOp, is_null, lit, utils::COUNT_STAR_EXPANSION,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions::math::nanvl;
@@ -2477,11 +2474,12 @@ impl DataFrame {
     }
 
     // Helper to find columns from names
-    fn find_columns(&self, names: &[String]) -> Result<Vec<FieldRef>> {
+    fn find_columns(&self, names: &[impl AsRef<str>]) -> Result<Vec<FieldRef>> {
         let schema = self.logical_plan().schema();
         names
             .iter()
             .map(|name| {
+                let name = name.as_ref();
                 schema
                     .field_with_name(None, name)
                     .cloned()
@@ -2490,8 +2488,9 @@ impl DataFrame {
             .collect()
     }
 
-    /// Fill NaN values in specified columns with a given value
-    /// If no columns are specified (empty vector), applies to all columns
+    /// Fill NaN values in specified floating-point columns with a given value
+    /// If no columns are specified (empty slice), applies to all columns
+    /// Only floating-point columns are affected; other columns are left unchanged
     /// Only fills if the value can be cast to the column's type
     ///
     /// # Arguments
@@ -2510,19 +2509,14 @@ impl DataFrame {
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
     /// // Fill NaN in only columns "a" and "c":
-    /// let df = df.fill_nan(ScalarValue::from(0.0), vec!["a".to_owned(), "c".to_owned()])?;
+    /// let df = df.fill_nan(ScalarValue::from(0.0), &["a", "c"])?;
     /// // Fill NaN across all columns:
-    /// let df = df.fill_nan(ScalarValue::from(0.0), vec![])?;
+    /// let df = df.fill_nan(ScalarValue::from(0.0), &[])?;
     /// # Ok(())
     /// # }
     /// ```
-    #[expect(clippy::needless_pass_by_value)]
-    pub fn fill_nan(
-        &self,
-        value: ScalarValue,
-        columns: Vec<String>,
-    ) -> Result<DataFrame> {
-        self.fill_columns(value, &columns, nanvl(), |field| {
+    pub fn fill_nan(&self, value: ScalarValue, columns: &[&str]) -> Result<DataFrame> {
+        self.fill_columns(value, columns, nanvl(), |field| {
             field.data_type().is_floating()
         })
     }
@@ -2531,7 +2525,7 @@ impl DataFrame {
     fn fill_columns(
         &self,
         value: ScalarValue,
-        columns: &[String],
+        columns: &[impl AsRef<str>],
         func: Arc<ScalarUDF>,
         applies: impl Fn(&FieldRef) -> bool,
     ) -> Result<DataFrame> {
@@ -2555,15 +2549,9 @@ impl DataFrame {
                 if cols.contains(field) && applies(field) {
                     // Try to cast fill value to column type. If the cast fails, fallback to the original column.
                     match value.clone().cast_to(field.data_type()) {
-                        Ok(fill_value) => Expr::Alias(Alias {
-                            expr: Box::new(Expr::ScalarFunction(ScalarFunction {
-                                func: Arc::clone(&func),
-                                args: vec![col(field.name()), lit(fill_value)],
-                            })),
-                            relation: None,
-                            name: field.name().to_string(),
-                            metadata: None,
-                        }),
+                        Ok(fill_value) => func
+                            .call(vec![col(field.name()), lit(fill_value)])
+                            .alias(field.name()),
                         Err(_) => col(field.name()),
                     }
                 } else {

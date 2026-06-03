@@ -6572,8 +6572,7 @@ async fn test_fill_nan() -> Result<()> {
     let df = create_nan_table().await?;
 
     // Fill NaNs in the float column "a" with 0.0.
-    let df_filled =
-        df.fill_nan(ScalarValue::Float64(Some(0.0)), vec!["a".to_string()])?;
+    let df_filled = df.fill_nan(ScalarValue::Float64(Some(0.0)), &["a"])?;
 
     let results = df_filled.collect().await?;
     assert_snapshot!(
@@ -6599,7 +6598,7 @@ async fn test_fill_nan_all_columns() -> Result<()> {
     // Fill NaNs across all columns. Only the float column "a" is affected;
     // the non-float column "b" is left unchanged since NaN only exists for
     // floating-point types.
-    let df_filled = df.fill_nan(ScalarValue::Float64(Some(0.0)), vec![])?;
+    let df_filled = df.fill_nan(ScalarValue::Float64(Some(0.0)), &[])?;
 
     let results = df_filled.collect().await?;
     assert_snapshot!(
@@ -6623,8 +6622,7 @@ async fn test_fill_nan_non_float_column() -> Result<()> {
 
     // Explicitly naming a non-float column is a no-op, not an error: NaN does
     // not exist for Int32, so column "b" (and the un-targeted "a") are unchanged.
-    let df_filled =
-        df.fill_nan(ScalarValue::Float64(Some(0.0)), vec!["b".to_string()])?;
+    let df_filled = df.fill_nan(ScalarValue::Float64(Some(0.0)), &["b"])?;
 
     let results = df_filled.collect().await?;
     assert_snapshot!(
@@ -6649,10 +6647,7 @@ async fn test_fill_nan_unknown_column() -> Result<()> {
 
     // A column name that is not in the schema is propagated as an error.
     let err = df
-        .fill_nan(
-            ScalarValue::Float64(Some(0.0)),
-            vec!["does_not_exist".to_string()],
-        )
+        .fill_nan(ScalarValue::Float64(Some(0.0)), &["does_not_exist"])
         .unwrap_err();
 
     assert_snapshot!(err.strip_backtrace(), @"Error during planning: Column 'does_not_exist' not found");
@@ -6667,7 +6662,7 @@ async fn test_fill_nan_casts_fill_value() -> Result<()> {
     // Int32(0) is not the column's type (Float64) but can be cast to it, so the
     // NaN is replaced with 0.0. Exercises the cross-type cast path — the other
     // positive tests pass a Float64 value, which skips the actual cast.
-    let df_filled = df.fill_nan(ScalarValue::Int32(Some(0)), vec!["a".to_string()])?;
+    let df_filled = df.fill_nan(ScalarValue::Int32(Some(0)), &["a"])?;
 
     let results = df_filled.collect().await?;
     assert_snapshot!(
@@ -6692,10 +6687,7 @@ async fn test_fill_nan_uncastable_value() -> Result<()> {
 
     // The float column "a" is targeted, but "abc" cannot be cast to Float64, so
     // the fill is skipped and column "a" keeps its original NaN value.
-    let df_filled = df.fill_nan(
-        ScalarValue::Utf8(Some("abc".to_string())),
-        vec!["a".to_string()],
-    )?;
+    let df_filled = df.fill_nan(ScalarValue::Utf8(Some("abc".to_string())), &["a"])?;
 
     let results = df_filled.collect().await?;
     assert_snapshot!(
