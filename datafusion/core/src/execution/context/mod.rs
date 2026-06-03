@@ -17,6 +17,7 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
+use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -67,10 +68,10 @@ use datafusion_catalog::{
 use datafusion_common::config::{ConfigField, ConfigOptions};
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
-    DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
+    DFSchema, DataFusionError, ParamValues, SchemaError, SchemaReference, TableReference,
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    plan_datafusion_err, plan_err, schema_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
 };
 pub use datafusion_execution::TaskContext;
@@ -887,6 +888,7 @@ impl SessionContext {
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
+                Self::ensure_unique_column_names(input.schema())?;
                 self.deregister_table(name.clone())?;
                 let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
@@ -906,6 +908,7 @@ impl SessionContext {
                 exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
             }
             (_, _, Err(_)) => {
+                Self::ensure_unique_column_names(input.schema())?;
                 let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
 
@@ -951,20 +954,37 @@ impl SessionContext {
 
         match (or_replace, view) {
             (true, Ok(_)) => {
-                self.deregister_table(name.clone())?;
                 let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
+                Self::ensure_unique_column_names(input.schema())?;
+                self.deregister_table(name.clone())?;
                 let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
                 let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
+                Self::ensure_unique_column_names(input.schema())?;
                 let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (false, Ok(_)) => exec_err!("Table '{name}' already exists"),
         }
+    }
+
+    fn ensure_unique_column_names(schema: &DFSchema) -> Result<()> {
+        // DFSchema name checks allow duplicate unqualified names as long as their
+        // qualifiers differ. DDL persistence drops qualifiers, so this helper must
+        // enforce uniqueness on the final unqualified names instead.
+        let mut seen = HashSet::with_capacity(schema.fields().len());
+        for field in schema.fields() {
+            if !seen.insert(field.name().as_str()) {
+                return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                    name: field.name().to_string(),
+                });
+            }
+        }
+        Ok(())
     }
 
     async fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {
@@ -1477,6 +1497,9 @@ impl SessionContext {
             RegisterFunction::Window(f) => {
                 self.state.write().register_udwf(f)?;
             }
+            RegisterFunction::HigherOrder(f) => {
+                self.state.write().register_higher_order_function(f)?;
+            }
             RegisterFunction::Table(name, f) => self.register_udtf(&name, f),
         };
 
@@ -1491,6 +1514,11 @@ impl SessionContext {
         dropped |= self.state.write().deregister_udaf(&stmt.name)?.is_some();
         dropped |= self.state.write().deregister_udwf(&stmt.name)?.is_some();
         dropped |= self.state.write().deregister_udtf(&stmt.name)?.is_some();
+        dropped |= self
+            .state
+            .write()
+            .deregister_higher_order_function(&stmt.name)?
+            .is_some();
 
         // DROP FUNCTION IF EXISTS drops the specified function only if that
         // function exists and in this way, it avoids error. While the DROP FUNCTION
@@ -1590,6 +1618,20 @@ impl SessionContext {
         state.register_udf(Arc::new(f)).ok();
     }
 
+    /// Registers a higher-order function within this context.
+    ///
+    /// Note in SQL queries, function names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_HIGHER_ORDER_FUNC(x)...` will look for a function named `"my_higher_order_func"`
+    /// - `SELECT "my_HIGHER_ORDER_FUNC"(x)` will look for a function named `"my_HIGHER_ORDER_FUNC"`
+    ///
+    /// Any functions registered with the function name or its aliases will be overwritten with this new function
+    pub fn register_higher_order_function(&self, f: Arc<HigherOrderUDF>) {
+        let mut state = self.state.write();
+        state.register_higher_order_function(f).ok();
+    }
+
     /// Registers an aggregate UDF within this context.
     ///
     /// Note in SQL queries, aggregate names are looked up using
@@ -1627,6 +1669,14 @@ impl SessionContext {
     /// Deregisters a UDF within this context.
     pub fn deregister_udf(&self, name: &str) {
         self.state.write().deregister_udf(name).ok();
+    }
+
+    /// Deregisters a higher-order function within this context.
+    pub fn deregister_higher_order_function(&self, name: &str) {
+        self.state
+            .write()
+            .deregister_higher_order_function(name)
+            .ok();
     }
 
     /// Deregisters a UDAF within this context.
@@ -2014,7 +2064,7 @@ impl FunctionRegistry for SessionContext {
         self.state.read().udf(name)
     }
 
-    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+    fn higher_order_function(&self, name: &str) -> Result<Arc<HigherOrderUDF>> {
         self.state.read().higher_order_function(name)
     }
 
@@ -2032,8 +2082,8 @@ impl FunctionRegistry for SessionContext {
 
     fn register_higher_order_function(
         &mut self,
-        function: Arc<dyn HigherOrderUDF>,
-    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        function: Arc<HigherOrderUDF>,
+    ) -> Result<Option<Arc<HigherOrderUDF>>> {
         self.state.write().register_higher_order_function(function)
     }
 
@@ -2106,7 +2156,7 @@ impl From<SessionContext> for SessionStateBuilder {
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
-pub trait QueryPlanner: Debug {
+pub trait QueryPlanner: Any + Debug {
     /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
@@ -2171,6 +2221,8 @@ pub enum RegisterFunction {
     Aggregate(Arc<AggregateUDF>),
     /// Window user defined function
     Window(Arc<WindowUDF>),
+    /// Higher-order user defined function
+    HigherOrder(Arc<HigherOrderUDF>),
     /// Table user defined function
     Table(String, Arc<dyn TableFunctionImpl>),
 }

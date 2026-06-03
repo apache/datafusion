@@ -72,7 +72,6 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
@@ -1251,30 +1250,6 @@ impl ExecutionPlan for HashJoinExec {
         vec![&self.left, &self.right]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to join key expressions from both sides
-        let mut tnr = TreeNodeRecursion::Continue;
-        for (left, right) in &self.on {
-            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
-            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
-        }
-
-        // Apply to join filter expression if present
-        if let Some(filter) = &self.filter {
-            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
-        }
-
-        // Apply to dynamic filter expression if present
-        if let Some(df) = &self.dynamic_filter {
-            tnr = tnr.visit_sibling(|| f(df.filter.as_ref()))?;
-        }
-
-        Ok(tnr)
-    }
-
     /// Creates a new HashJoinExec with different children while preserving configuration.
     ///
     /// This method is called during query optimization when the optimizer creates new
@@ -1660,8 +1635,14 @@ impl ExecutionPlan for HashJoinExec {
             ChildFilterDescription::all_unsupported(&parent_filters)
         };
 
-        // Add dynamic filters in Post phase if enabled
+        // Add dynamic filters in Post phase if enabled. Skip when this join
+        // already carries a dynamic filter from a previous pass — the shared
+        // `Arc<DynamicFilterPhysicalExpr>` is still wired into the probe-side
+        // scan's predicate, and re-creating it would AND a fresh duplicate
+        // onto every Post-phase invocation (apache/datafusion-ballista#1359
+        // surfaces this in AQE replan loops).
         if phase == FilterPushdownPhase::Post
+            && self.dynamic_filter.is_none()
             && self.allow_join_dynamic_filter_pushdown(config)
         {
             // Add actual dynamic filter to right side (probe side)

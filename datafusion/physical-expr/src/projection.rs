@@ -661,7 +661,7 @@ impl ProjectionExprs {
         for proj_expr in self.exprs.iter() {
             let expr = &proj_expr.expr;
             let col_stats = if let Some(col) = expr.downcast_ref::<Column>() {
-                std::mem::take(&mut stats.column_statistics[col.index()])
+                stats.column_statistics[col.index()].clone()
             } else if let Some(literal) = expr.downcast_ref::<Literal>() {
                 // Handle literal expressions (constants) by calculating proper statistics
                 let data_type = expr.data_type(output_schema)?;
@@ -963,8 +963,6 @@ pub fn update_expr(
                 return Ok(Transformed::no(expr));
             };
             if unproject {
-                state = RewriteState::RewrittenValid;
-                // Update the index of `column`:
                 let projected_expr = projected_exprs.get(column.index()).ok_or_else(|| {
                     internal_datafusion_err!(
                         "Column index {} out of bounds for projected expressions of length {}",
@@ -972,6 +970,17 @@ pub fn update_expr(
                         projected_exprs.len()
                     )
                 })?;
+                // Skip rebuilding the parent if substituting with an equal
+                // Column (e.g. pass-through `c0@0` -> `c0@0` during chained
+                // projection collapse). Without this, every CASE/BinaryExpr
+                // containing such a Column is reconstructed unnecessarily.
+                if let Some(projected_col) =
+                    projected_expr.expr.downcast_ref::<Column>()
+                    && projected_col == column
+                {
+                    return Ok(Transformed::no(expr));
+                }
+                state = RewriteState::RewrittenValid;
                 Ok(Transformed::yes(Arc::clone(&projected_expr.expr)))
             } else {
                 // default to invalid, in case we can't find the relevant column
@@ -2854,6 +2863,56 @@ pub(crate) mod tests {
             Precision::Exact(ScalarValue::Int32(Some(21)))
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_duplicate_column() -> Result<()> {
+        let input_stats = get_stats();
+        let col0 = input_stats.column_statistics[0].clone();
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "b"),
+        ]);
+
+        let output_schema = projection.project_schema(&get_schema())?;
+        let output_stats = projection.project_statistics(input_stats, &output_schema)?;
+
+        assert_eq!(output_stats.column_statistics, vec![col0.clone(), col0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_column_and_cast() -> Result<()> {
+        let input_stats = get_stats();
+        let col0 = input_stats.column_statistics[0].clone();
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "num"),
+            ProjectionExpr::new(
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("col0", 0)),
+                    DataType::Int32,
+                    None,
+                )),
+                "casted",
+            ),
+        ]);
+
+        let output_schema = projection.project_schema(&get_schema())?;
+        let output_stats = projection.project_statistics(input_stats, &output_schema)?;
+
+        assert_eq!(output_stats.column_statistics[0], col0);
+        assert_eq!(
+            output_stats.column_statistics[1],
+            ColumnStatistics {
+                min_value: Precision::Exact(ScalarValue::Int32(Some(-4))),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(21))),
+                distinct_count: Precision::Exact(5),
+                null_count: Precision::Exact(0),
+                sum_value: Precision::Absent,
+                byte_size: Precision::Absent,
+            }
+        );
         Ok(())
     }
 

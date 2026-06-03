@@ -71,6 +71,21 @@ mod tests {
         test_table_provider(true).await
     }
 
+    #[test]
+    fn test_ffi_table_provider_statistics_cross_library() -> Result<()> {
+        let module = get_module()?;
+        let (_, codec) = super::utils::ctx_and_codec();
+
+        let expected = datafusion_ffi::tests::make_test_statistics();
+
+        let ffi_provider = (module.create_table_with_statistics)(codec);
+        let foreign: Arc<dyn TableProvider> = (&ffi_provider).into();
+
+        assert_eq!(foreign.statistics().as_ref(), Some(&expected));
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_table_provider_factory() -> Result<()> {
         let table_provider_module = get_module()?;

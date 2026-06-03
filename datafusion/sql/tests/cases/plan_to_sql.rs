@@ -370,7 +370,7 @@ fn roundtrip_statement_postgres_any_array_expr() -> Result<(), DataFusionError> 
         sql: "select left from array where 1 = any(left);",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserPostgreSqlDialect {},
-        expected: @r#"SELECT "array"."left" FROM "array" WHERE CASE WHEN "array"."left" IS NULL THEN NULL WHEN (cardinality("array"."left") = 0) THEN false WHEN 1 IS NULL THEN NULL WHEN 1 = ANY("array"."left") THEN true WHEN array_position("array"."left", NULL, 1) IS NOT NULL THEN NULL ELSE false END"#,
+        expected: @r#"SELECT "array"."left" FROM "array" WHERE 1 = ANY("array"."left")"#,
     );
     Ok(())
 }
@@ -3364,6 +3364,332 @@ fn roundtrip_subquery_aggregate_with_column_alias() -> Result<(), DataFusionErro
         unparser_dialect: UnparserDefaultDialect {},
         expected: @"SELECT c.id FROM (SELECT max(j1.j1_id) FROM j1) AS c (id)",
     );
+    Ok(())
+}
+
+/// Roundtrip: aggregate over a subquery projection with limit.
+#[test]
+fn roundtrip_aggregate_over_subquery() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: r#"SELECT __agg_0 AS "min(j1_id)", __agg_1 AS "max(j1_id)" FROM (SELECT min(j1_rename) AS __agg_0, max(j1_rename) AS __agg_1 FROM (SELECT j1_id AS j1_rename FROM j1) AS bla LIMIT 20)"#,
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT __agg_0 AS "min(j1_id)", __agg_1 AS "max(j1_id)" FROM (SELECT min(bla.j1_rename) AS __agg_0, max(bla.j1_rename) AS __agg_1 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 20)"#,
+    );
+    Ok(())
+}
+
+/// Projection → Limit → Aggregate (aliases inlined into Aggregate, no
+/// intermediate Projection). Verifies the Limit is folded into the outer
+/// SELECT rather than creating a spurious derived subquery.
+#[test]
+fn test_unparse_aggregate_over_subquery_no_inner_proj() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![
+                max(col("bla.j1_rename")).alias("__agg_0"),
+                max(col("bla.j1_rename")).alias("__agg_1"),
+            ],
+        )?
+        .limit(0, Some(20))?
+        .project(vec![
+            col("__agg_0").alias("max1(j1_id)"),
+            col("__agg_1").alias("max2(j1_id)"),
+        ])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)", max(bla.j1_rename) AS "max2(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 20"#);
+    Ok(())
+}
+
+/// Projection → Aggregate (aliases inlined, no rename in outer Projection).
+/// Verifies the aggregate aliases are preserved as output column names.
+#[test]
+fn test_unparse_aggregate_no_outer_rename() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![
+                max(col("bla.j1_rename")).alias("__agg_0"),
+                max(col("bla.j1_rename")).alias("__agg_1"),
+            ],
+        )?
+        .project(vec![col("__agg_0"), col("__agg_1")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @"SELECT max(bla.j1_rename) AS __agg_0, max(bla.j1_rename) AS __agg_1 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla");
+    Ok(())
+}
+
+/// Projection → Sort → Aggregate (aliases inlined into Aggregate).
+/// Verifies the Sort is folded into the outer SELECT rather than creating
+/// a spurious derived subquery.
+#[test]
+fn test_unparse_aggregate_with_sort_no_inner_proj() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .sort(vec![col("__agg_0").sort(true, true)])?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) ASC NULLS FIRST"#);
+    Ok(())
+}
+
+/// Projection → Limit → Sort → Aggregate (aliases inlined into Aggregate).
+/// The Projection claims the Aggregate through the stacked Limit/Sort;
+/// both clauses should fold into the outer SELECT instead of wrapping
+/// the Sort in a derived subquery.
+#[test]
+fn test_unparse_aggregate_with_limit_sort_no_inner_proj() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .sort(vec![col("__agg_0").sort(true, true)])?
+        .limit(0, Some(5))?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) ASC NULLS FIRST LIMIT 5"#);
+    Ok(())
+}
+
+/// Projection → Sort → Limit → Aggregate (aliases inlined into Aggregate).
+/// The Sort sits above the Limit — the logical plan applies Limit first
+/// and Sort second, which a single `ORDER BY … LIMIT` SELECT cannot
+/// express (SQL applies the sort first). The outer Sort folds into the
+/// outer SELECT using passthrough column references, while the Limit
+/// (and the Aggregate it sits over) goes into a derived subquery.
+#[test]
+fn test_unparse_aggregate_with_sort_over_limit_no_inner_proj() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .limit(0, Some(5))?
+        .sort(vec![col("__agg_0").sort(true, true)])?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT __agg_0 AS "max1(j1_id)" FROM (SELECT max(bla.j1_rename) AS __agg_0 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 5) ORDER BY __agg_0 ASC NULLS FIRST"#);
+    Ok(())
+}
+
+/// Projection → Limit(10) → Limit(5) → Aggregate. Two stacked Limits
+/// merge via `combine_limit` (matching the optimizer's `PushDownLimit`):
+/// outer fetch=10, inner fetch=5 → effective fetch=5.
+#[test]
+fn test_unparse_aggregate_with_repeated_limits_combines() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .limit(0, Some(10))?
+        .limit(0, Some(5))?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 5"#);
+    Ok(())
+}
+
+/// Projection → Limit(skip=2, fetch=10) → Limit(skip=3, fetch=20)
+/// → Aggregate. Two stacked Limits merge via `combine_limit`: combined
+/// skip = 3+2=5, combined fetch = min(10, 20-2) = 10.
+#[test]
+fn test_unparse_aggregate_with_repeated_limits_combines_offset() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .limit(3, Some(20))?
+        .limit(2, Some(10))?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 10 OFFSET 5"#);
+    Ok(())
+}
+
+/// Projection → Sort(DESC) → Sort(ASC) → Aggregate. Two stacked Sorts
+/// fold into a single ORDER BY using the outermost (top) Sort's order;
+/// the inner Sort is reordered by the outer one and is therefore
+/// redundant.
+#[test]
+fn test_unparse_aggregate_with_repeated_sorts_keeps_outermost() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .sort(vec![col("__agg_0").sort(false, false)])?
+        .sort(vec![col("__agg_0").sort(true, true)])?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) ASC NULLS FIRST"#);
+    Ok(())
+}
+
+/// Projection → Sort(ASC) → Limit(10) → Sort(DESC) → Aggregate. The
+/// inner Sort determines which rows the Limit keeps and the outer Sort
+/// re-orders the kept rows — a single SELECT cannot express that, so
+/// the outer Sort folds into the outer SELECT (passthrough refs) and
+/// the Limit + inner Sort + Aggregate go into a derived subquery.
+#[test]
+fn test_unparse_aggregate_with_sort_limit_sort_uses_derived_subquery() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .sort(vec![col("__agg_0").sort(false, false)])?
+        .limit(0, Some(10))?
+        .sort(vec![col("__agg_0").sort(true, true)])?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT __agg_0 AS "max1(j1_id)" FROM (SELECT max(bla.j1_rename) AS __agg_0 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) DESC NULLS LAST LIMIT 10) ORDER BY __agg_0 ASC NULLS FIRST"#);
+    Ok(())
+}
+
+/// Projection -> Limit(non-literal fetch) -> Sort { fetch = 5 } -> Aggregate.
+/// The outer Limit is non-literal so it can't be combined with the inner
+/// Sort's fetch=5. The walk must stop before absorbing the Sort so its
+/// fetch survives as `LIMIT 5` in the derived subquery, while the
+/// non-literal outer Limit applies on the outer SELECT.
+#[test]
+fn test_unparse_aggregate_with_non_literal_limit_over_sort_with_fetch() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .sort_with_limit(vec![col("__agg_0").sort(true, true)], Some(5))?
+        .limit_by_expr(None, Some(cast(lit(7_i64), DataType::Int32)))?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT __agg_0 AS "max1(j1_id)" FROM (SELECT max(bla.j1_rename) AS __agg_0 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) ASC NULLS FIRST LIMIT 5) LIMIT CAST(7 AS INTEGER)"#);
     Ok(())
 }
 

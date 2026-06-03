@@ -40,12 +40,10 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{JoinType, Result, ScalarValue, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::Partitioning;
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -326,14 +324,6 @@ impl ExecutionPlan for CrossJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // CrossJoin has no join conditions or expressions
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -499,13 +489,14 @@ fn stats_cartesian_product(
     let left_row_count = left_stats.num_rows;
     let right_row_count = right_stats.num_rows;
 
-    // calculate global stats
+    // Calculate global stats
     let num_rows = left_row_count.multiply(&right_row_count);
-    // the result size is two times a*b because you have the columns of both left and right
-    let total_byte_size = left_stats
-        .total_byte_size
-        .multiply(&right_stats.total_byte_size)
-        .multiply(&Precision::Exact(2));
+
+    // Each output row includes every left and right column, so the left side is
+    // repeated once per right row and the right side once per left row.
+    let left_byte_size = left_stats.total_byte_size.multiply(&right_row_count);
+    let right_byte_size = right_stats.total_byte_size.multiply(&left_row_count);
+    let total_byte_size = left_byte_size.add(&right_byte_size);
 
     let left_col_stats = left_stats.column_statistics;
     let right_col_stats = right_stats.column_statistics;
@@ -831,7 +822,9 @@ mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(left_row_count * right_row_count),
-            total_byte_size: Precision::Exact(2 * left_bytes * right_bytes),
+            total_byte_size: Precision::Exact(
+                left_bytes * right_row_count + right_bytes * left_row_count,
+            ),
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
