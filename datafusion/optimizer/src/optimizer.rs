@@ -28,7 +28,7 @@ use log::{debug, warn};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, DataFusionError, HashSet, Result, internal_err};
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::logical_plan::LogicalPlan;
@@ -456,9 +456,16 @@ fn map_children_and_subqueries_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
 ) -> Result<bool> {
     let mut changed = map_children_mut(plan, &mut f)?;
 
-    // Subquery descent. `map_subqueries` early-returns on nodes that
-    // don't reference any subquery, so the only allocation cost is at
-    // the (rare) nodes that actually carry `IN (SELECT ...)` etc.
+    // Per-node fast path: skip the `mem::take` + `map_subqueries` roundtrip
+    // entirely when this node carries no subquery expressions. `map_subqueries`
+    // has the same check internally, but going through it still pays for the
+    // take/put and a `Transformed::no(self)` wrapper per node. Hot rules
+    // (every `ApplyOrder::None` rule that drives its own recursion) call this
+    // helper at every node, so eliminating the per-node roundtrip matters.
+    if !plan.has_subquery_expressions() {
+        return Ok(changed);
+    }
+
     let owned = std::mem::take(plan);
     let result = owned.map_subqueries(|mut sub| {
         let sq_changed = f(&mut sub)?;
@@ -474,26 +481,57 @@ fn map_children_and_subqueries_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
     Ok(changed)
 }
 
+/// Returns true if any node in the plan tree (including subquery plans)
+/// references a subquery in its expressions.
+///
+/// Used as a one-shot whole-plan gate at the optimizer driver level so that
+/// rules with [`ApplyOrder::TopDown`]/[`ApplyOrder::BottomUp`] can skip the
+/// per-node `map_subqueries` descent entirely when the plan is
+/// subquery-free. The check itself walks the plan once (O(plan size)), but
+/// it pays for itself once the rule visits more than a handful of nodes
+/// — and most plans run hundreds of node visits per rule × per pass.
+fn plan_has_subqueries(plan: &LogicalPlan) -> bool {
+    let mut found = false;
+    let _ = plan.apply(|node| {
+        if node.has_subquery_expressions() {
+            found = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    });
+    found
+}
+
 /// Rewrites a plan tree in place using `Arc::make_mut` for
 /// copy-on-write semantics on `Arc<LogicalPlan>` children.
 ///
 /// This avoids the `Arc::unwrap_or_clone` + `Arc::new` cycle that the
-/// ownership-based `TreeNode::rewrite` performs at every child node, and
-/// — unlike the previous iteration of this helper — also descends into
-/// subquery plans referenced from expressions, so the driver no longer
-/// has to gate on `plan_has_subqueries`.
+/// ownership-based `TreeNode`-style rewrite performs at every child node.
+///
+/// # Subquery handling
+///
+/// `has_subqueries` is the caller-computed result of [`plan_has_subqueries`]
+/// for the original plan, hoisted once per rule application. When `false`
+/// the recursion uses [`map_children_mut`] directly and skips all subquery
+/// machinery — that's the hot path for join-heavy / subquery-free plans
+/// where the per-node `has_subquery_expressions` walk inside
+/// [`map_children_and_subqueries_mut`] would otherwise dominate the
+/// optimizer's per-rule cost.
 ///
 /// # Error semantics
 ///
-/// On `Err`, `*plan` is left in an **unspecified** state and must not be used.
-/// Note this is different than consuming APIs such as [`TreeNode::rewrite`]
-/// where the original plan is freed and no longer available on error
+/// On `Err`, `*plan` is left in an **unspecified** state and must not be
+/// used. Note this is different than consuming APIs such as
+/// `TreeNode::rewrite` where the original plan is freed and no longer
+/// available on error.
 #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn rewrite_plan_in_place(
     plan: &mut LogicalPlan,
     apply_order: ApplyOrder,
     rule: &dyn OptimizerRule,
     config: &dyn OptimizerConfig,
+    has_subqueries: bool,
 ) -> Result<bool> {
     // f_down phase
     let mut changed = false;
@@ -512,11 +550,20 @@ fn rewrite_plan_in_place(
         }
     }
 
-    // Recurse into direct children AND subquery plans using Arc::make_mut
-    // (zero-cost when refcount == 1) on the in-place path.
-    changed |= map_children_and_subqueries_mut(plan, |child| {
-        rewrite_plan_in_place(child, apply_order, rule, config)
-    })?;
+    // Recurse into direct children using Arc::make_mut (zero-cost when
+    // refcount == 1). When the plan has no subqueries anywhere, skip the
+    // subquery-aware helper — that path's per-node check is the main
+    // source of regression on subquery-free workloads (join chains, wide
+    // filters / aggregates).
+    changed |= if has_subqueries {
+        map_children_and_subqueries_mut(plan, |child| {
+            rewrite_plan_in_place(child, apply_order, rule, config, true)
+        })?
+    } else {
+        map_children_mut(plan, |child| {
+            rewrite_plan_in_place(child, apply_order, rule, config, false)
+        })?
+    };
 
     // f_up phase
     if apply_order == ApplyOrder::BottomUp {
@@ -602,30 +649,33 @@ impl Optimizer {
                 let result = match rule.apply_order() {
                     // optimizer handles recursion: use in-place rewriting
                     // with `Arc::make_mut` for zero-cost CoW on children.
-                    // `rewrite_plan_in_place` now handles subquery descent
-                    // via `map_children_and_subqueries_mut`, so the
-                    // previous `plan_has_subqueries` gate is gone — the
-                    // per-node `has_subquery_expressions` fast-path
-                    // inside `LogicalPlan::map_subqueries` keeps the cost
-                    // free on nodes without subquery references.
+                    // Subquery descent is gated by a one-shot whole-plan
+                    // check so subquery-free plans (the common case for
+                    // join-heavy workloads) don't pay the per-node
+                    // `has_subquery_expressions` walk on every rule
+                    // iteration.
                     //
                     // On error `new_plan` is left in an unspecified
                     // state (see `rewrite_plan_in_place`); the result
                     // handling below discards it, restoring `prev_plan`
                     // when `skip_failed_rules` is set or propagating
                     // the error otherwise.
-                    Some(apply_order) => rewrite_plan_in_place(
-                        &mut new_plan,
-                        apply_order,
-                        rule.as_ref(),
-                        config,
-                    )
-                    .map(|transformed| {
-                        Transformed::new_transformed(
-                            std::mem::take(&mut new_plan),
-                            transformed,
+                    Some(apply_order) => {
+                        let has_subqueries = plan_has_subqueries(&new_plan);
+                        rewrite_plan_in_place(
+                            &mut new_plan,
+                            apply_order,
+                            rule.as_ref(),
+                            config,
+                            has_subqueries,
                         )
-                    }),
+                        .map(|transformed| {
+                            Transformed::new_transformed(
+                                std::mem::take(&mut new_plan),
+                                transformed,
+                            )
+                        })
+                    }
                     // rule handles recursion itself
                     None => rule.rewrite(new_plan, config),
                 }

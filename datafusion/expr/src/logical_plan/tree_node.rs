@@ -858,7 +858,7 @@ impl LogicalPlan {
 
     /// Returns true if any expression in this node contains a subquery
     /// (Exists, InSubquery, SetComparison, or ScalarSubquery).
-    fn has_subquery_expressions(&self) -> bool {
+    pub fn has_subquery_expressions(&self) -> bool {
         let mut found = false;
         let _ = self.apply_expressions(|expr| {
             if found {
