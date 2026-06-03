@@ -229,6 +229,20 @@ SELECT * FROM test_regex_utf8view WHERE s ~ '^(foo|Bazzz)$'
 foo
 Bazzz
 
+# Case-insensitive anchored match over Utf8View: must be simplified to ILIKE
+# (not a case-sensitive Eq) and must keep operand types as Utf8View.
+query T
+SELECT * FROM test_regex_utf8view WHERE s ~* '^bazzz$'
+----
+Bazzz
+
+# Case-insensitive anchored alternation over Utf8View
+query T rowsort
+SELECT * FROM test_regex_utf8view WHERE s ~* '^(foo|bazzz)$'
+----
+Bazzz
+foo
+
 statement ok
 DROP TABLE test_regex_utf8view;
 
