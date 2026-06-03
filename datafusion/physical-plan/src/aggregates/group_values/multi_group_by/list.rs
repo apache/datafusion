@@ -36,7 +36,7 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::FieldRef;
 use datafusion_common::{Result, internal_datafusion_err};
-use std::mem::size_of_val;
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use std::sync::Arc;
 
 /// A [`GroupColumn`] for `List<T>` (`O = i32`) and `LargeList<T>` (`O = i64`).
@@ -169,7 +169,7 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self.offsets.as_slice())
+        self.offsets.allocated_size()
             + self.outer_nulls.allocated_size()
             + self.child.size()
     }

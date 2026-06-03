@@ -23,6 +23,7 @@ use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, StructArray};
 use arrow::datatypes::Fields;
 use datafusion_common::Result;
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use std::sync::Arc;
 
 /// A [`GroupColumn`] for `Struct<...>` whose children are themselves
@@ -122,6 +123,7 @@ impl GroupColumn for StructGroupValueBuilder {
 
     fn size(&self) -> usize {
         self.outer_nulls.allocated_size()
+            + self.children.allocated_size()
             + self.children.iter().map(|c| c.size()).sum::<usize>()
     }
 
