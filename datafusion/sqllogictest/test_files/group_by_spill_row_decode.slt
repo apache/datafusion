@@ -16,11 +16,18 @@
 # under the License.
 
 # `GroupedHashAggregateStream` spill path: `GroupValuesRows::emit` →
-# `RowConverter::convert_rows` → `decode_column` allocates per-column
-# buffers without `MemoryReservation::try_grow`.
+# `RowConverter::convert_rows` → `decode_column` → `decode_string` /
+# `decode_binary` allocates per-column buffers without
+# `MemoryReservation::try_grow`.
 #
-# A `List<Utf8>` key forces the row-encoded `GroupValuesRows` impl
-# (single-column `Utf8` routes through `GroupValuesBytes` instead).
+# Plain single-column `Utf8` routes to `GroupValuesBytes`, not
+# `GroupValuesRows`. Pairing the wide Utf8 key with a small `List<Int>`
+# column ("schema poisoner") makes the schema fall outside
+# `multi_group_by::supported_type`, forcing `GroupValuesRows`. The wide
+# Utf8 column carries the data; its decode hits `decode_string` →
+# `decode_binary` — the exact path the production OOM at one
+# DataFusion-based log analytics deployment took on 2026-05-20.
+#
 # Pool=1M is in the goldilocks zone: above DF's tracked-alloc floor
 # (agg enters spill), below the framework's slack ceiling on the
 # decode buffer.
@@ -31,8 +38,9 @@ statement ok
 SET datafusion.execution.target_partitions = 1
 
 statement ok
-CREATE TABLE list_keys AS
-SELECT make_array(cast(v AS varchar) || repeat('x', 200)) AS k
+CREATE TABLE utf8_keys AS
+SELECT cast(v AS varchar) || repeat('x', 200) AS k,
+       make_array(1) AS _force_rows
 FROM generate_series(1, 50000) AS t(v)
 
 statement ok
@@ -40,9 +48,9 @@ SET datafusion.runtime.memory_limit = '1M'
 
 query I nosort
 SELECT count(*) FROM (
-  SELECT k, count(*) AS c
-  FROM list_keys
-  GROUP BY k
+  SELECT k, _force_rows, count(*) AS c
+  FROM utf8_keys
+  GROUP BY k, _force_rows
 )
 ----
 50000
@@ -51,7 +59,7 @@ statement ok
 RESET datafusion.runtime.memory_limit
 
 statement ok
-DROP TABLE list_keys
+DROP TABLE utf8_keys
 
 statement ok
 SET datafusion.execution.target_partitions = 4

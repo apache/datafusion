@@ -40,7 +40,7 @@ use std::sync::Arc;
 /// untracked allocation — by definition, since DF's pool didn't see it.
 ///
 /// 800% high, but that's what it takes to pass the SLT suite right now. Goal should be ~10%
-const HEADROOM_FACTOR: f64 = 8.0;
+const HEADROOM_FACTOR: f64 = 5.0;
 
 pub struct AccountingMemoryPool {
     inner: Arc<dyn MemoryPool>,
