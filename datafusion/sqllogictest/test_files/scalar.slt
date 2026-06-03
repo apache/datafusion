@@ -644,28 +644,30 @@ select log(2, 2.0/3) a, log(10, 2.0/3) b;
 
 # log scalar ops with zero edgecases
 # please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
-query RR rowsort
-select log(0) a, log(1, 64) b;
-----
--Infinity Infinity
+query error cannot take logarithm of zero
+select log(0) a;
 
-# log with columns #1
+# This behavior is consistent with duckdb
+query error division by zero in based logarithm
+select log(1, 64) a;
+
+query error cannot take logarithm with base zero
+select log(0, power(0, 2)) a;
+
+# log with columns #1 (excluding a=1 where base=1 would error)
 query RRR rowsort
-select log(a, 64) a, log(b), log(10, b) from unsigned_integers;
+select log(a, 64) a, log(b), log(10, b) from unsigned_integers where a != 1;
 ----
 3 NULL NULL
 3.785578521429 4 4
 6 3 3
-Infinity 2 2
 
-# log with columns #2
+# log with columns #2 (excluding a where base <= 0 or base = 1 would error)
 query RRR rowsort
-select log(a, 64) a, log(b), log(10, b) from signed_integers;
+select log(a, 64) a, log(b), log(10, b) from signed_integers where a > 0 and a != 1;
 ----
 3 NULL NULL
 6 NaN NaN
-NaN 2 2
-NaN 4 4
 
 # log overloaded base 10 float64 and float32 casting scalar
 query RR rowsort

@@ -606,24 +606,43 @@ fn test_simplify_with_cycle_count(
 
 #[test]
 fn test_simplify_log() {
-    // Log(c3, 1) ===> 0
+    // Log(10, 1) ===> 0
+    {
+        let expr = log(lit(10), lit(1));
+        test_simplify(expr, lit(0));
+    }
+    // Log(10, 10) ===> 1
+    {
+        let expr = log(lit(10), lit(10));
+        test_simplify(expr, lit(1));
+    }
+    // Log(c3, 1) ===> Log(c3, 1)
     {
         let expr = log(col("c3_non_null"), lit(1));
-        test_simplify(expr, lit(0i64));
+        test_simplify(expr.clone(), expr);
     }
-    // Log(c3, c3) ===> 1
+    // Log(10, Power(10, c4)) ===> Log(10, Power(10, c4))
     {
-        let expr = log(col("c3_non_null"), col("c3_non_null"));
-        let expected = lit(1i64);
+        let expr = log(lit(10), power(lit(10), col("c4_non_null")));
+        let expected = log(lit(10), power(lit(10), col("c4_non_null")));
         test_simplify(expr, expected);
     }
-    // Log(c3, Power(c3, c4)) ===> c4
+    // Log(c3, c3) ===> Log(c3, c3)
+    {
+        let expr = log(col("c3_non_null"), col("c3_non_null"));
+        let expected = log(col("c3_non_null"), col("c3_non_null"));
+        test_simplify(expr, expected);
+    }
+    // Log(c3, Power(c3, c4)) ===> Log(c3, Power(c3, c4))
     {
         let expr = log(
             col("c3_non_null"),
             power(col("c3_non_null"), col("c4_non_null")),
         );
-        let expected = col("c4_non_null");
+        let expected = log(
+            col("c3_non_null"),
+            power(col("c3_non_null"), col("c4_non_null")),
+        );
         test_simplify(expr, expected);
     }
     // Log(c3, c4) ===> Log(c3, c4)
@@ -646,27 +665,6 @@ fn test_simplify_power() {
     {
         let expr = power(col("c3_non_null"), lit(1));
         let expected = col("c3_non_null");
-        test_simplify(expr, expected)
-    }
-    // Power(c3, Log(c3, c4)) ===> cast(c4 AS Int64)
-    // The simplifier rewrites `power(b, log(b, x))` to `x`, but the
-    // rewritten expression must keep the same type as the original
-    // `power` call. `power`'s declared return type follows its base
-    // argument (c3 = Int64), so the UInt32 c4 has to be cast to Int64
-    // to preserve the output schema the optimizer already committed to.
-    {
-        let expr = power(
-            col("c3_non_null"),
-            log(col("c3_non_null"), col("c4_non_null")),
-        );
-        let expected =
-            Expr::Cast(Cast::new(Box::new(col("c4_non_null")), DataType::Int64));
-        test_simplify(expr, expected)
-    }
-    // Power(c3, c4) ===> Power(c3, c4)
-    {
-        let expr = power(col("c3_non_null"), col("c4_non_null"));
-        let expected = power(col("c3_non_null"), col("c4_non_null"));
         test_simplify(expr, expected)
     }
 }

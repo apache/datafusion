@@ -965,3 +965,78 @@ SELECT gcd(column1, 0) FROM (VALUES (7), (-3), (0));
 7
 3
 0
+
+# ── log: zero value errors ──
+# log(0, 0): base is zero → error (base validation fires before value validation)
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm with base zero
+SELECT log(0, 0);
+
+# log(0): implicit base 10, value is zero → error
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(0);
+
+# log(2, 0): value is zero → error
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(2, 0);
+
+# ── log: safe simplifications ──
+# log(10, 1) => 0, log(10, 10) => 1, log(10) => 1, log(10, power(10, 2)) => 2
+query BBBB
+SELECT log(10, 1) = 0, log(10, 10) = 1, log(10) = 1, log(10, power(10, 2)) = 2;
+----
+true true true true
+
+# log(10, power(10, col)) => col, for literal-safe bases
+query B rowsort
+SELECT log(10, power(10, column1)) = column1
+FROM (VALUES (2), (3)) AS t(column1);
+----
+true
+true
+
+# ── log: power underflow at runtime ──
+# log(10, power(10, -400)): power underflows to zero → error at runtime
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(10.0, power(10.0, column1))
+FROM (VALUES (-400.0), (2.0)) AS t(column1);
+
+# ── log: base 1 errors ──
+# log(1, 1): base 1 is invalid (division by zero)
+query error DataFusion error: Arrow error: Compute error: division by zero in based logarithm
+SELECT log(1, 1);
+
+# log(1, power(1, 2)): base 1 with literal power → error at runtime
+query error DataFusion error: Arrow error: Compute error: division by zero in based logarithm
+SELECT log(1, power(1, 2));
+
+# log(1, power(1, col)): base 1 with column power → error at runtime
+query error DataFusion error: Arrow error: Compute error: division by zero in based logarithm
+SELECT log(1, power(1, column1))
+FROM (VALUES (2), (3)) AS t(column1);
+
+# ── log: negative base errors ──
+# log(-2, 1): negative base is invalid
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm with a negative base
+SELECT log(-2, 1);
+
+# ── log: zero base errors ──
+# log(0, 10): decimal/int base is zero → error
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm with base zero
+SELECT log(0, 10);
+
+# log(0, 10.0): float base is zero → error
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm with base zero
+SELECT log(0, 10.0);
+
+# ── log: runtime column validation (not simplified away) ──
+# log(col, power(col, 2)): must NOT simplify to `2` when col may be zero at runtime
+# When col=0.0, base is 0 → "with base zero" error fires before value check
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm with base zero
+SELECT log(column1, power(column1, 2))
+FROM (VALUES (0.0), (2.0)) AS t(column1);
+
+# log(col, col): must NOT simplify to `1` when col may be zero at runtime
+# When col=0.0, base is 0 → "with base zero" error fires before value check
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm with base zero
+SELECT log(column1, column1)
+FROM (VALUES (0.0), (2.0)) AS t(column1);
