@@ -430,13 +430,14 @@ fn stats_cartesian_product(
     let left_row_count = left_stats.num_rows;
     let right_row_count = right_stats.num_rows;
 
-    // calculate global stats
+    // Calculate global stats
     let num_rows = left_row_count.multiply(&right_row_count);
-    // the result size is two times a*b because you have the columns of both left and right
-    let total_byte_size = left_stats
-        .total_byte_size
-        .multiply(&right_stats.total_byte_size)
-        .multiply(&Precision::Exact(2));
+
+    // Each output row includes every left and right column, so the left side is
+    // repeated once per right row and the right side once per left row.
+    let left_byte_size = left_stats.total_byte_size.multiply(&right_row_count);
+    let right_byte_size = right_stats.total_byte_size.multiply(&left_row_count);
+    let total_byte_size = left_byte_size.add(&right_byte_size);
 
     let left_col_stats = left_stats.column_statistics;
     let right_col_stats = right_stats.column_statistics;
@@ -494,7 +495,7 @@ fn stats_cartesian_product(
     }
 }
 
-/// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
+/// A stream that issues [RecordBatch]es as they arrive from the right of the join.
 struct CrossJoinStream<T> {
     /// Input schema
     schema: Arc<Schema>,
@@ -755,7 +756,9 @@ mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(left_row_count * right_row_count),
-            total_byte_size: Precision::Exact(2 * left_bytes * right_bytes),
+            total_byte_size: Precision::Exact(
+                left_bytes * right_row_count + right_bytes * left_row_count,
+            ),
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),

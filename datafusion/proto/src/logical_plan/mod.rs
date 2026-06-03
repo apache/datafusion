@@ -874,12 +874,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .as_ref()
                     .map(explain_analyze_categories_from_proto)
                     .transpose()?;
+                let pb_format = protobuf::ExplainFormat::try_from(analyze.format)
+                    .map_err(|_| {
+                        proto_error(format!(
+                            "Received an AnalyzeNode message with unknown ExplainFormat {}",
+                            analyze.format
+                        ))
+                    })?;
+                let analyze_format = match pb_format {
+                    protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
+                    protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
+                    protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
+                    protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
+                };
                 let explain_option =
                     datafusion_expr::logical_plan::ExplainOption::default()
                         .with_verbose(analyze.verbose)
                         .with_analyze(true)
                         .with_analyze_level(analyze_level)
-                        .with_analyze_categories(analyze_categories);
+                        .with_analyze_categories(analyze_categories)
+                        .with_format(analyze_format);
                 LogicalPlanBuilder::from(input)
                     .explain_option_format(explain_option)?
                     .build()
@@ -1179,12 +1193,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
 
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                    name: recursive_query_node.name.clone(),
-                    static_term: Arc::new(static_term),
-                    recursive_term: Arc::new(recursive_term),
-                    is_distinct: recursive_query_node.is_distinct,
-                }))
+                // The output schema is derived state, so decoding goes through
+                // the constructor after restoring the child terms.
+                RecursiveQuery::try_new(
+                    recursive_query_node.name.clone(),
+                    Arc::new(static_term),
+                    Arc::new(recursive_term),
+                    recursive_query_node.is_distinct,
+                )
+                .map(LogicalPlan::RecursiveQuery)
             }
             LogicalPlanType::CteWorkTableScan(cte_work_table_scan_node) => {
                 let CteWorkTableScanNode { name, schema } = cte_work_table_scan_node;
@@ -1878,6 +1895,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 .analyze_categories
                                 .as_ref()
                                 .map(explain_analyze_categories_to_proto),
+                            format: match &a.format {
+                                ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
+                                ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
+                                ExplainFormat::PostgresJSON => {
+                                    protobuf::ExplainFormat::Pgjson
+                                }
+                                ExplainFormat::Graphviz => {
+                                    protobuf::ExplainFormat::Graphviz
+                                }
+                            } as i32,
                         },
                     ))),
                 })

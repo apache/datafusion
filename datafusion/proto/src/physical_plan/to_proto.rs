@@ -532,6 +532,11 @@ impl TryFromProto<&PartitionedFile> for protobuf::PartitionedFile {
             ))
         })? as u64;
         Ok(protobuf::PartitionedFile {
+            arrow_schema: pf
+                .arrow_schema
+                .as_ref()
+                .map(|s| s.as_ref().try_into())
+                .transpose()?,
             path: pf.object_meta.location.as_ref().to_owned(),
             size: pf.object_meta.size,
             last_modified_ns,

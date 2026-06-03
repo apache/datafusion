@@ -192,12 +192,13 @@ impl LogicalPlanBuilder {
         // Ensure that the recursive term has the same field types as the static term
         let coerced_recursive_term =
             coerce_plan_expr_for_schema(recursive_term, self.plan.schema())?;
-        Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
+        let recursive_query = RecursiveQuery::try_new(
             name,
-            static_term: self.plan,
-            recursive_term: Arc::new(coerced_recursive_term),
+            self.plan,
+            Arc::new(coerced_recursive_term),
             is_distinct,
-        })))
+        )?;
+        Ok(Self::from(LogicalPlan::RecursiveQuery(recursive_query)))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
@@ -1335,6 +1336,7 @@ impl LogicalPlanBuilder {
         if explain_option.analyze {
             Ok(Self::new(LogicalPlan::Analyze(Analyze {
                 verbose: explain_option.verbose,
+                format: explain_option.format,
                 input: self.plan,
                 schema,
                 analyze_level: explain_option.analyze_level,

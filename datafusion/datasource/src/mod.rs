@@ -64,6 +64,7 @@ use object_store::{GetOptions, GetRange, ObjectStore};
 use object_store::{ObjectMeta, path::Path};
 pub use table_schema::{TableSchema, TableSchemaBuilder};
 // Remove when add_row_stats is remove
+use arrow::datatypes::SchemaRef;
 #[expect(deprecated)]
 pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
@@ -163,12 +164,23 @@ pub struct PartitionedFile {
     /// The estimated size of the parquet metadata, in bytes
     pub metadata_size_hint: Option<usize>,
     pub table_reference: Option<TableReference>,
+    /// A user-provided physical Arrow schema for this file.
+    ///
+    /// This schema describes only the columns stored in the file. It must not
+    /// include partition columns; those are represented separately by
+    /// [`Self::partition_values`] and the scan's table partition columns.
+    ///
+    /// When provided, this field will be used by the Parquet reader to avoid
+    /// parsing the Arrow schema from the `ARROW:schema` metadata key. Other
+    /// built-in file sources ignore it for now.
+    pub arrow_schema: Option<SchemaRef>,
 }
 
 impl PartitionedFile {
     /// Create a simple file without metadata or partition
     pub fn new(path: impl Into<String>, size: u64) -> Self {
         Self {
+            arrow_schema: None,
             object_meta: ObjectMeta {
                 location: Path::from(path.into()),
                 last_modified: chrono::Utc.timestamp_nanos(0),
@@ -189,6 +201,7 @@ impl PartitionedFile {
     /// Create a file from a known ObjectMeta without partition
     pub fn new_from_meta(object_meta: ObjectMeta) -> Self {
         Self {
+            arrow_schema: None,
             object_meta,
             partition_values: vec![],
             range: None,
@@ -203,6 +216,7 @@ impl PartitionedFile {
     /// Create a file range without metadata or partition
     pub fn new_with_range(path: String, size: u64, start: i64, end: i64) -> Self {
         Self {
+            arrow_schema: None,
             object_meta: ObjectMeta {
                 location: Path::from(path),
                 last_modified: chrono::Utc.timestamp_nanos(0),
@@ -219,6 +233,15 @@ impl PartitionedFile {
             table_reference: None,
         }
         .with_range(start, end)
+    }
+
+    /// Provide a physical Arrow schema for this file.
+    ///
+    /// The schema must describe only columns stored in the file and must not
+    /// include partition columns. See [`Self::arrow_schema`] for details.
+    pub fn with_arrow_schema(mut self, schema: SchemaRef) -> Self {
+        self.arrow_schema = Some(schema);
+        self
     }
 
     /// Attach partition values to this file.
@@ -376,6 +399,7 @@ impl From<ObjectMeta> for PartitionedFile {
     fn from(object_meta: ObjectMeta) -> Self {
         PartitionedFile {
             object_meta,
+            arrow_schema: None,
             partition_values: vec![],
             range: None,
             statistics: None,
@@ -556,6 +580,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
         let max = (base + range_size) as f64;
 
         let file = PartitionedFile {
+            arrow_schema: None,
             object_meta: ObjectMeta {
                 location: Path::from(format!("file_{i}.parquet")),
                 last_modified: chrono::Utc::now(),
