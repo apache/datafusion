@@ -60,7 +60,9 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, lit};
+use datafusion_physical_expr::expressions::{
+    BinaryExpr, Column, IsNotNullExpr, Literal, lit,
+};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{
@@ -310,8 +312,23 @@ impl FilterExec {
         &self.projection
     }
 
-    /// Calculates `Statistics` for `FilterExec`, by applying selectivity
-    /// (either default or estimated) to input statistics.
+    /// Calculates `Statistics` for `FilterExec` by applying the filter's
+    /// selectivity (default, or estimated from interval analysis) to the input
+    /// statistics.
+    ///
+    /// The estimated output row count is used to keep the per-column statistics
+    /// consistent with it:
+    /// - null and distinct counts are capped at the estimated row count;
+    /// - byte sizes (per column and total) are scaled by the selectivity;
+    /// - a column constrained to a single value (`col = literal`, or an
+    ///   interval that collapses to one point) gets a distinct count of 1;
+    /// - a column in a null-rejecting conjunct gets a null count of 0.
+    ///
+    /// When interval analysis applies, min/max are also tightened to the
+    /// surviving value range.
+    ///
+    /// A contradictory predicate (e.g. `a = 1 AND a = 2`) yields zero rows and
+    /// empty-column statistics.
     pub(crate) fn statistics_helper(
         schema: &SchemaRef,
         input_stats: Statistics,
@@ -852,27 +869,40 @@ fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> (HashSet<usize
 
 /// Collects columns that cannot be NULL in any surviving row.
 ///
-/// A filter keeps only rows where the predicate is TRUE. If a direct column
-/// operand appears in an AND conjunct whose operator returns NULL on NULL
-/// input, rows where that column is NULL cannot survive.
+/// A filter keeps only rows where the predicate is TRUE, so a column is
+/// null-rejecting if some top-level AND conjunct evaluates to NULL or FALSE
+/// whenever that column is NULL. Two such conjuncts are recognized:
+///
+/// - a binary operator that returns NULL on NULL input, applied directly to the
+///   column (e.g. `a = 10`, `a < b`);
+/// - an `IS NOT NULL` check on the column (e.g. `a IS NOT NULL`).
 ///
 /// This analysis is conservative; for example, OR clauses are not considered
-/// null-rejecting; neither are indirect operands like `a + 1 < 10`.
+/// null-rejecting, and neither are indirect operands like `a + 1 < 10`.
 fn collect_null_rejecting_columns(predicate: &Arc<dyn PhysicalExpr>) -> HashSet<usize> {
     let mut columns = HashSet::new();
 
     for expr in split_conjunction(predicate) {
-        let Some(binary) = expr.downcast_ref::<BinaryExpr>() else {
-            continue;
-        };
-        if !binary.op().returns_null_on_null() {
+        // `col IS NOT NULL` keeps only rows where `col` is non-null.
+        if let Some(is_not_null) = expr.downcast_ref::<IsNotNullExpr>() {
+            if let Some(col) = is_not_null.arg().downcast_ref::<Column>() {
+                columns.insert(col.index());
+            }
             continue;
         }
-        if let Some(col) = binary.left().downcast_ref::<Column>() {
-            columns.insert(col.index());
-        }
-        if let Some(col) = binary.right().downcast_ref::<Column>() {
-            columns.insert(col.index());
+
+        // A binary operator that returns NULL on NULL input rejects rows where
+        // a direct column operand is NULL.
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+            if !binary.op().returns_null_on_null() {
+                continue;
+            }
+            if let Some(col) = binary.left().downcast_ref::<Column>() {
+                columns.insert(col.index());
+            }
+            if let Some(col) = binary.right().downcast_ref::<Column>() {
+                columns.insert(col.index());
+            }
         }
     }
 
@@ -918,9 +948,11 @@ fn cap_at_rows(
     }
 }
 
-/// Returns the NDV for a column constrained to one non-null value, such as
-/// `column = literal` or a singleton interval. The constraint gives NDV at
-/// most one; a zero-row output has no distinct values.
+/// Returns the NDV for a column constrained to one non-null value (e.g.
+/// `column = literal` or a singleton interval), derived from the filtered row
+/// estimate: zero rows means zero distinct values, a known positive row count
+/// means exactly one, and an unknown row count means an inexact one (the column
+/// could still be empty).
 ///
 /// The caller is responsible for proving the singleton domain.
 fn distinct_count_for_singleton_domain(
@@ -928,6 +960,9 @@ fn distinct_count_for_singleton_domain(
 ) -> Precision<usize> {
     match filtered_num_rows {
         Precision::Exact(0) | Precision::Inexact(0) => filtered_num_rows,
+        // The row count is unknown, so the column could still be empty (zero
+        // distinct values); report an inexact one rather than overstating it.
+        Precision::Absent => Precision::Inexact(1),
         _ => Precision::Exact(1),
     }
 }
@@ -3497,6 +3532,47 @@ mod tests {
         assert_eq!(
             statistics.column_statistics[0].null_count,
             Precision::Inexact(20)
+        );
+        assert_eq!(
+            statistics.column_statistics[0].byte_size,
+            Precision::Inexact(200)
+        );
+        assert_eq!(
+            statistics.column_statistics[0].distinct_count,
+            Precision::Inexact(20)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_is_not_null_rejects_nulls() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("name", DataType::Utf8, true)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(1000),
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Inexact(80),
+                    distinct_count: Precision::Inexact(60),
+                    byte_size: Precision::Exact(1000),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        // `name IS NOT NULL` keeps only non-null rows, so the surviving null
+        // count is exactly zero. Utf8 interval analysis is unsupported, so this
+        // also exercises the default-selectivity path.
+        let predicate: Arc<dyn PhysicalExpr> = is_not_null(col("name", &schema)?)?;
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let statistics = filter.partition_statistics(None)?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(20));
+        assert_eq!(
+            statistics.column_statistics[0].null_count,
+            Precision::Exact(0)
         );
         assert_eq!(
             statistics.column_statistics[0].byte_size,
