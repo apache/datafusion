@@ -999,4 +999,156 @@ mod tests {
             )))
         }
     }
+
+    // ---------------------------------------------------------------
+    // Tests for the in-place rewrite helpers
+    // (`map_children_and_subqueries_mut`, `rewrite_children_in_place`)
+    // ---------------------------------------------------------------
+
+    use datafusion_expr::in_subquery;
+
+    type VisitLog = Arc<Mutex<Vec<String>>>;
+
+    /// Counts how many `LogicalPlan` nodes a closure visits.
+    fn counting_visitor() -> (VisitLog, impl FnMut(&mut LogicalPlan) -> Result<bool>) {
+        let log: VisitLog = Arc::new(Mutex::new(Vec::new()));
+        let log_for_closure = Arc::clone(&log);
+        let visitor = move |plan: &mut LogicalPlan| -> Result<bool> {
+            log_for_closure
+                .lock()
+                .unwrap()
+                .push(plan.display().to_string());
+            Ok(false) // never mutate
+        };
+        (log, visitor)
+    }
+
+    /// `map_children_and_subqueries_mut` on a plan with no children and no
+    /// subqueries → no calls to `f`, `Ok(false)`.
+    #[test]
+    fn map_children_and_subqueries_mut_no_children() -> Result<()> {
+        let mut plan = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+        let (log, visitor) = counting_visitor();
+        let changed = super::map_children_and_subqueries_mut(&mut plan, visitor)?;
+        assert!(!changed);
+        assert_eq!(log.lock().unwrap().len(), 0);
+        Ok(())
+    }
+
+    /// `map_children_and_subqueries_mut` walks direct children (a single
+    /// `TableScan` under a `Filter`) and reports `Ok(false)` when the
+    /// closure doesn't mutate.
+    #[test]
+    fn map_children_and_subqueries_mut_walks_direct_children() -> Result<()> {
+        let scan = test_table_scan()?;
+        let mut plan = LogicalPlanBuilder::from(scan)
+            .filter(col("a").gt(lit(0)))?
+            .build()?;
+
+        let (log, visitor) = counting_visitor();
+        let changed = super::map_children_and_subqueries_mut(&mut plan, visitor)?;
+        assert!(!changed);
+        // `Filter.input` is the `TableScan` — exactly one child visited.
+        let log = log.lock().unwrap();
+        assert_eq!(log.len(), 1, "expected 1 child visit, got: {log:?}");
+        assert!(
+            log[0].contains("TableScan"),
+            "child should be the TableScan, got: {}",
+            log[0]
+        );
+        Ok(())
+    }
+
+    /// `map_children_and_subqueries_mut` descends into a subquery plan
+    /// reachable from a `Filter`'s `IN (SELECT ...)` predicate. Without
+    /// the subquery descent it would visit only the outer `TableScan`.
+    #[test]
+    fn map_children_and_subqueries_mut_descends_into_subquery() -> Result<()> {
+        let inner = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a")])?
+            .build()?;
+        let outer_scan = test_table_scan()?;
+        let mut plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(in_subquery(col("a"), Arc::new(inner)))?
+            .build()?;
+
+        let (log, visitor) = counting_visitor();
+        let changed = super::map_children_and_subqueries_mut(&mut plan, visitor)?;
+        assert!(!changed);
+        let log = log.lock().unwrap();
+        // 1 direct child (outer TableScan) + 1 subquery plan
+        assert_eq!(log.len(), 2, "expected 2 visits, got: {log:?}");
+        Ok(())
+    }
+
+    /// `map_children_and_subqueries_mut` propagates `Ok(true)` when the
+    /// closure reports a change on any child.
+    #[test]
+    fn map_children_and_subqueries_mut_reports_changes() -> Result<()> {
+        let scan = test_table_scan()?;
+        let mut plan = LogicalPlanBuilder::from(scan)
+            .filter(col("a").gt(lit(0)))?
+            .build()?;
+
+        // Closure that claims the child changed without actually mutating it.
+        let mut hits = 0usize;
+        let changed = super::map_children_and_subqueries_mut(&mut plan, |_| {
+            hits += 1;
+            Ok(true)
+        })?;
+        assert!(changed, "child claim of `true` should bubble up");
+        assert_eq!(hits, 1);
+        Ok(())
+    }
+
+    /// `rewrite_children_in_place` drives recursion through a rule,
+    /// visiting each child via `rule.rewrite` and returning `true` when
+    /// any child was rewritten. Verifies the bridge between the
+    /// `&mut LogicalPlan` callback shape and the ownership-based
+    /// `OptimizerRule::rewrite` API.
+    #[test]
+    fn rewrite_children_in_place_drives_rule_recursion() -> Result<()> {
+        // Rule that records every plan it sees but never claims a change.
+        #[derive(Debug)]
+        struct RecordingRule {
+            seen: Arc<Mutex<Vec<String>>>,
+        }
+        impl OptimizerRule for RecordingRule {
+            fn name(&self) -> &str {
+                "recording"
+            }
+            fn rewrite(
+                &self,
+                plan: LogicalPlan,
+                _config: &dyn OptimizerConfig,
+            ) -> Result<Transformed<LogicalPlan>> {
+                self.seen.lock().unwrap().push(plan.display().to_string());
+                Ok(Transformed::no(plan))
+            }
+        }
+
+        let scan = test_table_scan()?;
+        let mut plan = LogicalPlanBuilder::from(scan)
+            .filter(col("a").gt(lit(0)))?
+            .project(vec![col("a")])?
+            .build()?;
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let rule = RecordingRule {
+            seen: Arc::clone(&seen),
+        };
+        let config = OptimizerContext::new();
+        let changed = super::rewrite_children_in_place(&mut plan, &rule, &config)?;
+        assert!(!changed);
+        // Outer plan is `Projection`; `rewrite_children_in_place` visits its
+        // direct children — that's the `Filter`. (It does NOT visit the
+        // root itself; rules call this from their own `rewrite_children`.)
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "expected 1 child visit, got: {seen:?}");
+        assert!(seen[0].contains("Filter"));
+        Ok(())
+    }
 }
