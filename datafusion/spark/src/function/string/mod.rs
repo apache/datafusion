@@ -30,6 +30,7 @@ pub mod make_valid_utf8;
 pub mod soundex;
 pub mod space;
 pub mod substring;
+pub mod regexp_extract;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -51,6 +52,7 @@ make_udf_function!(base64::SparkUnBase64, unbase64);
 make_udf_function!(soundex::SparkSoundex, soundex);
 make_udf_function!(make_valid_utf8::SparkMakeValidUtf8, make_valid_utf8);
 make_udf_function!(is_valid_utf8::SparkIsValidUtf8, is_valid_utf8);
+make_udf_function!(regexp_extract::RegexpExtractFunc, regexp_extract);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -127,6 +129,11 @@ pub mod expr_fn {
         "Returns the original string if str is a valid UTF-8 string, otherwise returns a new string whose invalid UTF8 byte sequences are replaced using the UNICODE replacement character U+FFFD.",
         str
     ));
+    export_functions!((
+        regexp_extract,
+        "Extracts a group from a string using a regex pattern. Returns the idx-th group match.",
+        str pattern idx
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -147,5 +154,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         soundex(),
         make_valid_utf8(),
         is_valid_utf8(),
+        regexp_extract(),
     ]
 }

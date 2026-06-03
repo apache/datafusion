@@ -1,0 +1,130 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+# Basic: extract first group
+query T
+SELECT regexp_extract('100-200', '(\d+)-(\d+)', 1);
+----
+100
+
+# Extract second group
+query T
+SELECT regexp_extract('100-200', '(\d+)-(\d+)', 2);
+----
+200
+
+# Group 0 returns entire match
+query T
+SELECT regexp_extract('hello world', '(hello) (world)', 0);
+----
+hello world
+
+# No match returns empty string
+query T
+SELECT regexp_extract('foo', '\d+', 0);
+----
+(empty)
+
+# No match with groups returns empty string
+query T
+SELECT regexp_extract('abc', '(\d+)', 1);
+----
+(empty)
+
+# Pattern with no groups, idx 0
+query T
+SELECT regexp_extract('hello', 'hello', 0);
+----
+hello
+
+# Null input returns null
+query T
+SELECT regexp_extract(NULL, '(\w+)', 1);
+----
+NULL
+
+# Null pattern returns null
+query T
+SELECT regexp_extract('hello', NULL, 1);
+----
+NULL
+
+# Null idx returns null
+query T
+SELECT regexp_extract('hello', '(\w+)', NULL);
+----
+NULL
+
+# Unicode input
+query T
+SELECT regexp_extract('日本語123テスト', '(\d+)', 1);
+----
+123
+
+# Special characters
+query T
+SELECT regexp_extract('price is $100.50', '\$(\d+\.\d+)', 1);
+----
+100.50
+
+# Nested groups
+query T
+SELECT regexp_extract('abc123', '((\w+?)(\d+))', 1);
+----
+abc123
+
+# Nested groups inner
+query T
+SELECT regexp_extract('abc123', '((\w+?)(\d+))', 3);
+----
+123
+
+# Negative index returns error
+statement error non-negative
+SELECT regexp_extract('abc', '(a)', -1);
+
+# Group index exceeds number of groups
+statement error exceeds the number of groups
+SELECT regexp_extract('abc', '(a)(b)', 3);
+
+# No groups but idx=1 returns error
+statement error exceeds the number of groups
+SELECT regexp_extract('hello', 'hello', 1);
+
+# Invalid regex returns error
+statement error invalid regex
+SELECT regexp_extract('abc', '[invalid', 0);
+
+# Test with table data
+statement ok
+CREATE TABLE test_strings(str TEXT, pattern TEXT, idx INT) AS VALUES
+  ('abc123', '([a-z]+)(\d+)', 1),
+  ('abc123', '([a-z]+)(\d+)', 2),
+  ('no-match', '(\d+)', 1),
+  ('key=value', '(\w+)=(\w+)', 2);
+
+query T
+SELECT regexp_extract(str, pattern, idx) FROM test_strings;
+----
+abc
+123
+(empty)
+value
+
+statement ok
+DROP TABLE test_strings;

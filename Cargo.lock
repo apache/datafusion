@@ -2576,9 +2576,11 @@ dependencies = [
  "num-traits",
  "percent-encoding",
  "rand 0.9.4",
+ "regex",
  "serde_json",
  "sha1 0.11.0",
  "sha2",
+ "tokio",
  "twox-hash",
  "url",
 ]
