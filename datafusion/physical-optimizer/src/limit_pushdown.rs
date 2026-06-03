@@ -375,6 +375,14 @@ pub(crate) fn pushdown_limits(
         (new_node, global_state) = pushdown_limit_helper(new_node.data, global_state)?;
     }
 
+    // Once a limit has been materialized above the current node, child
+    // subtrees should not inherit its `skip`. Keep `fetch`, but clear
+    // `skip` before recursing so child-local limits are not merged with
+    // an `OFFSET` that has already been applied.
+    if global_state.satisfied {
+        global_state.skip = 0;
+    }
+
     // Apply pushdown limits in children
     let children = new_node.data.children();
     let mut changed = false;

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`HigherOrderUDF`] definitions for array_filter function.
+//! [`datafusion_expr::HigherOrderUDF`] definitions for array_filter function.
 
 use arrow::{
     array::{
@@ -32,7 +32,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
-    HigherOrderSignature, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda,
+    HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda,
     Volatility,
 };
 use datafusion_macros::user_doc;
@@ -96,7 +96,7 @@ impl ArrayFilter {
     }
 }
 
-impl HigherOrderUDF for ArrayFilter {
+impl HigherOrderUDFImpl for ArrayFilter {
     fn name(&self) -> &str {
         "array_filter"
     }

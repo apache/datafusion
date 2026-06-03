@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use arrow::array::{
+    BinaryArray, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray, RecordBatch,
+};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{Result, test_util::parquet_test_data};
@@ -109,6 +115,59 @@ async fn describe_null() -> Result<()> {
     | median     | null | null |
     +------------+------+------+
     ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn describe_binary_columns() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("bin", DataType::Binary, true),
+        Field::new("lbin", DataType::LargeBinary, true),
+        Field::new("vbin", DataType::BinaryView, true),
+        Field::new("fbin", DataType::FixedSizeBinary(2), true),
+    ]));
+
+    let bin: BinaryArray = vec![Some([0x00u8, 0x01]), Some([0xff, 0xee]), None]
+        .into_iter()
+        .collect();
+    let lbin: LargeBinaryArray = vec![Some([0x00u8, 0x01]), Some([0xff, 0xee]), None]
+        .into_iter()
+        .collect();
+    let vbin: BinaryViewArray = vec![Some([0x00u8, 0x01]), Some([0xff, 0xee]), None]
+        .into_iter()
+        .collect();
+    let fbin = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+        [Some([0x00u8, 0x01]), Some([0xff, 0xee]), None].into_iter(),
+        2,
+    )?;
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(bin),
+            Arc::new(lbin),
+            Arc::new(vbin),
+            Arc::new(fbin),
+        ],
+    )?;
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let result = ctx.table("t").await?.describe().await?.collect().await?;
+
+    assert_snapshot!(batches_to_string(&result),
+        @r"
+        +------------+------+------+------+------+
+        | describe   | bin  | lbin | vbin | fbin |
+        +------------+------+------+------+------+
+        | count      | 2    | 2    | 2    | 2    |
+        | null_count | 1    | 1    | 1    | 1    |
+        | mean       | null | null | null | null |
+        | std        | null | null | null | null |
+        | min        | 0001 | 0001 | 0001 | 0001 |
+        | max        | ffee | ffee | ffee | ffee |
+        | median     | null | null | null | null |
+        +------------+------+------+------+------+
+");
+
     Ok(())
 }
 
