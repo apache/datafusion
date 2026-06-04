@@ -149,3 +149,13 @@ query T
 SELECT quote('a''b');
 ----
 'a\'b'
+
+query T
+SELECT quote('it''s a ''test''');
+----
+'it\'s a \'test\''
+
+query T
+SELECT quote('''');
+----
+'\''
