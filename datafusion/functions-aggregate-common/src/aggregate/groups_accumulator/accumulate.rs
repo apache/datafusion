@@ -305,6 +305,7 @@ impl NullState {
                     }
                 }
             }
+            EmitTo::Block => unreachable!("handled by caller"),
             EmitTo::First(n) => match &mut self.seen_values {
                 SeenValues::All { num_values } => {
                     *num_values = num_values.saturating_sub(n);

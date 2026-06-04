@@ -442,6 +442,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
 
         match emit_to {
             EmitTo::All => self.size_of_orderings = 0,
+            EmitTo::Block => unreachable!("handled by caller"),
             EmitTo::First(_) => {
                 self.size_of_orderings -=
                     result.iter().map(ScalarValue::size_of_vec).sum::<usize>()
@@ -498,6 +499,12 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         &mut self,
         emit_to: EmitTo,
     ) -> Result<(ArrayRef, Vec<Vec<ScalarValue>>, BooleanBuffer)> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!(
+                "EmitTo::Block is not supported by FirstLastGroupsAccumulator"
+            );
+        }
+
         emit_to.take_needed(&mut self.extreme_of_each_group_buf.0);
         self.extreme_of_each_group_buf
             .1

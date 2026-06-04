@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
 use arrow::buffer::BooleanBuffer;
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use super::accumulate::NullState;
@@ -105,10 +105,17 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        if matches!(emit_to, EmitTo::Block) {
+            return internal_err!(
+                "EmitTo::Block is not supported by BooleanGroupsAccumulator"
+            );
+        }
+
         let values = self.values.finish();
 
         let values = match emit_to {
             EmitTo::All => values,
+            EmitTo::Block => unreachable!("handled above"),
             EmitTo::First(n) => {
                 let first_n: BooleanBuffer = values.iter().take(n).collect();
                 // put n+1 back into self.values

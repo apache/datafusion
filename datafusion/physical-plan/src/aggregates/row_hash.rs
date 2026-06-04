@@ -713,6 +713,47 @@ pub(crate) fn create_group_accumulator(
     }
 }
 
+/// Create a blocked accumulator for `agg_expr`, if the aggregate supports one.
+pub(crate) fn create_blocked_group_accumulator(
+    agg_expr: &Arc<AggregateFunctionExpr>,
+    block_size: usize,
+) -> Result<Option<Box<dyn GroupsAccumulator>>> {
+    if !agg_expr.groups_accumulator_supported() {
+        return Ok(None);
+    }
+
+    let accumulator = agg_expr.create_groups_accumulator()?;
+    let Some(blocked_accumulator) = accumulator.create_blocked_accumulator(block_size)?
+    else {
+        return Ok(None);
+    };
+
+    if !blocked_accumulator.supports_blocked_emit() {
+        return internal_err!(
+            "blocked accumulator for {} does not support blocked emit",
+            agg_expr.name()
+        );
+    }
+
+    Ok(Some(blocked_accumulator))
+}
+
+/// Create blocked accumulators for every aggregate expression, if all support it.
+pub(crate) fn create_blocked_group_accumulators(
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
+    block_size: usize,
+) -> Result<Option<Vec<Box<dyn GroupsAccumulator>>>> {
+    let mut accumulators = Vec::with_capacity(aggr_expr.len());
+    for agg_expr in aggr_expr {
+        let Some(accumulator) = create_blocked_group_accumulator(agg_expr, block_size)?
+        else {
+            return Ok(None);
+        };
+        accumulators.push(accumulator);
+    }
+    Ok(Some(accumulators))
+}
+
 impl Stream for GroupedHashAggregateStream {
     type Item = Result<RecordBatch>;
 

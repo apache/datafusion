@@ -25,6 +25,15 @@ use datafusion_common::{Result, not_impl_err};
 pub enum EmitTo {
     /// Emit all groups
     All,
+    /// Emit one implementation-defined block of groups.
+    ///
+    /// This is intended for accumulators and group-value stores whose internal
+    /// representation is already split into fixed-size blocks. Implementations
+    /// that do not advertise blocked emit support may return an internal error.
+    ///
+    /// Callers should only use this once no further updates will arrive for the
+    /// current groups.
+    Block,
     /// Emit only the first `n` groups and shift all existing group
     /// indexes down by `n`.
     ///
@@ -41,7 +50,7 @@ impl EmitTo {
     /// This avoids copying if Self::All
     pub fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
         match self {
-            Self::All => {
+            Self::All | Self::Block => {
                 // Take the entire vector, leave new (empty) vector
                 std::mem::take(v)
             }
@@ -244,6 +253,24 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     /// Returns `true` if [`Self::convert_to_state`] is implemented to support
     /// intermediate aggregate state conversion.
     fn supports_convert_to_state(&self) -> bool {
+        false
+    }
+
+    /// Creates an accumulator that stores and emits state in bounded blocks.
+    ///
+    /// This is used by hash aggregation paths that pair a blocked group-value
+    /// store with blocked accumulator state so output batches can be produced
+    /// without first materializing all groups contiguously.
+    fn create_blocked_accumulator(
+        &self,
+        _block_size: usize,
+    ) -> Result<Option<Box<dyn GroupsAccumulator>>> {
+        Ok(None)
+    }
+
+    /// Returns true when [`Self::state`] and [`Self::evaluate`] support
+    /// [`EmitTo::Block`] by emitting one bounded block of accumulator state.
+    fn supports_blocked_emit(&self) -> bool {
         false
     }
 

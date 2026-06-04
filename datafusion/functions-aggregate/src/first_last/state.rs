@@ -297,6 +297,7 @@ pub(crate) fn take_need(
     let bool_buf = bool_buf_builder.finish();
     match emit_to {
         EmitTo::All => bool_buf,
+        EmitTo::Block => unreachable!("handled by caller"),
         EmitTo::First(n) => {
             // split off the first N values in seen_values
             //

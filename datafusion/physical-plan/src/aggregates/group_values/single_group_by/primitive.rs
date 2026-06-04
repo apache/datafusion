@@ -22,8 +22,8 @@ use arrow::array::{
     cast::AsArray,
 };
 use arrow::datatypes::{DataType, i256};
-use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
@@ -184,6 +184,11 @@ where
             EmitTo::All => {
                 self.map.clear();
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
+            }
+            EmitTo::Block => {
+                return internal_err!(
+                    "EmitTo::Block is not supported by GroupValuesPrimitive"
+                );
             }
             EmitTo::First(n) => {
                 self.map.retain(|entry| {
