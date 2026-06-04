@@ -22,9 +22,7 @@ use std::sync::Arc;
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
-    hash_aggregate::{
-        InitialPartialHashAggregateStream, PartialFinalHashAggregateStream,
-    },
+    hash_aggregate::{FinalHashAggregateStream, PartialHashAggregateStream},
     no_grouping::AggregateStream,
     row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
@@ -520,14 +518,14 @@ enum StreamType {
     AggregateStream(AggregateStream),
     /// Partial stage of the hash aggregation
     /// Input output scheme: initial input -> partial state
-    InitialPartialHash(InitialPartialHashAggregateStream),
+    PartialHash(PartialHashAggregateStream),
     /// Final stage of the hash aggregation
     /// Input output scheme: partial state -> final result
-    PartialFinalHash(PartialFinalHashAggregateStream),
+    FinalHash(FinalHashAggregateStream),
     /// Hash aggregation reused for multiple stages
     ///
     /// Note this is being incrementally migrated to dedicated streams like
-    /// [`StreamType::InitialPartialHash`] and [`StreamType::PartialFinalHash`]
+    /// [`StreamType::PartialHash`] and [`StreamType::FinalHash`]
     ///
     /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
     GroupedHash(GroupedHashAggregateStream),
@@ -543,8 +541,8 @@ impl From<StreamType> for SendableRecordBatchStream {
     fn from(stream: StreamType) -> Self {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
-            StreamType::InitialPartialHash(stream) => Box::pin(stream),
-            StreamType::PartialFinalHash(stream) => Box::pin(stream),
+            StreamType::PartialHash(stream) => Box::pin(stream),
+            StreamType::FinalHash(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
@@ -1008,16 +1006,16 @@ impl AggregateExec {
             .execution
             .enable_migration_aggregate
         {
-            if self.should_use_initial_partial_hash_stream(context) {
-                return Ok(StreamType::InitialPartialHash(
-                    InitialPartialHashAggregateStream::new(self, context, partition)?,
-                ));
+            if self.should_use_partial_hash_stream(context) {
+                return Ok(StreamType::PartialHash(PartialHashAggregateStream::new(
+                    self, context, partition,
+                )?));
             }
 
-            if self.should_use_partial_final_hash_stream(context) {
-                return Ok(StreamType::PartialFinalHash(
-                    PartialFinalHashAggregateStream::new(self, context, partition)?,
-                ));
+            if self.should_use_final_hash_stream(context) {
+                return Ok(StreamType::FinalHash(FinalHashAggregateStream::new(
+                    self, context, partition,
+                )?));
             }
         }
 
@@ -1027,7 +1025,7 @@ impl AggregateExec {
         )?))
     }
 
-    fn should_use_initial_partial_hash_stream(&self, context: &TaskContext) -> bool {
+    fn should_use_partial_hash_stream(&self, context: &TaskContext) -> bool {
         // TODO: implement memory-limited path and remove this limitation
         if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
             return false;
@@ -1040,7 +1038,7 @@ impl AggregateExec {
             && self.group_by.is_single()
     }
 
-    fn should_use_partial_final_hash_stream(&self, context: &TaskContext) -> bool {
+    fn should_use_final_hash_stream(&self, context: &TaskContext) -> bool {
         // TODO: implement memory-limited path and remove this limitation
         if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
             return false;
@@ -3097,7 +3095,7 @@ mod tests {
         );
 
         let partial_stream = partial_aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(partial_stream, StreamType::InitialPartialHash(_)));
+        assert!(matches!(partial_stream, StreamType::PartialHash(_)));
 
         let fallback_task_ctx = Arc::new(
             TaskContext::default().with_session_config(
@@ -3131,7 +3129,7 @@ mod tests {
         )?;
 
         let final_stream = final_aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(final_stream, StreamType::PartialFinalHash(_)));
+        assert!(matches!(final_stream, StreamType::FinalHash(_)));
 
         let stream = final_aggregate.execute_typed(0, &fallback_task_ctx)?;
         assert!(matches!(stream, StreamType::GroupedHash(_)));

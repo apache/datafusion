@@ -17,7 +17,7 @@
 
 //! 2-stage hash aggregation stream implementation.
 //!
-//! See comments in [`InitialPartialHashAggregateStream`] and [`PartialFinalHashAggregateStream`]
+//! See comments in [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`]
 //! for details.
 //!
 //! Note these streams are an incremental migration of the existing
@@ -36,7 +36,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::hash_table::{AggregateHashTable, InitialPartial, PartialFinal};
+use super::hash_table::{AggregateHashTable, Partial};
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
@@ -60,7 +60,7 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 /// ## Final Stage Behavior
 /// Input: partial states
 /// Output: results for all groups (e.g. for avg(x), it's avg(x) calculated from the state)
-pub(crate) struct InitialPartialHashAggregateStream {
+pub(crate) struct PartialHashAggregateStream {
     /// Output schema: group columns followed by partial aggregate state columns.
     schema: SchemaRef,
 
@@ -68,7 +68,7 @@ pub(crate) struct InitialPartialHashAggregateStream {
     input: SendableRecordBatchStream,
 
     /// Hash table state for this aggregate stream.
-    hash_table: AggregateHashTable<InitialPartial>,
+    hash_table: AggregateHashTable<Partial>,
 
     /// Memory reservation for group keys and accumulators.
     reservation: MemoryReservation,
@@ -83,8 +83,8 @@ pub(crate) struct InitialPartialHashAggregateStream {
 /// Hash aggregation uses a 2-stage (partial and final) hash aggregation, this stream
 /// is for the final stage.
 ///
-/// See [`InitialPartialHashAggregateStream`] for details.
-pub(crate) struct PartialFinalHashAggregateStream {
+/// See [`PartialHashAggregateStream`] for details.
+pub(crate) struct FinalHashAggregateStream {
     /// Output schema: group columns followed by final aggregate value columns.
     schema: SchemaRef,
 
@@ -92,7 +92,7 @@ pub(crate) struct PartialFinalHashAggregateStream {
     input: SendableRecordBatchStream,
 
     /// Hash table state for this aggregate stream.
-    hash_table: AggregateHashTable<PartialFinal>,
+    hash_table: AggregateHashTable<Partial>,
 
     /// Execution metrics shared with the aggregate plan node.
     baseline_metrics: BaselineMetrics,
@@ -101,7 +101,7 @@ pub(crate) struct PartialFinalHashAggregateStream {
     reservation: MemoryReservation,
 }
 
-impl InitialPartialHashAggregateStream {
+impl PartialHashAggregateStream {
     pub fn new(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
@@ -121,17 +121,16 @@ impl InitialPartialHashAggregateStream {
             .with_type(metrics::MetricType::Summary)
             .ratio_metrics("reduction_factor", partition);
 
-        let hash_table = AggregateHashTable::<InitialPartial>::new(
+        let hash_table = AggregateHashTable::<Partial>::new(
             agg,
             partition,
             Arc::clone(&schema),
             batch_size,
         )?;
 
-        let reservation = MemoryConsumer::new(format!(
-            "InitialPartialHashAggregateStream[{partition}]"
-        ))
-        .register(context.memory_pool());
+        let reservation =
+            MemoryConsumer::new(format!("PartialHashAggregateStream[{partition}]"))
+                .register(context.memory_pool());
 
         Ok(Self {
             schema,
@@ -144,7 +143,7 @@ impl InitialPartialHashAggregateStream {
     }
 }
 
-impl Stream for InitialPartialHashAggregateStream {
+impl Stream for PartialHashAggregateStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -220,13 +219,13 @@ impl Stream for InitialPartialHashAggregateStream {
     }
 }
 
-impl RecordBatchStream for InitialPartialHashAggregateStream {
+impl RecordBatchStream for PartialHashAggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 }
 
-impl PartialFinalHashAggregateStream {
+impl FinalHashAggregateStream {
     pub fn new(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
@@ -246,7 +245,7 @@ impl PartialFinalHashAggregateStream {
         // Preserve the existing aggregate metric surface for this plan node.
         let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);
 
-        let hash_table = AggregateHashTable::<PartialFinal>::new(
+        let hash_table = AggregateHashTable::<Partial>::new(
             agg,
             partition,
             Arc::clone(&schema),
@@ -254,7 +253,7 @@ impl PartialFinalHashAggregateStream {
         )?;
 
         let reservation =
-            MemoryConsumer::new(format!("PartialFinalHashAggregateStream[{partition}]"))
+            MemoryConsumer::new(format!("FinalHashAggregateStream[{partition}]"))
                 .register(context.memory_pool());
 
         Ok(Self {
@@ -267,7 +266,7 @@ impl PartialFinalHashAggregateStream {
     }
 }
 
-impl Stream for PartialFinalHashAggregateStream {
+impl Stream for FinalHashAggregateStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -339,7 +338,7 @@ impl Stream for PartialFinalHashAggregateStream {
     }
 }
 
-impl RecordBatchStream for PartialFinalHashAggregateStream {
+impl RecordBatchStream for FinalHashAggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
