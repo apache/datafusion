@@ -3812,12 +3812,25 @@ mod tests {
                 .map(Arc::new)?,
         ];
 
-        // All rows have unique keys => ratio = 1.0 (100% cardinality)
+        // Two batches are required: batch 1 triggers the probe threshold so the
+        // skip decision is evaluated; batch 2 is what would be skipped on main
+        // (where >= caused threshold=1.0 to still skip at 100% cardinality).
+        // All rows have unique keys => ratio = 1.0 (100% cardinality).
         let input_data = vec![
+            // Batch 1: fires the probe check (ratio = 5/5 = 1.0)
             RecordBatch::try_new(
                 Arc::clone(&schema),
                 vec![
                     Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+            // Batch 2: would be skipped if threshold=1.0 did not disable the feature
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![6, 7, 8, 9, 10])),
                     Arc::new(Int32Array::from(vec![0, 0, 0, 0, 0])),
                 ],
             )
