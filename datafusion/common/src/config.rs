@@ -803,6 +803,73 @@ impl ParquetCdcOptions {
     }
 }
 
+/// Target maximum size of a Parquet row group in bytes.
+///
+/// Wraps a `usize` so the "must be greater than zero" constraint (arrow-rs
+/// panics on a zero byte limit) is validated when the config is set, rather
+/// than when the writer properties are built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MaxRowGroupBytes(usize);
+
+impl MaxRowGroupBytes {
+    /// Creates a `MaxRowGroupBytes`, rejecting zero.
+    pub fn try_new(value: usize) -> Result<Self> {
+        if value == 0 {
+            return Err(DataFusionError::Configuration(
+                "max_row_group_bytes must be greater than 0".to_string(),
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the configured byte limit.
+    pub fn get(&self) -> usize {
+        self.0
+    }
+}
+
+impl FromStr for MaxRowGroupBytes {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let value = s.parse::<usize>().map_err(|_| {
+            DataFusionError::Configuration(format!(
+                "Invalid max_row_group_bytes: '{s}'. Expected a positive integer."
+            ))
+        })?;
+        Self::try_new(value)
+    }
+}
+
+impl Display for MaxRowGroupBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// `ConfigField` for `Option<MaxRowGroupBytes>`. A custom impl (rather than the
+/// blanket `Option<F>` one) so an invalid value is rejected without leaving the
+/// option in an invalid intermediate state on error. `MaxRowGroupBytes`
+/// deliberately does not implement `Default`, so the blanket impl does not apply.
+impl ConfigField for Option<MaxRowGroupBytes> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(s) => v.some(key, s, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, _key: &str, value: &str) -> Result<()> {
+        *self = Some(MaxRowGroupBytes::from_str(value)?);
+        Ok(())
+    }
+
+    fn reset(&mut self, _key: &str) -> Result<()> {
+        *self = None;
+        Ok(())
+    }
+}
+
 config_namespace! {
     /// Options for reading and writing parquet files
     ///
@@ -936,8 +1003,19 @@ config_namespace! {
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
-        /// can get better compression and be faster to read.
+        /// can get better compression and be faster to read. When
+        /// `max_row_group_bytes` is also set, the writer flushes a row group when
+        /// either limit is reached, whichever comes first.
         pub max_row_group_size: usize, default =  1024 * 1024
+
+        /// (writing) Target maximum size of each row group in bytes. When set,
+        /// the writer flushes whenever either this limit or `max_row_group_size`
+        /// is reached, whichever comes first. Useful for bounding writer memory
+        /// on wide schemas where a row-count limit can map to very different
+        /// byte sizes. Matches the behavior of `parquet.block.size` in
+        /// parquet-mr. If `None` (the default), only the row-count limit
+        /// applies.
+        pub max_row_group_bytes: Option<MaxRowGroupBytes>, default = None
 
         /// (writing) Sets "created by" property
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
@@ -4080,5 +4158,50 @@ mod tests {
         assert_eq!(cdc.min_chunk_size, 1024);
         assert_eq!(cdc.max_chunk_size, 1024 * 1024);
         assert_eq!(cdc.norm_level, 0);
+    }
+
+    #[test]
+    fn max_row_group_bytes_rejects_zero() {
+        use crate::config::MaxRowGroupBytes;
+        use std::str::FromStr;
+
+        assert!(MaxRowGroupBytes::try_new(0).is_err());
+        assert!(MaxRowGroupBytes::from_str("0").is_err());
+        assert!(MaxRowGroupBytes::from_str("not_a_number").is_err());
+        assert_eq!(MaxRowGroupBytes::try_new(128).unwrap().get(), 128);
+        assert_eq!(MaxRowGroupBytes::from_str("128").unwrap().get(), 128);
+    }
+
+    #[test]
+    fn parquet_max_row_group_bytes_config_set_rejects_zero() {
+        use crate::config::ConfigOptions;
+
+        let mut options = ConfigOptions::new();
+        options
+            .set("datafusion.execution.parquet.max_row_group_bytes", "1024")
+            .unwrap();
+        assert_eq!(
+            options
+                .execution
+                .parquet
+                .max_row_group_bytes
+                .map(|v| v.get()),
+            Some(1024)
+        );
+
+        // Zero is rejected at set time, leaving the previous value unchanged.
+        assert!(
+            options
+                .set("datafusion.execution.parquet.max_row_group_bytes", "0")
+                .is_err()
+        );
+        assert_eq!(
+            options
+                .execution
+                .parquet
+                .max_row_group_bytes
+                .map(|v| v.get()),
+            Some(1024)
+        );
     }
 }

@@ -900,6 +900,10 @@ pub struct ParquetOptions {
     pub max_predicate_cache_size_opt: ::core::option::Option<
         parquet_options::MaxPredicateCacheSizeOpt,
     >,
+    #[prost(oneof = "parquet_options::MaxRowGroupBytesOpt", tags = "37")]
+    pub max_row_group_bytes_opt: ::core::option::Option<
+        parquet_options::MaxRowGroupBytesOpt,
+    >,
     /// Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
     /// is set. When `Some`, INT96 columns coerce to
     /// `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
@@ -963,6 +967,11 @@ pub mod parquet_options {
     pub enum MaxPredicateCacheSizeOpt {
         #[prost(uint64, tag = "33")]
         MaxPredicateCacheSize(u64),
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum MaxRowGroupBytesOpt {
+        #[prost(uint64, tag = "37")]
+        MaxRowGroupBytes(u64),
     }
     /// Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
     /// is set. When `Some`, INT96 columns coerce to
