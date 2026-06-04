@@ -1636,11 +1636,11 @@ mod tests {
             ],
         )?;
 
-        // Batch 2: 350 rows with 350 unique NEW groups (starting from group 10)
-        // After batch 2, total: 450 rows, 360 groups
-        // Ratio: 360/450 = 0.8 (80%) >= 0.8 -> SHOULD decide to skip
-        let batch2_rows = 350;
-        let batch2_groups = 350;
+        // Batch 2: 360 rows with 360 unique NEW groups (starting from group 10)
+        // After batch 2, total: 460 rows, 370 groups
+        // Ratio: 370/460 ≈ 0.804 (80.4%) > 0.8 -> SHOULD decide to skip
+        let batch2_rows = 360;
+        let batch2_groups = 360;
         let group_ids_batch2: Vec<i32> = (batch1_groups..(batch1_groups + batch2_groups))
             .map(|x| x as i32)
             .collect();
