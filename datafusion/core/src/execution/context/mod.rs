@@ -1627,7 +1627,7 @@ impl SessionContext {
     /// - `SELECT "my_HIGHER_ORDER_FUNC"(x)` will look for a function named `"my_HIGHER_ORDER_FUNC"`
     ///
     /// Any functions registered with the function name or its aliases will be overwritten with this new function
-    pub fn register_higher_order_function(&self, f: Arc<dyn HigherOrderUDF>) {
+    pub fn register_higher_order_function(&self, f: Arc<HigherOrderUDF>) {
         let mut state = self.state.write();
         state.register_higher_order_function(f).ok();
     }
@@ -2064,7 +2064,7 @@ impl FunctionRegistry for SessionContext {
         self.state.read().udf(name)
     }
 
-    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+    fn higher_order_function(&self, name: &str) -> Result<Arc<HigherOrderUDF>> {
         self.state.read().higher_order_function(name)
     }
 
@@ -2082,8 +2082,8 @@ impl FunctionRegistry for SessionContext {
 
     fn register_higher_order_function(
         &mut self,
-        function: Arc<dyn HigherOrderUDF>,
-    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        function: Arc<HigherOrderUDF>,
+    ) -> Result<Option<Arc<HigherOrderUDF>>> {
         self.state.write().register_higher_order_function(function)
     }
 
@@ -2222,7 +2222,7 @@ pub enum RegisterFunction {
     /// Window user defined function
     Window(Arc<WindowUDF>),
     /// Higher-order user defined function
-    HigherOrder(Arc<dyn HigherOrderUDF>),
+    HigherOrder(Arc<HigherOrderUDF>),
     /// Table user defined function
     Table(String, Arc<dyn TableFunctionImpl>),
 }

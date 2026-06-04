@@ -26,8 +26,8 @@ use arrow::array::{
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    ArrowTimestampType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+    ArrowTimestampType, DECIMAL128_MAX_PRECISION, DataType, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarType, ScalarValue, exec_datafusion_err, exec_err};
@@ -491,7 +491,8 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 _ => exec_err!("Invalid Float64 value for to_timestamp"),
             },
             Decimal32(_, _) | Decimal64(_, _) | Decimal256(_, _) => {
-                let arg = args[0].cast_to(&Decimal128(38, 9), None)?;
+                let arg =
+                    args[0].cast_to(&Decimal128(DECIMAL128_MAX_PRECISION, 9), None)?;
                 decimal128_to_timestamp_nanos(&arg, tz)
             }
             Decimal128(_, _) => decimal128_to_timestamp_nanos(&args[0], tz),
