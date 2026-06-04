@@ -18,8 +18,8 @@
 use crate::aggregates::group_values::GroupValues;
 use crate::hash_utils::RandomState;
 use arrow::array::{
-    Array, ArrayRef, DictionaryArray, LargeStringArray, LargeStringBuilder, ListArray,
-    ListBuilder, PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
+    Array, ArrayRef, AsArray, DictionaryArray, LargeStringArray, LargeStringBuilder,
+    ListArray, ListBuilder, PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
     StringViewArray, StringViewBuilder,
 };
 use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType};
@@ -273,18 +273,6 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
             ))),
         }
     }
-    #[inline]
-    fn keys_to_usize(key_array: &PrimitiveArray<K>) -> Vec<Option<usize>> {
-        (0..key_array.len())
-            .map(|i| {
-                if key_array.is_null(i) {
-                    None
-                } else {
-                    Some(key_array.value(i).to_usize().unwrap())
-                }
-            })
-            .collect()
-    }
 }
 
 impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> {
@@ -311,7 +299,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
                 .values_cache
                 .0
                 .as_ref()
-                .map(|a| a.get_array_memory_size())
+                .map(|a| a.to_data().get_array_memory_size())
                 .unwrap_or(0);
 
         size_of::<Self>() + seen_elements_size + unique_mapping_size + values_cache_size
@@ -331,21 +319,14 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
         let array = Arc::clone(&cols[0]);
         groups.clear(); // zero out buffer
         let dict_array = array
-            .as_any()
-            .downcast_ref::<DictionaryArray<K>>()
-            .ok_or_else(|| {
-                Internal(format!(
-                    "GroupValuesDictionary expected DictionaryArray but got {:?}",
-                    array.data_type()
-                ))
-            })?;
+            .as_dictionary_opt()
+            .map_or_else(|| Err(Internal("Expected dictionary array".into())), Ok)?;
 
         let values = dict_array.values();
-        let key_array = dict_array.keys();
+        let key_array: &PrimitiveArray<K> = dict_array.keys();
         if key_array.is_empty() {
             return Ok(());
         }
-        let keys_as_usize: Vec<Option<usize>> = Self::keys_to_usize(key_array);
 
         let cache_hit = self
             .values_cache
@@ -355,16 +336,20 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
             .unwrap_or(false);
 
         if !cache_hit {
-            // first time seeing this values array to compute hashes, and cache the pointer, cheap operation
+            // values array changed since last batch - recompute hashes and update cached pointer
             self.compute_value_hashes(values)?;
             self.values_cache.0 = Some(Arc::clone(values));
         }
         let mut key_to_group: Vec<Option<usize>> = vec![None; values.len()];
+        // For values already seen in prior batches, pre fill `key_to_group`
+        // so the main loop below can skip hash table lookups for those keys.
+        // This pre scan is skipped on the first batch since the hash table is empty.
         if self.intern_called {
-            for key_opt in keys_as_usize.iter() {
-                let Some(original_key) = *key_opt else {
+            for i in 0..key_array.len() {
+                if key_array.is_null(i) {
                     continue;
-                };
+                }
+                let original_key = key_array.value(i).to_usize().unwrap();
                 if values.is_null(original_key) {
                     continue;
                 }
@@ -379,33 +364,33 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
                     .find(hash, |e| e.bytes == raw.as_ref())
                 {
                     key_to_group[original_key] = Some(entry.group_id);
-                    continue;
                 }
             }
         }
         // iterate keys array (n iterations)
         // only d insertions at most, repeated work is cached
-        for key_opt in keys_as_usize.iter() {
-            let group_id = match key_opt {
-                None => self.get_null_group_id(),
-                Some(key) => {
-                    if let Some(group_id) = key_to_group[*key] {
-                        group_id
-                    } else if values.is_null(*key) {
-                        let gid = self.get_null_group_id();
-                        key_to_group[*key] = Some(gid);
-                        gid
-                    } else {
-                        let hash = self.values_cache.1[*key];
-                        let raw = Self::get_raw_bytes(values, *key);
-                        let gid = self.lookup_or_insert_in_table(hash, raw.as_ref());
-                        key_to_group[*key] = Some(gid);
-                        gid
-                    }
+        for i in 0..key_array.len() {
+            let group_id = if key_array.is_null(i) {
+                self.get_null_group_id()
+            } else {
+                let key = key_array.value(i).to_usize().unwrap();
+                if let Some(group_id) = key_to_group[key] {
+                    group_id
+                } else if values.is_null(key) {
+                    let gid = self.get_null_group_id();
+                    key_to_group[key] = Some(gid);
+                    gid
+                } else {
+                    let hash = self.values_cache.1[key];
+                    let raw = Self::get_raw_bytes(values, key);
+                    let gid = self.lookup_or_insert_in_table(hash, raw.as_ref());
+                    key_to_group[key] = Some(gid);
+                    gid
                 }
             };
             groups.push(group_id);
         }
+        // set flag to true to repeated calls to intern will pre-fill key_to_group cache
         self.intern_called = true;
         Ok(())
     }
