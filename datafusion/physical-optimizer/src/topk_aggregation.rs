@@ -100,6 +100,9 @@ impl TopKAggregation {
         let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
         let order_desc = order.options.descending;
+        if order.options.nulls_first != !order_desc {
+            return None;
+        }
         let order = order.expr.downcast_ref::<Column>()?;
         let mut cur_col_name = order.name().to_string();
         let limit = sort.fetch()?;

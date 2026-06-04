@@ -229,10 +229,24 @@ impl StringHeap {
     /// Panics if the row index is out of bounds or if the data type is not one of
     /// the supported UTF-8 string types.
     ///
-    /// Note: Null values should not appear in the input; the aggregation layer
-    /// ensures nulls are filtered before reaching this code.
-    fn value(&self, row_idx: usize) -> &str {
-        extract_string_value(&self.batch, &self.data_type, row_idx)
+    fn value(&self, row_idx: usize) -> Option<&str> {
+        if self.batch.is_null(row_idx) {
+            None
+        } else {
+            Some(extract_string_value(&self.batch, &self.data_type, row_idx))
+        }
+    }
+}
+
+fn compare_optional_str(
+    lhs: Option<&str>,
+    rhs: &Option<String>,
+) -> Ordering {
+    match (lhs, rhs.as_deref()) {
+        (Some(lhs), Some(rhs)) => lhs.cmp(rhs),
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
     }
 }
 
@@ -269,13 +283,8 @@ impl ArrowHeap for StringHeap {
         // existing heap entry.
         let new_val = self.value(row_idx);
         let worst_val = self.heap.worst_val().expect("Missing root");
-        match worst_val {
-            None => false,
-            Some(worst_str) => {
-                (!self.desc && new_val > worst_str.as_str())
-                    || (self.desc && new_val < worst_str.as_str())
-            }
-        }
+        (!self.desc && compare_optional_str(new_val, worst_val) == Ordering::Greater)
+            || (self.desc && compare_optional_str(new_val, worst_val) == Ordering::Less)
     }
 
     fn worst_map_idx(&self) -> usize {
@@ -287,8 +296,7 @@ impl ArrowHeap for StringHeap {
         // because it will be stored in the heap. For replacements we avoid
         // allocation until `replace_if_better` confirms a replacement is
         // necessary.
-        let new_str = self.value(row_idx).to_string();
-        let new_val = Some(new_str);
+        let new_val = self.value(row_idx).map(ToString::to_string);
         self.heap.append_or_replace(new_val, map_idx, map);
     }
 
@@ -310,23 +318,26 @@ impl ArrowHeap for StringHeap {
             None => {
                 // MIN/MAX ignore null inputs, so a non-null row must replace an
                 // existing null aggregate state for the same group.
-                let new_val = Some(new_str.to_string());
-                if self.desc {
-                    self.heap.replace_if_better(heap_idx, new_val, map);
-                } else {
-                    self.heap.heap[heap_idx]
-                        .as_mut()
-                        .expect("Missing heap item")
-                        .val = new_val;
-                    self.heap.heapify_up(heap_idx, map);
+                if let Some(new_str) = new_str {
+                    let new_val = Some(new_str.to_string());
+                    if self.desc {
+                        self.heap.replace_if_better(heap_idx, new_val, map);
+                    } else {
+                        self.heap.heap[heap_idx]
+                            .as_mut()
+                            .expect("Missing heap item")
+                            .val = new_val;
+                        self.heap.heapify_up(heap_idx, map);
+                    }
                 }
             }
-            Some(existing_str) => {
+            Some(_) => {
                 // Compare borrowed strings first
-                if (!self.desc && new_str < existing_str.as_str())
-                    || (self.desc && new_str > existing_str.as_str())
+                if (!self.desc && compare_optional_str(new_str, &existing.val) == Ordering::Less)
+                    || (self.desc
+                        && compare_optional_str(new_str, &existing.val) == Ordering::Greater)
                 {
-                    let new_val = Some(new_str.to_string());
+                    let new_val = new_str.map(ToString::to_string);
                     self.heap.replace_if_better(heap_idx, new_val, map);
                 }
                 // Else: no improvement, no allocation
