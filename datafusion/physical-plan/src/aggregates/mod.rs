@@ -524,7 +524,7 @@ enum StreamType {
     /// Final stage of the hash aggregation
     /// Input output scheme: partial state -> final result
     PartialFinalHash(PartialFinalHashAggregateStream),
-    /// Hash aggregation resused for multiple stages
+    /// Hash aggregation reused for multiple stages
     ///
     /// Note this is being incrementally migrated to dedicated streams like
     /// [`StreamType::InitialPartialHash`] and [`StreamType::PartialFinalHash`]
@@ -1002,16 +1002,23 @@ impl AggregateExec {
             ));
         }
 
-        if self.should_use_initial_partial_hash_stream(context) {
-            return Ok(StreamType::InitialPartialHash(
-                InitialPartialHashAggregateStream::new(self, context, partition)?,
-            ));
-        }
+        if context
+            .session_config()
+            .options()
+            .execution
+            .enable_migration_aggregate
+        {
+            if self.should_use_initial_partial_hash_stream(context) {
+                return Ok(StreamType::InitialPartialHash(
+                    InitialPartialHashAggregateStream::new(self, context, partition)?,
+                ));
+            }
 
-        if self.should_use_partial_final_hash_stream(context) {
-            return Ok(StreamType::PartialFinalHash(
-                PartialFinalHashAggregateStream::new(self, context, partition)?,
-            ));
+            if self.should_use_partial_final_hash_stream(context) {
+                return Ok(StreamType::PartialFinalHash(
+                    PartialFinalHashAggregateStream::new(self, context, partition)?,
+                ));
+            }
         }
 
         // grouping by something else and we need to just materialize all results
@@ -3089,10 +3096,20 @@ mod tests {
                 .with_session_config(SessionConfig::new().with_batch_size(2)),
         );
 
-        let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::InitialPartialHash(_)));
+        let partial_stream = partial_aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(partial_stream, StreamType::InitialPartialHash(_)));
 
-        let stream: SendableRecordBatchStream = stream.into();
+        let fallback_task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(2)
+                    .set_bool("datafusion.execution.enable_migration_aggregate", false),
+            ),
+        );
+        let stream = partial_aggregate.execute_typed(0, &fallback_task_ctx)?;
+        assert!(matches!(stream, StreamType::GroupedHash(_)));
+
+        let stream: SendableRecordBatchStream = partial_stream.into();
         let batches = collect(stream).await?;
         assert_eq!(
             batches
@@ -3113,10 +3130,13 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let stream = final_aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::PartialFinalHash(_)));
+        let final_stream = final_aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(final_stream, StreamType::PartialFinalHash(_)));
 
-        let stream: SendableRecordBatchStream = stream.into();
+        let stream = final_aggregate.execute_typed(0, &fallback_task_ctx)?;
+        assert!(matches!(stream, StreamType::GroupedHash(_)));
+
+        let stream: SendableRecordBatchStream = final_stream.into();
         let batches = collect(stream).await?;
         assert_eq!(
             batches
