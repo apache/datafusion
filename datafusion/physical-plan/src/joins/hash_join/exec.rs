@@ -2150,9 +2150,7 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_physical_expr::aggregate::{
-        AggregateExprBuilder, AggregateFunctionExpr,
-    };
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal, col};
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
@@ -2506,16 +2504,6 @@ mod tests {
         Ok((columns, batches, metrics))
     }
 
-    #[derive(Clone)]
-    struct FinalAggregateBuildInput {
-        raw_schema: SchemaRef,
-        partial_schema: SchemaRef,
-        group_by: PhysicalGroupBy,
-        aggregates: Vec<Arc<AggregateFunctionExpr>>,
-        partial_batches: Vec<RecordBatch>,
-        num_groups: usize,
-    }
-
     fn memory_limited_aggregate_join_task_ctx(
         batch_size: usize,
         memory_limit: Option<usize>,
@@ -2550,10 +2538,10 @@ mod tests {
         ))
     }
 
-    async fn final_aggregate_build_input(
+    async fn final_aggregate_build_side(
         num_groups: usize,
         batch_size: usize,
-    ) -> Result<FinalAggregateBuildInput> {
+    ) -> Result<Arc<AggregateExec>> {
         let raw_schema = Arc::new(Schema::new(vec![
             Field::new("group_key", DataType::UInt32, false),
             Field::new("value", DataType::UInt64, false),
@@ -2590,32 +2578,19 @@ mod tests {
         let task_ctx = memory_limited_aggregate_join_task_ctx(batch_size, None)?;
         let partial_batches =
             common::collect(partial_aggregate.execute(0, task_ctx)?).await?;
-
-        Ok(FinalAggregateBuildInput {
-            raw_schema,
-            partial_schema,
-            group_by,
-            aggregates,
-            partial_batches,
-            num_groups,
-        })
-    }
-
-    fn final_aggregate(input: &FinalAggregateBuildInput) -> Result<Arc<AggregateExec>> {
-        let partial_batches = input.partial_batches.clone();
         let partial_input = TestMemoryExec::try_new_exec(
             &[partial_batches],
-            Arc::clone(&input.partial_schema),
+            Arc::clone(&partial_schema),
             None,
         )?;
 
         Ok(Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
-            input.group_by.as_final(),
-            input.aggregates.clone(),
-            vec![None; input.aggregates.len()],
+            group_by.as_final(),
+            aggregates.clone(),
+            vec![None; aggregates.len()],
             partial_input,
-            Arc::clone(&input.raw_schema),
+            Arc::clone(&raw_schema),
         )?))
     }
 
@@ -2641,10 +2616,10 @@ mod tests {
     }
 
     async fn final_aggregate_peak_mem_used(
-        input: &FinalAggregateBuildInput,
+        aggregate: &Arc<AggregateExec>,
+        num_groups: usize,
         batch_size: usize,
     ) -> Result<usize> {
-        let aggregate = final_aggregate(input)?;
         let task_ctx = memory_limited_aggregate_join_task_ctx(batch_size, None)?;
         let batches = common::collect(aggregate.execute(0, task_ctx)?).await?;
 
@@ -2654,7 +2629,7 @@ mod tests {
         );
         assert_eq!(
             batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
-            input.num_groups
+            num_groups
         );
 
         let metrics = aggregate.metrics().expect("aggregate metrics");
@@ -2671,12 +2646,13 @@ mod tests {
     }
 
     async fn run_aggregate_build_side_join(
-        input: &FinalAggregateBuildInput,
+        aggregate: Arc<AggregateExec>,
+        num_groups: usize,
         batch_size: usize,
         memory_limit: usize,
     ) -> Result<Vec<RecordBatch>> {
-        let aggregate: Arc<dyn ExecutionPlan> = final_aggregate(input)?;
-        let right = probe_side(input.num_groups)?;
+        let aggregate: Arc<dyn ExecutionPlan> = aggregate;
+        let right = probe_side(num_groups)?;
         let on = vec![(
             Arc::new(Column::new_with_schema("group_key", &aggregate.schema())?) as _,
             Arc::new(Column::new_with_schema("probe_key", &right.schema())?) as _,
@@ -2704,14 +2680,18 @@ mod tests {
         const NUM_GROUPS: usize = BATCH_SIZE * 32 + 1;
         const EXPECTED_JOIN_ROWS: usize = 3;
 
-        let aggregate_input = final_aggregate_build_input(NUM_GROUPS, BATCH_SIZE).await?;
+        let aggregate = final_aggregate_build_side(NUM_GROUPS, BATCH_SIZE).await?;
         let aggregate_peak_mem_used =
-            final_aggregate_peak_mem_used(&aggregate_input, BATCH_SIZE).await?;
+            final_aggregate_peak_mem_used(&aggregate, NUM_GROUPS, BATCH_SIZE).await?;
         let memory_limit = aggregate_peak_mem_used * 2;
 
-        let batches =
-            run_aggregate_build_side_join(&aggregate_input, BATCH_SIZE, memory_limit)
-                .await?;
+        let batches = run_aggregate_build_side_join(
+            aggregate,
+            NUM_GROUPS,
+            BATCH_SIZE,
+            memory_limit,
+        )
+        .await?;
         assert_eq!(
             batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
             EXPECTED_JOIN_ROWS
