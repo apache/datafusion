@@ -195,7 +195,7 @@ impl SkipAggregationProbe {
         self.num_groups = num_groups;
         if self.input_rows >= self.probe_rows_threshold {
             self.should_skip = self.num_groups as f64 / self.input_rows as f64
-                >= self.probe_ratio_threshold;
+                > self.probe_ratio_threshold;
             // Set is_locked to true only if we have decided to skip, otherwise we can try to skip
             // during processing the next record_batch.
             self.is_locked = self.should_skip;
@@ -644,14 +644,20 @@ impl GroupedHashAggregateStream {
                 options.skip_partial_aggregation_probe_rows_threshold;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
-            let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Rows)
-                .counter("skipped_aggregation_rows", partition);
-            Some(SkipAggregationProbe::new(
-                probe_rows_threshold,
-                probe_ratio_threshold,
-                skipped_aggregation_rows,
-            ))
+            // A threshold >= 1.0 means the ratio (num_groups / input_rows) can
+            // never exceed it, so the feature is effectively disabled.
+            if probe_ratio_threshold >= 1.0 {
+                None
+            } else {
+                let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
+                    .with_category(MetricCategory::Rows)
+                    .counter("skipped_aggregation_rows", partition);
+                Some(SkipAggregationProbe::new(
+                    probe_rows_threshold,
+                    probe_ratio_threshold,
+                    skipped_aggregation_rows,
+                ))
+            }
         } else {
             None
         };

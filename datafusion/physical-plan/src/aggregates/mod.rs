@@ -3791,6 +3791,79 @@ mod tests {
         Ok(())
     }
 
+    /// When `skip_partial_aggregation_probe_ratio_threshold` is set to 1.0,
+    /// the feature must be effectively disabled: even with 100% cardinality
+    /// (every row is a unique group), no rows should be skipped.
+    #[tokio::test]
+    async fn test_skip_aggregation_disabled_at_threshold_one() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("val", DataType::Int32, true),
+        ]));
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
+
+        // All rows have unique keys => ratio = 1.0 (100% cardinality)
+        let input_data = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+        ];
+
+        let input =
+            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            schema,
+        )?);
+
+        let mut session_config = SessionConfig::default();
+        // Set a very low probe threshold so the ratio check fires immediately
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+            &ScalarValue::Int64(Some(1)),
+        );
+        // threshold=1.0 must disable the feature entirely
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+            &ScalarValue::Float64(Some(1.0)),
+        );
+
+        let ctx = TaskContext::default().with_session_config(session_config);
+        collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let skipped_rows = metrics
+            .sum_by_name("skipped_aggregation_rows")
+            .map(|m| m.as_usize())
+            .unwrap_or(0);
+
+        assert_eq!(
+            skipped_rows, 0,
+            "threshold=1.0 should disable skip aggregation, but {skipped_rows} rows were skipped"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn group_exprs_nullable() -> Result<()> {
         let input_schema = Arc::new(Schema::new(vec![
