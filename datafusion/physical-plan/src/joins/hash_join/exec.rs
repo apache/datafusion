@@ -2125,6 +2125,7 @@ mod tests {
         Ok((left_schema, right_schema, on))
     }
 
+    use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
     use crate::test::{TestMemoryExec, assert_join_metrics};
@@ -2145,9 +2146,14 @@ mod tests {
         exec_err, internal_err,
     };
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_physical_expr::aggregate::{
+        AggregateExprBuilder, AggregateFunctionExpr,
+    };
+    use datafusion_physical_expr::expressions::{BinaryExpr, Literal, col};
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
     use rstest::*;
@@ -2498,6 +2504,261 @@ mod tests {
         let metrics = join.metrics().unwrap();
 
         Ok((columns, batches, metrics))
+    }
+
+    #[derive(Clone)]
+    struct FinalAggregateBuildInput {
+        raw_schema: SchemaRef,
+        partial_schema: SchemaRef,
+        group_by: PhysicalGroupBy,
+        aggregates: Vec<Arc<AggregateFunctionExpr>>,
+        partial_batches: Vec<RecordBatch>,
+        num_groups: usize,
+    }
+
+    fn memory_limited_aggregate_join_task_ctx(
+        batch_size: usize,
+        memory_limit: Option<usize>,
+    ) -> Result<Arc<TaskContext>> {
+        let mut session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        // Keep the repro focused on normal hash aggregation and hash join paths.
+        session_config
+            .options_mut()
+            .execution
+            .skip_partial_aggregation_probe_rows_threshold = usize::MAX;
+        session_config
+            .options_mut()
+            .execution
+            .perfect_hash_join_small_build_threshold = 0;
+        session_config
+            .options_mut()
+            .execution
+            .perfect_hash_join_min_key_density = f64::INFINITY;
+
+        let mut runtime_builder = RuntimeEnvBuilder::new().with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+        );
+        if let Some(memory_limit) = memory_limit {
+            runtime_builder = runtime_builder.with_memory_limit(memory_limit, 1.0);
+        }
+
+        Ok(Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime_builder.build_arc()?),
+        ))
+    }
+
+    async fn final_aggregate_build_input(
+        num_groups: usize,
+        batch_size: usize,
+    ) -> Result<FinalAggregateBuildInput> {
+        let raw_schema = Arc::new(Schema::new(vec![
+            Field::new("group_key", DataType::UInt32, false),
+            Field::new("value", DataType::UInt64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&raw_schema),
+            vec![
+                Arc::new(UInt32Array::from_iter_values(0..num_groups as u32)),
+                Arc::new(UInt64Array::from(vec![1; num_groups])),
+            ],
+        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&raw_schema), None)?;
+
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("group_key", &raw_schema)?,
+            "group_key".to_string(),
+        )]);
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value", &raw_schema)?])
+                .schema(Arc::clone(&raw_schema))
+                .alias("count_value")
+                .build()?,
+        )];
+        let partial_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregates.clone(),
+            vec![None],
+            input,
+            Arc::clone(&raw_schema),
+        )?);
+        let partial_schema = partial_aggregate.schema();
+        let task_ctx = memory_limited_aggregate_join_task_ctx(batch_size, None)?;
+        let partial_batches =
+            common::collect(partial_aggregate.execute(0, task_ctx)?).await?;
+
+        Ok(FinalAggregateBuildInput {
+            raw_schema,
+            partial_schema,
+            group_by,
+            aggregates,
+            partial_batches,
+            num_groups,
+        })
+    }
+
+    fn final_aggregate(input: &FinalAggregateBuildInput) -> Result<Arc<AggregateExec>> {
+        let partial_batches = input.partial_batches.clone();
+        let partial_input = TestMemoryExec::try_new_exec(
+            &[partial_batches],
+            Arc::clone(&input.partial_schema),
+            None,
+        )?;
+
+        Ok(Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            input.group_by.as_final(),
+            input.aggregates.clone(),
+            vec![None; input.aggregates.len()],
+            partial_input,
+            Arc::clone(&input.raw_schema),
+        )?))
+    }
+
+    fn probe_side(num_groups: usize) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "probe_key",
+            DataType::UInt32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![
+                0,
+                (num_groups / 2) as u32,
+                (num_groups - 1) as u32,
+            ]))],
+        )?;
+
+        let exec: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?;
+
+        Ok(exec)
+    }
+
+    async fn final_aggregate_peak_mem_used(
+        input: &FinalAggregateBuildInput,
+        batch_size: usize,
+    ) -> Result<usize> {
+        let aggregate = final_aggregate(input)?;
+        let task_ctx = memory_limited_aggregate_join_task_ctx(batch_size, None)?;
+        let batches = common::collect(aggregate.execute(0, task_ctx)?).await?;
+
+        assert!(
+            batches.len() > 1,
+            "expected final aggregate output to be split into multiple batches"
+        );
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            input.num_groups
+        );
+
+        let metrics = aggregate.metrics().expect("aggregate metrics");
+        let peak_mem_used = metrics
+            .sum_by_name("peak_mem_used")
+            .expect("peak_mem_used metric")
+            .as_usize();
+        assert!(
+            peak_mem_used > 0,
+            "expected non-zero final aggregate peak memory"
+        );
+
+        Ok(peak_mem_used)
+    }
+
+    async fn run_aggregate_build_side_join(
+        input: &FinalAggregateBuildInput,
+        batch_size: usize,
+        memory_limit: usize,
+    ) -> Result<Vec<RecordBatch>> {
+        let aggregate: Arc<dyn ExecutionPlan> = final_aggregate(input)?;
+        let right = probe_side(input.num_groups)?;
+        let on = vec![(
+            Arc::new(Column::new_with_schema("group_key", &aggregate.schema())?) as _,
+            Arc::new(Column::new_with_schema("probe_key", &right.schema())?) as _,
+        )];
+        let join = HashJoinExec::try_new(
+            aggregate,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        let task_ctx =
+            memory_limited_aggregate_join_task_ctx(batch_size, Some(memory_limit))?;
+        common::collect(join.execute(0, task_ctx)?).await
+    }
+
+    async fn first_passing_aggregate_build_side_join_multiplier(
+        input: &FinalAggregateBuildInput,
+        batch_size: usize,
+        aggregate_peak_mem_used: usize,
+        max_multiplier: usize,
+    ) -> Result<Option<usize>> {
+        for multiplier in 3..=max_multiplier {
+            if run_aggregate_build_side_join(
+                input,
+                batch_size,
+                aggregate_peak_mem_used * multiplier,
+            )
+            .await
+            .is_ok()
+            {
+                return Ok(Some(multiplier));
+            }
+        }
+
+        Ok(None)
+    }
+
+    #[tokio::test]
+    async fn build_side_final_aggregate_respects_grouped_memory_limit() -> Result<()> {
+        const BATCH_SIZE: usize = 8192;
+        const NUM_GROUPS: usize = BATCH_SIZE * 32 + 1;
+        const EXPECTED_JOIN_ROWS: usize = 3;
+
+        let aggregate_input = final_aggregate_build_input(NUM_GROUPS, BATCH_SIZE).await?;
+        let aggregate_peak_mem_used =
+            final_aggregate_peak_mem_used(&aggregate_input, BATCH_SIZE).await?;
+        let memory_limit = aggregate_peak_mem_used * 2;
+
+        match run_aggregate_build_side_join(&aggregate_input, BATCH_SIZE, memory_limit)
+            .await
+        {
+            Ok(batches) => {
+                assert_eq!(
+                    batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                    EXPECTED_JOIN_ROWS
+                );
+            }
+            Err(err) => {
+                let passing_multiplier =
+                    first_passing_aggregate_build_side_join_multiplier(
+                        &aggregate_input,
+                        BATCH_SIZE,
+                        aggregate_peak_mem_used,
+                        64,
+                    )
+                    .await?;
+                panic!(
+                    "HashJoinExec build side should pass with a memory limit of 2x \
+                    final AggregateExec peak grouped memory ({aggregate_peak_mem_used} bytes), \
+                    but failed with limit {memory_limit} bytes: {err}. Current smallest \
+                    passing multiplier up to 64x: {passing_multiplier:?}"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     #[apply(hash_join_exec_configs)]
