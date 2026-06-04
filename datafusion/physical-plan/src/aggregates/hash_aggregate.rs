@@ -15,18 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Grouped hash aggregation for simple multi-stage aggregation paths.
+//! 2-stage hash aggregation stream implementation.
 //!
-//! This module handles the basic grouped two-stage paths:
+//! See comments in [`InitialPartialHashAggregateStream`] and [`PartialFinalHashAggregateStream`]
+//! for details.
 //!
-//! ```text
-//! input rows -> GROUP BY hash table -> accumulator state rows
-//! state rows -> GROUP BY hash table -> final aggregate rows
-//! ```
+//! Note these streams are an incremental migration of the existing
+//! [`crate::aggregates::row_hash::GroupedHashAggregateStream`].
 //!
-//! `AggregateExec` keeps finite-memory, ordered, limit, grouping-set,
-//! `partial state -> partial state`, and single-stage aggregation on
-//! `GroupedHashAggregateStream` for now.
+//! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
 use std::sync::Arc;
 use std::task::{Context, Poll};

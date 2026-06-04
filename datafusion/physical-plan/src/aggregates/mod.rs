@@ -503,12 +503,39 @@ impl PartialEq for PhysicalGroupBy {
     }
 }
 
+/// Streams used by [`AggregateExec`].
+///
+/// # Stream Variant Schema Notation
+/// For example, `SELECT g, AVG(x) FROM t GROUP BY g` uses these schemas:
+///
+/// ```text
+/// initial input:              [g, x]
+/// partial state:              [g, AVG(x) state columns, e.g. sum/count]
+/// final result:               [g, AVG(x)]
+/// ```
 #[expect(clippy::large_enum_variant)]
 enum StreamType {
+    /// Single group (no group by) aggregate stream.
+    /// Input output scheme: initial input -> final result
     AggregateStream(AggregateStream),
+    /// Partial stage of the hash aggregation
+    /// Input output scheme: initial input -> partial state
     InitialPartialHash(InitialPartialHashAggregateStream),
+    /// Final stage of the hash aggregation
+    /// Input output scheme: partial state -> final result
     PartialFinalHash(PartialFinalHashAggregateStream),
+    /// Hash aggregation resused for multiple stages
+    ///
+    /// Note this is being incrementally migrated to dedicated streams like
+    /// [`StreamType::InitialPartialHash`] and [`StreamType::PartialFinalHash`]
+    ///
+    /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
     GroupedHash(GroupedHashAggregateStream),
+    /// Grouped TopK aggregate stream.
+    /// Input output scheme: initial input -> final result
+    ///
+    /// Used for grouped aggregation with LIMIT / ordering, where the stream keeps
+    /// only the top groups required by the query.
     GroupedPriorityQueue(GroupedTopKAggregateStream),
 }
 
