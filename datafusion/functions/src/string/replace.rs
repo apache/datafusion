@@ -268,14 +268,8 @@ fn apply_replace<B: BulkNullStringArrayBuilder>(
     }
 
     if from.is_empty() {
-        // Empty `from`: insert `to` before each character and at both ends.
-        builder.append_with(|w| {
-            w.write_str(to);
-            for ch in string.chars() {
-                w.write_char(ch);
-                w.write_str(to);
-            }
-        });
+        // PostgreSQL returns the input unchanged when `from` is empty (#22253).
+        builder.append_value(string);
         return;
     }
 
@@ -344,6 +338,19 @@ mod tests {
             &str,
             Utf8,
             StringArray
+        );
+
+        test_function!(
+            ReplaceFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("abc")))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("x")))),
+            ],
+            Ok(Some("abc")),
+            &str,
+            LargeUtf8,
+            LargeStringArray
         );
 
         Ok(())
