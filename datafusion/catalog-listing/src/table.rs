@@ -16,14 +16,17 @@
 // under the License.
 
 use crate::config::SchemaSource;
-use crate::helpers::{expr_applicable_for_cols, pruned_partition_list};
+use crate::helpers::{
+    expr_applicable_for_cols, filter_partitioned_file, pruned_partition_list,
+};
 use crate::{ListingOptions, ListingTableConfig};
-use arrow::datatypes::{Field, Schema, SchemaBuilder, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    Constraints, SchemaExt, Statistics, internal_datafusion_err, plan_err, project_schema,
+    Constraints, DFSchema, ScalarValue, SchemaExt, SplitPoint, Statistics,
+    internal_datafusion_err, plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -37,12 +40,17 @@ use datafusion_datasource::{
 use datafusion_execution::cache::cache_manager::{FileStatisticsCache, TableScopedPath};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
-use datafusion_physical_expr::create_lex_ordering;
+use datafusion_expr::{
+    Expr, Partitioning as LogicalPartitioning, TableProviderFilterPushDown, TableType,
+};
+use datafusion_expr_common::casts::try_cast_literal_to_type;
+use datafusion_physical_expr::{
+    Partitioning as PhysicalPartitioning, RangePartitioning as PhysicalRangePartitioning,
+    create_lex_ordering, create_physical_expr, create_physical_sort_expr,
+};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::Partitioning;
 use datafusion_physical_plan::empty::EmptyExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
@@ -449,6 +457,112 @@ fn derive_common_ordering_from_files(file_groups: &[FileGroup]) -> Option<LexOrd
     }
 }
 
+fn create_physical_output_partitioning(
+    partitioning: &LogicalPartitioning,
+    schema: &SchemaRef,
+    execution_props: &ExecutionProps,
+) -> datafusion_common::Result<PhysicalPartitioning> {
+    let df_schema = DFSchema::try_from(Arc::clone(schema))?;
+    match partitioning {
+        LogicalPartitioning::RoundRobinBatch(_) => {
+            datafusion_common::not_impl_err!(
+                "RoundRobinBatch output partitioning is not supported for ListingTable"
+            )
+        }
+        LogicalPartitioning::Hash(exprs, partition_count) => {
+            let exprs = exprs
+                .iter()
+                .map(|expr| create_physical_expr(expr, &df_schema, execution_props))
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            Ok(PhysicalPartitioning::Hash(exprs, *partition_count))
+        }
+        LogicalPartitioning::Range(range) => {
+            let ordering = range
+                .ordering()
+                .iter()
+                .map(|expr| create_physical_sort_expr(expr, &df_schema, execution_props))
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            let Some(ordering) = LexOrdering::new(ordering) else {
+                return plan_err!(
+                    "Range output partitioning must have at least one ordering expression"
+                );
+            };
+            let split_points =
+                normalize_range_split_points(&ordering, range.split_points(), schema)?;
+            let range = PhysicalRangePartitioning::try_new(ordering, split_points)?;
+            Ok(PhysicalPartitioning::Range(range))
+        }
+        LogicalPartitioning::DistributeBy(_) => {
+            datafusion_common::not_impl_err!(
+                "DistributeBy output partitioning is not supported for ListingTable"
+            )
+        }
+    }
+}
+
+fn normalize_range_split_points(
+    ordering: &LexOrdering,
+    split_points: &[SplitPoint],
+    schema: &SchemaRef,
+) -> datafusion_common::Result<Vec<SplitPoint>> {
+    split_points
+        .iter()
+        .enumerate()
+        .map(|(split_idx, split_point)| {
+            let values = split_point
+                .values()
+                .iter()
+                .zip(ordering.iter())
+                .enumerate()
+                .map(|(value_idx, (value, sort_expr))| {
+                    let target_type = sort_expr.expr.data_type(schema.as_ref())?;
+                    normalize_range_split_point_value(
+                        value,
+                        &target_type,
+                        split_idx,
+                        value_idx,
+                    )
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            Ok(SplitPoint::new(values))
+        })
+        .collect()
+}
+
+fn normalize_range_split_point_value(
+    value: &ScalarValue,
+    target_type: &DataType,
+    split_idx: usize,
+    value_idx: usize,
+) -> datafusion_common::Result<ScalarValue> {
+    let value_type = value.data_type();
+    if &value_type == target_type {
+        return Ok(value.clone());
+    }
+
+    if let Some(value) = try_cast_literal_to_type(value, target_type) {
+        return Ok(value);
+    }
+
+    plan_err!(
+        "Range output partitioning split point {split_idx} value {value_idx} has type {value_type}, but ordering expression has type {target_type}"
+    )
+}
+
+fn filter_file_group_by_partition_filters(
+    file_group: FileGroup,
+    filters: &[Expr],
+    df_schema: &DFSchema,
+) -> datafusion_common::Result<FileGroup> {
+    let files = file_group
+        .into_inner()
+        .into_iter()
+        .map(|file| filter_partitioned_file(file, filters, df_schema))
+        .filter_map(Result::transpose)
+        .collect::<datafusion_common::Result<Vec<_>>>()?;
+    Ok(FileGroup::new(files))
+}
+
 // Expressions can be used for partition pruning if they can be evaluated using
 // only the partition columns and there are partition columns.
 fn can_be_evaluated_for_partition_pruning(
@@ -516,21 +630,18 @@ impl TableProvider for ListingTable {
                 can_be_evaluated_for_partition_pruning(&table_partition_col_names, filter)
             });
 
-        // We should not limit the number of partitioned files to scan if there are filters and limit
-        // at the same time. This is because the limit should be applied after the filters are applied.
-        let statistic_file_limit = if filters.is_empty() { limit } else { None };
+        let declared_output_partitioning = self.options.output_partitioning.as_ref();
 
-        let declared_output_partitioning = if partition_filters.is_empty() {
-            self.options.output_partitioning.clone()
-        } else {
-            // Partition pruning can remove files before grouping. Without a
-            // stable file-to-declared-partition mapping, regrouping the
-            // remaining files could shift them into the wrong partition index.
-            None
-        };
-        let target_partitions = declared_output_partitioning
-            .as_ref()
-            .map(Partitioning::partition_count)
+        // We should not limit files before assigning declared output partitions
+        // or before applying non-partition filters.
+        let statistic_file_limit =
+            if filters.is_empty() && declared_output_partitioning.is_none() {
+                limit
+            } else {
+                None
+            };
+        let file_group_count = declared_output_partitioning
+            .and_then(LogicalPartitioning::partition_count)
             .unwrap_or_else(|| state.config().target_partitions());
 
         let ListFilesResult {
@@ -538,13 +649,7 @@ impl TableProvider for ListingTable {
             statistics,
             grouped_by_partition: partitioned_by_file_group,
         } = self
-            .list_files_for_scan_with_target(
-                state,
-                &partition_filters,
-                statistic_file_limit,
-                target_partitions,
-                declared_output_partitioning.is_some(),
-            )
+            .list_files_for_scan(state, &partition_filters, statistic_file_limit)
             .await?;
 
         // if no files need to be read, return an `EmptyExec`
@@ -569,7 +674,7 @@ impl TableProvider for ListingTable {
                         &self.table_schema,
                         &partitioned_file_lists,
                         output_ordering,
-                        target_partitions,
+                        file_group_count,
                     )
                 })
             })
@@ -577,7 +682,7 @@ impl TableProvider for ListingTable {
         {
             Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
             Some(Ok(new_groups)) => {
-                if new_groups.len() <= target_partitions {
+                if new_groups.len() <= file_group_count {
                     partitioned_file_lists = new_groups;
                 } else {
                     log::debug!(
@@ -586,6 +691,26 @@ impl TableProvider for ListingTable {
                 }
             }
             None => {} // no ordering required
+        };
+
+        let output_partitioning = if let Some(output_partitioning) =
+            declared_output_partitioning
+        {
+            let output_partitioning = create_physical_output_partitioning(
+                output_partitioning,
+                &self.table_schema,
+                state.execution_props(),
+            )?;
+            let partition_count = output_partitioning.partition_count();
+            if partitioned_file_lists.len() != partition_count {
+                return plan_err!(
+                    "ListingTable output_partitioning has {partition_count} partitions, but the scan has {} file groups",
+                    partitioned_file_lists.len()
+                );
+            }
+            Some(output_partitioning)
+        } else {
+            None
         };
 
         let Some(object_store_url) =
@@ -597,21 +722,17 @@ impl TableProvider for ListingTable {
         };
 
         let file_source = self.create_file_source();
-        let mut scan_config_builder =
-            FileScanConfigBuilder::new(object_store_url, file_source)
-                .with_file_groups(partitioned_file_lists)
-                .with_constraints(self.constraints.clone())
-                .with_statistics(statistics)
-                .with_projection_indices(projection)?
-                .with_limit(limit)
-                .with_output_ordering(output_ordering)
-                .with_output_partitioning(declared_output_partitioning)
-                .with_expr_adapter(self.expr_adapter_factory.clone());
-        if partitioned_by_file_group {
-            scan_config_builder =
-                scan_config_builder.with_partitioned_by_file_group(true);
-        }
-        let scan_config = scan_config_builder.build();
+        let scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
+            .with_file_groups(partitioned_file_lists)
+            .with_constraints(self.constraints.clone())
+            .with_statistics(statistics)
+            .with_projection_indices(projection)?
+            .with_limit(limit)
+            .with_output_ordering(output_ordering)
+            .with_output_partitioning(output_partitioning)
+            .with_expr_adapter(self.expr_adapter_factory.clone())
+            .with_partitioned_by_file_group(partitioned_by_file_group)
+            .build();
 
         // create the execution plan
         let plan = self
@@ -730,10 +851,8 @@ impl ListingTable {
     /// The list is grouped to let the execution plan know how the files should
     /// be distributed to different threads / executors.
     ///
-    /// If [`ListingOptions::output_partitioning`] is set, the returned file
-    /// groups preserve that declared partition count, including empty trailing
-    /// groups when needed, rather than using the scan-time target partition
-    /// count.
+    /// If [`ListingOptions::output_partitioning`] is set, returns one file
+    /// group per declared partition, including empty trailing groups.
     pub async fn list_files_for_scan<'a>(
         &'a self,
         ctx: &'a dyn Session,
@@ -741,28 +860,12 @@ impl ListingTable {
         limit: Option<usize>,
     ) -> datafusion_common::Result<ListFilesResult> {
         let declared_output_partitioning = self.options.output_partitioning.as_ref();
-        let target_partitions = declared_output_partitioning
-            .map(Partitioning::partition_count)
+        let file_group_count = declared_output_partitioning
+            .and_then(LogicalPartitioning::partition_count)
             .unwrap_or_else(|| ctx.config().target_partitions());
-        self.list_files_for_scan_with_target(
-            ctx,
-            filters,
-            limit,
-            target_partitions,
-            declared_output_partitioning.is_some(),
-        )
-        .await
-    }
+        let has_declared_partitioning = declared_output_partitioning.is_some();
 
-    async fn list_files_for_scan_with_target<'a>(
-        &'a self,
-        ctx: &'a dyn Session,
-        filters: &'a [Expr],
-        limit: Option<usize>,
-        target_partitions: usize,
-        preserve_partition_count: bool,
-    ) -> datafusion_common::Result<ListFilesResult> {
-        if target_partitions == 0 {
+        if file_group_count == 0 {
             return plan_err!(
                 "ListingTable requires target_partitions to be greater than zero"
             );
@@ -777,13 +880,23 @@ impl ListingTable {
                 grouped_by_partition: false,
             });
         };
+        // Listing-time pruning changes the file set before `split_files`
+        // assigns files to output partitions. For declared output partitioning,
+        // list the full file set, split into declared groups, then prune within
+        // each group below.
+        let listing_time_filters = if has_declared_partitioning {
+            &[]
+        } else {
+            filters
+        };
+
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
             pruned_partition_list(
                 ctx,
                 store.as_ref(),
                 table_path,
-                filters,
+                listing_time_filters,
                 &self.options.file_extension,
                 &self.options.table_partition_cols,
             )
@@ -809,8 +922,13 @@ impl ListingTable {
             .boxed()
             .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
+        let file_limit = if has_declared_partitioning {
+            None
+        } else {
+            limit
+        };
         let (file_group, inexact_stats) =
-            get_files_with_limit(files, limit, ctx.config().collect_statistics()).await?;
+            get_files_with_limit(files, file_limit, ctx.config().collect_statistics()).await?;
 
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
         //
@@ -819,25 +937,45 @@ impl ListingTable {
         // hash repartitioning for aggregates and joins on partition columns.
         let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
-        let (mut file_groups, grouped_by_partition) = if preserve_partition_count {
-            (file_group.split_files(target_partitions), false)
+        let (mut file_groups, grouped_by_partition) = if has_declared_partitioning {
+            (file_group.split_files(file_group_count), false)
         } else if threshold > 0 && !self.options.table_partition_cols.is_empty() {
-            let grouped = file_group.group_by_partition_values(target_partitions);
+            let grouped = file_group.group_by_partition_values(file_group_count);
             if grouped.len() >= threshold {
                 (grouped, true)
             } else {
                 let all_files: Vec<_> =
                     grouped.into_iter().flat_map(|g| g.into_inner()).collect();
                 (
-                    FileGroup::new(all_files).split_files(target_partitions),
+                    FileGroup::new(all_files).split_files(file_group_count),
                     false,
                 )
             }
         } else {
-            (file_group.split_files(target_partitions), false)
+            (file_group.split_files(file_group_count), false)
         };
-        if preserve_partition_count && !file_groups.is_empty() {
-            file_groups.resize_with(target_partitions, || FileGroup::new(vec![]));
+        if has_declared_partitioning && !file_groups.is_empty() {
+            file_groups.resize_with(file_group_count, || FileGroup::new(vec![]));
+        }
+
+        if has_declared_partitioning && !filters.is_empty() {
+            let df_schema = DFSchema::from_unqualified_fields(
+                self.options
+                    .table_partition_cols
+                    .iter()
+                    .map(|(name, data_type)| Field::new(name, data_type.clone(), true))
+                    .collect(),
+                Default::default(),
+            )?;
+
+            file_groups = file_groups
+                .into_iter()
+                .map(|file_group| {
+                    filter_file_group_by_partition_filters(
+                        file_group, filters, &df_schema,
+                    )
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
         }
 
         let (file_groups, stats) = compute_all_files_statistics(

@@ -210,8 +210,8 @@ pub struct FileScanConfig {
     ///
     /// Expressions are in terms of the full table schema, before scan
     /// projection or filtering. If the partition count does not match the
-    /// number of file groups, [`DataSource::output_partitioning`] falls back to
-    /// [`Partitioning::UnknownPartitioning`].
+    /// number of file groups, [`DataSource::output_partitioning`] logs a warning
+    /// and falls back to [`Partitioning::UnknownPartitioning`].
     pub output_partitioning: Option<Partitioning>,
 }
 
@@ -775,10 +775,13 @@ impl DataSource for FileScanConfig {
     /// Returns the output partitioning for this file scan.
     ///
     /// When output partitioning is declared, this returns it after remapping
-    /// through the scan projection. Otherwise, when `partitioned_by_file_group`
-    /// is true, this returns `Partitioning::Hash` on the Hive partition
-    /// columns, allowing the optimizer to skip repartitioning for compatible
-    /// aggregates and joins.
+    /// through the scan projection. If the declared partition count does not
+    /// match the number of file groups, this logs a warning and returns
+    /// [`Partitioning::UnknownPartitioning`] to avoid advertising an invalid
+    /// partitioning property. Otherwise, when `partitioned_by_file_group` is
+    /// true, this returns `Partitioning::Hash` on the Hive partition columns,
+    /// allowing the optimizer to skip repartitioning for compatible aggregates
+    /// and joins.
     ///
     /// Tradeoffs
     /// - Benefit: Eliminates `RepartitionExec` for compatible queries.
@@ -801,7 +804,7 @@ impl DataSource for FileScanConfig {
             return Partitioning::UnknownPartitioning(self.file_groups.len());
         };
         if output_partitioning.partition_count() != self.file_groups.len() {
-            debug!(
+            warn!(
                 "Declared output partitioning has {} partitions, but file scan has {} file groups. Falling back to UnknownPartitioning.",
                 output_partitioning.partition_count(),
                 self.file_groups.len()

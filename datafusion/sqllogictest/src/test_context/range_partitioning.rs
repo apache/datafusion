@@ -19,16 +19,13 @@ use std::fs::{create_dir_all, remove_dir_all, write};
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::common::ScalarValue;
+use datafusion::common::{ScalarValue, SplitPoint};
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion::physical_plan::{Partitioning, RangePartitioning, SplitPoint};
+use datafusion::logical_expr::{Partitioning, RangePartitioning, col};
 use datafusion::prelude::SessionContext;
 
 // ==============================================================================
@@ -43,14 +40,9 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         Field::new("non_range_key", DataType::Int32, false),
         Field::new("value", DataType::Int32, false),
     ]));
-    let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("range_key", 0)),
-        SortOptions::default(),
-    )])
-    .expect("range ordering should not be empty");
     let output_partitioning = Partitioning::Range(
         RangePartitioning::try_new(
-            ordering,
+            vec![col("range_key").sort(true, true)],
             vec![
                 SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
                 SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),

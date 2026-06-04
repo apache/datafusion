@@ -20,8 +20,7 @@ use datafusion_catalog::Session;
 use datafusion_common::plan_err;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_format::FileFormat;
-use datafusion_expr::SortExpr;
-use datafusion_physical_expr::Partitioning;
+use datafusion_expr::{Partitioning, SortExpr};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -56,10 +55,16 @@ pub struct ListingOptions {
     pub file_sort_order: Vec<Vec<SortExpr>>,
     /// Optional declared output partitioning for this table.
     ///
-    /// Expressions are specified against the full table schema. When set,
-    /// [`ListingTable`](crate::ListingTable) creates one scan file group per
-    /// declared output partition instead of the scan-time target partition
-    /// count. Empty file groups are added when needed to preserve that count.
+    /// This source declaration supports hash and range partitioning.
+    /// Expressions are logical expressions against the full table schema. This
+    /// declaration is authoritative: when set, [`ListingTable`](crate::ListingTable)
+    /// creates one scan file group per declared output partition instead of the
+    /// scan-time target partition count. Empty file groups are added when needed
+    /// to preserve that count.
+    ///
+    /// For range partitioning, split point values are validated against the
+    /// ordering expression types when planning the scan. Value-preserving casts
+    /// are accepted, but incompatible or lossy split point values are rejected.
     ///
     /// Files are sorted by path before grouping. DataFusion does not validate
     /// that rows match the declaration, so callers must ensure file group `i`
@@ -129,7 +134,8 @@ impl ListingOptions {
     /// Set declared output partitioning on [`ListingOptions`] and returns self.
     ///
     /// See [`Self::output_partitioning`]. Empty file groups are added when
-    /// needed to preserve the declared partition count.
+    /// needed to preserve the declared partition count. Range split point values
+    /// are validated against the table schema when planning the scan.
     pub fn with_output_partitioning(
         mut self,
         output_partitioning: Option<Partitioning>,
