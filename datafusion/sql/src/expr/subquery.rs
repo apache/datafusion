@@ -36,11 +36,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.pop_outer_query_schema();
         Ok(Expr::Exists(Exists {
-            subquery: Subquery {
-                subquery: Arc::new(sub_plan),
-                outer_ref_columns,
-                spans: Spans::new(),
-            },
+            subquery: Subquery::new(Arc::new(sub_plan), outer_ref_columns, Spans::new()),
             negated,
         }))
     }
@@ -81,11 +77,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         Ok(Expr::InSubquery(InSubquery::new(
             Box::new(expr_obj),
-            Subquery {
-                subquery: Arc::new(sub_plan),
-                outer_ref_columns,
-                spans,
-            },
+            Subquery::new(Arc::new(sub_plan), outer_ref_columns, spans),
             negated,
         )))
     }
@@ -118,11 +110,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             "Select only one column in the subquery",
         )?;
 
-        Ok(Expr::ScalarSubquery(Subquery {
-            subquery: Arc::new(sub_plan),
+        Ok(Expr::ScalarSubquery(Subquery::new(
+            Arc::new(sub_plan),
             outer_ref_columns,
             spans,
-        }))
+        )))
     }
 
     fn validate_single_column(
@@ -196,11 +188,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let expr_obj = self.sql_to_expr(left_expr, input_schema, planner_context)?;
         Ok(Expr::SetComparison(SetComparison::new(
             Box::new(expr_obj),
-            Subquery {
-                subquery: Arc::new(sub_plan),
-                outer_ref_columns,
-                spans,
-            },
+            Subquery::new(Arc::new(sub_plan), outer_ref_columns, spans),
             self.parse_sql_binary_op(compare_op)?,
             quantifier,
         )))

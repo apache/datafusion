@@ -347,19 +347,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match plan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 subquery_alias(
-                    LogicalPlan::Subquery(Subquery {
-                        subquery: input,
+                    LogicalPlan::Subquery(Subquery::new(
+                        input,
                         outer_ref_columns,
-                        spans: Spans::new(),
-                    }),
+                        Spans::new(),
+                    )),
                     alias,
                 )
             }
-            plan => Ok(LogicalPlan::Subquery(Subquery {
-                subquery: Arc::new(plan),
+            plan => Ok(LogicalPlan::Subquery(Subquery::new(
+                Arc::new(plan),
                 outer_ref_columns,
-                spans: Spans::new(),
-            })),
+                Spans::new(),
+            ))),
         }
     }
 }

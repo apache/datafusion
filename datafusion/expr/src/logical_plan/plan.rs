@@ -50,6 +50,7 @@ use crate::{
     WindowFunctionDefinition, build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
 };
 
+use crate::execution_props::SubqueryIndex;
 use crate::statistics::StatisticsRequest;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
@@ -959,6 +960,7 @@ impl LogicalPlan {
             LogicalPlan::Subquery(Subquery {
                 outer_ref_columns,
                 spans,
+                scalar_subquery_index,
                 ..
             }) => {
                 self.assert_no_expressions(expr)?;
@@ -968,6 +970,7 @@ impl LogicalPlan {
                     subquery: Arc::new(subquery),
                     outer_ref_columns: outer_ref_columns.clone(),
                     spans: spans.clone(),
+                    scalar_subquery_index: *scalar_subquery_index,
                 }))
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
@@ -4352,6 +4355,8 @@ pub struct Subquery {
     pub outer_ref_columns: Vec<Expr>,
     /// Span information for subquery projection columns
     pub spans: Spans,
+    /// Index assigned by the physical planner for uncorrelated scalar subqueries.
+    pub scalar_subquery_index: Option<SubqueryIndex>,
 }
 
 impl Normalizeable for Subquery {
@@ -4370,10 +4375,25 @@ impl NormalizeEq for Subquery {
                 .iter()
                 .zip(other.outer_ref_columns.iter())
                 .all(|(a, b)| a.normalize_eq(b))
+            && self.scalar_subquery_index == other.scalar_subquery_index
     }
 }
 
 impl Subquery {
+    /// Creates a subquery without a physical planner index.
+    pub fn new(
+        subquery: Arc<LogicalPlan>,
+        outer_ref_columns: Vec<Expr>,
+        spans: Spans,
+    ) -> Self {
+        Self {
+            subquery,
+            outer_ref_columns,
+            spans,
+            scalar_subquery_index: None,
+        }
+    }
+
     pub fn try_from_expr(plan: &Expr) -> Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
@@ -4387,6 +4407,25 @@ impl Subquery {
             subquery: plan,
             outer_ref_columns: self.outer_ref_columns.clone(),
             spans: Spans::new(),
+            scalar_subquery_index: self.scalar_subquery_index,
+        }
+    }
+
+    pub fn with_scalar_subquery_index(&self, index: SubqueryIndex) -> Subquery {
+        Subquery {
+            subquery: Arc::clone(&self.subquery),
+            outer_ref_columns: self.outer_ref_columns.clone(),
+            spans: self.spans.clone(),
+            scalar_subquery_index: Some(index),
+        }
+    }
+
+    pub fn without_scalar_subquery_index(&self) -> Subquery {
+        Subquery {
+            subquery: Arc::clone(&self.subquery),
+            outer_ref_columns: self.outer_ref_columns.clone(),
+            spans: self.spans.clone(),
+            scalar_subquery_index: None,
         }
     }
 
@@ -4401,7 +4440,7 @@ fn plan_contains_volatile(plan: &LogicalPlan) -> bool {
     plan.exists(|node| {
         let mut found = false;
         node.apply_expressions(|expr| {
-            if expr.is_volatile() {
+            if expr.is_volatile_including_subqueries() {
                 found = true;
                 Ok(TreeNodeRecursion::Stop)
             } else {

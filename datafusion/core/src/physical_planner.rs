@@ -79,9 +79,7 @@ use datafusion_common::{
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
-use datafusion_expr::execution_props::{
-    ScalarSubqueryResults, SubqueryIndex, SubqueryKey,
-};
+use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_expr::expr::{
     Alias, GroupingSet, NullTreatment, WindowFunction, WindowFunctionParams,
     physical_name,
@@ -388,58 +386,53 @@ impl DefaultPhysicalPlanner {
         Ok(())
     }
 
-    /// Collect uncorrelated scalar subqueries. We don't descend into nested
-    /// subqueries here: each call to `create_initial_plan` handles subqueries
-    /// at its level and then recurses in order to handle nested subqueries.
+    /// Assign indexes to uncorrelated scalar subqueries at this plan level.
+    ///
+    /// Non-volatile subqueries reuse an index by structure. Volatile subqueries
+    /// always get a fresh index.
     #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Subquery contains Arc with interior mutability but is intentionally used as hash key
-    fn collect_scalar_subqueries(plan: &LogicalPlan) -> Vec<Subquery> {
-        let mut subqueries: IndexMap<SubqueryKey, Subquery> = IndexMap::new();
-        plan.apply(|node| {
-            for expr in node.expressions() {
-                expr.apply(|e| {
-                    if let Expr::ScalarSubquery(sq) = e
-                        && sq.outer_ref_columns.is_empty()
-                    {
-                        subqueries
-                            .entry(SubqueryKey::new(sq))
-                            .or_insert_with(|| sq.clone());
-                    }
-                    Ok(TreeNodeRecursion::Continue)
-                })
-                .expect("infallible");
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .expect("infallible");
-        subqueries.into_values().collect()
-    }
+    fn assign_scalar_subquery_indexes(
+        plan: &LogicalPlan,
+    ) -> Result<(LogicalPlan, Vec<Subquery>)> {
+        let mut dedup: IndexMap<Subquery, SubqueryIndex> = IndexMap::new();
+        let mut subqueries = Vec::new();
 
-    /// Give each volatile uncorrelated scalar subquery occurrence a fresh plan
-    /// pointer so [`SubqueryKey`] can keep otherwise-identical occurrences
-    /// distinct during physical planning.
-    fn freshen_volatile_subqueries(plan: &LogicalPlan) -> Result<LogicalPlan> {
-        Ok(plan
+        let plan = plan
             .clone()
             .transform_down(|node| {
                 node.map_expressions(|expr| {
                     expr.transform_down(|e| {
-                        if let Expr::ScalarSubquery(sq) = &e
+                        if let Expr::ScalarSubquery(ref sq) = e
                             && sq.outer_ref_columns.is_empty()
-                            && sq.is_volatile()
                         {
-                            let fresh = Subquery {
-                                subquery: Arc::new(sq.subquery.as_ref().clone()),
-                                outer_ref_columns: sq.outer_ref_columns.clone(),
-                                spans: sq.spans.clone(),
+                            let volatile = sq.is_volatile();
+                            let dedup_key = sq.clone();
+                            let (index, is_new) = if volatile {
+                                (SubqueryIndex::new(subqueries.len()), true)
+                            } else if let Some(index) = dedup.get(&dedup_key) {
+                                (*index, false)
+                            } else {
+                                (SubqueryIndex::new(subqueries.len()), true)
                             };
-                            Ok(Transformed::yes(Expr::ScalarSubquery(fresh)))
+
+                            let sq = sq.with_scalar_subquery_index(index);
+                            if is_new {
+                                if !volatile {
+                                    dedup.insert(dedup_key, index);
+                                }
+                                subqueries.push(sq.clone());
+                            }
+
+                            Ok(Transformed::yes(Expr::ScalarSubquery(sq)))
                         } else {
                             Ok(Transformed::no(e))
                         }
                     })
                 })
             })?
-            .data)
+            .data;
+
+        Ok((plan, subqueries))
     }
 
     /// Create a physical plan from a logical plan.
@@ -484,19 +477,8 @@ impl DefaultPhysicalPlanner {
                     .await;
             }
 
-            let mut all_subqueries = Self::collect_scalar_subqueries(logical_plan);
-            let freshened = if all_subqueries.iter().any(Subquery::is_volatile) {
-                Some(Self::freshen_volatile_subqueries(logical_plan)?)
-            } else {
-                None
-            };
-            let logical_plan = match &freshened {
-                Some(freshened) => {
-                    all_subqueries = Self::collect_scalar_subqueries(freshened);
-                    freshened
-                }
-                None => logical_plan,
-            };
+            let (logical_plan, all_subqueries) =
+                Self::assign_scalar_subquery_indexes(logical_plan)?;
 
             let (links, index_map) = self
                 .plan_scalar_subqueries(all_subqueries, session_state)
@@ -504,7 +486,7 @@ impl DefaultPhysicalPlanner {
 
             if links.is_empty() {
                 return self
-                    .create_initial_plan_inner(logical_plan, session_state)
+                    .create_initial_plan_inner(&logical_plan, session_state)
                     .await;
             }
 
@@ -524,7 +506,7 @@ impl DefaultPhysicalPlanner {
             let session_state = Cow::Owned(owned);
 
             let plan = self
-                .create_initial_plan_inner(logical_plan, &session_state)
+                .create_initial_plan_inner(&logical_plan, &session_state)
                 .await?;
             Ok(Arc::new(ScalarSubqueryExec::new(plan, links, results)))
         })
@@ -2978,34 +2960,35 @@ impl DefaultPhysicalPlanner {
         Ok(mem_exec)
     }
 
-    /// Build physical plans for scalar subqueries and assign each an ordinal
-    /// `SubqueryIndex`. Returns the links (plan + index) and a map from each
-    /// subquery's `SubqueryKey` to its index.
+    /// Build physical plans for scalar subqueries and return their links plus
+    /// an index map for direct physical expression planning of non-volatile
+    /// subqueries. Volatile subqueries are only resolved by their assigned
+    /// occurrence index so unindexed copies cannot accidentally share a value.
     async fn plan_scalar_subqueries(
         &self,
         subqueries: Vec<Subquery>,
         session_state: &SessionState,
-    ) -> Result<(
-        Vec<ScalarSubqueryLink>,
-        DFHashMap<SubqueryKey, SubqueryIndex>,
-    )> {
+    ) -> Result<(Vec<ScalarSubqueryLink>, DFHashMap<Subquery, SubqueryIndex>)> {
         let mut links = Vec::with_capacity(subqueries.len());
         let mut index_map = DFHashMap::with_capacity(subqueries.len());
+        let mut indexes = HashSet::with_capacity(subqueries.len());
         for sq in subqueries {
-            let key = SubqueryKey::new(&sq);
-            // Callers deduplicate, but guard against accidental double-planning.
-            if index_map.contains_key(&key) {
-                continue;
+            let Some(index) = sq.scalar_subquery_index else {
+                return internal_err!("Scalar subquery missing planner-assigned index");
+            };
+            if !indexes.insert(index) {
+                return internal_err!("Duplicate scalar subquery index {index:?}");
             }
             let physical_plan = self
                 .create_initial_plan(&sq.subquery, session_state)
                 .await?;
-            let index = SubqueryIndex::new(links.len());
             links.push(ScalarSubqueryLink {
                 plan: physical_plan,
                 index,
             });
-            index_map.insert(key, index);
+            if !sq.is_volatile() {
+                index_map.insert(sq.without_scalar_subquery_index(), index);
+            }
         }
         Ok((links, index_map))
     }

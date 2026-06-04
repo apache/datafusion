@@ -2145,12 +2145,15 @@ impl Expr {
     /// For example the function call `RANDOM()` is volatile as each call will
     /// return a different value.
     ///
-    /// This also descends into subquery-bearing expressions, so
-    /// `(SELECT random())` is volatile even though the scalar subquery node is
-    /// not itself a volatile function.
-    ///
     /// See [`Volatility`] for more information.
     pub fn is_volatile(&self) -> bool {
+        self.exists(|expr| Ok(expr.is_volatile_node()))
+            .expect("exists closure is infallible")
+    }
+
+    /// Like [`Self::is_volatile`], but also descends into subquery-bearing
+    /// expressions.
+    pub fn is_volatile_including_subqueries(&self) -> bool {
         self.exists(|expr| {
             let subquery_is_volatile = match expr {
                 Expr::ScalarSubquery(subquery)
@@ -3869,14 +3872,14 @@ mod test {
             )
             .unwrap(),
         );
-        let subquery = Subquery {
-            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+        let subquery = Subquery::new(
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema: subquery_schema,
             })),
-            outer_ref_columns: vec![],
-            spans: Spans::new(),
-        };
+            vec![],
+            Spans::new(),
+        );
 
         let in_subquery = Expr::InSubquery(InSubquery {
             expr: Box::new(Expr::Placeholder(Placeholder {
@@ -3917,14 +3920,14 @@ mod test {
             )
             .unwrap(),
         );
-        let subquery = Subquery {
-            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+        let subquery = Subquery::new(
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema: subquery_schema,
             })),
-            outer_ref_columns: vec![],
-            spans: Spans::new(),
-        };
+            vec![],
+            Spans::new(),
+        );
 
         let not_in_subquery = Expr::InSubquery(InSubquery {
             expr: Box::new(Expr::Placeholder(Placeholder {
@@ -4242,23 +4245,27 @@ mod test {
                 .build()?,
         );
 
-        let subquery = |plan: &Arc<LogicalPlan>| Subquery {
-            subquery: Arc::clone(plan),
-            outer_ref_columns: vec![],
-            spans: Spans::new(),
+        let subquery = |plan: &Arc<LogicalPlan>| {
+            Subquery::new(Arc::clone(plan), vec![], Spans::new())
         };
 
         // Every subquery-bearing expression kind must surface the volatility of
         // its subquery plan.
-        assert!(Expr::ScalarSubquery(subquery(&volatile_plan)).is_volatile());
-        assert!(Expr::Exists(Exists::new(subquery(&volatile_plan), false)).is_volatile());
+        assert!(
+            Expr::ScalarSubquery(subquery(&volatile_plan))
+                .is_volatile_including_subqueries()
+        );
+        assert!(
+            Expr::Exists(Exists::new(subquery(&volatile_plan), false))
+                .is_volatile_including_subqueries()
+        );
         assert!(
             Expr::InSubquery(InSubquery::new(
                 Box::new(lit(1i64)),
                 subquery(&volatile_plan),
                 false
             ))
-            .is_volatile()
+            .is_volatile_including_subqueries()
         );
         assert!(
             Expr::SetComparison(SetComparison::new(
@@ -4267,12 +4274,18 @@ mod test {
                 Operator::Eq,
                 SetQuantifier::Any
             ))
-            .is_volatile()
+            .is_volatile_including_subqueries()
         );
 
         // Non-volatile subqueries are not reported as volatile.
-        assert!(!Expr::ScalarSubquery(subquery(&stable_plan)).is_volatile());
-        assert!(!Expr::Exists(Exists::new(subquery(&stable_plan), false)).is_volatile());
+        assert!(
+            !Expr::ScalarSubquery(subquery(&stable_plan))
+                .is_volatile_including_subqueries()
+        );
+        assert!(
+            !Expr::Exists(Exists::new(subquery(&stable_plan), false))
+                .is_volatile_including_subqueries()
+        );
 
         // Volatility hidden behind a nested subquery is still detected.
         let nested_plan = Arc::new(
@@ -4283,7 +4296,10 @@ mod test {
                 ))])?
                 .build()?,
         );
-        assert!(Expr::ScalarSubquery(subquery(&nested_plan)).is_volatile());
+        assert!(
+            Expr::ScalarSubquery(subquery(&nested_plan))
+                .is_volatile_including_subqueries()
+        );
 
         Ok(())
     }
@@ -4382,14 +4398,14 @@ mod test {
 
     #[test]
     fn test_display_set_comparison() {
-        let subquery = Subquery {
-            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+        let subquery = Subquery::new(
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema: Arc::new(DFSchema::empty()),
             })),
-            outer_ref_columns: vec![],
-            spans: Spans::new(),
-        };
+            vec![],
+            Spans::new(),
+        );
 
         let expr = Expr::SetComparison(SetComparison::new(
             Box::new(Expr::Column(Column::from_name("a"))),

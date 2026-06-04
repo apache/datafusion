@@ -98,6 +98,10 @@ fn assert_counter(counter: &Arc<AtomicI64>, expected: i64) {
     assert_eq!(counter.load(Ordering::SeqCst), expected);
 }
 
+fn num_rows(batches: &[RecordBatch]) -> usize {
+    batches.iter().map(|b| b.num_rows()).sum()
+}
+
 #[tokio::test]
 async fn same_node_volatile_subqueries_are_evaluated_independently() -> Result<()> {
     let (ctx, counter) = ctx_with_counter();
@@ -115,6 +119,23 @@ async fn same_node_volatile_subqueries_are_evaluated_independently() -> Result<(
 }
 
 #[tokio::test]
+async fn wrapped_volatile_subqueries_are_not_cse_candidates() -> Result<()> {
+    let (ctx, counter) = ctx_with_counter();
+    let batches = collect_sql(
+        &ctx,
+        "SELECT (SELECT volatile_counter()) + 1 AS a, \
+                (SELECT volatile_counter()) + 1 AS b",
+    )
+    .await?;
+
+    let a = int64_value(&batches, 0);
+    let b = int64_value(&batches, 1);
+    assert_ne!(a, b, "wrapped volatile subqueries must not be shared");
+    assert_counter(&counter, 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn cross_node_volatile_subqueries_are_evaluated_independently() -> Result<()> {
     let (ctx, counter) = ctx_with_counter();
     let batches = collect_sql(
@@ -127,6 +148,37 @@ async fn cross_node_volatile_subqueries_are_evaluated_independently() -> Result<
 
     assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
     assert_counter(&counter, 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn union_filter_does_not_duplicate_volatile_scalar_subquery() -> Result<()> {
+    let (ctx, counter) = ctx_with_counter();
+    let batches = collect_sql(
+        &ctx,
+        "SELECT a FROM (SELECT 1 AS a UNION ALL SELECT 2 AS a) t \
+         WHERE (SELECT volatile_counter()) = 0",
+    )
+    .await?;
+
+    assert_eq!(num_rows(&batches), 2);
+    assert_counter(&counter, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_or_extraction_does_not_duplicate_volatile_scalar_subquery() -> Result<()> {
+    let (ctx, counter) = ctx_with_counter();
+    let batches = collect_sql(
+        &ctx,
+        "SELECT l.a, r.b \
+         FROM (SELECT 1 AS a) l JOIN (SELECT 2 AS b) r ON true \
+         WHERE (l.a = 1 AND (SELECT volatile_counter()) = 0) OR r.b = 3",
+    )
+    .await?;
+
+    assert_eq!(num_rows(&batches), 1);
+    assert_counter(&counter, 1);
     Ok(())
 }
 

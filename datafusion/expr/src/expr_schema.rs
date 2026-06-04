@@ -788,6 +788,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
         subquery: Arc::new(new_plan),
         outer_ref_columns: subquery.outer_ref_columns,
         spans: Spans::new(),
+        scalar_subquery_index: subquery.scalar_subquery_index,
     })
 }
 

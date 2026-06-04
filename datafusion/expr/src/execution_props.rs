@@ -64,10 +64,9 @@ pub struct ExecutionProps {
     pub config_options: Option<Arc<ConfigOptions>>,
     /// Providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
-    /// Maps each uncorrelated scalar [`SubqueryKey`] to its index in
-    /// `subquery_results`. Populated by the physical planner before calling
-    /// `create_physical_expr`.
-    pub subquery_indexes: HashMap<SubqueryKey, SubqueryIndex>,
+    /// Maps each logical `Subquery` to its index in `subquery_results`.
+    /// Populated by the physical planner before calling `create_physical_expr`.
+    pub subquery_indexes: HashMap<crate::logical_plan::Subquery, SubqueryIndex>,
     /// Shared results container for uncorrelated scalar subquery values.
     /// Populated at execution time by `ScalarSubqueryExec`.
     pub subquery_results: ScalarSubqueryResults,
@@ -170,34 +169,8 @@ impl ExecutionProps {
     }
 }
 
-/// Identity used to deduplicate uncorrelated scalar subqueries during physical
-/// planning.
-///
-/// Non-volatile subqueries are deduplicated by structure, so two textually
-/// identical subqueries share a single execution. Volatile subqueries (whose
-/// plan contains a function such as `random()`) are keyed by occurrence, using
-/// a plan pointer freshened by the physical planner when needed.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SubqueryKey {
-    /// A non-volatile subquery, deduplicated by structural identity.
-    Shared(crate::logical_plan::Subquery),
-    /// A volatile subquery occurrence.
-    Unique(usize),
-}
-
-impl SubqueryKey {
-    /// Builds the deduplication key for `subquery`.
-    pub fn new(subquery: &crate::logical_plan::Subquery) -> Self {
-        if subquery.is_volatile() {
-            SubqueryKey::Unique(Arc::as_ptr(&subquery.subquery) as usize)
-        } else {
-            SubqueryKey::Shared(subquery.clone())
-        }
-    }
-}
-
 /// Index of a scalar subquery within a [`ScalarSubqueryResults`] container.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Hash)]
 pub struct SubqueryIndex(usize);
 
 impl SubqueryIndex {

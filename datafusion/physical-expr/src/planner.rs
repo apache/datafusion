@@ -32,7 +32,7 @@ use datafusion_common::{
     DFSchema, Result, ScalarValue, TableReference, ToDFSchema, exec_err,
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
 };
-use datafusion_expr::execution_props::{ExecutionProps, SubqueryKey};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
     Alias, Cast, HigherOrderFunction, InList, Lambda, LambdaVariable, Placeholder,
     ScalarFunction,
@@ -403,8 +403,14 @@ pub fn create_physical_expr(
             }
         },
         Expr::ScalarSubquery(sq) => {
-            match execution_props.subquery_indexes.get(&SubqueryKey::new(sq)) {
-                Some(&index) => {
+            let index = sq.scalar_subquery_index.or_else(|| {
+                execution_props
+                    .subquery_indexes
+                    .get(&sq.without_scalar_subquery_index())
+                    .copied()
+            });
+            match index {
+                Some(index) => {
                     let schema = sq.subquery.schema();
                     if schema.fields().len() != 1 {
                         return plan_err!(

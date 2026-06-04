@@ -2031,6 +2031,30 @@ physical_plan
 05)--AggregateExec: mode=Single, gby=[], aggr=[max(sq_values.v)]
 06)----DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Cross-node non-volatile scalar subqueries are deduplicated.
+query TT
+explain SELECT (SELECT max(v) FROM sq_values) AS r FROM (SELECT 1) t WHERE (SELECT max(v) FROM sq_values) IS NOT NULL;
+----
+logical_plan
+01)Projection: (<subquery>) AS r
+02)--Subquery:
+03)----Aggregate: groupBy=[[]], aggr=[[max(sq_values.v)]]
+04)------TableScan: sq_values projection=[v]
+05)--SubqueryAlias: t
+06)----Filter: (<subquery>) IS NOT NULL
+07)------Subquery:
+08)--------Aggregate: groupBy=[[]], aggr=[[max(sq_values.v)]]
+09)----------TableScan: sq_values projection=[v]
+10)------EmptyRelation: rows=1
+physical_plan
+01)ScalarSubqueryExec: subqueries=1
+02)--ProjectionExec: expr=[scalar_subquery(<pending>) as r]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------FilterExec: scalar_subquery(<pending>) IS NOT NULL
+05)--------PlaceholderRowExec
+06)--AggregateExec: mode=Single, gby=[], aggr=[max(sq_values.v)]
+07)----DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Volatile scalar subqueries are evaluated per occurrence.
 query TT
 explain SELECT (SELECT random()) - (SELECT random()) AS diff;
