@@ -1014,7 +1014,8 @@ config_namespace! {
         /// on wide schemas where a row-count limit can map to very different
         /// byte sizes. Matches the behavior of `parquet.block.size` in
         /// parquet-mr. If `None` (the default), only the row-count limit
-        /// applies.
+        /// applies. Currently only honored when `allow_single_file_parallelism`
+        /// is `false`; by default the parallel file writer ignores this limit.
         pub max_row_group_bytes: Option<MaxRowGroupBytes>, default = None
 
         /// (writing) Sets "created by" property
