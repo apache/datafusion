@@ -747,8 +747,6 @@ fn normalize_semi_anti_join_key_null_count(
 
 // Scale a column-level count to an estimated row subset. Rounding up keeps a
 // small non-zero count from disappearing solely because the subset is small.
-// The `u128` intermediate keeps the multiplication exact and overflow-free for
-// any `usize` operands.
 fn scale_subset_count(
     count: Precision<usize>,
     input_num_rows: usize,
