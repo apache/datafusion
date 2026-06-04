@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS customer;
+
+DROP TABLE IF EXISTS orders;
+
+DROP TABLE IF EXISTS nation;
