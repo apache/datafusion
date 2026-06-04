@@ -2470,7 +2470,7 @@ impl DataFrame {
         value: ScalarValue,
         columns: Vec<String>,
     ) -> Result<DataFrame> {
-        self.fill_columns(value, &columns, coalesce(), |_| true)
+        self.fill_columns(&value, &columns, &coalesce(), |_| true)
     }
 
     // Helper to find columns from names
@@ -2515,18 +2515,18 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    #[expect(clippy::needless_pass_by_value)]
     pub fn fill_nan(&self, value: ScalarValue, columns: &[&str]) -> Result<DataFrame> {
-        self.fill_columns(value, columns, nanvl(), |field| {
+        self.fill_columns(&value, columns, &nanvl(), |field| {
             field.data_type().is_floating()
         })
     }
 
-    #[expect(clippy::needless_pass_by_value)]
     fn fill_columns(
         &self,
-        value: ScalarValue,
+        value: &ScalarValue,
         columns: &[impl AsRef<str>],
-        func: Arc<ScalarUDF>,
+        func: &Arc<ScalarUDF>,
         applies: impl Fn(&FieldRef) -> bool,
     ) -> Result<DataFrame> {
         let cols = if columns.is_empty() {
