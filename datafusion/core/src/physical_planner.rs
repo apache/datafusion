@@ -394,43 +394,118 @@ impl DefaultPhysicalPlanner {
     fn assign_scalar_subquery_indexes(
         plan: &LogicalPlan,
     ) -> Result<(LogicalPlan, Vec<Subquery>)> {
+        fn register_subquery(
+            sq: &Subquery,
+            dedup: &mut IndexMap<Subquery, SubqueryIndex>,
+            subqueries: &mut Vec<Subquery>,
+        ) -> Option<SubqueryIndex> {
+            if !sq.outer_ref_columns.is_empty() {
+                return None;
+            }
+
+            let dedup_key = sq.without_scalar_subquery_index();
+            if let Some(index) = dedup.get(&dedup_key) {
+                return Some(*index);
+            }
+
+            let index = SubqueryIndex::new(subqueries.len());
+            dedup.insert(dedup_key, index);
+            // This helper owns registration for non-volatile subqueries:
+            // callers must not push the returned index again.
+            subqueries.push(sq.with_scalar_subquery_index(index));
+            Some(index)
+        }
+
+        fn collect_extension_subqueries(
+            plan: &LogicalPlan,
+            dedup: &mut IndexMap<Subquery, SubqueryIndex>,
+            subqueries: &mut Vec<Subquery>,
+        ) -> Result<()> {
+            for expr in plan.expressions() {
+                expr.apply(|e| {
+                    if let Expr::ScalarSubquery(sq) = e
+                        && !sq.is_volatile()
+                    {
+                        register_subquery(sq, dedup, subqueries);
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+            }
+
+            for input in plan.inputs() {
+                collect_extension_subqueries(input, dedup, subqueries)?;
+            }
+
+            Ok(())
+        }
+
+        fn assign_expr_indexes(
+            expr: Expr,
+            dedup: &mut IndexMap<Subquery, SubqueryIndex>,
+            subqueries: &mut Vec<Subquery>,
+        ) -> Result<Transformed<Expr>> {
+            expr.transform_down(|e| {
+                if let Expr::ScalarSubquery(ref sq) = e {
+                    let volatile = sq.is_volatile();
+                    let index = if volatile && sq.outer_ref_columns.is_empty() {
+                        (SubqueryIndex::new(subqueries.len()), true)
+                    } else if let Some(index) = register_subquery(sq, dedup, subqueries) {
+                        (index, false)
+                    } else {
+                        return Ok(Transformed::no(e));
+                    };
+
+                    let (index, is_new) = index;
+                    let sq = sq.with_scalar_subquery_index(index);
+                    if is_new {
+                        subqueries.push(sq.clone());
+                    }
+
+                    Ok(Transformed::yes(Expr::ScalarSubquery(sq)))
+                } else {
+                    Ok(Transformed::no(e))
+                }
+            })
+        }
+
+        fn assign_plan_indexes(
+            plan: LogicalPlan,
+            dedup: &mut IndexMap<Subquery, SubqueryIndex>,
+            subqueries: &mut Vec<Subquery>,
+        ) -> Result<LogicalPlan> {
+            let plan = match plan {
+                // Some extension nodes do not support reconstruction via
+                // `with_exprs_and_inputs`. Read them to preserve non-volatile
+                // subquery planning, but leave them untouched for their
+                // extension planner. Volatile subqueries in extension nodes
+                // are not planned because they need per-occurrence indexes.
+                LogicalPlan::Extension(_) => {
+                    collect_extension_subqueries(&plan, dedup, subqueries)?;
+                    plan
+                }
+                _ => {
+                    plan.map_expressions(|expr| {
+                        assign_expr_indexes(expr, dedup, subqueries)
+                    })?
+                    .data
+                }
+            };
+
+            match plan {
+                LogicalPlan::Extension(_) => Ok(plan),
+                _ => Ok(plan
+                    .map_children(|child| {
+                        assign_plan_indexes(child, dedup, subqueries)
+                            .map(Transformed::yes)
+                    })?
+                    .data),
+            }
+        }
+
         let mut dedup: IndexMap<Subquery, SubqueryIndex> = IndexMap::new();
         let mut subqueries = Vec::new();
 
-        let plan = plan
-            .clone()
-            .transform_down(|node| {
-                node.map_expressions(|expr| {
-                    expr.transform_down(|e| {
-                        if let Expr::ScalarSubquery(ref sq) = e
-                            && sq.outer_ref_columns.is_empty()
-                        {
-                            let volatile = sq.is_volatile();
-                            let dedup_key = sq.clone();
-                            let (index, is_new) = if volatile {
-                                (SubqueryIndex::new(subqueries.len()), true)
-                            } else if let Some(index) = dedup.get(&dedup_key) {
-                                (*index, false)
-                            } else {
-                                (SubqueryIndex::new(subqueries.len()), true)
-                            };
-
-                            let sq = sq.with_scalar_subquery_index(index);
-                            if is_new {
-                                if !volatile {
-                                    dedup.insert(dedup_key, index);
-                                }
-                                subqueries.push(sq.clone());
-                            }
-
-                            Ok(Transformed::yes(Expr::ScalarSubquery(sq)))
-                        } else {
-                            Ok(Transformed::no(e))
-                        }
-                    })
-                })
-            })?
-            .data;
+        let plan = assign_plan_indexes(plan.clone(), &mut dedup, &mut subqueries)?;
 
         Ok((plan, subqueries))
     }
@@ -4537,6 +4612,100 @@ mod tests {
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
         }
+    }
+
+    /// Extension node that passes through its input but does not support
+    /// optimizer-style reconstruction.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct PassthroughExtensionNode {
+        input: LogicalPlan,
+        schema: DFSchemaRef,
+    }
+
+    impl PartialOrd for PassthroughExtensionNode {
+        fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+            None
+        }
+    }
+
+    impl UserDefinedLogicalNodeCore for PassthroughExtensionNode {
+        fn name(&self) -> &str {
+            "Passthrough"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![&self.input]
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            vec![]
+        }
+
+        fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "Passthrough")
+        }
+
+        fn with_exprs_and_inputs(
+            &self,
+            _exprs: Vec<Expr>,
+            _inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            unimplemented!("Passthrough");
+        }
+    }
+
+    struct PassthroughExtensionPlanner;
+
+    #[async_trait]
+    impl ExtensionPlanner for PassthroughExtensionPlanner {
+        async fn plan_extension(
+            &self,
+            _planner: &dyn PhysicalPlanner,
+            node: &dyn UserDefinedLogicalNode,
+            _logical_inputs: &[&LogicalPlan],
+            physical_inputs: &[Arc<dyn ExecutionPlan>],
+            _session_state: &SessionState,
+        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+            if node.as_any().is::<PassthroughExtensionNode>() {
+                Ok(Some(Arc::clone(&physical_inputs[0])))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn scalar_subquery_below_extension_plans() -> Result<()> {
+        let session_state = make_session_state();
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+            PassthroughExtensionPlanner,
+        )]);
+
+        let subquery_plan = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(1i64)])?
+            .build()?;
+        let input = LogicalPlanBuilder::empty(true)
+            .project(vec![
+                datafusion_expr::expr_fn::scalar_subquery(Arc::new(subquery_plan))
+                    .alias("sq"),
+            ])?
+            .build()?;
+        let logical_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(PassthroughExtensionNode {
+                schema: input.schema().clone(),
+                input,
+            }),
+        });
+
+        let plan = planner
+            .create_physical_plan(&logical_plan, &session_state)
+            .await?;
+        assert!(format!("{plan:?}").contains("ScalarSubqueryExec"));
+        Ok(())
     }
 
     //  Produces an execution plan where the schema is mismatched from
