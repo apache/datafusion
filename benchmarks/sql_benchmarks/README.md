@@ -43,7 +43,7 @@ in the community:
 | `tpcds`               | TPC‑DS queries                                                     |
 | `tpch`                | TPC‑H queries                                                      |
 | `wide_schema`         | Small-projection queries on a wide (1024-col, 256-file) synthetic dataset; runs `wide` + `narrow` subgroups for comparison |
-| `predicate_eval`      | Implementation-agnostic conjunctive (AND) filter-evaluation micro-benchmarks; subgroups (`BENCH_SUBGROUP`): `costsel`, `cost`, `selectivity`, `cardinality`, `width`, `scale`, `neutral`, `correlation`, `drift`, `nulls`. Toggle a system under test with its native `DATAFUSION_*` env var |
+| `predicate_eval`      | Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an adaptive predicate-ordering system behaves across them ([#11262](https://github.com/apache/datafusion/issues/11262)). Subgroups (`BENCH_SUBGROUP`): `costsel`, `cost`, `selectivity`, `cardinality`, `width`, `scale`, `neutral`, `correlation`, `drift`. Toggle a system under test with its native `DATAFUSION_*` env var |
 
 # Running Benchmarks
 

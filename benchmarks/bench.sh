@@ -103,8 +103,9 @@ push_down_topk:         Benchmark of ORDER BY ... LIMIT over outer joins on TPC-
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
 wide_schema:            Small-projection queries on a wide synthetic dataset (1024 cols × 256 files) — measures per-file metadata overhead
                           (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
-predicate_eval:         Implementation-agnostic conjunctive (AND) filter-evaluation micro-benchmarks (synthetic data, generated inline)
-                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift, nulls)
+predicate_eval:         Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an
+                          adaptive predicate-ordering system behaves across them (see https://github.com/apache/datafusion/issues/11262)
+                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift)
                           (toggle a system under test with its native DATAFUSION_* env var; size data with PRED_ROWS, string width with PRED_FILL)
 
 # ClickBench Benchmarks
@@ -810,12 +811,15 @@ run_push_down_topk() {
       bash -c "$SQL_CARGO_COMMAND"
 }
 
-# Runs the predicate_eval benchmark suite. Data is generated inline by the
-# suite's load SQL, so there is no data step. The suite is implementation-
-# agnostic and sets no engine config of its own; by default it measures
-# DataFusion's built-in left-deep AND short-circuit. To evaluate a
-# predicate-ordering system under test, export its native config as a
-# DATAFUSION_* env var before invoking bench.sh -- the bench harness reads
+# Runs the predicate_eval benchmark suite: conjunctive (AND) filter-evaluation
+# micro-benchmarks where each subgroup is a different predicate pattern, used to
+# test how an adaptive predicate-ordering system behaves across them (see
+# https://github.com/apache/datafusion/issues/11262). Data is generated inline
+# by the suite's load SQL, so there is no data step.
+#
+# By default the suite measures DataFusion's built-in left-deep AND short-circuit
+# and sets no engine config of its own. To evaluate a system under test, export
+# its native DATAFUSION_* config before invoking bench.sh -- the harness reads
 # SessionConfig::from_env, and that environment is inherited here, e.g.
 #   DATAFUSION_EXECUTION_ADAPTIVE_FILTER_REORDERING=true ./bench.sh run predicate_eval
 # Suite-specific knobs (string-substituted into the load SQL, not engine config):

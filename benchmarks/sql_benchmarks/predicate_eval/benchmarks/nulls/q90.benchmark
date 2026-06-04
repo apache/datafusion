@@ -1,7 +1,0 @@
-subgroup nulls
-
-template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
-SUBGROUP=nulls
-QPAD=90
-DATASET=ints
-NAME=nulls_q90_no_nulls_control
