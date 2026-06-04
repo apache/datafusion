@@ -36,7 +36,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::hash_table::{AggregateHashTable, Partial};
+use super::hash_table::{AggregateHashTable, Final, Partial};
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
@@ -92,7 +92,7 @@ pub(crate) struct FinalHashAggregateStream {
     input: SendableRecordBatchStream,
 
     /// Hash table state for this aggregate stream.
-    hash_table: AggregateHashTable<Partial>,
+    hash_table: AggregateHashTable<Final>,
 
     /// Execution metrics shared with the aggregate plan node.
     baseline_metrics: BaselineMetrics,
@@ -245,7 +245,7 @@ impl FinalHashAggregateStream {
         // Preserve the existing aggregate metric surface for this plan node.
         let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);
 
-        let hash_table = AggregateHashTable::<Partial>::new(
+        let hash_table = AggregateHashTable::<Final>::new(
             agg,
             partition,
             Arc::clone(&schema),

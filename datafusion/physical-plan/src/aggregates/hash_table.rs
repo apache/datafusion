@@ -39,7 +39,7 @@ use crate::metrics::{MetricBuilder, MetricCategory};
 /// Marker for raw rows -> partial state aggregation.
 pub(super) struct Partial;
 /// Marker for partial state -> final value aggregation.
-pub(super) struct Partial;
+pub(super) struct Final;
 
 /// Grouped hash table shared by the initial-partial and partial-final paths.
 ///
@@ -543,7 +543,7 @@ impl AggregateHashTable<Partial> {
     }
 }
 
-impl AggregateHashTable<Partial> {
+impl AggregateHashTable<Final> {
     pub(super) fn new(
         agg: &AggregateExec,
         partition: usize,
