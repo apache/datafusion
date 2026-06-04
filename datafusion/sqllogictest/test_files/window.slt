@@ -5895,6 +5895,46 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2
 06)----------DataSourceExec: partitions=2, partition_sizes=[5, 4]
 
+statement ok
+CREATE TABLE table_test_distinct_count_rows_null (
+    k VARCHAR,
+    seq INT,
+    v INT
+);
+
+statement ok
+INSERT INTO table_test_distinct_count_rows_null (k, seq, v) VALUES
+    ('a', 1, 1),
+    ('a', 2, 1),
+    ('a', 3, NULL),
+    ('a', 4, 2),
+    ('a', 5, 1),
+    ('b', 1, NULL),
+    ('b', 2, 3),
+    ('b', 3, 3),
+    ('b', 4, 4);
+
+query TII
+SELECT
+    k,
+    seq,
+    COUNT(DISTINCT v) OVER (
+        PARTITION BY k
+        ORDER BY seq
+        ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+    ) AS distinct_count
+FROM table_test_distinct_count_rows_null
+ORDER BY k, seq;
+----
+a 1 1
+a 2 1
+a 3 1
+a 4 2
+a 5 2
+b 1 0
+b 2 1
+b 3 1
+b 4 2
 
 # Add testing for distinct sum
 query TPII

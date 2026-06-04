@@ -20,15 +20,15 @@
 //!
 //! [`Int64Array`]: arrow::array::Int64Array
 //! [`Float64Array`]: arrow::array::Float64Array
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::mem::size_of_val;
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
 use arrow::array::PrimitiveArray;
 use arrow::array::types::ArrowPrimitiveType;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::RandomState;
 
@@ -85,11 +85,16 @@ where
         }
 
         let arr = as_primitive_array::<T>(&values[0])?;
-        arr.iter().for_each(|value| {
-            if let Some(value) = value {
+        // Fast path: no nulls in this batch, validity checks can be skipped.
+        // Earlier batches with nulls do not affect correctness because distinct
+        // accumulation is order-independent.
+        if arr.null_count() > 0 {
+            arr.iter().flatten().for_each(|value| {
                 self.values.insert(value);
-            }
-        });
+            });
+        } else {
+            self.values.extend(arr.values().iter().copied());
+        }
 
         Ok(())
     }
@@ -516,5 +521,174 @@ impl Accumulator for Bitmap65536DistinctCountAccumulatorI16 {
 
     fn size(&self) -> usize {
         size_of_val(self) + 8192
+    }
+}
+
+/// Sliding-window variant of [`PrimitiveDistinctCountAccumulator`].
+#[derive(Debug)]
+pub struct SlidingPrimitiveDistinctCountAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+    T::Native: Eq + Hash,
+{
+    counts: HashMap<T::Native, usize, RandomState>,
+    data_type: DataType,
+}
+
+impl<T> SlidingPrimitiveDistinctCountAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+    T::Native: Eq + Hash,
+{
+    pub fn new(data_type: &DataType) -> Self {
+        Self {
+            counts: HashMap::default(),
+            data_type: data_type.clone(),
+        }
+    }
+}
+
+impl<T> Accumulator for SlidingPrimitiveDistinctCountAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send + Debug,
+    T::Native: Eq + Hash,
+{
+    fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
+        let arr = Arc::new(
+            PrimitiveArray::<T>::from_iter_values(self.counts.keys().cloned())
+                .with_data_type(self.data_type.clone()),
+        );
+        Ok(vec![
+            SingleRowListArrayBuilder::new(arr).build_list_scalar(),
+        ])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let arr = as_primitive_array::<T>(&values[0])?;
+        if arr.null_count() == 0 {
+            for value in arr.values().iter() {
+                *self.counts.entry(*value).or_insert(0) += 1;
+            }
+        } else {
+            for idx in 0..arr.len() {
+                if arr.is_valid(idx) {
+                    *self.counts.entry(arr.value(idx)).or_insert(0) += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let arr = as_primitive_array::<T>(&values[0])?;
+        if arr.null_count() == 0 {
+            for value in arr.values().iter() {
+                let count = self.counts.get_mut(value);
+                debug_assert!(
+                    count.is_some(),
+                    "retract_batch called for a value not in the accumulator"
+                );
+                if let Some(count) = count {
+                    *count -= 1;
+                    if *count == 0 {
+                        self.counts.remove(value);
+                    }
+                }
+            }
+        } else {
+            for idx in 0..arr.len() {
+                if arr.is_valid(idx) {
+                    let value = arr.value(idx);
+                    let count = self.counts.get_mut(&value);
+                    debug_assert!(
+                        count.is_some(),
+                        "retract_batch called for a value not in the accumulator"
+                    );
+                    if let Some(count) = count {
+                        *count -= 1;
+                        if *count == 0 {
+                            self.counts.remove(&value);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+        assert_eq!(
+            states.len(),
+            1,
+            "count_distinct states must be single array"
+        );
+
+        let arr = as_list_array(&states[0])?;
+        arr.iter().try_for_each(|maybe_list| {
+            if let Some(list) = maybe_list {
+                let list = as_primitive_array::<T>(&list)?;
+                for value in list.values().iter() {
+                    *self.counts.entry(*value).or_insert(0) += 1;
+                }
+            };
+            Ok(())
+        })
+    }
+
+    fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(self.counts.len() as i64)))
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> usize {
+        let num_elements = self.counts.len();
+        let fixed_size = size_of_val(self) + size_of_val(&self.counts);
+
+        estimate_memory_size::<(T::Native, usize)>(
+            num_elements,
+            fixed_size + size_of::<RandomState>(),
+        )
+        .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Int32Type};
+
+    #[test]
+    fn sliding_primitive_distinct_count_accumulator_update_retract() {
+        let mut acc =
+            SlidingPrimitiveDistinctCountAccumulator::<Int32Type>::new(&DataType::Int32);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(2),
+            Some(3),
+            None,
+        ]));
+
+        acc.update_batch(&[Arc::clone(&values)]).unwrap();
+        assert_eq!(acc.evaluate().unwrap(), ScalarValue::Int64(Some(3)));
+
+        let leaving: ArrayRef = Arc::new(Int32Array::from(vec![Some(2), Some(3), None]));
+        acc.retract_batch(&[leaving]).unwrap();
+        assert_eq!(acc.evaluate().unwrap(), ScalarValue::Int64(Some(2)));
     }
 }

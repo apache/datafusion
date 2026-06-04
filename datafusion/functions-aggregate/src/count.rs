@@ -52,6 +52,7 @@ use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::DictionaryCountAccumulator,
     count_distinct::FloatDistinctCountAccumulator,
     count_distinct::PrimitiveDistinctCountAccumulator,
+    count_distinct::SlidingPrimitiveDistinctCountAccumulator,
     groups_accumulator::accumulate::accumulate_indices,
 };
 use datafusion_macros::user_doc;
@@ -267,6 +268,38 @@ fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
     }
 }
 
+fn get_sliding_distinct_count_accumulator(
+    data_type: &DataType,
+) -> Result<Box<dyn Accumulator>> {
+    Ok(match data_type {
+        DataType::Int8 => Box::new(
+            SlidingPrimitiveDistinctCountAccumulator::<Int8Type>::new(data_type),
+        ),
+        DataType::Int16 => Box::new(
+            SlidingPrimitiveDistinctCountAccumulator::<Int16Type>::new(data_type),
+        ),
+        DataType::Int32 => Box::new(
+            SlidingPrimitiveDistinctCountAccumulator::<Int32Type>::new(data_type),
+        ),
+        DataType::Int64 => Box::new(
+            SlidingPrimitiveDistinctCountAccumulator::<Int64Type>::new(data_type),
+        ),
+        DataType::UInt8 => Box::new(
+            SlidingPrimitiveDistinctCountAccumulator::<UInt8Type>::new(data_type),
+        ),
+        DataType::UInt16 => Box::new(SlidingPrimitiveDistinctCountAccumulator::<
+            UInt16Type,
+        >::new(data_type)),
+        DataType::UInt32 => Box::new(SlidingPrimitiveDistinctCountAccumulator::<
+            UInt32Type,
+        >::new(data_type)),
+        DataType::UInt64 => Box::new(SlidingPrimitiveDistinctCountAccumulator::<
+            UInt64Type,
+        >::new(data_type)),
+        _ => Box::new(SlidingDistinctCountAccumulator::try_new(data_type)?),
+    })
+}
+
 /// Uses optimized bitmap accumulators but separated to keep hot path small
 #[cold]
 fn get_small_int_accumulator(data_type: &DataType) -> Result<Box<dyn Accumulator>> {
@@ -434,9 +467,7 @@ impl AggregateUDFImpl for Count {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
         if args.is_distinct {
-            let acc =
-                SlidingDistinctCountAccumulator::try_new(args.return_field.data_type())?;
-            Ok(Box::new(acc))
+            get_sliding_distinct_count_accumulator(args.expr_fields[0].data_type())
         } else {
             let acc = CountAccumulator::new();
             Ok(Box::new(acc))
