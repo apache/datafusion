@@ -23,7 +23,6 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_physical_optimizer::{PhysicalOptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use stabby::string::String as SString;
 use tokio::runtime::Handle;
 
@@ -34,17 +33,13 @@ use crate::{df_result, sresult_return};
 
 /// A stable struct for sharing [`PhysicalOptimizerContext`] across FFI boundaries.
 ///
-/// This provides access to configuration options and an optional statistics registry
-/// for optimizer rules that need extended context.
+/// This provides access to configuration options for optimizer rules that need
+/// extended context beyond the plan itself.
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_PhysicalOptimizerContext {
     pub config_options:
         unsafe extern "C" fn(&FFI_PhysicalOptimizerContext) -> FFI_ConfigOptions,
-
-    /// Returns true if a statistics registry is available.
-    pub has_statistics_registry:
-        unsafe extern "C" fn(&FFI_PhysicalOptimizerContext) -> bool,
 
     /// Release the memory of the private data.
     pub release: unsafe extern "C" fn(&mut FFI_PhysicalOptimizerContext),
@@ -58,20 +53,17 @@ unsafe impl Sync for FFI_PhysicalOptimizerContext {}
 
 struct OptimizerContextPrivateData {
     config: ConfigOptions,
-    statistics_registry: Option<StatisticsRegistry>,
 }
 
 impl FFI_PhysicalOptimizerContext {
     pub fn new(context: &dyn PhysicalOptimizerContext) -> Self {
         let private_data = Box::new(OptimizerContextPrivateData {
             config: context.config_options().clone(),
-            statistics_registry: context.statistics_registry().cloned(),
         });
         let private_data = Box::into_raw(private_data) as *const c_void;
 
         Self {
             config_options: context_config_options_fn,
-            has_statistics_registry: context_has_statistics_registry_fn,
             release: context_release_fn,
             private_data,
         }
@@ -94,12 +86,6 @@ unsafe extern "C" fn context_config_options_fn(
     FFI_ConfigOptions::from(&ctx.inner().config)
 }
 
-unsafe extern "C" fn context_has_statistics_registry_fn(
-    ctx: &FFI_PhysicalOptimizerContext,
-) -> bool {
-    ctx.inner().statistics_registry.is_some()
-}
-
 unsafe extern "C" fn context_release_fn(ctx: &mut FFI_PhysicalOptimizerContext) {
     if !ctx.private_data.is_null() {
         unsafe {
@@ -110,18 +96,16 @@ unsafe extern "C" fn context_release_fn(ctx: &mut FFI_PhysicalOptimizerContext) 
 }
 
 /// Reconstructed [`PhysicalOptimizerContext`] on the consumer side of FFI.
+///
+/// `StatisticsRegistry` is not plumbed because it contains trait object vtables
+/// that are only valid within the originating library.
 struct ForeignOptimizerContext {
     config: ConfigOptions,
-    statistics_registry: Option<StatisticsRegistry>,
 }
 
 impl PhysicalOptimizerContext for ForeignOptimizerContext {
     fn config_options(&self) -> &ConfigOptions {
         &self.config
-    }
-
-    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
-        self.statistics_registry.as_ref()
     }
 }
 
@@ -133,12 +117,6 @@ pub struct FFI_PhysicalOptimizerRule {
         &Self,
         plan: &FFI_ExecutionPlan,
         config: FFI_ConfigOptions,
-    ) -> FFI_Result<FFI_ExecutionPlan>,
-
-    pub optimize_with_context: unsafe extern "C" fn(
-        &Self,
-        plan: &FFI_ExecutionPlan,
-        context: &FFI_PhysicalOptimizerContext,
     ) -> FFI_Result<FFI_ExecutionPlan>,
 
     pub name: unsafe extern "C" fn(&Self) -> SString,
@@ -154,6 +132,12 @@ pub struct FFI_PhysicalOptimizerRule {
 
     /// Return the major DataFusion version number of this rule.
     pub version: unsafe extern "C" fn() -> u64,
+
+    pub optimize_with_context: unsafe extern "C" fn(
+        &Self,
+        plan: &FFI_ExecutionPlan,
+        context: &FFI_PhysicalOptimizerContext,
+    ) -> FFI_Result<FFI_ExecutionPlan>,
 
     /// Internal data. This is only to be accessed by the provider of the rule.
     /// A [`ForeignPhysicalOptimizerRule`] should never attempt to access this data.
@@ -209,14 +193,7 @@ unsafe extern "C" fn optimize_with_context_fn_wrapper(
     let config = sresult_return!(ConfigOptions::try_from(unsafe {
         (context.config_options)(context)
     }));
-    // StatisticsRegistry cannot safely cross an FFI boundary because it contains
-    // trait object vtables (`Vec<Arc<dyn StatisticsProvider>>`) that are only valid
-    // within the originating library. Rules that need statistics should fall back to
-    // per-partition statistics via `ExecutionPlan::partition_statistics()`.
-    let foreign_ctx = ForeignOptimizerContext {
-        config,
-        statistics_registry: None,
-    };
+    let foreign_ctx = ForeignOptimizerContext { config };
     let optimized_plan = sresult_return!(inner.optimize_with_context(plan, &foreign_ctx));
 
     FFI_Result::Ok(FFI_ExecutionPlan::new(optimized_plan, runtime))
