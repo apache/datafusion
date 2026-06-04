@@ -1264,6 +1264,14 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<_>>>()?;
                         Partitioning::Hash(runtime_expr, *n)
                     }
+                    LogicalPartitioning::Range(_) => {
+                        // TODO: Support planning LogicalPlan::Repartition with
+                        // range partitioning.
+                        // Tracked by https://github.com/apache/datafusion/issues/22786
+                        return not_impl_err!(
+                            "Physical plan does not support Range repartitioning"
+                        );
+                    }
                     LogicalPartitioning::DistributeBy(_) => {
                         return not_impl_err!(
                             "Physical plan does not support DistributeBy partitioning"
@@ -3245,8 +3253,8 @@ mod tests {
     use arrow_schema::{FieldRef, SchemaRef};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
-        DFSchemaRef, ScalarValue, TableReference, ToDFSchema as _, assert_batches_eq,
-        assert_contains,
+        DFSchemaRef, ScalarValue, SplitPoint, TableReference, ToDFSchema as _,
+        assert_batches_eq, assert_contains,
     };
     use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnv;
@@ -3255,8 +3263,8 @@ mod tests {
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
     use datafusion_expr::{
         Accumulator, AggregateUDF, AggregateUDFImpl, ExprFunctionExt, LogicalPlanBuilder,
-        Signature, TableSource, UserDefinedLogicalNodeCore, Volatility,
-        WindowFunctionDefinition, col, lit,
+        RangePartitioning, Signature, TableSource, UserDefinedLogicalNodeCore,
+        Volatility, WindowFunctionDefinition, col, lit,
     };
     use datafusion_functions_aggregate::count::{count_all, count_udaf};
     use datafusion_functions_aggregate::expr_fn::sum;
@@ -3298,6 +3306,25 @@ mod tests {
             .build()?;
 
         aggregate_explain(&logical_plan).await
+    }
+
+    #[tokio::test]
+    async fn logical_range_repartition_is_not_supported() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let logical_plan = scan_empty(None, &schema, None)?
+            .repartition(LogicalPartitioning::Range(RangePartitioning::try_new(
+                vec![col("a").sort(true, true)],
+                vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+            )?))?
+            .build()?;
+
+        let err = plan(&logical_plan).await.unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Physical plan does not support Range repartitioning"
+        );
+
+        Ok(())
     }
 
     fn int64_field(name: &str, nullable: bool) -> Field {

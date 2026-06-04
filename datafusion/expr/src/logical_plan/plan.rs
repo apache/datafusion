@@ -51,6 +51,7 @@ use crate::{
 };
 
 use crate::statistics::StatisticsRequest;
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
@@ -61,8 +62,9 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
-    ScalarValue, Spans, TableReference, UnnestOptions, aggregate_functional_dependencies,
-    assert_eq_or_internal_err, assert_or_internal_err, internal_err, plan_err,
+    ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
+    aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_err, plan_err, validate_range_split_points,
 };
 use indexmap::IndexSet;
 
@@ -866,6 +868,32 @@ impl LogicalPlan {
                     let input = self.only_input(inputs)?;
                     Ok(LogicalPlan::Repartition(Repartition {
                         partitioning_scheme: Partitioning::Hash(expr, *n),
+                        input: Arc::new(input),
+                    }))
+                }
+                Partitioning::Range(range) => {
+                    if expr.len() != range.ordering().len() {
+                        return internal_err!(
+                            "Incorrect number of expressions for Range partitioning"
+                        );
+                    }
+                    let input = self.only_input(inputs)?;
+                    let ordering = range
+                        .ordering()
+                        .iter()
+                        .zip(expr)
+                        .map(|(sort_expr, expr)| SortExpr {
+                            expr,
+                            asc: sort_expr.asc,
+                            nulls_first: sort_expr.nulls_first,
+                        })
+                        .collect();
+                    let range = RangePartitioning::try_new(
+                        ordering,
+                        range.split_points().to_vec(),
+                    )?;
+                    Ok(LogicalPlan::Repartition(Repartition {
+                        partitioning_scheme: Partitioning::Range(range),
                         input: Arc::new(input),
                     }))
                 }
@@ -2100,6 +2128,9 @@ impl LogicalPlan {
                                 hash_expr.join(", "),
                                 n
                             )
+                        }
+                        Partitioning::Range(range) => {
+                            write!(f, "Repartition: {range}")
                         }
                         Partitioning::DistributeBy(expr) => {
                             let dist_by_expr: Vec<String> =
@@ -4397,11 +4428,16 @@ impl Debug for Subquery {
     }
 }
 
-/// Logical partitioning schemes supported by [`LogicalPlan::Repartition`]
+/// Logical partitioning schemes.
 ///
-/// See [`Partitioning`] for more details on partitioning
+/// A scheme can describe either requested repartitioning in
+/// [`LogicalPlan::Repartition`] or a partitioning property declared by a source.
+/// Some schemes are only valid as metadata until planner support is added.
 ///
-/// [`Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
+/// For physical execution partitioning, see
+/// [`datafusion_physical_expr::Partitioning`].
+///
+/// [`datafusion_physical_expr::Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
@@ -4409,8 +4445,123 @@ pub enum Partitioning {
     /// Allocate rows based on a hash of one of more expressions and the specified number
     /// of partitions.
     Hash(Vec<Expr>, usize),
+    /// Partition rows by ranges.
+    /// See [`RangePartitioning`] for the logical contract.
+    Range(RangePartitioning),
     /// The DISTRIBUTE BY clause is used to repartition the data based on the input expressions
     DistributeBy(Vec<Expr>),
+}
+
+impl Partitioning {
+    /// Return the number of partitions, if known.
+    pub fn partition_count(&self) -> Option<usize> {
+        match self {
+            Self::RoundRobinBatch(partition_count) | Self::Hash(_, partition_count) => {
+                Some(*partition_count)
+            }
+            Self::Range(range) => Some(range.partition_count()),
+            Self::DistributeBy(_) => None,
+        }
+    }
+}
+
+/// Logical range partitioning.
+///
+/// [`RangePartitioning`] describes an ordered logical key space with split points.
+///
+/// - `ordering` defines the partitioning key and ordering using logical
+///   [`SortExpr`]s.
+/// - `split_points` define the boundaries between adjacent partitions.
+///
+/// Comparisons use the lexicographic order defined by `ordering`,
+/// including `ASC`/`DESC` and null ordering. Split points must be ordered
+/// according to that ordering, and each split point must have one value per
+/// ordering expression. See [`SplitPoint`] for the shared boundary contract.
+///
+/// The expressions are resolved against the declaring plan's schema. This
+/// constructor does not validate split point value types against the resolved
+/// expression types. Like other user-specified data properties such as
+/// sortedness, if a source declares range partitioning, it is responsible for
+/// placing each row in the partition described by the split points. DataFusion
+/// will not validate this is upheld.
+///
+/// NOTE: Planning [`LogicalPlan::Repartition`] with range partitioning is not
+/// currently supported. Range-aware optimizer and execution behavior will be
+/// introduced incrementally. See
+/// <https://github.com/apache/datafusion/issues/22395>.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct RangePartitioning {
+    /// Ordered logical partitioning key.
+    ordering: Vec<SortExpr>,
+    /// Boundaries between adjacent partitions.
+    split_points: Vec<SplitPoint>,
+}
+
+impl RangePartitioning {
+    /// Creates logical range partitioning metadata and validates split point
+    /// shape and ordering.
+    pub fn try_new(
+        ordering: Vec<SortExpr>,
+        split_points: Vec<SplitPoint>,
+    ) -> Result<Self> {
+        if ordering.is_empty() {
+            return plan_err!("Range partitioning requires non-empty ordering");
+        }
+
+        validate_range_split_points(&split_points, &logical_sort_options(&ordering))?;
+
+        Ok(Self {
+            ordering,
+            split_points,
+        })
+    }
+
+    /// Return the number of partitions.
+    pub fn partition_count(&self) -> usize {
+        self.split_points.len() + 1
+    }
+
+    /// Returns the ordering that defines the range key.
+    pub fn ordering(&self) -> &[SortExpr] {
+        &self.ordering
+    }
+
+    /// Returns the ordered split points between partitions.
+    pub fn split_points(&self) -> &[SplitPoint] {
+        &self.split_points
+    }
+}
+
+fn logical_sort_options(ordering: &[SortExpr]) -> Vec<SortOptions> {
+    ordering
+        .iter()
+        .map(|sort_expr| SortOptions {
+            descending: !sort_expr.asc,
+            nulls_first: sort_expr.nulls_first,
+        })
+        .collect()
+}
+
+impl Display for RangePartitioning {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let ordering = self
+            .ordering()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let split_points = self
+            .split_points()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(
+            f,
+            "Range([{ordering}], [{split_points}], {})",
+            self.partition_count()
+        )
+    }
 }
 
 /// Represent the unnesting operation on a list column, such as the recursion depth and
@@ -4787,6 +4938,134 @@ mod tests {
             Field::new("state", DataType::Utf8, false),
             Field::new("salary", DataType::Int32, false),
         ])
+    }
+
+    fn i32_split_point(value: i32) -> SplitPoint {
+        SplitPoint::new(vec![ScalarValue::Int32(Some(value))])
+    }
+
+    fn null_i32_split_point() -> SplitPoint {
+        SplitPoint::new(vec![ScalarValue::Int32(None)])
+    }
+
+    #[test]
+    fn logical_range_partitioning_validates_shape() {
+        let range = RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![i32_split_point(10), i32_split_point(20)],
+        )
+        .unwrap();
+        assert_eq!(range.partition_count(), 3);
+
+        let range = RangePartitioning::try_new(
+            vec![col("id").sort(false, true)],
+            vec![i32_split_point(20), i32_split_point(10)],
+        )
+        .unwrap();
+        assert_eq!(range.partition_count(), 3);
+
+        let err = RangePartitioning::try_new(vec![], vec![]).unwrap_err();
+        assert!(err.to_string().contains("non-empty ordering"));
+
+        let err = RangePartitioning::try_new(
+            vec![col("id").sort(true, true), col("salary").sort(true, true)],
+            vec![i32_split_point(10)],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("split point 0 has width 1, but ordering has width 2")
+        );
+
+        let err = RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![i32_split_point(20), i32_split_point(10)],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("split points must be strictly ordered")
+        );
+
+        let err = RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![i32_split_point(10), i32_split_point(10)],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("split points must be strictly ordered")
+        );
+
+        let range = RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![null_i32_split_point(), i32_split_point(10)],
+        )
+        .unwrap();
+        assert_eq!(range.partition_count(), 3);
+    }
+
+    #[test]
+    fn logical_partitioning_reports_known_partition_count() -> Result<()> {
+        let range = RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![i32_split_point(10)],
+        )?;
+
+        assert_eq!(Partitioning::RoundRobinBatch(4).partition_count(), Some(4));
+        assert_eq!(
+            Partitioning::Hash(vec![col("id")], 8).partition_count(),
+            Some(8)
+        );
+        assert_eq!(Partitioning::Range(range).partition_count(), Some(2));
+        assert_eq!(
+            Partitioning::DistributeBy(vec![col("id")]).partition_count(),
+            None
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn logical_range_partitioning_participates_in_expression_rewrite() -> Result<()> {
+        let input =
+            table_scan(Some("employee_csv"), &employee_schema(), None)?.build()?;
+        let plan = LogicalPlan::Repartition(Repartition {
+            input: Arc::new(input),
+            partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+                vec![col("id").sort(true, true)],
+                vec![i32_split_point(10)],
+            )?),
+        });
+
+        let mut visited_exprs = vec![];
+        plan.apply_expressions(|expr| {
+            visited_exprs.push(expr.to_string());
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(visited_exprs, vec!["id"]);
+
+        let plan = plan
+            .map_expressions(|expr| {
+                if expr == col("id") {
+                    Ok(Transformed::yes(col("salary")))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })?
+            .data;
+
+        let LogicalPlan::Repartition(Repartition {
+            partitioning_scheme: Partitioning::Range(range),
+            ..
+        }) = plan
+        else {
+            unreachable!("expected range repartition");
+        };
+        assert_eq!(range.ordering()[0].expr, col("salary"));
+        assert_eq!(range.partition_count(), 2);
+
+        Ok(())
     }
 
     fn display_plan() -> Result<LogicalPlan> {
