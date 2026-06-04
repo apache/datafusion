@@ -2146,7 +2146,6 @@ mod tests {
         exec_err, internal_err,
     };
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_functions_aggregate::count::count_udaf;
@@ -2504,44 +2503,11 @@ mod tests {
         Ok((columns, batches, metrics))
     }
 
-    fn memory_limited_aggregate_join_task_ctx(
-        batch_size: usize,
-        memory_limit: Option<usize>,
-    ) -> Result<Arc<TaskContext>> {
-        let mut session_config = SessionConfig::default().with_batch_size(batch_size);
-
-        // Keep the repro focused on normal hash aggregation and hash join paths.
-        session_config
-            .options_mut()
-            .execution
-            .skip_partial_aggregation_probe_rows_threshold = usize::MAX;
-        session_config
-            .options_mut()
-            .execution
-            .perfect_hash_join_small_build_threshold = 0;
-        session_config
-            .options_mut()
-            .execution
-            .perfect_hash_join_min_key_density = f64::INFINITY;
-
-        let mut runtime_builder = RuntimeEnvBuilder::new().with_disk_manager_builder(
-            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
-        );
-        if let Some(memory_limit) = memory_limit {
-            runtime_builder = runtime_builder.with_memory_limit(memory_limit, 1.0);
-        }
-
-        Ok(Arc::new(
-            TaskContext::default()
-                .with_session_config(session_config)
-                .with_runtime(runtime_builder.build_arc()?),
-        ))
+    fn aggregate_join_group_key(i: usize) -> u32 {
+        (i as u32) * 1000
     }
 
-    async fn final_aggregate_build_side(
-        num_groups: usize,
-        batch_size: usize,
-    ) -> Result<Arc<AggregateExec>> {
+    async fn final_aggregate_build_side(num_groups: usize) -> Result<Arc<AggregateExec>> {
         let raw_schema = Arc::new(Schema::new(vec![
             Field::new("group_key", DataType::UInt32, false),
             Field::new("value", DataType::UInt64, false),
@@ -2549,7 +2515,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&raw_schema),
             vec![
-                Arc::new(UInt32Array::from_iter_values(0..num_groups as u32)),
+                Arc::new(UInt32Array::from_iter_values(
+                    (0..num_groups).map(aggregate_join_group_key),
+                )),
                 Arc::new(UInt64Array::from(vec![1; num_groups])),
             ],
         )?;
@@ -2575,9 +2543,10 @@ mod tests {
             Arc::clone(&raw_schema),
         )?);
         let partial_schema = partial_aggregate.schema();
-        let task_ctx = memory_limited_aggregate_join_task_ctx(batch_size, None)?;
-        let partial_batches =
-            common::collect(partial_aggregate.execute(0, task_ctx)?).await?;
+        let partial_batches = common::collect(
+            partial_aggregate.execute(0, Arc::new(TaskContext::default()))?,
+        )
+        .await?;
         let partial_input = TestMemoryExec::try_new_exec(
             &[partial_batches],
             Arc::clone(&partial_schema),
@@ -2594,73 +2563,54 @@ mod tests {
         )?))
     }
 
-    fn probe_side(num_groups: usize) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
+    #[tokio::test]
+    async fn build_side_final_aggregate_respects_grouped_memory_limit() -> Result<()> {
+        const BATCH_SIZE: usize = 8192;
+        const NUM_GROUPS: usize = BATCH_SIZE * 32 + 1;
+        const EXPECTED_JOIN_ROWS: usize = 3;
+
+        let aggregate = final_aggregate_build_side(NUM_GROUPS).await?;
+        let aggregate_batches =
+            common::collect(aggregate.execute(0, Arc::new(TaskContext::default()))?)
+                .await?;
+        assert!(aggregate_batches.len() > 1);
+        assert_eq!(
+            aggregate_batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            NUM_GROUPS
+        );
+        let aggregate_batch = concat_batches(&aggregate.schema(), &aggregate_batches)?;
+        let memory_limit = get_record_batch_memory_size(&aggregate_batch) * 4;
+
+        let probe_schema = Arc::new(Schema::new(vec![Field::new(
             "probe_key",
             DataType::UInt32,
             false,
         )]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
+        let probe_batch = RecordBatch::try_new(
+            Arc::clone(&probe_schema),
             vec![Arc::new(UInt32Array::from(vec![
-                0,
-                (num_groups / 2) as u32,
-                (num_groups - 1) as u32,
+                aggregate_join_group_key(0),
+                aggregate_join_group_key(NUM_GROUPS / 2),
+                aggregate_join_group_key(NUM_GROUPS - 1),
             ]))],
         )?;
+        let probe: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[vec![probe_batch]],
+            Arc::clone(&probe_schema),
+            None,
+        )?;
 
-        let exec: Arc<dyn ExecutionPlan> =
-            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?;
-
-        Ok(exec)
-    }
-
-    async fn final_aggregate_peak_mem_used(
-        aggregate: &Arc<AggregateExec>,
-        num_groups: usize,
-        batch_size: usize,
-    ) -> Result<usize> {
-        let task_ctx = memory_limited_aggregate_join_task_ctx(batch_size, None)?;
-        let batches = common::collect(aggregate.execute(0, task_ctx)?).await?;
-
-        assert!(
-            batches.len() > 1,
-            "expected final aggregate output to be split into multiple batches"
-        );
-        assert_eq!(
-            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
-            num_groups
-        );
-
-        let metrics = aggregate.metrics().expect("aggregate metrics");
-        let peak_mem_used = metrics
-            .sum_by_name("peak_mem_used")
-            .expect("peak_mem_used metric")
-            .as_usize();
-        assert!(
-            peak_mem_used > 0,
-            "expected non-zero final aggregate peak memory"
-        );
-
-        Ok(peak_mem_used)
-    }
-
-    async fn run_aggregate_build_side_join(
-        aggregate: Arc<AggregateExec>,
-        num_groups: usize,
-        batch_size: usize,
-        memory_limit: usize,
-    ) -> Result<Vec<RecordBatch>> {
         let aggregate: Arc<dyn ExecutionPlan> = aggregate;
-        let right = probe_side(num_groups)?;
-        let on = vec![(
-            Arc::new(Column::new_with_schema("group_key", &aggregate.schema())?) as _,
-            Arc::new(Column::new_with_schema("probe_key", &right.schema())?) as _,
-        )];
         let join = HashJoinExec::try_new(
-            aggregate,
-            right,
-            on,
+            Arc::clone(&aggregate),
+            probe,
+            vec![(
+                Arc::new(Column::new_with_schema("group_key", &aggregate.schema())?) as _,
+                Arc::new(Column::new_with_schema("probe_key", &probe_schema)?) as _,
+            )],
             None,
             &JoinType::Inner,
             None,
@@ -2668,30 +2618,11 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?;
-
-        let task_ctx =
-            memory_limited_aggregate_join_task_ctx(batch_size, Some(memory_limit))?;
-        common::collect(join.execute(0, task_ctx)?).await
-    }
-
-    #[tokio::test]
-    async fn build_side_final_aggregate_respects_grouped_memory_limit() -> Result<()> {
-        const BATCH_SIZE: usize = 8192;
-        const NUM_GROUPS: usize = BATCH_SIZE * 32 + 1;
-        const EXPECTED_JOIN_ROWS: usize = 3;
-
-        let aggregate = final_aggregate_build_side(NUM_GROUPS, BATCH_SIZE).await?;
-        let aggregate_peak_mem_used =
-            final_aggregate_peak_mem_used(&aggregate, NUM_GROUPS, BATCH_SIZE).await?;
-        let memory_limit = aggregate_peak_mem_used * 2;
-
-        let batches = run_aggregate_build_side_join(
-            aggregate,
-            NUM_GROUPS,
-            BATCH_SIZE,
-            memory_limit,
-        )
-        .await?;
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
         assert_eq!(
             batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
             EXPECTED_JOIN_ROWS
