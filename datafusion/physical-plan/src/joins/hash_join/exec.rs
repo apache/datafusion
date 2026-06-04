@@ -2698,28 +2698,6 @@ mod tests {
         common::collect(join.execute(0, task_ctx)?).await
     }
 
-    async fn first_passing_aggregate_build_side_join_multiplier(
-        input: &FinalAggregateBuildInput,
-        batch_size: usize,
-        aggregate_peak_mem_used: usize,
-        max_multiplier: usize,
-    ) -> Result<Option<usize>> {
-        for multiplier in 3..=max_multiplier {
-            if run_aggregate_build_side_join(
-                input,
-                batch_size,
-                aggregate_peak_mem_used * multiplier,
-            )
-            .await
-            .is_ok()
-            {
-                return Ok(Some(multiplier));
-            }
-        }
-
-        Ok(None)
-    }
-
     #[tokio::test]
     async fn build_side_final_aggregate_respects_grouped_memory_limit() -> Result<()> {
         const BATCH_SIZE: usize = 8192;
@@ -2731,32 +2709,13 @@ mod tests {
             final_aggregate_peak_mem_used(&aggregate_input, BATCH_SIZE).await?;
         let memory_limit = aggregate_peak_mem_used * 2;
 
-        match run_aggregate_build_side_join(&aggregate_input, BATCH_SIZE, memory_limit)
-            .await
-        {
-            Ok(batches) => {
-                assert_eq!(
-                    batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
-                    EXPECTED_JOIN_ROWS
-                );
-            }
-            Err(err) => {
-                let passing_multiplier =
-                    first_passing_aggregate_build_side_join_multiplier(
-                        &aggregate_input,
-                        BATCH_SIZE,
-                        aggregate_peak_mem_used,
-                        64,
-                    )
-                    .await?;
-                panic!(
-                    "HashJoinExec build side should pass with a memory limit of 2x \
-                    final AggregateExec peak grouped memory ({aggregate_peak_mem_used} bytes), \
-                    but failed with limit {memory_limit} bytes: {err}. Current smallest \
-                    passing multiplier up to 64x: {passing_multiplier:?}"
-                );
-            }
-        }
+        let batches =
+            run_aggregate_build_side_join(&aggregate_input, BATCH_SIZE, memory_limit)
+                .await?;
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            EXPECTED_JOIN_ROWS
+        );
 
         Ok(())
     }
