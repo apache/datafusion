@@ -946,7 +946,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             if nulls.is_some_and(|nulls| !nulls.is_valid(i)) {
                 continue;
             }
-            let key = ScalarValue::try_from_array(val, i)?.compacted();
+            let key = ScalarValue::try_from_array(val, i)?;
             match self.values.get_mut(&key) {
                 Some(count) => {
                     *count -= 1;
