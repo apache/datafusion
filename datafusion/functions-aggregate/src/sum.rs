@@ -553,22 +553,32 @@ impl SlidingDistinctSumAccumulator {
             }
         }
     }
+
+    fn apply_valid_values<F>(
+        &mut self,
+        arr: &arrow::array::PrimitiveArray<Int64Type>,
+        mut op: F,
+    ) where
+        F: FnMut(&mut Self, i64),
+    {
+        if arr.null_count() == 0 {
+            for &value in arr.values() {
+                op(self, value);
+            }
+        } else {
+            for (idx, &value) in arr.values().iter().enumerate() {
+                if arr.is_valid(idx) {
+                    op(self, value);
+                }
+            }
+        }
+    }
 }
 
 impl Accumulator for SlidingDistinctSumAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let arr = values[0].as_primitive::<Int64Type>();
-        if arr.null_count() == 0 {
-            for &value in arr.values() {
-                self.update_value(value);
-            }
-        } else {
-            for (idx, &value) in arr.values().iter().enumerate() {
-                if arr.is_valid(idx) {
-                    self.update_value(value);
-                }
-            }
-        }
+        self.apply_valid_values(arr, Self::update_value);
         Ok(())
     }
 
@@ -615,17 +625,7 @@ impl Accumulator for SlidingDistinctSumAccumulator {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let arr = values[0].as_primitive::<Int64Type>();
-        if arr.null_count() == 0 {
-            for &value in arr.values() {
-                self.retract_value(value);
-            }
-        } else {
-            for (idx, &value) in arr.values().iter().enumerate() {
-                if arr.is_valid(idx) {
-                    self.retract_value(value);
-                }
-            }
-        }
+        self.apply_valid_values(arr, Self::retract_value);
         Ok(())
     }
 
