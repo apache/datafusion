@@ -421,6 +421,16 @@ impl GroupHll {
         }
     }
 
+    /// Heap bytes held by this sketch. Mirrors the deltas accrued in
+    /// [`Self::add_hash`] / [`Self::merge_dense`] so emitting a group can
+    /// precisely reverse them.
+    fn heap_bytes(&self) -> usize {
+        match self {
+            GroupHll::Sparse(v) => v.capacity() * size_of::<u64>(),
+            GroupHll::Dense(_) => NUM_REGISTERS,
+        }
+    }
+
     /// Serialize the sketch into `scratch` (which is cleared first). A dense
     /// sketch is written as its raw [`NUM_REGISTERS`] registers (wire-compatible
     /// with the per-group [`Accumulator`]); a sparse sketch is written as its
@@ -619,12 +629,16 @@ impl<H: HllValueHasher> GroupsAccumulator for HllGroupsAccumulator<H> {
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let groups = emit_to.take_needed(&mut self.groups);
-        let counts: UInt64Array = groups.iter().map(|g| Some(g.count())).collect();
-        // The emitted groups are gone; recompute the memory estimate lazily on
-        // the next batch rather than tracking the freed bytes precisely.
-        if matches!(emit_to, EmitTo::All) {
-            self.allocated_bytes = 0;
-        }
+        let mut freed = 0;
+        let counts: UInt64Array = groups
+            .iter()
+            .map(|g| {
+                freed += g.heap_bytes();
+                Some(g.count())
+            })
+            .collect();
+        // The emitted groups have been removed; reclaim their tracked bytes.
+        self.allocated_bytes = self.allocated_bytes.saturating_sub(freed);
         Ok(Arc::new(counts))
     }
 
@@ -632,13 +646,14 @@ impl<H: HllValueHasher> GroupsAccumulator for HllGroupsAccumulator<H> {
         let mut groups = emit_to.take_needed(&mut self.groups);
         let mut builder = BinaryBuilder::new();
         let mut scratch: Vec<u8> = Vec::new();
+        let mut freed = 0;
         for g in groups.iter_mut() {
+            freed += g.heap_bytes();
             g.serialize(&mut scratch);
             builder.append_value(&scratch);
         }
-        if matches!(emit_to, EmitTo::All) {
-            self.allocated_bytes = 0;
-        }
+        // The emitted groups have been removed; reclaim their tracked bytes.
+        self.allocated_bytes = self.allocated_bytes.saturating_sub(freed);
         Ok(vec![Arc::new(builder.finish())])
     }
 
