@@ -110,6 +110,7 @@ impl DataFusion {
                         let df_reserved_mb =
                             (self.ctx.runtime_env().memory_pool.reserved() as u64)
                                 / (1024 * 1024);
+                        let overshoot = -od.account_balance;
                         warn!(
                             "[{}] killed by allocator overdraft: \
                              account balance = {} bytes, df-pool reserved = {df_reserved_mb} MB; \
@@ -120,8 +121,26 @@ impl DataFusion {
                         // Restore the bank so the next statement starts clean
                         crate::reset_account_to_default();
                         Err(DFSqlLogicTestError::Other(format!(
-                            "allocator overdraft: account balance at panic = {} bytes",
-                            od.account_balance,
+                            "Memory accounting mismatch: this query allocated \
+                             {overshoot} bytes more than DataFusion's MemoryPool \
+                             accounted for. Some operator is allocating outside \
+                             the pool's tracking — this is a real accounting bug \
+                             worth fixing.\n\
+                             \n\
+                             If you hit this on an SLT you didn't author, the \
+                             fastest path forward is to opt this test into a \
+                             larger overdraft tolerance and file the gap against \
+                             the epic so we can pay it down:\n\
+                             \n  \
+                             SET datafusion.sqllogictest.memory_overdraft_factor = N;\n\
+                             \n\
+                             where N is roughly `2 * <bytes the query actually \
+                             needs> / datafusion.runtime.memory_limit`. The \
+                             override applies to the next `SET datafusion.runtime.memory_limit` \
+                             only, then auto-resets.\n\
+                             \n\
+                             Please record the query + observed overshoot at:\n  \
+                             https://github.com/apache/datafusion/issues/22758"
                         )))
                     } else {
                         // Not our panic — re-raise so test runner sees it.
@@ -345,7 +364,7 @@ mod tests {
             "SET datafusion.sqllogictest.memory_overdraft_factor = 5.0",
         )
         .expect("recognized as our SET");
-        let _ = out.expect("parse succeeds");
+        assert!(out.is_ok(), "parse should succeed");
         #[cfg(feature = "memory-accounting")]
         assert!((crate::memory_overdraft_factor() - 5.0).abs() < f64::EPSILON);
     }
@@ -365,7 +384,9 @@ mod tests {
             "SET datafusion.sqllogictest.memory_overdraft_factor = 'not a number'",
         )
         .expect("recognized as our SET");
-        let err = out.expect_err("parse should fail");
+        let Err(err) = out else {
+            panic!("expected parse to fail");
+        };
         assert!(err.to_string().contains("expects an f64"), "{err}");
     }
 
