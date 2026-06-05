@@ -3848,17 +3848,15 @@ mod tests {
             schema,
         )?);
 
-        let mut session_config = SessionConfig::default();
-        // Set a very low probe threshold so the ratio check fires immediately
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::Int64(Some(1)),
-        );
-        // threshold=1.0 must disable the feature entirely
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(1.0)),
-        );
+        let session_config = SessionConfig::default()
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                &ScalarValue::Int64(Some(1)),
+            )
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(1.0)),
+            );
 
         let ctx = TaskContext::default().with_session_config(session_config);
         collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;

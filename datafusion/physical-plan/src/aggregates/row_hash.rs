@@ -1823,4 +1823,25 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_skip_aggregation_probe_equality_does_not_skip() {
+        // When num_groups / input_rows == probe_ratio_threshold, the `>` boundary
+        // means we must NOT skip — equality is not sufficient to trigger skip.
+        let threshold_ratio = 0.5_f64;
+        let threshold_rows = 10_usize;
+        let mut probe = SkipAggregationProbe::new(
+            threshold_rows,
+            threshold_ratio,
+            metrics::Count::new(),
+        );
+
+        // 10 rows, 5 groups → ratio = 5/10 = 0.5 exactly equals threshold
+        probe.update_state(10, 5);
+
+        assert!(
+            !probe.should_skip(),
+            "ratio == threshold should not trigger skip (boundary is exclusive)"
+        );
+    }
 }
