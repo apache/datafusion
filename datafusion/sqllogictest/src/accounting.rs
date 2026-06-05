@@ -58,7 +58,16 @@ static ACCOUNTS: OnceLock<RwLock<HashMap<usize, AtomicIsize>>> = OnceLock::new()
 
 /// Starting budget for any new account, set by [`set_default_budget`] and
 /// inherited by per-file SLT contexts spawned after.
-static DEFAULT_BUDGET: AtomicIsize = AtomicIsize::new(0);
+///
+/// Default is `isize::MAX / 2` — effectively infinite — so an un-armed bank
+/// is a no-op. Real enforcement only kicks in once either
+/// [`set_default_budget`] (via `--default-pool-size-mb`) or the
+/// `AccountingMemoryPool::try_resize` path (via `SET datafusion.runtime.
+/// memory_limit`) calls [`set_account_balance`] with a finite value.
+/// Otherwise file setup allocations would settle into a 0-budget bank
+/// before any real work runs and trip the panic with a misleading
+/// backtrace pointing at `RuntimeEnv::default`.
+static DEFAULT_BUDGET: AtomicIsize = AtomicIsize::new(isize::MAX / 2);
 
 fn accounts() -> &'static RwLock<HashMap<usize, AtomicIsize>> {
     ACCOUNTS.get_or_init(|| RwLock::new(HashMap::new()))
@@ -140,6 +149,71 @@ pub fn current_context_id() -> usize {
 pub struct OverdraftPanic {
     /// Account balance at the moment the panic fired (negative — that's the point).
     pub account_balance: isize,
+}
+
+/// Install a chained panic hook that formats [`OverdraftPanic`] payloads as a
+/// readable message instead of the default `Box<dyn Any>` rendering. Other
+/// panic payloads pass through to the previous hook unchanged.
+///
+/// Idempotent: only the first call wins. Safe to call from any thread, but
+/// best called once from `main` before any work spawns.
+///
+/// The hook is needed because [`OverdraftPanic`] fires inside spawned tokio
+/// tasks (e.g. RepartitionExec workers). Tokio's task harness catches the
+/// unwind on the worker, surfaces it to the joiner as a `JoinError`, and the
+/// joiner often coerces that into `DataFusionError::External("task NN
+/// panicked")` — the original payload is lost. The hook runs on the worker
+/// *before* the harness eats it, so the operator + balance still hit stderr.
+pub fn install_overdraft_panic_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Some(od) = info.payload().downcast_ref::<OverdraftPanic>() {
+                let overshoot = -od.account_balance;
+                let loc = info
+                    .location()
+                    .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let thread = std::thread::current();
+                let thread_name = thread.name().unwrap_or("<unnamed>");
+                // Force-capture the backtrace — without this, the default
+                // hook's RUST_BACKTRACE behavior is lost when we short-circuit,
+                // and that's exactly the line of code that allocated outside
+                // the MemoryPool's tracking. Without it the user has nothing
+                // to grep for.
+                let bt = std::backtrace::Backtrace::force_capture();
+                eprintln!(
+                    "thread '{thread_name}' panicked at {loc}:\n\
+                     Memory accounting mismatch: this thread allocated {overshoot} \
+                     bytes more than DataFusion's MemoryPool accounted for. Some \
+                     operator is allocating outside the pool's tracking — this is a \
+                     real accounting bug worth fixing.\n\
+                     \n\
+                     If you made changes to an operator or UDF this is probably \
+                     related to your work and should be investigated. If you do not \
+                     believe this is related to your change, the fastest path \
+                     forward is to opt the failing SLT into a larger overdraft \
+                     tolerance and file the gap against the epic so we can pay it \
+                     down:\n\
+                     \n  \
+                     SET datafusion.sqllogictest.memory_overdraft_factor = N;\n\
+                     \n\
+                     where N is roughly `2 * <bytes the query actually needs> / \
+                     datafusion.runtime.memory_limit`. The override applies to the \
+                     next `SET datafusion.runtime.memory_limit` only, then \
+                     auto-resets.\n\
+                     \n\
+                     Please record the query + observed overshoot at:\n  \
+                     https://github.com/apache/datafusion/issues/22758\n\
+                     \n\
+                     The untracked allocation is in this backtrace:\n{bt}"
+                );
+                return;
+            }
+            prev(info);
+        }));
+    });
 }
 
 /// Set the default budget new accounts will be created with. Existing

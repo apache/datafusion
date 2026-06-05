@@ -106,44 +106,18 @@ impl DataFusion {
             return match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
                 Ok(r) => r,
                 Err(payload) => {
-                    if let Some(od) = payload.downcast_ref::<OverdraftPanic>() {
-                        let df_reserved_mb =
-                            (self.ctx.runtime_env().memory_pool.reserved() as u64)
-                                / (1024 * 1024);
-                        let overshoot = -od.account_balance;
-                        warn!(
-                            "[{}] killed by allocator overdraft: \
-                             account balance = {} bytes, df-pool reserved = {df_reserved_mb} MB; \
-                             sql = {sql:?}",
-                            self.relative_path.display(),
-                            od.account_balance,
-                        );
-                        // Restore the bank so the next statement starts clean
+                    if payload.is::<OverdraftPanic>() {
+                        // The remediation message was already printed to stderr by
+                        // `install_overdraft_panic_hook` on whichever thread fired
+                        // the panic. Reset the bank so the next statement starts
+                        // clean — otherwise the bank stays negative and every
+                        // subsequent allocation refires.
                         crate::reset_account_to_default();
-                        Err(DFSqlLogicTestError::Other(format!(
-                            "Memory accounting mismatch: this query allocated \
-                             {overshoot} bytes more than DataFusion's MemoryPool \
-                             accounted for. Some operator is allocating outside \
-                             the pool's tracking — this is a real accounting bug \
-                             worth fixing.\n\
-                             \n\
-                             If you made changes to an operator or UDF this is probably related \
-                             to your work and should be investigated. If you do not believe this \
-                             is related to your change, the \
-                             fastest path forward is to opt this test into a \
-                             larger overdraft tolerance and file the gap against \
-                             the epic so we can pay it down:\n\
-                             \n  \
-                             SET datafusion.sqllogictest.memory_overdraft_factor = N;\n\
-                             \n\
-                             where N is roughly `2 * <bytes the query actually \
-                             needs> / datafusion.runtime.memory_limit`. The \
-                             override applies to the next `SET datafusion.runtime.memory_limit` \
-                             only, then auto-resets.\n\
-                             \n\
-                             Please record the query + observed overshoot at:\n  \
-                             https://github.com/apache/datafusion/issues/22758"
-                        )))
+                        Err(DFSqlLogicTestError::Other(
+                            "memory accounting overdraft — see stderr for the \
+                             actionable message and remediation"
+                                .to_string(),
+                        ))
                     } else {
                         // Not our panic — re-raise so test runner sees it.
                         std::panic::resume_unwind(payload);

@@ -144,16 +144,28 @@ async fn run_tests() -> Result<()> {
     options.warn_on_ignored();
 
     #[cfg(feature = "memory-accounting")]
-    if let Some(pool_mb) = options.default_pool_size_mb {
-        let pool_bytes = pool_mb.saturating_mul(1024 * 1024);
-        // Same value drives the inner MemoryPool's size and the bank's
-        // default budget. The wrapper renders this value as `unlimited` in
-        // `SHOW ALL` (sentinel for "no SET has happened"); once a test
-        // calls `SET datafusion.runtime.memory_limit`, the wrapper retunes
-        // the bank to that limit + 10% headroom.
-        datafusion_sqllogictest::set_memory_tracker_limit(pool_bytes);
-        datafusion_sqllogictest::set_default_budget(pool_bytes as isize);
-        log::info!("memory-accounting on: default pool size = {pool_mb} MB");
+    {
+        // OverdraftPanic frequently fires on tokio worker threads spawned by
+        // operators like RepartitionExec; the joiner converts that JoinError
+        // into a generic DataFusionError::External("task NN panicked") that
+        // discards the payload. The hook prints the real message + remediation
+        // on stderr before the harness swallows the unwind. Install
+        // unconditionally — the bank is also armed by the resize path that
+        // runs for every `SET datafusion.runtime.memory_limit`, independent
+        // of whether `--default-pool-size-mb` was passed.
+        datafusion_sqllogictest::install_overdraft_panic_hook();
+
+        if let Some(pool_mb) = options.default_pool_size_mb {
+            let pool_bytes = pool_mb.saturating_mul(1024 * 1024);
+            // Same value drives the inner MemoryPool's size and the bank's
+            // default budget. The wrapper renders this value as `unlimited` in
+            // `SHOW ALL` (sentinel for "no SET has happened"); once a test
+            // calls `SET datafusion.runtime.memory_limit`, the wrapper retunes
+            // the bank to that limit + 10% headroom.
+            datafusion_sqllogictest::set_memory_tracker_limit(pool_bytes);
+            datafusion_sqllogictest::set_default_budget(pool_bytes as isize);
+            log::info!("memory-accounting on: default pool size = {pool_mb} MB");
+        }
     }
 
     // Print parallelism info for debugging CI performance
