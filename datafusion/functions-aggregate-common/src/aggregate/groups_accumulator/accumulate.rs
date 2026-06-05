@@ -31,8 +31,9 @@ use arrow::{
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
-use crate::aggregate::groups_accumulator::block_store::{BlockStore, BlockedBlockStore, FlatBlockStore};
-use crate::aggregate::groups_accumulator::blocks::Block;
+use crate::aggregate::groups_accumulator::block_store::{
+    Block, BlockStore, BlockedBlockStore, FlatBlockStore,
+};
 use crate::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
 };

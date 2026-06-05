@@ -20,7 +20,6 @@
 
 pub mod accumulate;
 pub mod block_store;
-pub mod blocks;
 pub mod bool_op;
 pub mod group_index_operations;
 pub mod nulls;

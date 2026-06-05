@@ -17,10 +17,15 @@
 
 //! Flat [`BlockStore`] implementation backed by a single block.
 
+use std::fmt::Debug;
 use std::ops::{Index, IndexMut};
 
-use crate::aggregate::groups_accumulator::block_store::BlockStore;
-use crate::aggregate::groups_accumulator::blocks::Block;
+use datafusion_common::{Result, internal_err};
+use datafusion_expr_common::groups_accumulator::EmitTo;
+
+use crate::aggregate::groups_accumulator::block_store::{
+    Block, BlockStore, VecBlockStore,
+};
 
 /// A flat [`BlockStore`] implementation backed by a single block.
 ///
@@ -108,6 +113,19 @@ impl<B: Block> IndexMut<usize> for FlatBlockStore<B> {
     }
 }
 
+
+impl<T: Clone + Debug> VecBlockStore<T> for FlatBlockStore<Vec<T>> {
+    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<T>> {
+        match emit_to {
+            EmitTo::All | EmitTo::First(_) => Ok(emit_to.take_needed(&mut self[0])),
+            EmitTo::NextBlock => {
+                internal_err!(
+                    "flat value block store does not support emitting next block"
+                )
+            }
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

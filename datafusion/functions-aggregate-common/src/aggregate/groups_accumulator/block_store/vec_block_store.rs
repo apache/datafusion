@@ -18,12 +18,12 @@
 //! [`BlockStore`] extension for stores whose blocks are `Vec<T>`.
 
 use std::fmt::Debug;
+use std::iter;
 
-use datafusion_common::{Result, internal_datafusion_err, internal_err};
+use datafusion_common::Result;
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
-use crate::aggregate::groups_accumulator::block_store::blocked::BlockedBlockStore;
-use crate::aggregate::groups_accumulator::block_store::{BlockStore, FlatBlockStore};
+use crate::aggregate::groups_accumulator::block_store::{Block, BlockStore};
 
 /// [`BlockStore`] extension for stores whose blocks are `Vec<T>`.
 ///
@@ -37,30 +37,22 @@ where
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<T>>;
 }
 
-impl<T: Clone + Debug> VecBlockStore<T> for FlatBlockStore<Vec<T>> {
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<T>> {
-        match emit_to {
-            EmitTo::All | EmitTo::First(_) => Ok(emit_to.take_needed(&mut self[0])),
-            EmitTo::NextBlock => {
-                internal_err!(
-                    "flat value block store does not support emitting next block"
-                )
-            }
-        }
-    }
-}
+/// Most aggregation intermediate results are naturally represented as `Vec<T>`,
+/// so we provide a blanket [`Block`] implementation for it. Specialized layouts
+/// (e.g. compact representations for non-trivially-sized values) should define
+/// their own block type rather than wrap `Vec<T>`.
+impl<T: Clone + Debug> Block for Vec<T> {
+    type T = T;
 
-impl<T: Clone + Debug> VecBlockStore<T> for BlockedBlockStore<Vec<T>> {
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<T>> {
-        match emit_to {
-            EmitTo::NextBlock => self
-                .pop_block()
-                .ok_or_else(|| internal_datafusion_err!("no more blocks to emit")),
-            EmitTo::All | EmitTo::First(_) => {
-                internal_err!(
-                    "blocks value block store does not support emitting all or first"
-                )
-            }
-        }
+    fn new(capacity: usize) -> Self {
+        Vec::with_capacity(capacity)
+    }
+
+    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
+        self.extend(iter::repeat_n(default_value, fill_len));
+    }
+
+    fn len(&self) -> usize {
+        Vec::len(self)
     }
 }

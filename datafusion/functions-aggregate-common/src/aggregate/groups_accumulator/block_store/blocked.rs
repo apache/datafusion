@@ -23,8 +23,12 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-use crate::aggregate::groups_accumulator::block_store::BlockStore;
-use crate::aggregate::groups_accumulator::blocks::Block;
+use datafusion_common::{Result, internal_datafusion_err, internal_err};
+use datafusion_expr_common::groups_accumulator::EmitTo;
+
+use crate::aggregate::groups_accumulator::block_store::{
+    Block, BlockStore, VecBlockStore,
+};
 
 /// Structure used to store aggregation intermediate results in `blocked approach`
 ///
@@ -195,6 +199,25 @@ impl<B: Block> IndexMut<usize> for BlockedBlockStore<B> {
         unsafe { self.inner.get_unchecked_mut(index) }
     }
 }
+
+
+
+impl<T: Clone + Debug> VecBlockStore<T> for BlockedBlockStore<Vec<T>> {
+    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<T>> {
+        match emit_to {
+            EmitTo::NextBlock => self
+                .pop_block()
+                .ok_or_else(|| internal_datafusion_err!("no more blocks to emit")),
+            EmitTo::All | EmitTo::First(_) => {
+                internal_err!(
+                    "blocks value block store does not support emitting all or first"
+                )
+            }
+        }
+    }
+}
+
+
 
 #[cfg(test)]
 mod tests {

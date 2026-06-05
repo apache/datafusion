@@ -20,8 +20,6 @@
 use std::fmt::Debug;
 use std::ops::{Index, IndexMut};
 
-use crate::aggregate::groups_accumulator::blocks::Block;
-
 pub mod blocked;
 pub mod flat;
 pub mod vec_block_store;
@@ -52,4 +50,31 @@ pub trait BlockStore<B: Block>:
 
     /// Clear all active blocks and release owned block storage.
     fn clear(&mut self);
+}
+
+/// The abstraction to represent one aggregation intermediate result block
+/// in `blocked approach`, multiple blocks compose a [`BlockStore`].
+///
+/// Many types of aggregation intermediate result exist, and we define an interface
+/// to abstract the necessary behaviors of various intermediate result types.
+pub trait Block: Debug + Default {
+    type T: Clone;
+
+    /// Create a new empty block with the given capacity hint.
+    ///
+    /// `capacity` is `0` for flat storage (no hint) and the configured block
+    /// size for blocked storage. Implementations should treat `0` the same as
+    /// `Default::default()`.
+    fn new(capacity: usize) -> Self;
+
+    /// Fill the block with default value
+    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T);
+
+    /// Return the length of the block
+    fn len(&self) -> usize;
+
+    /// Return true if the block is empty
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
