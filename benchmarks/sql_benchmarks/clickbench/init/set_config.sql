@@ -3,5 +3,3 @@
 # automatically convert binary to string.
   
 SET datafusion.execution.parquet.binary_as_string = true;
-SET datafusion.execution.parquet.pushdown_filters = ${PUSHDOWN_FILTERS:-false};
-SET datafusion.execution.parquet.reorder_filters = ${REORDER_FILTERS:-false};
