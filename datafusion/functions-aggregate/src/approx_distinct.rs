@@ -23,6 +23,7 @@ use arrow::array::{
     AsArray, BinaryBuilder, BooleanArray, GenericBinaryArray, GenericStringArray,
     OffsetSizeTrait, PrimitiveArray, UInt64Array,
 };
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
     ArrowPrimitiveType, Date32Type, Date64Type, FieldRef, Int32Type, Int64Type,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
@@ -46,6 +47,7 @@ use datafusion_functions_aggregate_common::aggregate::count_distinct::{
     BoolArray256DistinctCountAccumulator, BoolArray256DistinctCountAccumulatorI8,
     BooleanDistinctCountAccumulator,
 };
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filter_to_nulls;
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
 use std::fmt::{Debug, Formatter};
@@ -381,7 +383,20 @@ impl GroupHll {
             let other: HyperLogLog<u8> = bytes.try_into()?;
             Ok(self.merge_dense(&other))
         } else {
-            debug_assert_eq!(bytes.len() % size_of::<u64>(), 0);
+            if !bytes.len().is_multiple_of(size_of::<u64>()) {
+                return internal_err!(
+                    "approx_distinct: malformed sparse state: length {} is not a multiple of {}",
+                    bytes.len(),
+                    size_of::<u64>()
+                );
+            }
+            if bytes.len() > SPARSE_LIMIT * size_of::<u64>() {
+                return internal_err!(
+                    "approx_distinct: malformed sparse state: length {} exceeds sparse limit {}",
+                    bytes.len(),
+                    SPARSE_LIMIT * size_of::<u64>()
+                );
+            }
             let mut delta = 0;
             for chunk in bytes.chunks_exact(size_of::<u64>()) {
                 let h = u64::from_le_bytes(chunk.try_into().unwrap());
@@ -458,8 +473,14 @@ impl GroupHll {
 /// The hashing matches the per-group [`Accumulator`] implementations exactly so
 /// that the grouped and ungrouped paths produce identical estimates.
 trait HllValueHasher: Send + Sync + 'static {
-    /// Invoke `f(row_index, hash)` for every non-null row of `array`.
-    fn for_each_hash(array: &dyn Array, f: impl FnMut(usize, u64));
+    /// Invoke `f(row_index, hash)` for every row that is valid according to
+    /// `nulls`. `nulls = None` means every row is valid (caller has
+    /// pre-combined value-nulls and filter into a single buffer).
+    fn for_each_hash(
+        array: &dyn Array,
+        nulls: Option<&NullBuffer>,
+        f: impl FnMut(usize, u64),
+    );
 }
 
 struct NumericHasher<T>(PhantomData<T>);
@@ -470,16 +491,23 @@ where
     T::Native: Hash,
 {
     #[inline]
-    fn for_each_hash(array: &dyn Array, mut f: impl FnMut(usize, u64)) {
+    fn for_each_hash(
+        array: &dyn Array,
+        nulls: Option<&NullBuffer>,
+        mut f: impl FnMut(usize, u64),
+    ) {
         let array: &PrimitiveArray<T> = array.as_primitive::<T>();
-        if array.null_count() == 0 {
-            for (i, v) in array.values().iter().enumerate() {
-                f(i, HLL_HASH_STATE.hash_one(v));
+        match nulls {
+            None => {
+                for (i, v) in array.values().iter().enumerate() {
+                    f(i, HLL_HASH_STATE.hash_one(v));
+                }
             }
-        } else {
-            for i in 0..array.len() {
-                if array.is_valid(i) {
-                    f(i, HLL_HASH_STATE.hash_one(array.value(i)));
+            Some(nulls) => {
+                for i in 0..array.len() {
+                    if nulls.is_valid(i) {
+                        f(i, HLL_HASH_STATE.hash_one(array.value(i)));
+                    }
                 }
             }
         }
@@ -490,10 +518,14 @@ struct Utf8Hasher<O>(PhantomData<O>);
 
 impl<O: OffsetSizeTrait> HllValueHasher for Utf8Hasher<O> {
     #[inline]
-    fn for_each_hash(array: &dyn Array, mut f: impl FnMut(usize, u64)) {
+    fn for_each_hash(
+        array: &dyn Array,
+        nulls: Option<&NullBuffer>,
+        mut f: impl FnMut(usize, u64),
+    ) {
         let array: &GenericStringArray<O> = array.as_string::<O>();
         for i in 0..array.len() {
-            if array.is_valid(i) {
+            if nulls.is_none_or(|n| n.is_valid(i)) {
                 f(i, HLL_HASH_STATE.hash_one(array.value(i)));
             }
         }
@@ -504,20 +536,24 @@ struct Utf8ViewHasher;
 
 impl HllValueHasher for Utf8ViewHasher {
     #[inline]
-    fn for_each_hash(array: &dyn Array, mut f: impl FnMut(usize, u64)) {
+    fn for_each_hash(
+        array: &dyn Array,
+        nulls: Option<&NullBuffer>,
+        mut f: impl FnMut(usize, u64),
+    ) {
         let array: &StringViewArray = array.as_string_view();
         // Mirror `StringViewHLLAccumulator`: hash the raw inline view when all
         // strings are stored inline (≤ 12 bytes), avoiding `&str` materialization.
         if array.data_buffers().is_empty() {
             let views = array.views();
             for i in 0..array.len() {
-                if array.is_valid(i) {
+                if nulls.is_none_or(|n| n.is_valid(i)) {
                     f(i, HLL_HASH_STATE.hash_one(views[i]));
                 }
             }
         } else {
             for i in 0..array.len() {
-                if array.is_valid(i) {
+                if nulls.is_none_or(|n| n.is_valid(i)) {
                     f(i, HLL_HASH_STATE.hash_one(array.value(i)));
                 }
             }
@@ -529,10 +565,14 @@ struct BinaryHasher<O>(PhantomData<O>);
 
 impl<O: OffsetSizeTrait> HllValueHasher for BinaryHasher<O> {
     #[inline]
-    fn for_each_hash(array: &dyn Array, mut f: impl FnMut(usize, u64)) {
+    fn for_each_hash(
+        array: &dyn Array,
+        nulls: Option<&NullBuffer>,
+        mut f: impl FnMut(usize, u64),
+    ) {
         let array: &GenericBinaryArray<O> = array.as_binary::<O>();
         for i in 0..array.len() {
-            if array.is_valid(i) {
+            if nulls.is_none_or(|n| n.is_valid(i)) {
                 f(i, HLL_HASH_STATE.hash_one(array.value(i)));
             }
         }
@@ -547,6 +587,29 @@ impl<O: OffsetSizeTrait> HllValueHasher for BinaryHasher<O> {
 /// single vectorized pass (no per-group `take`/slice and no dynamic dispatch),
 /// and the sparse representation avoids allocating a 16 KiB sketch for every
 /// group when most groups only see a few distinct values.
+///
+///
+/// # Example
+///
+/// For `SELECT k, approx_distinct(v) FROM t GROUP BY k`, each group owns one
+/// independent sketch:
+///
+/// ```text
+/// group   state
+/// a       Sparse([h1, h2, h3, h2])
+/// b       Dense(HLL registers)
+/// ...
+/// ```
+///
+/// Group `a` has fewer than [`SPARSE_LIMIT`] distinct hashes, so it stays in
+/// the sparse representation. Before emitting state or estimating the count, the
+/// hash list is sorted and deduplicated to `[h1, h2, h3]`, then those hashes are
+/// interpreted exactly as if they had been added to a dense [`HyperLogLog`].
+///
+/// Group `b` has crossed the sparse limit, so its hashes have already been
+/// replayed into a dense sketch. New values for `b` update the dense registers
+/// directly, and serialized state is the raw [`NUM_REGISTERS`]-byte register
+/// array.
 struct HllGroupsAccumulator<H: HllValueHasher> {
     /// Per-group sketches, indexed by `group_index`.
     groups: Vec<GroupHll>,
@@ -589,16 +652,15 @@ impl<H: HllValueHasher> GroupsAccumulator for HllGroupsAccumulator<H> {
         self.ensure_groups(total_num_groups);
         let groups = &mut self.groups;
         let mut delta: isize = 0;
-        match opt_filter {
-            None => H::for_each_hash(values[0].as_ref(), |row, hash| {
-                delta += groups[group_indices[row]].add_hash(hash);
-            }),
-            Some(filter) => H::for_each_hash(values[0].as_ref(), |row, hash| {
-                if filter.value(row) {
-                    delta += groups[group_indices[row]].add_hash(hash);
-                }
-            }),
-        }
+        // Pre-combine value-nulls and filter into one mask so the callback
+        // needs no per-row branching.
+        let filter_nulls = opt_filter.map(filter_to_nulls);
+        let value_nulls = values[0].logical_nulls();
+        let combined_nulls =
+            NullBuffer::union(filter_nulls.as_ref(), value_nulls.as_ref());
+        H::for_each_hash(values[0].as_ref(), combined_nulls.as_ref(), |row, hash| {
+            delta += groups[group_indices[row]].add_hash(hash);
+        });
         self.apply_delta(delta);
         Ok(())
     }
@@ -607,18 +669,19 @@ impl<H: HllValueHasher> GroupsAccumulator for HllGroupsAccumulator<H> {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
+        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        assert!(
+            opt_filter.is_none(),
+            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+        );
+
         self.ensure_groups(total_num_groups);
         let states = downcast_value!(values[0], BinaryArray);
         let mut delta: isize = 0;
         for (row, &group_index) in group_indices.iter().enumerate() {
-            if let Some(filter) = opt_filter
-                && !filter.value(row)
-            {
-                continue;
-            }
             if states.is_valid(row) {
                 delta += self.groups[group_index].merge_serialized(states.value(row))?;
             }
@@ -942,9 +1005,14 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::Date32
             | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Time64(_)
-            | DataType::Timestamp(_, _)
+            | DataType::Time32(TimeUnit::Second)
+            | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond)
+            | DataType::Time64(TimeUnit::Nanosecond)
+            | DataType::Timestamp(TimeUnit::Second, _)
+            | DataType::Timestamp(TimeUnit::Millisecond, _)
+            | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Timestamp(TimeUnit::Nanosecond, _)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
@@ -995,7 +1063,10 @@ mod groups_tests {
         );
         assert_eq!(g.count(), reference_count(&hashes));
         // sparse serialized state is far smaller than a dense 16 KiB sketch
-        assert!(serialize(&mut g).len() < NUM_REGISTERS);
+        // and must not exceed the sparse limit contract enforced by merge_serialized
+        let serialized = serialize(&mut g);
+        assert!(serialized.len() < NUM_REGISTERS);
+        assert!(serialized.len() <= SPARSE_LIMIT * size_of::<u64>());
     }
 
     #[test]
@@ -1053,5 +1124,32 @@ mod groups_tests {
         let mut dst = GroupHll::default();
         dst.merge_serialized(&bytes).unwrap();
         assert_eq!(dst.count(), 0);
+    }
+
+    /// `approx_distinct(v) FILTER (WHERE nullable_bool)` — a NULL filter row
+    /// must not be counted (null filter is treated the same as false).
+    #[test]
+    fn update_batch_nullable_filter_excludes_null_filter_rows() {
+        use arrow::array::Int64Array;
+        use std::sync::Arc;
+
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2, 3, 4, 5]));
+        // row 0: filter=true, row 1: filter=NULL, row 2: filter=false,
+        // row 3: filter=NULL, row 4: filter=true
+        let filter =
+            BooleanArray::from(vec![Some(true), None, Some(false), None, Some(true)]);
+
+        let mut acc = HllGroupsAccumulator::<NumericHasher<Int64Type>>::new();
+        // put all rows in group 0
+        let group_indices = vec![0usize; 5];
+        acc.update_batch(&[values], &group_indices, Some(&filter), 1)
+            .unwrap();
+
+        // Only rows 0 and 4 (values 1 and 5) should be counted.
+        let result = acc.evaluate(EmitTo::All).unwrap();
+        let counts = result.as_any().downcast_ref::<UInt64Array>().unwrap();
+        // reference: hash 1 and 5 into a dense sketch
+        let expected = reference_count(&[h(1), h(5)]);
+        assert_eq!(counts.value(0), expected);
     }
 }
