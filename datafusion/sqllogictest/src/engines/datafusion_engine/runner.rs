@@ -127,7 +127,9 @@ impl DataFusion {
                              the pool's tracking — this is a real accounting bug \
                              worth fixing.\n\
                              \n\
-                             If you hit this on an SLT you didn't author, the \
+                             If you made changes to an operator or UDF this is probably related \
+                             to your work and should be investigated. If you do not believe this \
+                             is related to your change, the \
                              fastest path forward is to opt this test into a \
                              larger overdraft tolerance and file the gap against \
                              the epic so we can pay it down:\n\
