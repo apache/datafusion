@@ -87,6 +87,15 @@ impl DataFusion {
     /// feature, allocator-detected overdrafts panic with `OverdraftPanic`;
     /// catch them here and translate to a clean `Err`.
     async fn run_one(&self, sql: &str) -> Result<DFOutput> {
+        // SLT-only knob: `SET datafusion.sqllogictest.memory_overdraft_factor = N`
+        // is intercepted here (DataFusion doesn't know about it) and feeds
+        // the AccountingMemoryPool's next try_resize. No-op when the
+        // memory-accounting feature is off, so the same SLT parses either
+        // way.
+        if let Some(result) = try_intercept_overdraft_set(sql) {
+            return result;
+        }
+
         #[cfg(feature = "memory-accounting")]
         {
             use crate::OverdraftPanic;
@@ -265,10 +274,100 @@ async fn run_query(
     }
 }
 
+/// The variable name the SLT runner intercepts to override the
+/// [`crate::AccountingMemoryPool`]'s per-thread overdraft factor.
+const OVERDRAFT_FACTOR_VAR: &str = "datafusion.sqllogictest.memory_overdraft_factor";
+
+/// Recognize `SET datafusion.sqllogictest.memory_overdraft_factor = N` and
+/// route it into the accounting pool's per-thread override. Returns:
+///   - `None` if `sql` is anything else (caller runs it normally),
+///   - `Some(Ok(StatementComplete))` after a successful override,
+///   - `Some(Err(...))` if the value didn't parse as `f64`.
+///
+/// DataFusion's parser owns the SQL grammar; this just inspects the AST
+/// for our magic variable and short-circuits before the statement reaches
+/// the planner (which would reject the unknown variable name).
+fn try_intercept_overdraft_set(sql: &str) -> Option<Result<DFOutput>> {
+    use datafusion::sql::parser::{DFParser, Statement as DFStatement};
+    use sqlparser::ast::{Set, Statement as SqlStatement};
+
+    let mut parsed = DFParser::parse_sql(sql).ok()?;
+    let DFStatement::Statement(stmt) = parsed.pop_front()? else {
+        return None;
+    };
+    let SqlStatement::Set(Set::SingleAssignment {
+        variable, values, ..
+    }) = *stmt
+    else {
+        return None;
+    };
+
+    if !variable.to_string().eq_ignore_ascii_case(OVERDRAFT_FACTOR_VAR) {
+        return None;
+    }
+
+    if values.len() != 1 {
+        return Some(Err(DFSqlLogicTestError::Other(format!(
+            "{OVERDRAFT_FACTOR_VAR} expects exactly one value, got {}",
+            values.len()
+        ))));
+    }
+
+    // Render whatever Expr the parser produced (handles `5.0`, `'5.0'`,
+    // `"5.0"`, signed numbers via UnaryOp, etc.) then peel any quotes.
+    let raw = values[0].to_string();
+    let value_str = raw.trim_matches(|c| c == '\'' || c == '"').trim();
+    let factor: f64 = match value_str.parse() {
+        Ok(f) => f,
+        Err(e) => {
+            return Some(Err(DFSqlLogicTestError::Other(format!(
+                "{OVERDRAFT_FACTOR_VAR} expects an f64, got {value_str:?}: {e}"
+            ))));
+        }
+    };
+
+    #[cfg(feature = "memory-accounting")]
+    crate::set_memory_overdraft_factor(factor);
+    #[cfg(not(feature = "memory-accounting"))]
+    let _ = factor; // accepted but inert without the feature
+
+    Some(Ok(DBOutput::StatementComplete(0)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use sqllogictest::AsyncDB;
+
+    #[tokio::test]
+    async fn intercept_overdraft_set_parses_bare_value() {
+        let out = try_intercept_overdraft_set(
+            "SET datafusion.sqllogictest.memory_overdraft_factor = 5.0",
+        )
+        .expect("recognized as our SET");
+        let _ = out.expect("parse succeeds");
+        #[cfg(feature = "memory-accounting")]
+        assert!((crate::memory_overdraft_factor() - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn intercept_overdraft_set_passes_through_unrelated_sets() {
+        assert!(
+            try_intercept_overdraft_set("SET datafusion.execution.batch_size = 2048")
+                .is_none()
+        );
+        assert!(try_intercept_overdraft_set("SELECT 1").is_none());
+    }
+
+    #[tokio::test]
+    async fn intercept_overdraft_set_rejects_bad_value() {
+        let out = try_intercept_overdraft_set(
+            "SET datafusion.sqllogictest.memory_overdraft_factor = 'not a number'",
+        )
+        .expect("recognized as our SET");
+        let err = out.expect_err("parse should fail");
+        assert!(err.to_string().contains("expects an f64"), "{err}");
+    }
 
     #[tokio::test]
     async fn validate_config_unchanged_detects_modified_config() {

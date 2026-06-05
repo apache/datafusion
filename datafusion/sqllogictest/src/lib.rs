@@ -41,7 +41,10 @@ pub use accounting::{
     set_memory_tracker_limit, set_thread_context_id, settle_thread_local,
 };
 #[cfg(feature = "memory-accounting")]
-pub use accounting_pool::AccountingMemoryPool;
+pub use accounting_pool::{
+    AccountingMemoryPool, DEFAULT_MEMORY_OVERDRAFT_FACTOR,
+    memory_overdraft_factor, set_memory_overdraft_factor,
+};
 
 pub use engines::CurrentlyExecutingSqlTracker;
 pub use engines::DFColumnType;

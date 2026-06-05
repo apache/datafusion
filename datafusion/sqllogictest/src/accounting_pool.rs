@@ -33,14 +33,45 @@ use datafusion::common::Result;
 use datafusion::execution::memory_pool::{
     MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
 };
+use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-/// Headroom over the pool's declared limit. Anything past this is an
-/// untracked allocation — by definition, since DF's pool didn't see it.
+/// Default overdraft factor: how much the allocator may exceed DataFusion's
+/// declared `MemoryPool` limit before [`AccountingMemoryPool`] panics.
+/// Anything past this is an untracked allocation — by definition, since
+/// DF's pool didn't see it.
 ///
-/// 800% high, but that's what it takes to pass the SLT suite right now. Goal should be ~10%
-const HEADROOM_FACTOR: f64 = 8.0;
+/// `8.0` (800%) is what it takes to pass the SLT suite today. Goal is to
+/// drive this down to ~`1.1`; progress tracked in epic
+/// <https://github.com/apache/datafusion/issues/22758>.
+///
+/// SLTs that exercise queries with more in-flight batches than the default
+/// covers can opt into a larger factor for one resize via
+/// `SET datafusion.sqllogictest.memory_overdraft_factor = N`, which the
+/// SLT runner intercepts and stores in [`MEMORY_OVERDRAFT_FACTOR`].
+pub const DEFAULT_MEMORY_OVERDRAFT_FACTOR: f64 = 8.0;
+
+thread_local! {
+    /// Per-thread overdraft multiplier, applied by [`AccountingMemoryPool::try_resize`].
+    /// The SLT runner writes here when it sees a
+    /// `SET datafusion.sqllogictest.memory_overdraft_factor = N` statement;
+    /// it resets to [`DEFAULT_MEMORY_OVERDRAFT_FACTOR`] on each `try_resize`
+    /// so opt-ins stay scoped to the SLT block that asked for them.
+    static MEMORY_OVERDRAFT_FACTOR: Cell<f64> = const { Cell::new(DEFAULT_MEMORY_OVERDRAFT_FACTOR) };
+}
+
+/// Override the memory overdraft factor for the current thread. The next
+/// [`AccountingMemoryPool::try_resize`] consumes the override, then resets
+/// the thread-local back to [`DEFAULT_MEMORY_OVERDRAFT_FACTOR`].
+pub fn set_memory_overdraft_factor(factor: f64) {
+    MEMORY_OVERDRAFT_FACTOR.with(|h| h.set(factor));
+}
+
+/// Read the current thread's memory overdraft factor.
+pub fn memory_overdraft_factor() -> f64 {
+    MEMORY_OVERDRAFT_FACTOR.with(|h| h.get())
+}
 
 pub struct AccountingMemoryPool {
     inner: Arc<dyn MemoryPool>,
@@ -117,7 +148,9 @@ impl MemoryPool for AccountingMemoryPool {
 
     fn try_resize(&self, new_limit: usize) -> Result<()> {
         self.inner.try_resize(new_limit)?;
-        set_account_balance((new_limit as f64 * HEADROOM_FACTOR) as isize);
+        let factor = MEMORY_OVERDRAFT_FACTOR
+            .with(|h| h.replace(DEFAULT_MEMORY_OVERDRAFT_FACTOR));
+        set_account_balance((new_limit as f64 * factor) as isize);
         Ok(())
     }
 }
@@ -162,13 +195,46 @@ mod tests {
         );
         pool.try_resize(50_000).unwrap();
 
-        // Balance is reset to limit * HEADROOM_FACTOR, minus a small
-        // drift from this test thread's own allocs between set and read.
-        let expected = (50_000.0 * HEADROOM_FACTOR) as isize;
+        // Balance is reset to limit * DEFAULT_MEMORY_OVERDRAFT_FACTOR,
+        // minus a small drift from this test thread's own allocs between
+        // set and read.
+        let expected = (50_000.0 * DEFAULT_MEMORY_OVERDRAFT_FACTOR) as isize;
         let bal = account_balance();
         assert!(
             (50_000..=expected).contains(&bal),
             "balance not in expected range: got {bal}, expected ≤ {expected}"
+        );
+    }
+
+    #[test]
+    fn overdraft_factor_override_is_consumed_by_try_resize() {
+        set_thread_context_id(next_context_id());
+
+        let default_size = 1_000_000;
+        let pool = AccountingMemoryPool::new(
+            Arc::new(GreedyMemoryPool::new(default_size)),
+            default_size,
+        );
+
+        set_memory_overdraft_factor(2.0);
+        pool.try_resize(100_000).unwrap();
+        // 2.0 * 100K = 200K; subtract worst-case drift from this thread's
+        // own allocs between the resize and the read.
+        let bal = account_balance();
+        assert!(
+            (100_000..=200_000).contains(&bal),
+            "first resize used wrong factor: got {bal}, expected ≤ 200_000"
+        );
+
+        // Override consumed: next resize falls back to default.
+        pool.try_resize(100_000).unwrap();
+        let bal = account_balance();
+        let expected_default =
+            (100_000.0 * DEFAULT_MEMORY_OVERDRAFT_FACTOR) as isize;
+        assert!(
+            (100_000..=expected_default).contains(&bal),
+            "second resize did not fall back to default factor: got {bal}, \
+             expected ≤ {expected_default}"
         );
     }
 }
