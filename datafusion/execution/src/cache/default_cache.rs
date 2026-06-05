@@ -106,12 +106,7 @@ impl<K: CacheKey, V: CacheValue> DefaultCacheState<K, V> {
 
         if total_size > self.memory_limit {
             // Remove potential stale entry
-            let result = self.remove(key);
-            if let Some(stale_entry) = &result {
-                self.memory_used -= key_size;
-                self.memory_used -= stale_entry.size();
-            }
-            return result;
+           return self.remove(key);
         }
 
         let expires = self.ttl.map(|ttl| now + ttl);
@@ -200,14 +195,12 @@ impl<K: CacheKey, V: CacheValue> DefaultCache<K, V> {
     }
 
     /// Override the time source used to stamp and check TTLs.
-    #[cfg(test)]
     pub fn with_time_provider(mut self, provider: Arc<dyn TimeProvider>) -> Self {
         self.time_provider = provider;
         self
     }
 
     /// Number of bytes currently accounted for by live entries.
-    #[cfg(test)]
     pub fn memory_used(&self) -> usize {
         self.state.lock().unwrap().memory_used
     }

@@ -369,9 +369,9 @@ mod tests {
 
     #[test]
     fn test_cache_entry_added_when_entries_are_within_cache_limit() {
-        let (meta_1, value_1) = create_cached_file_metadata_with_stats("test1.parquet");
-        let (meta_2, value_2) = create_cached_file_metadata_with_stats("test2.parquet");
-        let (meta_3, value_3) = create_cached_file_metadata_with_stats("test3.parquet");
+        let (meta_1, value_1) = create_cached_file_metadata_with_stats("test1.parquet", 10);
+        let (meta_2, value_2) = create_cached_file_metadata_with_stats("test2.parquet", 10);
+        let (meta_3, value_3) = create_cached_file_metadata_with_stats("test3.parquet", 10);
 
         let mut ctx = DFHeapSizeCtx::default();
 
@@ -443,9 +443,9 @@ mod tests {
 
     #[test]
     fn test_cache_rejects_entry_which_is_too_large() {
-        let (meta, value) = create_cached_file_metadata_with_stats("test1.parquet");
+        let (meta, value_too_large) = create_cached_file_metadata_with_stats("test1.parquet", 10);
         let mut ctx = DFHeapSizeCtx::default();
-        let limit_less_than_the_entry = value.heap_size(&mut ctx) - 1;
+        let limit_less_than_the_entry = value_too_large.clone().heap_size(&mut ctx) - 1;
 
         // create a cache with a size less than the entry
         let cache = DefaultCache::new(limit_less_than_the_entry);
@@ -455,18 +455,34 @@ mod tests {
             table: None,
         };
 
-        cache.put(&path_1, value);
+        cache.put(&path_1, value_too_large.clone());
 
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.memory_used(), 0);
+
+        // Test stale entry is removed when oversized entry is added
+        let (_, value_fits) = create_cached_file_metadata_with_stats("test1.parquet", 7);
+        cache.put(&path_1, value_fits.clone());
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.memory_used(), 1514);
+
+        // now add an entry which is over the limit and make sure the old stale entry is removed
+        let stale_entry = cache.put(&path_1, value_too_large.clone());
+        assert_eq!(stale_entry, Some(value_fits));
+
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.memory_used(), 0);
+
     }
 
     fn create_cached_file_metadata_with_stats(
         file_name: &str,
+        series_size: i32,
     ) -> (ObjectMeta, CachedFileMetadata) {
-        let series: Vec<i32> = (0..=10).collect();
+        let series: Vec<i32> = (0..=series_size).collect();
         let values = Int32Array::from(series);
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 11]));
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, series_size + 1]));
         let field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let list_array = ListArray::new(field, offsets, Arc::new(values), None);
 
