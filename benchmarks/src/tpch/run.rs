@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use super::{
     TPCH_QUERY_END_ID, TPCH_QUERY_START_ID, TPCH_TABLES, get_query_sql_for_scale_factor,
-    get_tbl_tpch_table_schema, get_tpch_table_schema,
+    get_tbl_tpch_table_schema, get_tpch_table_schema, table_constraints,
 };
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
@@ -324,12 +324,15 @@ impl RunOpt {
             .with_file_extension(extension)
             .with_target_partitions(target_partitions)
             .with_collect_stat(state.config().collect_statistics());
+
         let schema = match table_format {
             "parquet" => options.infer_schema(&state, &table_path).await?,
             "tbl" => Arc::new(get_tbl_tpch_table_schema(table)),
             "csv" => Arc::new(get_tpch_table_schema(table)),
             _ => unreachable!(),
         };
+        let constraints = table_constraints(table, schema.as_ref());
+
         let options = if self.sorted {
             let key_column_name = schema.fields()[0].name();
             options
@@ -342,9 +345,11 @@ impl RunOpt {
             .with_listing_options(options)
             .with_schema(schema);
 
-        Ok(Arc::new(ListingTable::try_new(config)?.with_cache(
-            ctx.runtime_env().cache_manager.get_file_statistic_cache(),
-        )))
+        let provider = ListingTable::try_new(config)?
+            .with_constraints(constraints)
+            .with_cache(ctx.runtime_env().cache_manager.get_file_statistic_cache());
+
+        Ok(Arc::new(provider))
     }
 
     fn iterations(&self) -> usize {
