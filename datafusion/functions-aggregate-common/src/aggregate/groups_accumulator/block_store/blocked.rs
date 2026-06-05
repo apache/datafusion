@@ -34,7 +34,7 @@ use crate::aggregate::groups_accumulator::blocks::Block;
 ///
 /// The lifecycle is split into two phases:
 /// - **Accumulation** (`emit_cursor` is `None`): blocks are appended via
-///   [`BlockStore::resize`], [`BlockStore::reserve_blocks`], or [`Self::push_block`].
+///   [`BlockStore::resize`], [`BlockStore::allocate_block`], or [`Self::push_block`].
 /// - **Emission** (`emit_cursor` is `Some`): blocks are drained one-by-one via
 ///   [`Self::pop_block`] until all blocks are consumed, then [`BlockStore::clear`]
 ///   resets the state back to accumulation.
@@ -94,17 +94,10 @@ impl<B: Block> BlockedBlockStore<B> {
 }
 
 impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
-    fn new(block_size: Option<usize>) -> Self {
-        Self::new(block_size.expect("blocked block store should have block size"))
-    }
-
-    fn reserve_blocks<F>(&mut self, new_block: F)
-    where
-        F: Fn(Option<usize>) -> B,
-    {
+    fn allocate_block(&mut self) {
         assert!(
             self.emit_cursor.is_none(),
-            "reserve_blocks must not be called during emission"
+            "allocate_block must not be called during emission"
         );
 
         let block_size = self.block_size;
@@ -114,18 +107,11 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
                 .last()
                 .is_some_and(|block| block.len() == block_size)
         {
-            self.inner.push(new_block(Some(self.block_size)));
+            self.inner.push(B::new(block_size));
         }
     }
 
-    fn resize<F>(
-        &mut self,
-        total_num_groups: usize,
-        new_block: F,
-        default_value: B::T,
-    ) where
-        F: Fn(Option<usize>) -> B,
-    {
+    fn resize(&mut self, total_num_groups: usize, default_value: B::T) {
         assert!(
             self.emit_cursor.is_none(),
             "resize must not be called during emission"
@@ -157,7 +143,7 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
 
         // Add full blocks
         while to_fill >= block_size {
-            let mut block = new_block(Some(block_size));
+            let mut block = B::new(block_size);
             block.fill_default_value(block_size, default_value.clone());
             self.inner.push(block);
             to_fill -= block_size;
@@ -165,7 +151,7 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
 
         // Add final partial block if needed
         if to_fill > 0 {
-            let mut block = new_block(Some(block_size));
+            let mut block = B::new(block_size);
             block.fill_default_value(to_fill, default_value.clone());
             self.inner.push(block);
         }
@@ -213,13 +199,9 @@ impl<B: Block> IndexMut<usize> for BlockedBlockStore<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregate::groups_accumulator::block_store::BlockStore;
+    use crate::aggregate::groups_accumulator::block_store::{BlockStore, VecValues};
 
-    type TestBlocks = BlockedBlockStore<Vec<u32>>;
-
-    fn new_block(block_size: Option<usize>) -> Vec<u32> {
-        Vec::with_capacity(block_size.expect("blocked blocks should pass block size"))
-    }
+    type TestBlocks = BlockedBlockStore<VecValues<u32>>;
 
     #[test]
     fn test_resize_within_one_block() {
@@ -227,12 +209,12 @@ mod tests {
         assert_eq!(blocks.num_blocks(), 0);
 
         for _ in 0..2 {
-            blocks.resize(5, new_block, 42);
+            blocks.resize(5, 42);
             assert_eq!(blocks.num_blocks(), 1);
             assert_eq!(blocks[0].len(), 5);
             blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
 
-            blocks.resize(10, new_block, 42);
+            blocks.resize(10, 42);
             assert_eq!(blocks.num_blocks(), 1);
             assert_eq!(blocks[0].len(), 10);
             blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
@@ -248,14 +230,14 @@ mod tests {
         assert_eq!(blocks.num_blocks(), 0);
 
         for _ in 0..2 {
-            blocks.resize(5, new_block, 42);
+            blocks.resize(5, 42);
             assert_eq!(blocks.num_blocks(), 2);
             assert_eq!(blocks[0].len(), 3);
             blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
             assert_eq!(blocks[1].len(), 2);
             blocks[1].iter().for_each(|num| assert_eq!(*num, 42));
 
-            blocks.resize(10, new_block, 42);
+            blocks.resize(10, 42);
             assert_eq!(blocks.num_blocks(), 4);
             assert_eq!(blocks[0].len(), 3);
             blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
@@ -274,7 +256,7 @@ mod tests {
     #[test]
     fn test_pop_block() {
         let mut blocks = TestBlocks::new(3);
-        blocks.resize(7, new_block, 42);
+        blocks.resize(7, 42);
         assert_eq!(blocks.num_blocks(), 3);
 
         let blk0 = blocks.pop_block().unwrap();
@@ -294,26 +276,26 @@ mod tests {
 
     #[test]
     fn existing_blocks_implements_block_store() {
-        let mut store = BlockedBlockStore::<Vec<u32>>::new(2);
-        store.resize(5, new_block, 42);
+        let mut store = BlockedBlockStore::<VecValues<u32>>::new(2);
+        store.resize(5, 42);
         assert_eq!(BlockStore::num_blocks(&store), 3);
-        assert_eq!(store[0], vec![42, 42]);
-        assert_eq!(store[1], vec![42, 42]);
-        assert_eq!(store[2], vec![42]);
+        assert_eq!(*store[0], vec![42, 42]);
+        assert_eq!(*store[1], vec![42, 42]);
+        assert_eq!(*store[2], vec![42]);
     }
 
     #[test]
-    fn blocked_block_store_reserves_new_block_when_full() {
-        let mut store = BlockedBlockStore::<Vec<u32>>::new(2);
-        store.reserve_blocks(new_block);
+    fn blocked_block_store_allocates_new_block_when_full() {
+        let mut store = BlockedBlockStore::<VecValues<u32>>::new(2);
+        store.allocate_block();
         assert_eq!(BlockStore::num_blocks(&store), 1);
 
         store[0].push(1);
-        store.reserve_blocks(new_block);
+        store.allocate_block();
         assert_eq!(BlockStore::num_blocks(&store), 1);
 
         store[0].push(2);
-        store.reserve_blocks(new_block);
+        store.allocate_block();
         assert_eq!(BlockStore::num_blocks(&store), 2);
     }
 }

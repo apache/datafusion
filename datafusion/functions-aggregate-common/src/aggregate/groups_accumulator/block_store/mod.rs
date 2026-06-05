@@ -26,7 +26,7 @@ pub mod blocked;
 pub mod flat;
 pub mod vec_values;
 
-pub use blocked::{BlockedBlockStore, BlockedBlockStore};
+pub use blocked::BlockedBlockStore;
 pub use flat::FlatBlockStore;
 pub use vec_values::{VecValues, VecValuesBlockStore};
 
@@ -38,21 +38,11 @@ pub use vec_values::{VecValues, VecValuesBlockStore};
 pub trait BlockStore<B: Block>:
     Debug + Index<usize, Output = B> + IndexMut<usize>
 {
-    /// Create a new store.
-    ///
-    /// `block_size` is `None` for flat storage and `Some(_)` for blocked
-    /// storage.
-    fn new(block_size: Option<usize>) -> Self;
-
     /// Ensure the store has a block available for pushing a new value.
-    fn reserve_blocks<F>(&mut self, new_block: F)
-    where
-        F: Fn(Option<usize>) -> B;
+    fn allocate_block(&mut self);
 
     /// Ensure the store can hold `total_num_groups` values.
-    fn resize<F>(&mut self, total_num_groups: usize, new_block: F, default_value: B::T)
-    where
-        F: Fn(Option<usize>) -> B;
+    fn resize(&mut self, total_num_groups: usize, default_value: B::T);
 
     /// Return the number of active blocks.
     fn num_blocks(&self) -> usize;

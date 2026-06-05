@@ -45,6 +45,7 @@ use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::FlatNullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::block_store::FlatBlockStore;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
 };
@@ -787,7 +788,7 @@ where
             sum_data_type: sum_data_type.clone(),
             counts: vec![],
             sums: vec![],
-            null_state: FlatNullState::new(None),
+            null_state: FlatNullState::new(FlatBlockStore::new(), None),
             avg_fn,
         }
     }

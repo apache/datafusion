@@ -200,9 +200,7 @@ where
     }
 
     fn push_new_group(&mut self, value: V) -> u64 {
-        self.values.reserve_blocks(|block_size| {
-            VecValues::with_capacity(block_size.unwrap_or(0))
-        });
+        self.values.allocate_block();
 
         let block_id = self.values.num_blocks().saturating_sub(1);
         let current_block = &mut self.values[block_id];
@@ -341,8 +339,15 @@ enum GroupValuesPrimitiveStateAdapter<V: Clone + std::fmt::Debug + Send> {
 }
 
 impl<V: Clone + std::fmt::Debug + Send> GroupValuesPrimitiveStateAdapter<V> {
-    
+    fn new_flat() -> Self {
+        Self::Flat(GroupValuesPrimitiveState::new(FlatBlockStore::new()))
+    }
 
+    fn new_blocked(block_size: usize) -> Self {
+        Self::Blocked(GroupValuesPrimitiveState::new(BlockedBlockStore::new(
+            block_size,
+        )))
+    }
 
     fn size(&self) -> usize {
         match self {

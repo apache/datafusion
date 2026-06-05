@@ -53,7 +53,7 @@ pub mod execution_props {
     pub use datafusion_expr::var_provider::{VarProvider, VarType};
 }
 
-pub use aggregate::groups_accumulator::{FlatNullState, GroupsAccumulatorAdapter};
+pub use aggregate::groups_accumulator::{FlatBlockStore, FlatNullState, GroupsAccumulatorAdapter};
 pub use analysis::{AnalysisContext, ExprBoundaries, analyze};
 pub use equivalence::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, calculate_union,

@@ -59,30 +59,15 @@ impl<B: Block> Default for FlatBlockStore<B> {
 }
 
 impl<B: Block> BlockStore<B> for FlatBlockStore<B> {
-    fn new(block_size: Option<usize>) -> Self {
-        debug_assert!(
-            block_size.is_none(),
-            "flat block store should not be created with a block size"
-        );
-        Self::new()
-    }
+    fn allocate_block(&mut self) {}
 
-    fn reserve_blocks<F>(&mut self, _new_block: F)
-    where
-        F: Fn(Option<usize>) -> B,
-    {
-    }
-
-    fn resize<F>(&mut self, total_num_groups: usize, new_block: F, default_value: B::T)
-    where
-        F: Fn(Option<usize>) -> B,
-    {
+    fn resize(&mut self, total_num_groups: usize, default_value: B::T) {
         if total_num_groups == 0 {
             return;
         }
 
         if self.0.is_empty() {
-            self.0 = new_block(None);
+            self.0 = B::new(0);
         }
 
         let existing_len = self.0.len();
@@ -126,12 +111,9 @@ impl<B: Block> IndexMut<usize> for FlatBlockStore<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aggregate::groups_accumulator::block_store::VecValues;
 
-    type TestBlock = Vec<u32>;
-
-    fn new_block(block_size: Option<usize>) -> TestBlock {
-        Vec::with_capacity(block_size.unwrap_or(0))
-    }
+    type TestBlock = VecValues<u32>;
 
     #[test]
     fn flat_block_store_resizes_single_block() {
@@ -139,13 +121,13 @@ mod tests {
         assert!(store.is_empty());
         assert_eq!(store.num_blocks(), 0);
 
-        store.resize(3, new_block, 42);
+        store.resize(3, 42);
         assert_eq!(store.num_blocks(), 1);
-        assert_eq!(store[0], vec![42, 42, 42]);
+        assert_eq!(*store[0], vec![42, 42, 42]);
 
-        store.resize(5, new_block, 7);
+        store.resize(5, 7);
         assert_eq!(store.num_blocks(), 1);
-        assert_eq!(store[0], vec![42, 42, 42, 7, 7]);
+        assert_eq!(*store[0], vec![42, 42, 42, 7, 7]);
 
         store.clear();
         assert!(store.is_empty());
@@ -155,21 +137,21 @@ mod tests {
     #[test]
     fn flat_block_store_index_accesses_inner_block() {
         let mut store = FlatBlockStore::<TestBlock>::new();
-        store.resize(2, new_block, 42);
+        store.resize(2, 42);
 
         store[0][1] = 7;
-        assert_eq!(store[0], vec![42, 7]);
+        assert_eq!(*store[0], vec![42, 7]);
     }
 
     #[test]
-    fn flat_block_store_reserve_blocks_is_noop() {
+    fn flat_block_store_allocate_block_is_noop() {
         let mut store = FlatBlockStore::<TestBlock>::new();
-        store.reserve_blocks(new_block);
+        store.allocate_block();
         assert_eq!(store.num_blocks(), 0);
 
-        store.resize(1, new_block, 42);
-        store.reserve_blocks(new_block);
+        store.resize(1, 42);
+        store.allocate_block();
         assert_eq!(store.num_blocks(), 1);
-        assert_eq!(store[0], vec![42]);
+        assert_eq!(*store[0], vec![42]);
     }
 }

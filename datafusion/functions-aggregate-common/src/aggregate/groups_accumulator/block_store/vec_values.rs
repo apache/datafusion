@@ -74,8 +74,12 @@ impl<T: Clone + Debug> DerefMut for VecValues<T> {
 impl<T: Clone + Debug> Block for VecValues<T> {
     type T = T;
 
+    fn new(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+
     fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
-        self.0.fill_default_value(fill_len, default_value);
+        self.0.extend(std::iter::repeat_n(default_value, fill_len));
     }
 
     fn len(&self) -> usize {

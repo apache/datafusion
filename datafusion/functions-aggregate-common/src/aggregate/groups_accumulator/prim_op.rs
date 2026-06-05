@@ -135,18 +135,8 @@ where
         F: Fn(&mut V, V) + Send + Sync + 'static,
     {
         // Expand to ensure values are large enough
-        let new_block = |block_size: Option<usize>| {
-            // In blocked mode, pre-allocate the full block capacity.
-            // In flat mode (block_size=None), start with an empty Vec
-            // and let `resize` grow it to exactly `total_num_groups`,
-            // matching the standard Vec growth behavior.
-            match block_size {
-                Some(cap) => VecValues::with_capacity(cap),
-                None => VecValues::default(),
-            }
-        };
         self.values
-            .resize(input.total_num_groups, new_block, starting_value);
+            .resize(input.total_num_groups, starting_value);
 
         self.null_state.accumulate(
             input.group_indices,
@@ -201,14 +191,14 @@ impl<V: Clone + Debug + Send> PrimitiveGroupsStateAdapter<V> {
     fn new_flat() -> Self {
         Self::Flat(PrimitiveGroupsState::new(
             FlatBlockStore::new(),
-            FlatNullState::new(None),
+            FlatNullState::new(FlatBlockStore::new(), None),
         ))
     }
 
     fn new_blocked(block_size: usize) -> Self {
         Self::Blocked(PrimitiveGroupsState::new(
             BlockedBlockStore::new(block_size),
-            BlockedNullState::new(Some(block_size)),
+            BlockedNullState::new(BlockedBlockStore::new(block_size), Some(block_size)),
         ))
     }
 

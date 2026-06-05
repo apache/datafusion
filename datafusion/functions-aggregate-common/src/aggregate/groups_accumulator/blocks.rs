@@ -17,7 +17,7 @@
 
 //! Aggregation intermediate results block abstraction
 
-use std::{fmt::Debug, iter};
+use std::fmt::Debug;
 
 // Re-export `Blocks` from its new home for backward compatibility.
 pub use crate::aggregate::groups_accumulator::block_store::blocked::BlockedBlockStore;
@@ -31,6 +31,13 @@ pub use crate::aggregate::groups_accumulator::block_store::blocked::BlockedBlock
 pub trait Block: Debug + Default {
     type T: Clone;
 
+    /// Create a new empty block with the given capacity hint.
+    ///
+    /// `capacity` is `0` for flat storage (no hint) and the configured block
+    /// size for blocked storage. Implementations should treat `0` the same as
+    /// `Default::default()`.
+    fn new(capacity: usize) -> Self;
+
     /// Fill the block with default value
     fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T);
 
@@ -40,19 +47,5 @@ pub trait Block: Debug + Default {
     /// Return true if the block is empty
     fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-}
-
-/// We usually use `Vec` to represent `Block`,
-/// so we implement `Block` trait for `Vec`
-impl<Ty: Clone + Debug> Block for Vec<Ty> {
-    type T = Ty;
-
-    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
-        self.extend(iter::repeat_n(default_value, fill_len));
-    }
-
-    fn len(&self) -> usize {
-        self.len()
     }
 }
