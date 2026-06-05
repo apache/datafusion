@@ -321,7 +321,10 @@ fn try_intercept_overdraft_set(sql: &str) -> Option<Result<DFOutput>> {
         return None;
     };
 
-    if !variable.to_string().eq_ignore_ascii_case(OVERDRAFT_FACTOR_VAR) {
+    if !variable
+        .to_string()
+        .eq_ignore_ascii_case(OVERDRAFT_FACTOR_VAR)
+    {
         return None;
     }
 

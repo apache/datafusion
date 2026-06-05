@@ -377,13 +377,44 @@ cargo test --features memory-accounting --test sqllogictests -- \
 `--default-pool-size-mb` seeds each per-file SLT context's MemoryPool with
 the given size in MB and arms the bank as a no-op until a test opts in.
 
-**Opting an individual test in.** Add `SET datafusion.runtime.memory_limit = 'N'` at the top of the `.slt`. The wrapping `AccountingMemoryPool` then
-tightens its allocator-level bank to `N * 1.10` (10% headroom). If the test
-allocates more than that — including bytes DataFusion's tracker didn't see
-— the test panics with an `OverdraftPanic` reporting the actual balance at
-panic time. SLTs without a `SET` of `memory_limit` see no change in
-behavior; the bank stays loose and `SHOW ALL` continues to render the limit
-as `unlimited`.
+**Opting an individual test in.** Add `SET datafusion.runtime.memory_limit = 'N'`
+at the top of the `.slt`. The wrapping `AccountingMemoryPool` then tightens
+its allocator-level bank to `N * DEFAULT_MEMORY_OVERDRAFT_FACTOR` (currently
+`8.0`, i.e. 800% — yes, that's loose). If the test allocates more than that
+— including bytes DataFusion's tracker didn't see — the test panics with an
+`OverdraftPanic` reporting the actual balance at panic time. SLTs without a
+`SET` of `memory_limit` see no change in behavior; the bank stays loose and
+`SHOW ALL` continues to render the limit as `unlimited`.
+
+The default factor is deliberately loose so the existing suite passes today;
+the long-term goal is to drive it down toward ~`1.1` as operators that
+allocate outside the pool's tracking are fixed. Progress is tracked in
+[epic #22758](https://github.com/apache/datafusion/issues/22758).
+
+**When a test trips the accounting check**, the runner emits a message like:
+
+> Memory accounting mismatch: this query allocated N bytes more than
+> DataFusion's MemoryPool accounted for. Some operator is allocating outside
+> the pool's tracking — this is a real accounting bug worth fixing.
+
+That bytes-over-budget number is the gap we're hunting. The right fix is to
+account for the offending allocation inside the operator (file a sub-issue
+under the epic above, with the query + observed overshoot). For an SLT you
+didn't author that just started failing, the unblocker is to bump the
+overdraft factor for that one test:
+
+```sql
+SET datafusion.sqllogictest.memory_overdraft_factor = 5.0;
+SET datafusion.runtime.memory_limit = '150K';
+-- ... rest of test ...
+```
+
+The override is consumed by the *next* `SET datafusion.runtime.memory_limit`
+(which is what arms the bank), then auto-resets to the default — so each
+test opts in independently and the per-file isolation in the runner still
+holds. The setting only exists in the SLT runner; DataFusion's parser
+doesn't know about it, and nothing changes in `datafusion-cli` or anywhere
+else.
 
 Inside the runner each file gets its own multi-thread Tokio runtime so
 context-ids stamped onto worker threads stay stable for the allocator

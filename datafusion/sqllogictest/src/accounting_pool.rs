@@ -23,10 +23,13 @@
 //! which `RuntimeEnvBuilder::with_memory_limit` triggers on `SET
 //! datafusion.runtime.memory_limit = '…'`).
 //!
-//! Each retune sets the bank to `new_limit * HEADROOM_FACTOR`. A query
-//! that allocates past that envelope panics with an `OverdraftPanic` —
-//! the gap between DF's voluntary tracker and the allocator's reality
-//! is the bug we're hunting.
+//! Each retune sets the bank to `new_limit * DEFAULT_MEMORY_OVERDRAFT_FACTOR`
+//! (or whatever the current thread has set via [`set_memory_overdraft_factor`]
+//! — used by the SLT runner to honor per-test
+//! `SET datafusion.sqllogictest.memory_overdraft_factor = N` overrides).
+//! A query that allocates past that envelope panics with an `OverdraftPanic`
+//! — the gap between DF's voluntary tracker and the allocator's reality is
+//! the bug we're hunting.
 
 use crate::set_account_balance;
 use datafusion::common::Result;
@@ -148,8 +151,8 @@ impl MemoryPool for AccountingMemoryPool {
 
     fn try_resize(&self, new_limit: usize) -> Result<()> {
         self.inner.try_resize(new_limit)?;
-        let factor = MEMORY_OVERDRAFT_FACTOR
-            .with(|h| h.replace(DEFAULT_MEMORY_OVERDRAFT_FACTOR));
+        let factor =
+            MEMORY_OVERDRAFT_FACTOR.with(|h| h.replace(DEFAULT_MEMORY_OVERDRAFT_FACTOR));
         set_account_balance((new_limit as f64 * factor) as isize);
         Ok(())
     }
@@ -229,8 +232,7 @@ mod tests {
         // Override consumed: next resize falls back to default.
         pool.try_resize(100_000).unwrap();
         let bal = account_balance();
-        let expected_default =
-            (100_000.0 * DEFAULT_MEMORY_OVERDRAFT_FACTOR) as isize;
+        let expected_default = (100_000.0 * DEFAULT_MEMORY_OVERDRAFT_FACTOR) as isize;
         assert!(
             (100_000..=expected_default).contains(&bal),
             "second resize did not fall back to default factor: got {bal}, \

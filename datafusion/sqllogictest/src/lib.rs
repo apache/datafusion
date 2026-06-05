@@ -42,8 +42,8 @@ pub use accounting::{
 };
 #[cfg(feature = "memory-accounting")]
 pub use accounting_pool::{
-    AccountingMemoryPool, DEFAULT_MEMORY_OVERDRAFT_FACTOR,
-    memory_overdraft_factor, set_memory_overdraft_factor,
+    AccountingMemoryPool, DEFAULT_MEMORY_OVERDRAFT_FACTOR, memory_overdraft_factor,
+    set_memory_overdraft_factor,
 };
 
 pub use engines::CurrentlyExecutingSqlTracker;
