@@ -28,7 +28,6 @@ use datafusion_expr::{
     TypeSignature::Exact, TypeSignature::Uniform, Volatility,
 };
 use datafusion_macros::user_doc;
-use itertools::izip;
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -256,296 +255,162 @@ fn regexp_count(
 }
 
 fn regexp_count_inner<'a, S>(
-    values: &S,
-    regex_array: &S,
+    values: &'a S,
+    regex_array: &'a S,
     is_regex_scalar: bool,
-    start_array: Option<&Int64Array>,
+    start_array: Option<&'a Int64Array>,
     is_start_scalar: bool,
-    flags_array: Option<&S>,
+    flags_array: Option<&'a S>,
     is_flags_scalar: bool,
 ) -> Result<ArrayRef, ArrowError>
 where
     S: StringArrayType<'a>,
 {
-    let (regex_scalar, is_regex_scalar) = if is_regex_scalar || regex_array.len() == 1 {
-        (
-            (!regex_array.is_null(0)).then(|| regex_array.value(0)),
-            true,
-        )
-    } else {
-        (None, false)
+    let regex = StringValueSource::regex(regex_array, is_regex_scalar);
+
+    // Preserve existing short-circuit behavior: a scalar NULL regex produces zeros
+    // for every row without validating start or flags.
+    if regex.is_null_scalar() {
+        return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
+    }
+
+    let start = StartValueSource::new(start_array, is_start_scalar);
+    let flags = StringValueSource::flags(flags_array, is_flags_scalar);
+
+    regex.validate_len("regex_array", values.len())?;
+    start.validate_len(values.len())?;
+    flags.validate_len("flags_array", values.len())?;
+
+    let scalar_pattern = match (regex.scalar(), flags.scalar()) {
+        (Some(Some(regex)), Some(flags)) => Some(compile_regex(regex, flags)?),
+        _ => None,
     };
 
-    let (start_array, start_scalar, is_start_scalar) =
-        if let Some(start_array) = start_array {
-            if is_start_scalar || start_array.len() == 1 {
-                (None, Some(start_array.value(0)), true)
-            } else {
-                (Some(start_array), None, false)
-            }
-        } else {
-            (None, Some(1), true)
-        };
-
-    let (flags_array, flags_scalar, is_flags_scalar) =
-        if let Some(flags_array) = flags_array {
-            if is_flags_scalar || flags_array.len() == 1 {
-                (None, Some(flags_array.value(0)), true)
-            } else {
-                (Some(flags_array), None, false)
-            }
-        } else {
-            (None, None, true)
-        };
-
     let mut regex_cache = HashMap::new();
-
-    match (is_regex_scalar, is_start_scalar, is_flags_scalar) {
-        (true, true, true) => {
-            let regex = match regex_scalar {
-                None => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
-                }
+    let counts = (0..values.len())
+        .map(|row| {
+            let regex = match regex.value(row) {
+                None => return Ok(0),
                 Some(regex) => regex,
             };
+            let start = start.value(row);
+            let flags = flags.value(row);
 
-            let pattern = compile_regex(regex, flags_scalar)?;
-
-            Ok(Arc::new(
-                values
-                    .iter()
-                    .map(|value| count_matches(value, &pattern, start_scalar))
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
-        }
-        (true, true, false) => {
-            let regex = match regex_scalar {
-                None => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
-                }
-                Some(regex) => regex,
-            };
-
-            let flags_array = flags_array.unwrap();
-            if values.len() != flags_array.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "flags_array must be the same length as values array; got {} and {}",
-                    flags_array.len(),
-                    values.len(),
-                )));
+            if let Some(pattern) = &scalar_pattern {
+                count_matches(values.value_opt(row), pattern, start)
+            } else {
+                let pattern = compile_and_cache_regex(regex, flags, &mut regex_cache)?;
+                count_matches(values.value_opt(row), pattern, start)
             }
+        })
+        .collect::<Result<Int64Array, ArrowError>>()?;
 
-            Ok(Arc::new(
-                values
-                    .iter()
-                    .zip(flags_array.iter())
-                    .map(|(value, flags)| {
-                        let pattern =
-                            compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                        count_matches(value, pattern, start_scalar)
-                    })
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
-        }
-        (true, false, true) => {
-            let regex = match regex_scalar {
-                None => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
-                }
-                Some(regex) => regex,
-            };
+    Ok(Arc::new(counts))
+}
 
-            let pattern = compile_regex(regex, flags_scalar)?;
+trait StringArrayValue<'a>: StringArrayType<'a> {
+    fn value_opt(&self, row: usize) -> Option<&'a str> {
+        (!self.is_null(row)).then(|| self.value(row))
+    }
+}
 
-            let start_array = start_array.unwrap();
+impl<'a, S> StringArrayValue<'a> for S where S: StringArrayType<'a> {}
 
-            Ok(Arc::new(
-                values
-                    .iter()
-                    .zip(start_array.iter())
-                    .map(|(value, start)| count_matches(value, &pattern, start))
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
-        }
-        (true, false, false) => {
-            let regex = match regex_scalar {
-                None => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
-                }
-                Some(regex) => regex,
-            };
+enum StringValueSource<'a, S> {
+    Scalar(Option<&'a str>),
+    Array(&'a S),
+}
 
-            let flags_array = flags_array.unwrap();
-            if values.len() != flags_array.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "flags_array must be the same length as values array; got {} and {}",
-                    flags_array.len(),
-                    values.len(),
-                )));
-            }
-
-            Ok(Arc::new(
-                izip!(
-                    values.iter(),
-                    start_array.unwrap().iter(),
-                    flags_array.iter()
-                )
-                .map(|(value, start, flags)| {
-                    let pattern =
-                        compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-
-                    count_matches(value, pattern, start)
-                })
-                .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
-        }
-        (false, true, true) => {
-            if values.len() != regex_array.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "regex_array must be the same length as values array; got {} and {}",
-                    regex_array.len(),
-                    values.len(),
-                )));
-            }
-
-            Ok(Arc::new(
-                values
-                    .iter()
-                    .zip(regex_array.iter())
-                    .map(|(value, regex)| {
-                        let regex = match regex {
-                            None => return Ok(0),
-                            Some(regex) => regex,
-                        };
-
-                        let pattern = compile_and_cache_regex(
-                            regex,
-                            flags_scalar,
-                            &mut regex_cache,
-                        )?;
-                        count_matches(value, pattern, start_scalar)
-                    })
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
-        }
-        (false, true, false) => {
-            if values.len() != regex_array.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "regex_array must be the same length as values array; got {} and {}",
-                    regex_array.len(),
-                    values.len(),
-                )));
-            }
-
-            let flags_array = flags_array.unwrap();
-            if values.len() != flags_array.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "flags_array must be the same length as values array; got {} and {}",
-                    flags_array.len(),
-                    values.len(),
-                )));
-            }
-
-            Ok(Arc::new(
-                izip!(values.iter(), regex_array.iter(), flags_array.iter())
-                    .map(|(value, regex, flags)| {
-                        let regex = match regex {
-                            None => return Ok(0),
-                            Some(regex) => regex,
-                        };
-
-                        let pattern =
-                            compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-
-                        count_matches(value, pattern, start_scalar)
-                    })
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
-        }
-        (false, false, true) => {
-            if values.len() != regex_array.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "regex_array must be the same length as values array; got {} and {}",
-                    regex_array.len(),
-                    values.len(),
-                )));
-            }
-
-            let start_array = start_array.unwrap();
-            if values.len() != start_array.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "start_array must be the same length as values array; got {} and {}",
-                    start_array.len(),
-                    values.len(),
-                )));
-            }
-
-            Ok(Arc::new(
-                izip!(values.iter(), regex_array.iter(), start_array.iter())
-                    .map(|(value, regex, start)| {
-                        let regex = match regex {
-                            None => return Ok(0),
-                            Some(regex) => regex,
-                        };
-
-                        let pattern = compile_and_cache_regex(
-                            regex,
-                            flags_scalar,
-                            &mut regex_cache,
-                        )?;
-                        count_matches(value, pattern, start)
-                    })
-                    .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
-        }
-        (false, false, false) => {
-            if values.len() != regex_array.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "regex_array must be the same length as values array; got {} and {}",
-                    regex_array.len(),
-                    values.len(),
-                )));
-            }
-
-            let start_array = start_array.unwrap();
-            if values.len() != start_array.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "start_array must be the same length as values array; got {} and {}",
-                    start_array.len(),
-                    values.len(),
-                )));
-            }
-
-            let flags_array = flags_array.unwrap();
-            if values.len() != flags_array.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "flags_array must be the same length as values array; got {} and {}",
-                    flags_array.len(),
-                    values.len(),
-                )));
-            }
-
-            Ok(Arc::new(
-                izip!(
-                    values.iter(),
-                    regex_array.iter(),
-                    start_array.iter(),
-                    flags_array.iter()
-                )
-                .map(|(value, regex, start, flags)| {
-                    let regex = match regex {
-                        None => return Ok(0),
-                        Some(regex) => regex,
-                    };
-
-                    let pattern =
-                        compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                    count_matches(value, pattern, start)
-                })
-                .collect::<Result<Int64Array, ArrowError>>()?,
-            ))
+impl<'a, S> StringValueSource<'a, S>
+where
+    S: StringArrayValue<'a>,
+{
+    fn regex(array: &'a S, is_scalar: bool) -> Self {
+        if is_scalar || array.len() == 1 {
+            Self::Scalar(array.value_opt(0))
+        } else {
+            Self::Array(array)
         }
     }
+
+    fn flags(array: Option<&'a S>, is_scalar: bool) -> Self {
+        match array {
+            Some(array) if is_scalar || array.len() == 1 => {
+                Self::Scalar(Some(array.value(0)))
+            }
+            Some(array) => Self::Array(array),
+            None => Self::Scalar(None),
+        }
+    }
+
+    fn scalar(&self) -> Option<Option<&'a str>> {
+        match self {
+            Self::Scalar(value) => Some(*value),
+            Self::Array(_) => None,
+        }
+    }
+
+    fn is_null_scalar(&self) -> bool {
+        matches!(self, Self::Scalar(None))
+    }
+
+    fn value(&self, row: usize) -> Option<&'a str> {
+        match self {
+            Self::Scalar(value) => *value,
+            Self::Array(array) => array.value_opt(row),
+        }
+    }
+
+    fn validate_len(&self, name: &str, values_len: usize) -> Result<(), ArrowError> {
+        if let Self::Array(array) = self {
+            validate_array_len(name, array.len(), values_len)?;
+        }
+        Ok(())
+    }
+}
+
+enum StartValueSource<'a> {
+    Scalar(Option<i64>),
+    Array(&'a Int64Array),
+}
+
+impl<'a> StartValueSource<'a> {
+    fn new(array: Option<&'a Int64Array>, is_scalar: bool) -> Self {
+        match array {
+            Some(array) if is_scalar || array.len() == 1 => {
+                Self::Scalar(Some(array.value(0)))
+            }
+            Some(array) => Self::Array(array),
+            None => Self::Scalar(Some(1)),
+        }
+    }
+
+    fn value(&self, row: usize) -> Option<i64> {
+        match self {
+            Self::Scalar(value) => *value,
+            Self::Array(array) => (!array.is_null(row)).then(|| array.value(row)),
+        }
+    }
+
+    fn validate_len(&self, values_len: usize) -> Result<(), ArrowError> {
+        if let Self::Array(array) = self {
+            validate_array_len("start_array", array.len(), values_len)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_array_len(
+    array_name: &str,
+    array_len: usize,
+    values_len: usize,
+) -> Result<(), ArrowError> {
+    if values_len != array_len {
+        return Err(ArrowError::ComputeError(format!(
+            "{array_name} must be the same length as values array; got {array_len} and {values_len}",
+        )));
+    }
+    Ok(())
 }
 
 fn count_matches(
