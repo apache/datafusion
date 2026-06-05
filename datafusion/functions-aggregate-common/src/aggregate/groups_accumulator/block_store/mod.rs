@@ -24,11 +24,11 @@ use crate::aggregate::groups_accumulator::blocks::Block;
 
 pub mod blocked;
 pub mod flat;
-pub mod vec_values;
+pub mod vec_block_store;
 
 pub use blocked::BlockedBlockStore;
 pub use flat::FlatBlockStore;
-pub use vec_values::{VecValues, VecValuesBlockStore};
+pub use vec_block_store::VecBlockStore;
 
 /// Storage abstraction for aggregation intermediate result blocks.
 ///

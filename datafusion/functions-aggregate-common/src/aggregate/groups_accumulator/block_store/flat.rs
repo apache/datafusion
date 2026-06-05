@@ -111,9 +111,8 @@ impl<B: Block> IndexMut<usize> for FlatBlockStore<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregate::groups_accumulator::block_store::VecValues;
 
-    type TestBlock = VecValues<u32>;
+    type TestBlock = Vec<u32>;
 
     #[test]
     fn flat_block_store_resizes_single_block() {
@@ -123,11 +122,11 @@ mod tests {
 
         store.resize(3, 42);
         assert_eq!(store.num_blocks(), 1);
-        assert_eq!(*store[0], vec![42, 42, 42]);
+        assert_eq!(store[0], vec![42, 42, 42]);
 
         store.resize(5, 7);
         assert_eq!(store.num_blocks(), 1);
-        assert_eq!(*store[0], vec![42, 42, 42, 7, 7]);
+        assert_eq!(store[0], vec![42, 42, 42, 7, 7]);
 
         store.clear();
         assert!(store.is_empty());
@@ -140,7 +139,7 @@ mod tests {
         store.resize(2, 42);
 
         store[0][1] = 7;
-        assert_eq!(*store[0], vec![42, 7]);
+        assert_eq!(store[0], vec![42, 7]);
     }
 
     #[test]
@@ -152,6 +151,6 @@ mod tests {
         store.resize(1, 42);
         store.allocate_block();
         assert_eq!(store.num_blocks(), 1);
-        assert_eq!(*store[0], vec![42]);
+        assert_eq!(store[0], vec![42]);
     }
 }

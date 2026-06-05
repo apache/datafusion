@@ -199,9 +199,9 @@ impl<B: Block> IndexMut<usize> for BlockedBlockStore<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregate::groups_accumulator::block_store::{BlockStore, VecValues};
+    use crate::aggregate::groups_accumulator::block_store::BlockStore;
 
-    type TestBlocks = BlockedBlockStore<VecValues<u32>>;
+    type TestBlocks = BlockedBlockStore<Vec<u32>>;
 
     #[test]
     fn test_resize_within_one_block() {
@@ -276,17 +276,17 @@ mod tests {
 
     #[test]
     fn existing_blocks_implements_block_store() {
-        let mut store = BlockedBlockStore::<VecValues<u32>>::new(2);
+        let mut store = BlockedBlockStore::<Vec<u32>>::new(2);
         store.resize(5, 42);
         assert_eq!(BlockStore::num_blocks(&store), 3);
-        assert_eq!(*store[0], vec![42, 42]);
-        assert_eq!(*store[1], vec![42, 42]);
-        assert_eq!(*store[2], vec![42]);
+        assert_eq!(store[0], vec![42, 42]);
+        assert_eq!(store[1], vec![42, 42]);
+        assert_eq!(store[2], vec![42]);
     }
 
     #[test]
     fn blocked_block_store_allocates_new_block_when_full() {
-        let mut store = BlockedBlockStore::<VecValues<u32>>::new(2);
+        let mut store = BlockedBlockStore::<Vec<u32>>::new(2);
         store.allocate_block();
         assert_eq!(BlockStore::num_blocks(&store), 1);
 

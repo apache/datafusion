@@ -32,7 +32,7 @@ use crate::aggregate::groups_accumulator::accumulate::{
     BlockedNullState, BooleanBlock, FlatNullState, NullState, SeenValueStore,
 };
 use crate::aggregate::groups_accumulator::block_store::{
-    BlockedBlockStore, FlatBlockStore, VecValues, VecValuesBlockStore,
+    BlockedBlockStore, FlatBlockStore, VecBlockStore,
 };
 use crate::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
@@ -101,7 +101,7 @@ struct UpdateBatchInput<'a, T: ArrowPrimitiveType> {
 struct PrimitiveGroupsState<V, VB, O, S>
 where
     V: Clone + Debug,
-    VB: VecValuesBlockStore<V> + Send,
+    VB: VecBlockStore<V> + Send,
     O: GroupIndexOperations,
     S: SeenValueStore + Send,
 {
@@ -113,7 +113,7 @@ where
 impl<V, VB, O, S> PrimitiveGroupsState<V, VB, O, S>
 where
     V: Clone + Debug,
-    VB: VecValuesBlockStore<V> + Send,
+    VB: VecBlockStore<V> + Send,
     O: GroupIndexOperations,
     S: SeenValueStore + Send,
 {
@@ -169,14 +169,14 @@ where
 
 type FlatPrimitiveGroupsState<V> = PrimitiveGroupsState<
     V,
-    FlatBlockStore<VecValues<V>>,
+    FlatBlockStore<Vec<V>>,
     FlatGroupIndexOperations,
     FlatBlockStore<BooleanBlock>,
 >;
 
 type BlockedPrimitiveGroupsState<V> = PrimitiveGroupsState<
     V,
-    BlockedBlockStore<VecValues<V>>,
+    BlockedBlockStore<Vec<V>>,
     BlockedGroupIndexOperations,
     BlockedBlockStore<BooleanBlock>,
 >;

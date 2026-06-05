@@ -27,7 +27,7 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::block_store::{
-    BlockedBlockStore, FlatBlockStore, VecValues, VecValuesBlockStore,
+    BlockedBlockStore, FlatBlockStore, VecBlockStore,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
@@ -124,7 +124,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
 struct GroupValuesPrimitiveState<V, VB, O>
 where
     V: Clone + std::fmt::Debug,
-    VB: VecValuesBlockStore<V> + Send,
+    VB: VecBlockStore<V> + Send,
     O: GroupIndexOperations,
 {
     values: VB,
@@ -134,7 +134,7 @@ where
 impl<V, VB, O> GroupValuesPrimitiveState<V, VB, O>
 where
     V: Clone + std::fmt::Debug,
-    VB: VecValuesBlockStore<V> + Send,
+    VB: VecBlockStore<V> + Send,
     O: GroupIndexOperations,
 {
     fn new(values: VB) -> Self {
@@ -328,9 +328,9 @@ where
 }
 
 type FlatGroupValuesPrimitiveState<V> =
-    GroupValuesPrimitiveState<V, FlatBlockStore<VecValues<V>>, FlatGroupIndexOperations>;
+    GroupValuesPrimitiveState<V, FlatBlockStore<Vec<V>>, FlatGroupIndexOperations>;
 type BlockedGroupValuesPrimitiveState<V> =
-    GroupValuesPrimitiveState<V, BlockedBlockStore<VecValues<V>>, BlockedGroupIndexOperations>;
+    GroupValuesPrimitiveState<V, BlockedBlockStore<Vec<V>>, BlockedGroupIndexOperations>;
 
 #[derive(Debug)]
 enum GroupValuesPrimitiveStateAdapter<V: Clone + std::fmt::Debug + Send> {

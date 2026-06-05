@@ -17,7 +17,7 @@
 
 //! Aggregation intermediate results block abstraction
 
-use std::fmt::Debug;
+use std::{fmt::Debug, iter};
 
 // Re-export `Blocks` from its new home for backward compatibility.
 pub use crate::aggregate::groups_accumulator::block_store::blocked::BlockedBlockStore;
@@ -47,5 +47,25 @@ pub trait Block: Debug + Default {
     /// Return true if the block is empty
     fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// Most aggregation intermediate results are naturally represented as `Vec<T>`,
+/// so we provide a blanket [`Block`] implementation for it. Specialized layouts
+/// (e.g. compact representations for non-trivially-sized values) should define
+/// their own block type rather than wrap `Vec<T>`.
+impl<T: Clone + Debug> Block for Vec<T> {
+    type T = T;
+
+    fn new(capacity: usize) -> Self {
+        Vec::with_capacity(capacity)
+    }
+
+    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
+        self.extend(iter::repeat_n(default_value, fill_len));
+    }
+
+    fn len(&self) -> usize {
+        Vec::len(self)
     }
 }
