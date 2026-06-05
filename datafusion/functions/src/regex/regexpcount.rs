@@ -195,8 +195,8 @@ fn regexp_count(
 
     match (values.data_type(), regex_array.data_type(), flags_array) {
         (Utf8, Utf8, None) => regexp_count_inner(
-            &values.as_string::<i32>(),
-            &regex_array.as_string::<i32>(),
+            values.as_string::<i32>(),
+            regex_array.as_string::<i32>(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
@@ -204,17 +204,17 @@ fn regexp_count(
             is_flags_scalar,
         ),
         (Utf8, Utf8, Some(flags_array)) if *flags_array.data_type() == Utf8 => regexp_count_inner(
-            &values.as_string::<i32>(),
-            &regex_array.as_string::<i32>(),
+            values.as_string::<i32>(),
+            regex_array.as_string::<i32>(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
-            Some(&flags_array.as_string::<i32>()),
+            Some(flags_array.as_string::<i32>()),
             is_flags_scalar,
         ),
         (LargeUtf8, LargeUtf8, None) => regexp_count_inner(
-            &values.as_string::<i64>(),
-            &regex_array.as_string::<i64>(),
+            values.as_string::<i64>(),
+            regex_array.as_string::<i64>(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
@@ -222,17 +222,17 @@ fn regexp_count(
             is_flags_scalar,
         ),
         (LargeUtf8, LargeUtf8, Some(flags_array)) if *flags_array.data_type() == LargeUtf8 => regexp_count_inner(
-            &values.as_string::<i64>(),
-            &regex_array.as_string::<i64>(),
+            values.as_string::<i64>(),
+            regex_array.as_string::<i64>(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
-            Some(&flags_array.as_string::<i64>()),
+            Some(flags_array.as_string::<i64>()),
             is_flags_scalar,
         ),
         (Utf8View, Utf8View, None) => regexp_count_inner(
-            &values.as_string_view(),
-            &regex_array.as_string_view(),
+            values.as_string_view(),
+            regex_array.as_string_view(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
@@ -240,12 +240,12 @@ fn regexp_count(
             is_flags_scalar,
         ),
         (Utf8View, Utf8View, Some(flags_array)) if *flags_array.data_type() == Utf8View => regexp_count_inner(
-            &values.as_string_view(),
-            &regex_array.as_string_view(),
+            values.as_string_view(),
+            regex_array.as_string_view(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
-            Some(&flags_array.as_string_view()),
+            Some(flags_array.as_string_view()),
             is_flags_scalar,
         ),
         _ => Err(ArrowError::ComputeError(
@@ -255,16 +255,16 @@ fn regexp_count(
 }
 
 fn regexp_count_inner<'a, S>(
-    values: &'a S,
-    regex_array: &'a S,
+    values: S,
+    regex_array: S,
     is_regex_scalar: bool,
     start_array: Option<&'a Int64Array>,
     is_start_scalar: bool,
-    flags_array: Option<&'a S>,
+    flags_array: Option<S>,
     is_flags_scalar: bool,
 ) -> Result<ArrayRef, ArrowError>
 where
-    S: StringArrayType<'a>,
+    S: StringArrayType<'a> + Copy,
 {
     let values_len = values.len();
     let regex = StringValueSource::regex_arg(regex_array, is_regex_scalar);
@@ -317,7 +317,7 @@ where
     Ok(Arc::new(counts))
 }
 
-fn string_value_opt<'a, S>(array: &'a S, row: usize) -> Option<&'a str>
+fn string_value_opt<'a, S>(array: S, row: usize) -> Option<&'a str>
 where
     S: StringArrayType<'a>,
 {
@@ -326,14 +326,14 @@ where
 
 enum StringValueSource<'a, S> {
     Scalar(Option<&'a str>),
-    Array(&'a S),
+    Array(S),
 }
 
 impl<'a, S> StringValueSource<'a, S>
 where
-    S: StringArrayType<'a>,
+    S: StringArrayType<'a> + Copy,
 {
-    fn regex_arg(array: &'a S, is_scalar: bool) -> Self {
+    fn regex_arg(array: S, is_scalar: bool) -> Self {
         if is_scalar || array.len() == 1 {
             Self::Scalar(string_value_opt(array, 0))
         } else {
@@ -341,7 +341,7 @@ where
         }
     }
 
-    fn flags_arg(array: Option<&'a S>, is_scalar: bool) -> Self {
+    fn flags_arg(array: Option<S>, is_scalar: bool) -> Self {
         match array {
             // Preserve prior behavior: scalar flags use value(0), not a null-aware
             // lookup, before compile_regex handles the resulting flag value.
