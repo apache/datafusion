@@ -279,10 +279,20 @@ where
     let flags = StringValueSource::flags_arg(flags_array, is_flags_scalar);
 
     regex.validate_len("regex_array", values_len)?;
-    start.validate_len(values_len)?;
-    flags.validate_len("flags_array", values_len)?;
 
-    let scalar_pattern = compile_scalar_pattern(&regex, &flags)?;
+    let scalar_pattern = if regex.is_array() {
+        start.validate_len(values_len)?;
+        flags.validate_len("flags_array", values_len)?;
+        None
+    } else if flags.is_array() {
+        flags.validate_len("flags_array", values_len)?;
+        start.validate_len(values_len)?;
+        None
+    } else {
+        let scalar_pattern = compile_scalar_pattern(&regex, &flags)?;
+        start.validate_len(values_len)?;
+        scalar_pattern
+    };
 
     let mut regex_cache = HashMap::new();
     let counts = (0..values_len)
@@ -347,6 +357,10 @@ where
         matches!(self, Self::Scalar(None))
     }
 
+    fn is_array(&self) -> bool {
+        matches!(self, Self::Array(_))
+    }
+
     fn value(&self, row: usize) -> Option<&'a str> {
         match self {
             Self::Scalar(value) => *value,
@@ -375,7 +389,7 @@ fn compile_scalar_pattern<'a, S>(
 }
 
 enum StartValueSource<'a> {
-    Scalar(Option<i64>),
+    Scalar(i64),
     Array(&'a Int64Array),
 }
 
@@ -384,17 +398,15 @@ impl<'a> StartValueSource<'a> {
         match array {
             // Preserve prior behavior: scalar start uses value(0), not a null-aware
             // lookup, before count_matches validates the resulting start value.
-            Some(array) if is_scalar || array.len() == 1 => {
-                Self::Scalar(Some(array.value(0)))
-            }
+            Some(array) if is_scalar || array.len() == 1 => Self::Scalar(array.value(0)),
             Some(array) => Self::Array(array),
-            None => Self::Scalar(Some(1)),
+            None => Self::Scalar(1),
         }
     }
 
     fn value(&self, row: usize) -> Option<i64> {
         match self {
-            Self::Scalar(value) => *value,
+            Self::Scalar(value) => Some(*value),
             Self::Array(array) => (!array.is_null(row)).then(|| array.value(row)),
         }
     }
@@ -497,6 +509,8 @@ mod tests {
         test_case_sensitive_regexp_count_array_complex::<StringViewArray>();
 
         test_case_regexp_count_cache_check::<GenericStringArray<i32>>();
+        test_regexp_count_error_order_invalid_scalar_regex_before_start_len();
+        test_regexp_count_error_order_flags_len_before_start_len();
     }
 
     fn regexp_count_with_scalar_values(args: &[ScalarValue]) -> Result<ColumnarValue> {
@@ -721,6 +735,37 @@ mod tests {
                 _ => panic!("Unexpected result"),
             }
         });
+    }
+
+    fn assert_regexp_count_error_contains(args: &[ArrayRef], expected: &str) {
+        let err = regexp_count_func(args).unwrap_err().to_string();
+        assert!(
+            err.contains(expected),
+            "expected error to contain {expected:?}, got {err:?}"
+        );
+    }
+
+    fn test_regexp_count_error_order_invalid_scalar_regex_before_start_len() {
+        let values = Arc::new(GenericStringArray::<i32>::from(vec!["a", "b"]));
+        let regex = Arc::new(GenericStringArray::<i32>::from(vec!["["]));
+        let start = Arc::new(Int64Array::from(vec![1, 1, 1]));
+
+        assert_regexp_count_error_contains(
+            &[values, regex, start],
+            "Regular expression did not compile",
+        );
+    }
+
+    fn test_regexp_count_error_order_flags_len_before_start_len() {
+        let values = Arc::new(GenericStringArray::<i32>::from(vec!["a", "b"]));
+        let regex = Arc::new(GenericStringArray::<i32>::from(vec!["a"]));
+        let start = Arc::new(Int64Array::from(vec![1, 1, 1]));
+        let flags = Arc::new(GenericStringArray::<i32>::from(vec!["", "", ""]));
+
+        assert_regexp_count_error_contains(
+            &[values, regex, start, flags],
+            "flags_array must be the same length as values array; got 3 and 2",
+        );
     }
 
     fn test_case_sensitive_regexp_count_array<A>()
