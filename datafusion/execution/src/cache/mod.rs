@@ -19,7 +19,7 @@ pub mod cache_manager;
 mod file_statistics_cache;
 pub mod lru_queue;
 
-pub mod default_cache;
+mod default_cache;
 mod file_metadata_cache;
 mod list_files_cache;
 
