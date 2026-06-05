@@ -106,7 +106,7 @@ impl<K: CacheKey, V: CacheValue> DefaultCacheState<K, V> {
 
         if total_size > self.memory_limit {
             // Remove potential stale entry
-           return self.remove(key);
+            return self.remove(key);
         }
 
         let expires = self.ttl.map(|ttl| now + ttl);

@@ -369,9 +369,12 @@ mod tests {
 
     #[test]
     fn test_cache_entry_added_when_entries_are_within_cache_limit() {
-        let (meta_1, value_1) = create_cached_file_metadata_with_stats("test1.parquet", 10);
-        let (meta_2, value_2) = create_cached_file_metadata_with_stats("test2.parquet", 10);
-        let (meta_3, value_3) = create_cached_file_metadata_with_stats("test3.parquet", 10);
+        let (meta_1, value_1) =
+            create_cached_file_metadata_with_stats("test1.parquet", 10);
+        let (meta_2, value_2) =
+            create_cached_file_metadata_with_stats("test2.parquet", 10);
+        let (meta_3, value_3) =
+            create_cached_file_metadata_with_stats("test3.parquet", 10);
 
         let mut ctx = DFHeapSizeCtx::default();
 
@@ -443,7 +446,8 @@ mod tests {
 
     #[test]
     fn test_cache_rejects_entry_which_is_too_large() {
-        let (meta, value_too_large) = create_cached_file_metadata_with_stats("test1.parquet", 10);
+        let (meta, value_too_large) =
+            create_cached_file_metadata_with_stats("test1.parquet", 10);
         let mut ctx = DFHeapSizeCtx::default();
         let limit_less_than_the_entry = value_too_large.clone().heap_size(&mut ctx) - 1;
 
@@ -473,7 +477,6 @@ mod tests {
 
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.memory_used(), 0);
-
     }
 
     fn create_cached_file_metadata_with_stats(
