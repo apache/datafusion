@@ -355,6 +355,20 @@ SELECT * FROM test WHERE column1 ~* '^(barrr|bazzz)$'
 Barrr
 Bazzz
 
+query T rowsort
+SELECT * FROM test WHERE column1 !~ '^Bazzz$'
+----
+Barrr
+ZZZZZ
+foo
+
+query T rowsort
+SELECT * FROM test WHERE column1 !~* '^barrr$'
+----
+Bazzz
+ZZZZZ
+foo
+
 query T
 SELECT * FROM test WHERE column1 !~ 'z'
 ----
