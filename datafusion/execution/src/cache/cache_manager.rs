@@ -282,19 +282,6 @@ impl Debug for CachedFileMetadataEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Represents information about a cached metadata entry.
-/// This is used to expose the metadata cache contents to outside modules.
-pub struct FileMetadataCacheEntry {
-    pub object_meta: ObjectMeta,
-    /// Size of the cached metadata, in bytes.
-    pub size_bytes: usize,
-    /// Number of times this entry was retrieved.
-    pub hits: usize,
-    /// Additional object-specific information.
-    pub extra: HashMap<String, String>,
-}
-
 /// Manages various caches used in DataFusion.
 ///
 /// Following DataFusion design principles, DataFusion provides default cache
