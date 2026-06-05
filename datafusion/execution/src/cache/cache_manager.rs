@@ -37,8 +37,58 @@ pub const DEFAULT_FILE_STATISTICS_MEMORY_LIMIT: usize = 20 * 1024 * 1024; // 20M
 
 pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 
+/// A cache for file statistics and orderings.
+///
+/// This cache stores [`CachedFileMetadata`] which includes:
+/// - File metadata for validation (size, last_modified)
+/// - Statistics for the file
+/// - Ordering information for the file
+///
+/// If enabled via [`CacheManagerConfig::with_file_statistics_cache`] this
+/// cache avoids inferring the same file statistics repeatedly during the
+/// session lifetime.
+///
+/// The typical usage pattern is:
+/// 1. Call `get(path)` to check for cached value
+/// 2. If `Some(cached)`, validate with `cached.is_valid_for(&current_meta)`
+/// 3. If invalid or missing, compute new value and call `put(path, new_value)`
+///
+/// See [`crate::runtime_env::RuntimeEnv`] for more details
 pub type FileStatisticsCache = dyn Cache<TableScopedPath, CachedFileMetadata>;
+
+/// Cache for storing the [`ObjectMeta`]s that result from listing a path
+///
+/// Listing a path means doing an object store "list" operation or `ls`
+/// command on the local filesystem. This operation can be expensive,
+/// especially when done over remote object stores.
+///
+/// The cache key is always the table's base path, ensuring a stable cache key.
+/// The cached value is a [`CachedFileList`] containing the files and a timestamp.
+///
+/// Partition filtering is done after retrieval using [`CachedFileList::files_matching_prefix`].
+///
+/// See [`crate::runtime_env::RuntimeEnv`] for more details.
 pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
+
+/// Cache for file-embedded metadata.
+///
+/// This cache stores per-file metadata in the form of [`CachedFileMetadataEntry`],
+/// which includes the [`ObjectMeta`] for validation.
+///
+/// For example, the built in [`ListingTable`] uses this cache to avoid parsing
+/// Parquet footers multiple times for the same file.
+///
+/// DataFusion provides a default implementation,  and users can also provide their
+/// own implementations to implement custom caching strategies.
+///
+/// The typical usage pattern is:
+/// 1. Call `get(path)` to check for cached value
+/// 2. If `Some(cached)`, validate with `cached.is_valid_for(&current_meta)`
+/// 3. If invalid or missing, compute new value and call `put(path, new_value)`
+///
+/// See [`crate::runtime_env::RuntimeEnv`] for more details.
+///
+/// [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 pub type FileMetadataCache = dyn Cache<Path, CachedFileMetadataEntry>;
 
 /// Cached metadata for a file, including statistics and ordering.
