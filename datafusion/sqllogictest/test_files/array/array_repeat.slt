@@ -79,6 +79,16 @@ Select
 ----
 [] [] [] []
 
+# array_repeat returns an execution error on scalar output-size overflow
+query error DataFusion error: Execution error: array_repeat: total repeated values overflowed usize
+SELECT array_repeat(1, c)
+FROM (
+  VALUES
+    (9223372036854775807),
+    (9223372036854775807),
+    (9223372036854775807)
+) AS t(c);
+
 # array_repeat with columns #1
 
 statement ok

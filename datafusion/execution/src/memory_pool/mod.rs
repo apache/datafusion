@@ -18,7 +18,7 @@
 //! [`MemoryPool`] for memory management during query execution, [`proxy`] for
 //! help with allocation accounting.
 
-use datafusion_common::{Result, internal_datafusion_err};
+use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use std::any::Any;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
@@ -222,6 +222,16 @@ pub trait MemoryPool: Any + Send + Sync + std::fmt::Debug + Display {
     /// to return it(`Memory::Finite(limit)`).
     fn memory_limit(&self) -> MemoryLimit {
         MemoryLimit::Unknown
+    }
+
+    /// Attempt to update this pool's limit in place to `new_limit` bytes.
+    ///
+    /// Default impl returns `Err`. Callers that route through
+    /// [`crate::runtime_env::RuntimeEnvBuilder::with_memory_limit`] fall
+    /// back to replacing the pool wholesale on `Err`, preserving historical
+    /// behavior for pools that can't be resized in place.
+    fn try_resize(&self, _new_limit: usize) -> Result<()> {
+        not_impl_err!("{} does not support resize", self.name())
     }
 }
 

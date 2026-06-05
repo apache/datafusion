@@ -844,7 +844,7 @@ select
   pow(2.5::decimal(2, 1), 4::bigint),
   arrow_typeof(pow(2.5::decimal(2, 1), 4::bigint));
 ----
-39 Decimal128(2, 1)
+39.0625 Float64
 
 # factorial negative (PostgreSQL-compatible domain error)
 query error DataFusion error: Execution error: factorial of a negative number is undefined

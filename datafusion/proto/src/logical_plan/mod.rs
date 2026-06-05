@@ -790,26 +790,30 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                    CreateExternalTable::builder(
-                        from_table_reference(
-                            create_extern_table.name.as_ref(),
-                            "CreateExternalTable",
-                        )?,
-                        create_extern_table.location.clone(),
-                        create_extern_table.file_type.clone(),
-                        pb_schema.try_into()?,
-                    )
-                    .with_partition_cols(create_extern_table.table_partition_cols.clone())
-                    .with_order_exprs(order_exprs)
-                    .with_if_not_exists(create_extern_table.if_not_exists)
-                    .with_or_replace(create_extern_table.or_replace)
-                    .with_temporary(create_extern_table.temporary)
-                    .with_definition(definition)
-                    .with_unbounded(create_extern_table.unbounded)
-                    .with_options(create_extern_table.options.clone())
-                    .with_constraints(constraints.into())
-                    .with_column_defaults(column_defaults)
-                    .build(),
+                    Box::new(
+                        CreateExternalTable::builder(
+                            from_table_reference(
+                                create_extern_table.name.as_ref(),
+                                "CreateExternalTable",
+                            )?,
+                            create_extern_table.location.clone(),
+                            create_extern_table.file_type.clone(),
+                            pb_schema.try_into()?,
+                        )
+                        .with_partition_cols(
+                            create_extern_table.table_partition_cols.clone(),
+                        )
+                        .with_order_exprs(order_exprs)
+                        .with_if_not_exists(create_extern_table.if_not_exists)
+                        .with_or_replace(create_extern_table.or_replace)
+                        .with_temporary(create_extern_table.temporary)
+                        .with_definition(definition)
+                        .with_unbounded(create_extern_table.unbounded)
+                        .with_options(create_extern_table.options.clone())
+                        .with_constraints(constraints.into())
+                        .with_column_defaults(column_defaults)
+                        .build(),
+                    ),
                 )))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -874,12 +878,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .as_ref()
                     .map(explain_analyze_categories_from_proto)
                     .transpose()?;
+                let pb_format = protobuf::ExplainFormat::try_from(analyze.format)
+                    .map_err(|_| {
+                        proto_error(format!(
+                            "Received an AnalyzeNode message with unknown ExplainFormat {}",
+                            analyze.format
+                        ))
+                    })?;
+                let analyze_format = match pb_format {
+                    protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
+                    protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
+                    protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
+                    protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
+                };
                 let explain_option =
                     datafusion_expr::logical_plan::ExplainOption::default()
                         .with_verbose(analyze.verbose)
                         .with_analyze(true)
                         .with_analyze_level(analyze_level)
-                        .with_analyze_categories(analyze_categories);
+                        .with_analyze_categories(analyze_categories)
+                        .with_format(analyze_format);
                 LogicalPlanBuilder::from(input)
                     .explain_option_format(explain_option)?
                     .build()
@@ -1179,12 +1197,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
 
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                    name: recursive_query_node.name.clone(),
-                    static_term: Arc::new(static_term),
-                    recursive_term: Arc::new(recursive_term),
-                    is_distinct: recursive_query_node.is_distinct,
-                }))
+                // The output schema is derived state, so decoding goes through
+                // the constructor after restoring the child terms.
+                RecursiveQuery::try_new(
+                    recursive_query_node.name.clone(),
+                    Arc::new(static_term),
+                    Arc::new(recursive_term),
+                    recursive_query_node.is_distinct,
+                )
+                .map(LogicalPlan::RecursiveQuery)
             }
             LogicalPlanType::CteWorkTableScan(cte_work_table_scan_node) => {
                 let CteWorkTableScanNode { name, schema } = cte_work_table_scan_node;
@@ -1757,8 +1778,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                CreateExternalTable {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(ce)) => {
+                let CreateExternalTable {
                     name,
                     location,
                     file_type,
@@ -1773,8 +1794,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     constraints,
                     column_defaults,
                     temporary,
-                },
-            )) => {
+                } = ce.as_ref();
                 let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
                 for order in order_exprs {
                     let temp = SortExprNodeCollection {
@@ -1878,6 +1898,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 .analyze_categories
                                 .as_ref()
                                 .map(explain_analyze_categories_to_proto),
+                            format: match &a.format {
+                                ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
+                                ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
+                                ExplainFormat::PostgresJSON => {
+                                    protobuf::ExplainFormat::Pgjson
+                                }
+                                ExplainFormat::Graphviz => {
+                                    protobuf::ExplainFormat::Graphviz
+                                }
+                            } as i32,
                         },
                     ))),
                 })

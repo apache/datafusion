@@ -275,17 +275,25 @@ drop table agg_dyn_e2e;
 statement ok
 set datafusion.execution.target_partitions = 2;
 
-# --- single-column fixture ([5, 1, 3, 8]) split across 2 files ---
+# --- single-column fixture ([1, 8, 1, 8]) split across 2 files ---
+#
+# Every file shares the same per-file min (1) and max (8). This makes the
+# DynamicFilter content deterministic under parallel execution: no matter the
+# order in which the Partial aggregates publish their bounds, every partition
+# contributes the same min/max, so any snapshot taken by `EXPLAIN ANALYZE`
+# equals the fully converged filter. Using files with differing per-file
+# extremes (e.g. min 1 vs 3) makes the snapshot race-dependent, which is what
+# caused the flakiness reported in #22621.
 
 statement ok
 COPY (
-  SELECT * FROM (VALUES (5), (1)) AS v(a)
+  SELECT * FROM (VALUES (1), (8)) AS v(a)
 ) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_single/file_0.parquet'
 STORED AS PARQUET;
 
 statement ok
 COPY (
-  SELECT * FROM (VALUES (3), (8)) AS v(a)
+  SELECT * FROM (VALUES (1), (8)) AS v(a)
 ) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_single/file_1.parquet'
 STORED AS PARQUET;
 
@@ -296,10 +304,11 @@ LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn_single/';
 
 # Use `analyze_level = summary` + `analyze_categories = 'none'` so metrics
 # render empty; we only care that the `predicate=DynamicFilter [ ... ]` text
-# matches. Pruning metrics here are subject to a parallel-execution race
+# matches. The pruning *counts* are still subject to a parallel-execution race
 # (the order in which Partial aggregates publish filter updates vs. when the
-# scan reads each partition), so the filter *content* is deterministic but
-# the pruning counts are not.
+# scan reads each partition), which is why metrics are suppressed. The filter
+# *content* is kept deterministic by giving every file the same per-file
+# min/max (see the fixture comment above).
 statement ok
 set datafusion.explain.analyze_level = summary;
 
@@ -350,16 +359,18 @@ statement ok
 drop table agg_dyn_single;
 
 # --- two-column fixture: MIN(a) + MAX(b) across columns ---
+# Every file shares the same per-file min(a)=1 and max(b)=9 so the DynamicFilter
+# content is deterministic regardless of publish order (see #22621).
 
 statement ok
 COPY (
-  SELECT * FROM (VALUES (5, 7), (1, 2)) AS v(a, b)
+  SELECT * FROM (VALUES (1, 5), (4, 9)) AS v(a, b)
 ) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_two_col/file_0.parquet'
 STORED AS PARQUET;
 
 statement ok
 COPY (
-  SELECT * FROM (VALUES (3, 4), (8, 9)) AS v(a, b)
+  SELECT * FROM (VALUES (1, 6), (2, 9)) AS v(a, b)
 ) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_two_col/file_1.parquet'
 STORED AS PARQUET;
 
@@ -384,10 +395,12 @@ drop table agg_dyn_two_col;
 # --- mixed expressions: MIN(a), MAX(a), MAX(b), MIN(c+1) ---
 # Supported aggregates (MIN(a), MAX(a), MAX(b)) should drive a filter;
 # MIN(c+1) is unsupported and must not contribute.
+# Every file shares the same per-file min(a)=1, max(a)=8 and max(b)=12 so the
+# DynamicFilter content is deterministic regardless of publish order (see #22621).
 
 statement ok
 COPY (
-  SELECT * FROM (VALUES (5, 10, 100), (1, 4, 70)) AS v(a, b, c)
+  SELECT * FROM (VALUES (1, 12, 100), (8, 4, 70)) AS v(a, b, c)
 ) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet'
 STORED AS PARQUET;
 

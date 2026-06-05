@@ -70,6 +70,10 @@ tokio-postgres = { version = "0.7.17", optional = true }
 [features]
 avro = ["datafusion/avro"]
 backtrace = ["datafusion/backtrace"]
+# Enable the `AccountingAllocator` `GlobalAlloc` wrapper and its thread-local
+# byte counter. The binary still has to declare `#[global_allocator]` for it
+# to actually take effect — building with this feature on alone is harmless.
+memory-accounting = []
 postgres = [
     "bytes",
     "chrono",

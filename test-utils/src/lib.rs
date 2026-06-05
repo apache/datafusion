@@ -19,6 +19,7 @@
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_int32_array;
+use datafusion_common::{Constraint, Constraints};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -113,6 +114,7 @@ pub fn stagger_batch_with_seed(batch: RecordBatch, seed: u64) -> Vec<RecordBatch
 pub struct TableDef {
     pub name: String,
     pub schema: Schema,
+    pub constraints: Constraints,
 }
 
 impl TableDef {
@@ -120,6 +122,25 @@ impl TableDef {
         Self {
             name: name.into(),
             schema,
+            constraints: Constraints::default(),
         }
     }
+
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
+    }
+}
+
+fn primary_key(schema: &Schema, column_names: &[&str]) -> Constraint {
+    let indices = column_names
+        .iter()
+        .map(|column_name| {
+            schema.index_of(column_name).unwrap_or_else(|_| {
+                panic!("primary key column '{column_name}' not found in schema")
+            })
+        })
+        .collect();
+
+    Constraint::PrimaryKey(indices)
 }
