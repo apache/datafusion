@@ -744,9 +744,10 @@ EXPLAIN (TIMING ON) SELECT 1;
 statement error DataFusion error: Error during planning: EXPLAIN option LEVEL requires ANALYZE
 EXPLAIN (SUMMARY ON) SELECT 1;
 
-# FORMAT is incompatible with both ANALYZE and VERBOSE (same as the legacy
-# keyword form — these mappings come from the planner, not the parser).
-statement error DataFusion error: Error during planning: EXPLAIN ANALYZE with FORMAT is not supported
+# VERBOSE is incompatible with any FORMAT, and ANALYZE only supports the
+# `indent` and `pgjson` formats — `tree` and `graphviz` are rejected (these
+# mappings come from the planner, not the parser).
+statement error DataFusion error: Error during planning: EXPLAIN ANALYZE with FORMAT tree is not supported
 EXPLAIN (ANALYZE, FORMAT tree) SELECT 1;
 
 statement error DataFusion error: Error during planning: EXPLAIN VERBOSE with FORMAT is not supported
