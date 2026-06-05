@@ -330,6 +330,15 @@ impl Default for GroupHll {
     }
 }
 
+/// Fold a slice of pre-computed hashes into a fresh [`HyperLogLog`] sketch.
+fn fold_sparse_to_hll(hashes: &[u64]) -> HyperLogLog<u8> {
+    let mut hll = HyperLogLog::<u8>::new();
+    for &h in hashes {
+        hll.add_hashed(h);
+    }
+    hll
+}
+
 impl GroupHll {
     /// Add a pre-computed hash, returning the change in heap-allocated bytes so
     /// the accumulator can track its memory usage incrementally.
@@ -361,15 +370,15 @@ impl GroupHll {
         v.sort_unstable();
         v.dedup();
         if v.len() > SPARSE_LIMIT {
-            let mut hll = HyperLogLog::<u8>::new();
-            for &h in v.iter() {
-                hll.add_hashed(h);
-            }
-            *self = GroupHll::Dense(Box::new(hll));
+            // cap_before is the capacity already reflected in allocated_bytes.
+            // Any reallocation caused by the triggering push was never counted and
+            // is also freed here, so the two cancel out.
+            *self = GroupHll::Dense(Box::new(fold_sparse_to_hll(v)));
             (NUM_REGISTERS as isize) - ((cap_before * size_of::<u64>()) as isize)
         } else {
-            // capacity is unchanged by sort/dedup
-            0
+            // Account for any Vec growth caused by the triggering push.
+            // sort/dedup do not reallocate, so v.capacity() is the post-push capacity.
+            ((v.capacity() - cap_before) * size_of::<u64>()) as isize
         }
     }
 
@@ -463,12 +472,7 @@ impl GroupHll {
                 v.sort_unstable();
                 v.dedup();
                 if v.len() > SPARSE_LIMIT {
-                    let mut hll = HyperLogLog::<u8>::new();
-                    for &h in v.iter() {
-                        hll.add_hashed(h);
-                    }
-                    let registers: &[u8] = hll.as_ref();
-                    scratch.extend_from_slice(registers);
+                    scratch.extend_from_slice(fold_sparse_to_hll(v).as_ref());
                 } else {
                     for &h in v.iter() {
                         scratch.extend_from_slice(&h.to_le_bytes());
