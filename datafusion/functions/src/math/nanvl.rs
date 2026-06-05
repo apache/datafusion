@@ -20,12 +20,11 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, Float16Array, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float16, Float32, Float64};
 use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
-use datafusion_common::{
-    Result, ScalarValue, exec_err, plan_err, utils::take_function_args,
-};
+use datafusion_common::types::{NativeType, logical_float64};
+use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -64,9 +63,35 @@ impl Default for NanvlFunc {
 
 impl NanvlFunc {
     pub fn new() -> Self {
+        // Non-float numerics (integers, decimals) and NULL coerce to Float64,
+        // which represents as many inputs as possible before rounding.
+        let non_float = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
+            vec![TypeSignatureClass::Integer, TypeSignatureClass::Decimal],
+            NativeType::Float64,
+        );
+        // Any numeric (including floats) coerces to Float64.
+        let to_float64 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
         Self {
-            // Argument coercion is handled by `coerce_types`.
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    // If either argument is a non-float numeric (or NULL), both
+                    // are computed in Float64. Two arms cover either argument
+                    // order.
+                    TypeSignature::Coercible(vec![non_float.clone(), to_float64.clone()]),
+                    TypeSignature::Coercible(vec![to_float64, non_float]),
+                    // Otherwise both arguments are floats; preserve their
+                    // (widest common) precision rather than widening to Float64.
+                    TypeSignature::Exact(vec![Float16, Float16]),
+                    TypeSignature::Exact(vec![Float32, Float32]),
+                    TypeSignature::Exact(vec![Float64, Float64]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -86,27 +111,6 @@ impl ScalarUDFImpl for NanvlFunc {
             (Float32, Float32) => Ok(Float32),
             _ => Ok(Float64),
         }
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [x, y] = take_function_args(self.name(), arg_types)?;
-
-        // Integers, decimals, and NULL become Float64; choosing Float64 ensures
-        // we can represent as many inputs as possible before rounding. The two
-        // inputs are then unified to the widest float type. For example,
-        // (Float16, Float32) -> Float32, not Float64.
-        let to_float = |t: &DataType| match t {
-            Float16 => Ok(Float16),
-            Float32 => Ok(Float32),
-            t if t.is_numeric() || t.is_null() => Ok(Float64),
-            t => plan_err!("Function 'nanvl' expects numeric arguments, got {t}"),
-        };
-        let common = match (to_float(x)?, to_float(y)?) {
-            (Float64, _) | (_, Float64) => Float64,
-            (Float32, _) | (_, Float32) => Float32,
-            _ => Float16,
-        };
-        Ok(vec![common.clone(), common])
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
