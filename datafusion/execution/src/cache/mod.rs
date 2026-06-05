@@ -34,27 +34,15 @@ use std::time::Duration;
 /// Base trait for cache implementations with common operations.
 ///
 /// This trait provides the fundamental cache operations (`get`, `put`, `remove`, etc.)
-/// that all cache types share. Specific cache traits like [`cache_manager::FileStatisticsCache`],
-/// [`cache_manager::ListFilesCache`], and [`cache_manager::FileMetadataCache`] extend this
-/// trait with their specialized methods.
+/// that all cache types share.
 ///
 /// ## Thread Safety
 ///
 /// Implementations must handle their own locking via internal mutability, as methods do not
 /// take mutable references and may be accessed by multiple concurrent queries.
 ///
-/// ## Validation Pattern
-///
-/// Validation metadata (e.g., file size, last modified time) should be embedded in the
-/// value type `V`. The typical usage pattern is:
-/// 1. Call `get(key)` to check for cached value
-/// 2. If `Some(cached)`, validate with `cached.is_valid_for(&current_meta)`
-/// 3. If invalid or missing, compute new value and call `put(key, new_value)`
 pub trait Cache<K: CacheKey, V: CacheValue>: Send + Sync {
     /// Get a cached entry if it exists.
-    ///
-    /// Returns the cached value without any validation. The caller should
-    /// validate the returned value if freshness matters.
     fn get(&self, key: &K) -> Option<V>;
 
     /// Store a value in the cache.
