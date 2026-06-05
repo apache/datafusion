@@ -7,7 +7,7 @@ CREATE EXTERNAL TABLE aka_name (
     name_pcode_nf varchar(5),
     surname_pcode varchar(5),
     md5sum varchar(32)
-) STORED AS PARQUET LOCATION 'data/imdb/aka_name.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/aka_name.parquet';
 
 CREATE EXTERNAL TABLE aka_title (
     id integer unsigned NOT NULL,
@@ -22,7 +22,7 @@ CREATE EXTERNAL TABLE aka_title (
     episode_nr integer,
     note varchar(72),
     md5sum varchar(32)
-) STORED AS PARQUET LOCATION 'data/imdb/aka_title.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/aka_title.parquet';
 
 CREATE EXTERNAL TABLE cast_info (
     id integer unsigned NOT NULL,
@@ -32,7 +32,7 @@ CREATE EXTERNAL TABLE cast_info (
     note varchar(992),
     nr_order integer,
     role_id integer NOT NULL
-) STORED AS PARQUET LOCATION 'data/imdb/cast_info.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/cast_info.parquet';
 
 CREATE EXTERNAL TABLE char_name (
     id integer unsigned NOT NULL,
@@ -42,12 +42,12 @@ CREATE EXTERNAL TABLE char_name (
     name_pcode_nf varchar(5),
     surname_pcode varchar(5),
     md5sum varchar(32)
-) STORED AS PARQUET LOCATION 'data/imdb/char_name.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/char_name.parquet';
 
 CREATE EXTERNAL TABLE comp_cast_type (
     id integer unsigned NOT NULL,
     kind varchar(32) NOT NULL
-) STORED AS PARQUET LOCATION 'data/imdb/comp_cast_type.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/comp_cast_type.parquet';
 
 CREATE EXTERNAL TABLE company_name (
     id integer unsigned NOT NULL,
@@ -57,40 +57,40 @@ CREATE EXTERNAL TABLE company_name (
     name_pcode_nf varchar(5),
     name_pcode_sf varchar(5),
     md5sum varchar(32)
-) STORED AS PARQUET LOCATION 'data/imdb/company_name.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/company_name.parquet';
 
 CREATE EXTERNAL TABLE company_type (
     id integer unsigned NOT NULL,
     kind varchar(32) NOT NULL
-) STORED AS PARQUET LOCATION 'data/imdb/company_type.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/company_type.parquet';
 
 CREATE EXTERNAL TABLE complete_cast (
     id integer unsigned NOT NULL,
     movie_id integer,
     subject_id integer NOT NULL,
     status_id integer NOT NULL
-) STORED AS PARQUET LOCATION 'data/imdb/complete_cast.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/complete_cast.parquet';
 
 CREATE EXTERNAL TABLE info_type (
     id integer unsigned NOT NULL,
     info varchar(32) NOT NULL
-) STORED AS PARQUET LOCATION 'data/imdb/info_type.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/info_type.parquet';
 
 CREATE EXTERNAL TABLE keyword (
     id integer unsigned NOT NULL,
     keyword varchar(74) NOT NULL,
     phonetic_code varchar(5)
-) STORED AS PARQUET LOCATION 'data/imdb/keyword.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/keyword.parquet';
 
 CREATE EXTERNAL TABLE kind_type (
     id integer unsigned NOT NULL,
     kind varchar(15) NOT NULL
-) STORED AS PARQUET LOCATION 'data/imdb/kind_type.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/kind_type.parquet';
 
 CREATE EXTERNAL TABLE link_type (
     id integer unsigned NOT NULL,
     link varchar(32) NOT NULL
-) STORED AS PARQUET LOCATION 'data/imdb/link_type.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/link_type.parquet';
 
 CREATE EXTERNAL TABLE movie_companies (
     id integer unsigned NOT NULL,
@@ -98,7 +98,7 @@ CREATE EXTERNAL TABLE movie_companies (
     company_id integer NOT NULL,
     company_type_id integer NOT NULL,
     note varchar(208)
-) STORED AS PARQUET LOCATION 'data/imdb/movie_companies.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/movie_companies.parquet';
 
 CREATE EXTERNAL TABLE movie_info (
     id integer unsigned NOT NULL,
@@ -106,7 +106,7 @@ CREATE EXTERNAL TABLE movie_info (
     info_type_id integer NOT NULL,
     info varchar(8000) NOT NULL,
     note varchar(387)
-) STORED AS PARQUET LOCATION 'data/imdb/movie_info.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/movie_info.parquet';
 
 CREATE EXTERNAL TABLE movie_info_idx (
     id integer unsigned NOT NULL,
@@ -114,20 +114,20 @@ CREATE EXTERNAL TABLE movie_info_idx (
     info_type_id integer NOT NULL,
     info varchar(10) NOT NULL,
     note varchar(1)
-) STORED AS PARQUET LOCATION 'data/imdb/movie_info_idx.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/movie_info_idx.parquet';
 
 CREATE EXTERNAL TABLE movie_keyword (
     id integer unsigned NOT NULL,
     movie_id integer NOT NULL,
     keyword_id integer NOT NULL
-) STORED AS PARQUET LOCATION 'data/imdb/movie_keyword.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/movie_keyword.parquet';
 
 CREATE EXTERNAL TABLE movie_link (
     id integer unsigned NOT NULL,
     movie_id integer NOT NULL,
     linked_movie_id integer NOT NULL,
     link_type_id integer NOT NULL
-) STORED AS PARQUET LOCATION 'data/imdb/movie_link.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/movie_link.parquet';
 
 CREATE EXTERNAL TABLE name (
     id integer unsigned NOT NULL,
@@ -139,7 +139,7 @@ CREATE EXTERNAL TABLE name (
     name_pcode_nf varchar(5),
     surname_pcode varchar(5),
     md5sum varchar(32)
-) STORED AS PARQUET LOCATION 'data/imdb/name.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/name.parquet';
 
 CREATE EXTERNAL TABLE person_info (
     id integer unsigned NOT NULL,
@@ -147,12 +147,12 @@ CREATE EXTERNAL TABLE person_info (
     info_type_id integer NOT NULL,
     info text NOT NULL,
     note varchar(430)
-) STORED AS PARQUET LOCATION 'data/imdb/person_info.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/person_info.parquet';
 
 CREATE EXTERNAL TABLE role_type (
     id integer unsigned NOT NULL,
     role varchar(32) NOT NULL
-) STORED AS PARQUET LOCATION 'data/imdb/role_type.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/role_type.parquet';
 
 CREATE EXTERNAL TABLE title (
     id integer unsigned NOT NULL,
@@ -167,4 +167,4 @@ CREATE EXTERNAL TABLE title (
     episode_nr integer,
     series_years varchar(49),
     md5sum varchar(32)
-) STORED AS PARQUET LOCATION 'data/imdb/title.parquet';
+) STORED AS PARQUET LOCATION '${DATA_DIR:-data}/imdb/title.parquet';

@@ -7,7 +7,7 @@ CREATE EXTERNAL TABLE aka_name (
     name_pcode_nf varchar(5),
     surname_pcode varchar(5),
     md5sum varchar(32)
-) STORED AS CSV LOCATION 'data/imdb/aka_name.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/aka_name.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE aka_title (
     id integer unsigned NOT NULL,
@@ -22,7 +22,7 @@ CREATE EXTERNAL TABLE aka_title (
     episode_nr integer,
     note varchar(72),
     md5sum varchar(32)
-) STORED AS CSV LOCATION 'data/imdb/aka_title.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/aka_title.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE cast_info (
     id integer unsigned NOT NULL,
@@ -32,7 +32,7 @@ CREATE EXTERNAL TABLE cast_info (
     note varchar(992),
     nr_order integer,
     role_id integer NOT NULL
-) STORED AS CSV LOCATION 'data/imdb/cast_info.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/cast_info.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE char_name (
     id integer unsigned NOT NULL,
@@ -42,12 +42,12 @@ CREATE EXTERNAL TABLE char_name (
     name_pcode_nf varchar(5),
     surname_pcode varchar(5),
     md5sum varchar(32)
-) STORED AS CSV LOCATION 'data/imdb/char_name.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/char_name.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE comp_cast_type (
     id integer unsigned NOT NULL,
     kind varchar(32) NOT NULL
-) STORED AS CSV LOCATION 'data/imdb/comp_cast_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/comp_cast_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE company_name (
     id integer unsigned NOT NULL,
@@ -57,40 +57,40 @@ CREATE EXTERNAL TABLE company_name (
     name_pcode_nf varchar(5),
     name_pcode_sf varchar(5),
     md5sum varchar(32)
-) STORED AS CSV LOCATION 'data/imdb/company_name.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/company_name.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE company_type (
     id integer unsigned NOT NULL,
     kind varchar(32) NOT NULL
-) STORED AS CSV LOCATION 'data/imdb/company_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/company_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE complete_cast (
     id integer unsigned NOT NULL,
     movie_id integer,
     subject_id integer NOT NULL,
     status_id integer NOT NULL
-) STORED AS CSV LOCATION 'data/imdb/complete_cast.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/complete_cast.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE info_type (
     id integer unsigned NOT NULL,
     info varchar(32) NOT NULL
-) STORED AS CSV LOCATION 'data/imdb/info_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/info_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE keyword (
     id integer unsigned NOT NULL,
     keyword varchar(74) NOT NULL,
     phonetic_code varchar(5)
-) STORED AS CSV LOCATION 'data/imdb/keyword.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/keyword.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE kind_type (
     id integer unsigned NOT NULL,
     kind varchar(15) NOT NULL
-) STORED AS CSV LOCATION 'data/imdb/kind_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/kind_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE link_type (
     id integer unsigned NOT NULL,
     link varchar(32) NOT NULL
-) STORED AS CSV LOCATION 'data/imdb/link_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/link_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE movie_companies (
     id integer unsigned NOT NULL,
@@ -98,7 +98,7 @@ CREATE EXTERNAL TABLE movie_companies (
     company_id integer NOT NULL,
     company_type_id integer NOT NULL,
     note varchar(208)
-) STORED AS CSV LOCATION 'data/imdb/movie_companies.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/movie_companies.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE movie_info (
     id integer unsigned NOT NULL,
@@ -106,7 +106,7 @@ CREATE EXTERNAL TABLE movie_info (
     info_type_id integer NOT NULL,
     info varchar(8000) NOT NULL,
     note varchar(387)
-) STORED AS CSV LOCATION 'data/imdb/movie_info.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/movie_info.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE movie_info_idx (
     id integer unsigned NOT NULL,
@@ -114,20 +114,20 @@ CREATE EXTERNAL TABLE movie_info_idx (
     info_type_id integer NOT NULL,
     info varchar(10) NOT NULL,
     note varchar(1)
-) STORED AS CSV LOCATION 'data/imdb/movie_info_idx.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/movie_info_idx.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE movie_keyword (
     id integer unsigned NOT NULL,
     movie_id integer NOT NULL,
     keyword_id integer NOT NULL
-) STORED AS CSV LOCATION 'data/imdb/movie_keyword.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/movie_keyword.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE movie_link (
     id integer unsigned NOT NULL,
     movie_id integer NOT NULL,
     linked_movie_id integer NOT NULL,
     link_type_id integer NOT NULL
-) STORED AS CSV LOCATION 'data/imdb/movie_link.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/movie_link.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE name (
     id integer unsigned NOT NULL,
@@ -139,7 +139,7 @@ CREATE EXTERNAL TABLE name (
     name_pcode_nf varchar(5),
     surname_pcode varchar(5),
     md5sum varchar(32)
-) STORED AS CSV LOCATION 'data/imdb/name.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/name.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE person_info (
     id integer unsigned NOT NULL,
@@ -147,12 +147,12 @@ CREATE EXTERNAL TABLE person_info (
     info_type_id integer NOT NULL,
     info text NOT NULL,
     note varchar(430)
-) STORED AS CSV LOCATION 'data/imdb/person_info.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/person_info.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE role_type (
     id integer unsigned NOT NULL,
     role varchar(32) NOT NULL
-) STORED AS CSV LOCATION 'data/imdb/role_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/role_type.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
 
 CREATE EXTERNAL TABLE title (
     id integer unsigned NOT NULL,
@@ -167,4 +167,4 @@ CREATE EXTERNAL TABLE title (
     episode_nr integer,
     series_years varchar(49),
     md5sum varchar(32)
-) STORED AS CSV LOCATION 'data/imdb/title.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
+) STORED AS CSV LOCATION '${DATA_DIR:-data}/imdb/title.csv' OPTIONS ('has_header' 'false', 'format.delimiter' ',', 'format.escape' '\');
