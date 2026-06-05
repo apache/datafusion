@@ -449,7 +449,9 @@ impl GroupHll {
     /// Serialize the sketch into `scratch` (which is cleared first). A dense
     /// sketch is written as its raw [`NUM_REGISTERS`] registers (wire-compatible
     /// with the per-group [`Accumulator`]); a sparse sketch is written as its
-    /// distinct hashes in little-endian order.
+    /// distinct hashes in little-endian order unless it has crossed
+    /// [`SPARSE_LIMIT`], in which case it is emitted as dense state so the final
+    /// merge path accepts it.
     fn serialize(&mut self, scratch: &mut Vec<u8>) {
         scratch.clear();
         match self {
@@ -460,8 +462,17 @@ impl GroupHll {
             GroupHll::Sparse(v) => {
                 v.sort_unstable();
                 v.dedup();
-                for &h in v.iter() {
-                    scratch.extend_from_slice(&h.to_le_bytes());
+                if v.len() > SPARSE_LIMIT {
+                    let mut hll = HyperLogLog::<u8>::new();
+                    for &h in v.iter() {
+                        hll.add_hashed(h);
+                    }
+                    let registers: &[u8] = hll.as_ref();
+                    scratch.extend_from_slice(registers);
+                } else {
+                    for &h in v.iter() {
+                        scratch.extend_from_slice(&h.to_le_bytes());
+                    }
                 }
             }
         }
@@ -1093,6 +1104,44 @@ mod groups_tests {
             dst.merge_serialized(&bytes).unwrap();
             assert_eq!(dst.count(), reference_count(&hashes), "n = {n}");
         }
+    }
+
+    #[test]
+    fn sparse_limit_group_serializes_as_mergeable_sparse_state() {
+        let hashes: Vec<u64> = (0..SPARSE_LIMIT as u64).map(h).collect();
+        let mut src = GroupHll::default();
+        for &hash in &hashes {
+            src.add_hash(hash);
+        }
+        assert!(matches!(src, GroupHll::Sparse(_)));
+
+        let bytes = serialize(&mut src);
+        assert_eq!(bytes.len(), SPARSE_LIMIT * size_of::<u64>());
+
+        let mut dst = GroupHll::default();
+        dst.merge_serialized(&bytes).unwrap();
+        assert_eq!(dst.count(), reference_count(&hashes));
+    }
+
+    #[test]
+    fn medium_sparse_group_serializes_as_mergeable_dense_state() {
+        let n = SPARSE_LIMIT as u64 + 44;
+        let hashes: Vec<u64> = (0..n).map(h).collect();
+        let mut src = GroupHll::default();
+        for &hash in &hashes {
+            src.add_hash(hash);
+        }
+        assert!(
+            matches!(src, GroupHll::Sparse(_)),
+            "group should not promote during update before the compaction threshold"
+        );
+
+        let bytes = serialize(&mut src);
+        assert_eq!(bytes.len(), NUM_REGISTERS);
+
+        let mut dst = GroupHll::default();
+        dst.merge_serialized(&bytes).unwrap();
+        assert_eq!(dst.count(), reference_count(&hashes));
     }
 
     #[test]
