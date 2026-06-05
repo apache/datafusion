@@ -42,6 +42,7 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::aggregate::count_distinct::{
     Bitmap65536DistinctCountAccumulator, Bitmap65536DistinctCountAccumulatorI16,
     BoolArray256DistinctCountAccumulator, BoolArray256DistinctCountAccumulatorI8,
+    BooleanDistinctCountAccumulator,
 };
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
@@ -336,10 +337,13 @@ impl ApproxDistinct {
 }
 
 #[cold]
-fn get_small_int_approx_accumulator(
+fn get_fixed_domain_approx_accumulator(
     data_type: &DataType,
 ) -> Result<Box<dyn Accumulator>> {
     match data_type {
+        DataType::Boolean => Ok(Box::new(ApproxDistinctBitmapWrapper {
+            inner: BooleanDistinctCountAccumulator::new(),
+        })),
         DataType::UInt8 => Ok(Box::new(ApproxDistinctBitmapWrapper {
             inner: BoolArray256DistinctCountAccumulator::new(),
         })),
@@ -357,7 +361,10 @@ fn get_small_int_approx_accumulator(
 }
 
 #[cold]
-fn get_small_int_state_field(name: &str, data_type: &DataType) -> Result<Vec<FieldRef>> {
+fn get_fixed_domain_state_field(
+    name: &str,
+    data_type: &DataType,
+) -> Result<Vec<FieldRef>> {
     Ok(vec![
         Field::new_list(
             format_state_name(name, "approx_distinct"),
@@ -400,9 +407,11 @@ impl AggregateUDFImpl for ApproxDistinct {
                 )
                 .into(),
             ]),
-            DataType::UInt8 | DataType::Int8 | DataType::UInt16 | DataType::Int16 => {
-                get_small_int_state_field(args.name, data_type)
-            }
+            DataType::Boolean
+            | DataType::UInt8
+            | DataType::Int8
+            | DataType::UInt16
+            | DataType::Int16 => get_fixed_domain_state_field(args.name, data_type),
             _ => Ok(vec![
                 Field::new(
                     format_state_name(args.name, "hll_registers"),
@@ -418,8 +427,12 @@ impl AggregateUDFImpl for ApproxDistinct {
         let data_type = acc_args.expr_fields[0].data_type();
 
         let accumulator: Box<dyn Accumulator> = match data_type {
-            DataType::UInt8 | DataType::Int8 | DataType::UInt16 | DataType::Int16 => {
-                return get_small_int_approx_accumulator(data_type);
+            DataType::Boolean
+            | DataType::UInt8
+            | DataType::Int8
+            | DataType::UInt16
+            | DataType::Int16 => {
+                return get_fixed_domain_approx_accumulator(data_type);
             }
             DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
             DataType::UInt64 => Box::new(NumericHLLAccumulator::<UInt64Type>::new()),

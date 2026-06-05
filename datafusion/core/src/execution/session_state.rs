@@ -30,7 +30,9 @@ use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow_schema::{DataType, FieldRef};
+#[cfg(feature = "sql")]
+use arrow_schema::DataType;
+use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, InformationSchemaProvider,

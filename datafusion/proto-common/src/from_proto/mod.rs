@@ -39,8 +39,8 @@ use datafusion_common::{
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
-        CsvOptions, JsonOptions, ParquetCdcOptions, ParquetColumnOptions, ParquetOptions,
-        TableParquetOptions,
+        CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
+        ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
     parsers::CompressionTypeVariant,
@@ -1130,6 +1130,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
             }).unwrap_or(None),
+            max_row_group_bytes: value.max_row_group_bytes_opt.and_then(|opt| match opt {
+                protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => MaxRowGroupBytes::try_new(v as usize).ok(),
+            }),
             content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::from).unwrap_or_default(),
         })
     }
@@ -1331,7 +1334,7 @@ pub(crate) fn csv_writer_options_from_proto(
 #[cfg(test)]
 mod tests {
     use datafusion_common::config::{
-        ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+        MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
 
     fn parquet_options_proto_round_trip(opts: ParquetOptions) -> ParquetOptions {
@@ -1374,6 +1377,21 @@ mod tests {
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(recovered.coerce_int96, Some("us".to_string()));
         assert_eq!(recovered.coerce_int96_tz, Some("UTC".to_string()));
+    }
+
+    #[test]
+    fn test_parquet_options_max_row_group_bytes_round_trip() {
+        let opts = ParquetOptions {
+            max_row_group_bytes: Some(
+                MaxRowGroupBytes::try_new(64 * 1024 * 1024).unwrap(),
+            ),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts.clone());
+        assert_eq!(
+            recovered.max_row_group_bytes.map(|v| v.get()),
+            Some(64 * 1024 * 1024)
+        );
     }
 
     #[test]

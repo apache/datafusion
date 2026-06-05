@@ -383,7 +383,8 @@ mod parquet {
         parquet_options,
     };
     use datafusion_common::config::{
-        ParquetCdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions, ParquetOptions,
+        TableParquetOptions,
     };
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
@@ -454,6 +455,9 @@ mod parquet {
                 }),
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
+                }),
+                max_row_group_bytes_opt: global_options.global.max_row_group_bytes.map(|size| {
+                    parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size.get() as u64)
                 }),
                 content_defined_chunking: Some(ParquetCdcOptionsProto {
                     enabled: global_options.global.content_defined_chunking.enabled,
@@ -627,6 +631,14 @@ mod parquet {
                         parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(
                             size,
                         ) => *size as usize,
+                    }),
+                max_row_group_bytes: proto
+                    .max_row_group_bytes_opt
+                    .as_ref()
+                    .and_then(|opt| match opt {
+                        parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size) => {
+                            MaxRowGroupBytes::try_new(*size as usize).ok()
+                        }
                     }),
                 content_defined_chunking: proto
                     .content_defined_chunking

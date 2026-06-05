@@ -627,6 +627,10 @@ message ParquetOptions {
     uint64 max_predicate_cache_size = 33;
   }
 
+  oneof max_row_group_bytes_opt {
+    uint64 max_row_group_bytes = 37;
+  }
+
   ParquetCdcOptions content_defined_chunking = 35;
 
   // Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
