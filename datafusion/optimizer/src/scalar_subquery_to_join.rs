@@ -169,25 +169,38 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 }
 
                 let mut all_subqueries = vec![];
-                let mut alias_to_index: HashMap<String, usize> = HashMap::new();
-                let mut rewrite_exprs: Vec<Expr> =
-                    Vec::with_capacity(projection.expr.len());
-                for (idx, expr) in projection.expr.iter().enumerate() {
-                    let (subqueries, rewrite_expr) = self.extract_subquery_exprs(
+                let mut rewrite_states = Vec::with_capacity(projection.expr.len());
+                for expr in &projection.expr {
+                    let (subqueries, rewritten_expr) = self.extract_subquery_exprs(
                         expr,
                         config.alias_generator(),
                         physical_uncorrelated,
                     )?;
-                    for (_, alias) in &subqueries {
-                        alias_to_index.insert(alias.clone(), idx);
-                    }
+                    let subquery_aliases =
+                        subqueries.iter().map(|(_, alias)| alias.clone()).collect();
                     all_subqueries.extend(subqueries);
-                    rewrite_exprs.push(rewrite_expr);
+                    rewrite_states.push(ProjectionRewriteState {
+                        rewritten_expr,
+                        subquery_aliases,
+                    });
                 }
                 assert_or_internal_err!(
                     !all_subqueries.is_empty(),
                     "Expected subqueries not found in projection"
                 );
+
+                let alias_to_state_index: HashMap<String, usize> = rewrite_states
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(idx, state)| {
+                        state
+                            .subquery_aliases
+                            .iter()
+                            .cloned()
+                            .map(move |alias| (alias, idx))
+                    })
+                    .collect();
+
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueries {
@@ -196,9 +209,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     {
                         cur_input = optimized_subquery;
                         if !compensation_exprs.is_empty()
-                            && let Some(&idx) = alias_to_index.get(&alias)
+                            && let Some(&idx) = alias_to_state_index.get(&alias)
                         {
-                            let new_expr = rewrite_exprs[idx]
+                            let new_expr = rewrite_states[idx]
+                                .rewritten_expr
                                 .clone()
                                 .transform_up(|expr| {
                                     if let Some(compensation_expr) = expr
@@ -211,7 +225,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                     }
                                 })
                                 .data()?;
-                            rewrite_exprs[idx] = new_expr;
+                            rewrite_states[idx].rewritten_expr = new_expr;
                         }
                     } else {
                         // if we can't handle all of the subqueries then bail for now
@@ -220,8 +234,9 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 }
 
                 let mut proj_exprs = vec![];
-                for (expr, new_expr) in projection.expr.iter().zip(rewrite_exprs) {
+                for (expr, state) in projection.expr.iter().zip(rewrite_states) {
                     let old_expr_name = expr.schema_name().to_string();
+                    let new_expr = state.rewritten_expr;
                     let new_expr_name = new_expr.schema_name().to_string();
                     if new_expr_name != old_expr_name {
                         proj_exprs.push(new_expr.alias(old_expr_name))
@@ -264,6 +279,11 @@ fn contains_scalar_subquery_to_rewrite(expr: &Expr, physical_uncorrelated: bool)
         ))
     })
     .expect("Inner is always Ok")
+}
+
+struct ProjectionRewriteState {
+    rewritten_expr: Expr,
+    subquery_aliases: Vec<String>,
 }
 
 struct ExtractScalarSubQuery<'a> {
