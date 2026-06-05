@@ -38,9 +38,11 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_catalog::cte_worktable::CteWorkTable;
 use datafusion_catalog::empty::EmptyTable;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::format::ExplainFormat;
+use datafusion_common::format::{
+    ExplainAnalyzeCategories, ExplainFormat, MetricCategory, MetricType,
+};
 use datafusion_common::{
-    NullEquality, Result, TableReference, ToDFSchema, assert_or_internal_err, context,
+    NullEquality, Result, TableReference, assert_or_internal_err, context,
     internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::file_format::FileFormat;
@@ -66,9 +68,11 @@ use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
         DdlStatement, Distinct, EmptyRelation, Extension, Join, Prepare, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, Values, Window, builder::project,
+        Repartition, Sort, SubqueryAlias, TableScan, TableScanBuilder, Values, Window,
+        builder::project,
     },
 };
+use datafusion_proto_common::protobuf_common;
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_sorts;
@@ -162,7 +166,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
         &self,
         name: &str,
         _buf: &[u8],
-    ) -> Result<Arc<dyn HigherOrderUDF>> {
+    ) -> Result<Arc<HigherOrderUDF>> {
         not_impl_err!(
             "LogicalExtensionCodec is not provided for higher order function {name}"
         )
@@ -170,7 +174,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
 
     fn try_encode_higher_order_function(
         &self,
-        _node: &dyn HigherOrderUDF,
+        _node: &HigherOrderUDF,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         Ok(())
@@ -371,17 +375,83 @@ fn from_table_source(
     target: Arc<dyn TableSource>,
     extension_codec: &dyn LogicalExtensionCodec,
 ) -> Result<LogicalPlanNode> {
-    let projected_schema = target.schema().to_dfschema_ref()?;
-    let r = LogicalPlan::TableScan(TableScan {
-        table_name,
-        source: target,
-        projection: None,
-        projected_schema,
-        filters: vec![],
-        fetch: None,
-    });
+    let r = LogicalPlan::TableScan(TableScanBuilder::new(table_name, target).build()?);
 
     LogicalPlanNode::try_from_logical_plan(&r, extension_codec)
+}
+
+fn metric_type_from_proto(value: i32) -> Result<MetricType> {
+    let pb = protobuf_common::MetricType::try_from(value)
+        .map_err(|_| proto_error(format!("Unknown MetricType discriminant: {value}")))?;
+    Ok(match pb {
+        protobuf_common::MetricType::Summary => MetricType::Summary,
+        protobuf_common::MetricType::Dev => MetricType::Dev,
+    })
+}
+
+fn metric_type_to_proto(value: MetricType) -> protobuf_common::MetricType {
+    match value {
+        MetricType::Summary => protobuf_common::MetricType::Summary,
+        MetricType::Dev => protobuf_common::MetricType::Dev,
+    }
+}
+
+fn metric_category_from_proto(value: i32) -> Result<MetricCategory> {
+    let pb = protobuf_common::MetricCategory::try_from(value).map_err(|_| {
+        proto_error(format!("Unknown MetricCategory discriminant: {value}"))
+    })?;
+    Ok(match pb {
+        protobuf_common::MetricCategory::Rows => MetricCategory::Rows,
+        protobuf_common::MetricCategory::Bytes => MetricCategory::Bytes,
+        protobuf_common::MetricCategory::Timing => MetricCategory::Timing,
+        protobuf_common::MetricCategory::Uncategorized => MetricCategory::Uncategorized,
+    })
+}
+
+fn metric_category_to_proto(value: MetricCategory) -> protobuf_common::MetricCategory {
+    match value {
+        MetricCategory::Rows => protobuf_common::MetricCategory::Rows,
+        MetricCategory::Bytes => protobuf_common::MetricCategory::Bytes,
+        MetricCategory::Timing => protobuf_common::MetricCategory::Timing,
+        MetricCategory::Uncategorized => protobuf_common::MetricCategory::Uncategorized,
+    }
+}
+
+fn explain_analyze_categories_from_proto(
+    node: &protobuf_common::ExplainAnalyzeCategoriesNode,
+) -> Result<ExplainAnalyzeCategories> {
+    if node.all {
+        Ok(ExplainAnalyzeCategories::All)
+    } else {
+        let cats = node
+            .only
+            .iter()
+            .copied()
+            .map(metric_category_from_proto)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ExplainAnalyzeCategories::Only(cats))
+    }
+}
+
+fn explain_analyze_categories_to_proto(
+    value: &ExplainAnalyzeCategories,
+) -> protobuf_common::ExplainAnalyzeCategoriesNode {
+    match value {
+        ExplainAnalyzeCategories::All => protobuf_common::ExplainAnalyzeCategoriesNode {
+            all: true,
+            only: vec![],
+        },
+        ExplainAnalyzeCategories::Only(cats) => {
+            protobuf_common::ExplainAnalyzeCategoriesNode {
+                all: false,
+                only: cats
+                    .iter()
+                    .copied()
+                    .map(|c| metric_category_to_proto(c) as i32)
+                    .collect(),
+            }
+        }
+    }
 }
 
 impl AsLogicalPlan for LogicalPlanNode {
@@ -720,26 +790,30 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                    CreateExternalTable::builder(
-                        from_table_reference(
-                            create_extern_table.name.as_ref(),
-                            "CreateExternalTable",
-                        )?,
-                        create_extern_table.location.clone(),
-                        create_extern_table.file_type.clone(),
-                        pb_schema.try_into()?,
-                    )
-                    .with_partition_cols(create_extern_table.table_partition_cols.clone())
-                    .with_order_exprs(order_exprs)
-                    .with_if_not_exists(create_extern_table.if_not_exists)
-                    .with_or_replace(create_extern_table.or_replace)
-                    .with_temporary(create_extern_table.temporary)
-                    .with_definition(definition)
-                    .with_unbounded(create_extern_table.unbounded)
-                    .with_options(create_extern_table.options.clone())
-                    .with_constraints(constraints.into())
-                    .with_column_defaults(column_defaults)
-                    .build(),
+                    Box::new(
+                        CreateExternalTable::builder(
+                            from_table_reference(
+                                create_extern_table.name.as_ref(),
+                                "CreateExternalTable",
+                            )?,
+                            create_extern_table.location.clone(),
+                            create_extern_table.file_type.clone(),
+                            pb_schema.try_into()?,
+                        )
+                        .with_partition_cols(
+                            create_extern_table.table_partition_cols.clone(),
+                        )
+                        .with_order_exprs(order_exprs)
+                        .with_if_not_exists(create_extern_table.if_not_exists)
+                        .with_or_replace(create_extern_table.or_replace)
+                        .with_temporary(create_extern_table.temporary)
+                        .with_definition(definition)
+                        .with_unbounded(create_extern_table.unbounded)
+                        .with_options(create_extern_table.options.clone())
+                        .with_constraints(constraints.into())
+                        .with_column_defaults(column_defaults)
+                        .build(),
+                    ),
                 )))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -795,8 +869,37 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan =
                     into_logical_plan!(analyze.input, ctx, extension_codec)?;
+                let analyze_level = analyze
+                    .analyze_level
+                    .map(metric_type_from_proto)
+                    .transpose()?;
+                let analyze_categories = analyze
+                    .analyze_categories
+                    .as_ref()
+                    .map(explain_analyze_categories_from_proto)
+                    .transpose()?;
+                let pb_format = protobuf::ExplainFormat::try_from(analyze.format)
+                    .map_err(|_| {
+                        proto_error(format!(
+                            "Received an AnalyzeNode message with unknown ExplainFormat {}",
+                            analyze.format
+                        ))
+                    })?;
+                let analyze_format = match pb_format {
+                    protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
+                    protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
+                    protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
+                    protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
+                };
+                let explain_option =
+                    datafusion_expr::logical_plan::ExplainOption::default()
+                        .with_verbose(analyze.verbose)
+                        .with_analyze(true)
+                        .with_analyze_level(analyze_level)
+                        .with_analyze_categories(analyze_categories)
+                        .with_format(analyze_format);
                 LogicalPlanBuilder::from(input)
-                    .explain(analyze.verbose, true)?
+                    .explain_option_format(explain_option)?
                     .build()
             }
             LogicalPlanType::Explain(explain) => {
@@ -818,7 +921,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let explain_option =
                     datafusion_expr::logical_plan::ExplainOption::default()
                         .with_verbose(explain.verbose)
-                        .with_format(explain_format);
+                        .with_format(explain_format)
+                        .with_show_statistics(explain.show_statistics);
                 LogicalPlanBuilder::from(input)
                     .explain_option_format(explain_option)?
                     .build()
@@ -1093,12 +1197,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
 
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                    name: recursive_query_node.name.clone(),
-                    static_term: Arc::new(static_term),
-                    recursive_term: Arc::new(recursive_term),
-                    is_distinct: recursive_query_node.is_distinct,
-                }))
+                // The output schema is derived state, so decoding goes through
+                // the constructor after restoring the child terms.
+                RecursiveQuery::try_new(
+                    recursive_query_node.name.clone(),
+                    Arc::new(static_term),
+                    Arc::new(recursive_term),
+                    recursive_query_node.is_distinct,
+                )
+                .map(LogicalPlan::RecursiveQuery)
             }
             LogicalPlanType::CteWorkTableScan(cte_work_table_scan_node) => {
                 let CteWorkTableScanNode { name, schema } = cte_work_table_scan_node;
@@ -1671,8 +1778,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                CreateExternalTable {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(ce)) => {
+                let CreateExternalTable {
                     name,
                     location,
                     file_type,
@@ -1687,8 +1794,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     constraints,
                     column_defaults,
                     temporary,
-                },
-            )) => {
+                } = ce.as_ref();
                 let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
                 for order in order_exprs {
                     let temp = SortExprNodeCollection {
@@ -1785,6 +1891,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                         protobuf::AnalyzeNode {
                             input: Some(Box::new(input)),
                             verbose: a.verbose,
+                            analyze_level: a
+                                .analyze_level
+                                .map(|m| metric_type_to_proto(m) as i32),
+                            analyze_categories: a
+                                .analyze_categories
+                                .as_ref()
+                                .map(explain_analyze_categories_to_proto),
+                            format: match &a.format {
+                                ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
+                                ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
+                                ExplainFormat::PostgresJSON => {
+                                    protobuf::ExplainFormat::Pgjson
+                                }
+                                ExplainFormat::Graphviz => {
+                                    protobuf::ExplainFormat::Graphviz
+                                }
+                            } as i32,
                         },
                     ))),
                 })
@@ -1810,6 +1933,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 }
                             }
                             .into(),
+                            show_statistics: a.show_statistics,
                         },
                     ))),
                 })

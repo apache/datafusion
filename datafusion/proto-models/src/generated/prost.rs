@@ -344,6 +344,18 @@ pub struct AnalyzeNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(bool, tag = "2")]
     pub verbose: bool,
+    /// Statement-level override for `datafusion.explain.analyze_level`.
+    /// Absent means "fall back to session config".
+    #[prost(enumeration = "super::datafusion_common::MetricType", optional, tag = "3")]
+    pub analyze_level: ::core::option::Option<i32>,
+    /// Statement-level override for `datafusion.explain.analyze_categories`.
+    /// Absent means "fall back to session config".
+    #[prost(message, optional, tag = "4")]
+    pub analyze_categories: ::core::option::Option<
+        super::datafusion_common::ExplainAnalyzeCategoriesNode,
+    >,
+    #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "5")]
+    pub format: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExplainNode {
@@ -353,6 +365,10 @@ pub struct ExplainNode {
     pub verbose: bool,
     #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "3")]
     pub format: i32,
+    /// Statement-level override for `datafusion.explain.show_statistics`.
+    /// Absent means "fall back to session config".
+    #[prost(bool, optional, tag = "4")]
+    pub show_statistics: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateNode {
@@ -1838,6 +1854,8 @@ pub struct AnalyzeExecNode {
     pub has_metric_categories: bool,
     #[prost(string, repeated, tag = "6")]
     pub metric_categories: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "7")]
+    pub format: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CrossJoinExecNode {
@@ -2044,14 +2062,26 @@ pub struct PhysicalHashRepartition {
     pub partition_count: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalRangePartitioning {
+    #[prost(message, repeated, tag = "1")]
+    pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub split_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalRangeSplitPoint {
+    #[prost(message, repeated, tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<super::datafusion_common::ScalarValue>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RepartitionExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
-    /// oneof partition_method {
+    /// Legacy direct partitioning fields:
     ///    uint64 round_robin = 2;
     ///    PhysicalHashRepartition hash = 3;
     ///    uint64 unknown = 4;
-    /// }
+    /// New partitioning variants are stored in `partitioning`.
     #[prost(message, optional, tag = "5")]
     pub partitioning: ::core::option::Option<Partitioning>,
     #[prost(bool, tag = "6")]
@@ -2059,7 +2089,7 @@ pub struct RepartitionExecNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Partitioning {
-    #[prost(oneof = "partitioning::PartitionMethod", tags = "1, 2, 3")]
+    #[prost(oneof = "partitioning::PartitionMethod", tags = "1, 2, 3, 4")]
     pub partition_method: ::core::option::Option<partitioning::PartitionMethod>,
 }
 /// Nested message and enum types in `Partitioning`.
@@ -2072,6 +2102,8 @@ pub mod partitioning {
         Hash(super::PhysicalHashRepartition),
         #[prost(uint64, tag = "3")]
         Unknown(u64),
+        #[prost(message, tag = "4")]
+        Range(super::PhysicalRangePartitioning),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2106,6 +2138,8 @@ pub struct PartitionedFile {
     pub range: ::core::option::Option<FileRange>,
     #[prost(message, optional, tag = "6")]
     pub statistics: ::core::option::Option<super::datafusion_common::Statistics>,
+    #[prost(message, optional, tag = "7")]
+    pub arrow_schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FileRange {

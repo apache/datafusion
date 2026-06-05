@@ -818,6 +818,8 @@ from values
 81
 NULL
 
+# There is no variant of `power` that accepts (Decimal, Decimal); type coercion
+# casts both arguments to `Float64`, so the result is `Float64`.
 query RT rowsort
 select
   power(base::decimal(38, 0), exponent::decimal(38, 0)),
@@ -830,19 +832,19 @@ from values
   (2, 3),
   (3, 4) as t(base, exponent);
 ----
-0 Decimal128(38, 0)
-1 Decimal128(38, 0)
-4 Decimal128(38, 0)
-625 Decimal128(38, 0)
-8 Decimal128(38, 0)
-81 Decimal128(38, 0)
+0 Float64
+1 Float64
+4 Float64
+625 Float64
+8 Float64
+81 Float64
 
 query RT
 select
   pow(2.5::decimal(2, 1), 4::bigint),
   arrow_typeof(pow(2.5::decimal(2, 1), 4::bigint));
 ----
-39 Decimal128(2, 1)
+39.0625 Float64
 
 # factorial negative (PostgreSQL-compatible domain error)
 query error DataFusion error: Execution error: factorial of a negative number is undefined

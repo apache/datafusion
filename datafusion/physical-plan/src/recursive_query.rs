@@ -35,7 +35,7 @@ use crate::{
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
@@ -84,6 +84,7 @@ impl RecursiveQueryExec {
     /// Create a new RecursiveQueryExec
     pub fn try_new(
         name: String,
+        output_schema: SchemaRef,
         static_term: Arc<dyn ExecutionPlan>,
         recursive_term: Arc<dyn ExecutionPlan>,
         is_distinct: bool,
@@ -91,8 +92,6 @@ impl RecursiveQueryExec {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new(name.clone()));
         // Use the same work table for both the WorkTableExec and the recursive term
-        let output_schema =
-            recursive_output_schema(&static_term.schema(), &recursive_term.schema());
         let static_term = project_plan_to_schema(static_term, &output_schema)?;
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
         let recursive_term = project_plan_to_schema(recursive_term, &output_schema)?;
@@ -177,6 +176,7 @@ impl ExecutionPlan for RecursiveQueryExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         RecursiveQueryExec::try_new(
             self.name.clone(),
+            self.schema(),
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
             self.is_distinct,
@@ -363,30 +363,6 @@ impl RecursiveQueryStream {
     }
 }
 
-fn recursive_output_schema(
-    static_schema: &SchemaRef,
-    recursive_schema: &SchemaRef,
-) -> SchemaRef {
-    let fields = static_schema
-        .fields()
-        .iter()
-        .zip(recursive_schema.fields())
-        .map(|(static_field, recursive_field)| {
-            Field::new(
-                static_field.name(),
-                static_field.data_type().clone(),
-                static_field.is_nullable() || recursive_field.is_nullable(),
-            )
-            .with_metadata(static_field.metadata().clone())
-        })
-        .collect::<Vec<_>>();
-
-    Arc::new(Schema::new_with_metadata(
-        fields,
-        static_schema.metadata().clone(),
-    ))
-}
-
 fn assign_work_table(
     plan: Arc<dyn ExecutionPlan>,
     work_table: &Arc<WorkTable>,
@@ -537,6 +513,7 @@ mod tests {
 
         let exec = RecursiveQueryExec::try_new(
             "numbers".to_string(),
+            static_term.schema(),
             Arc::clone(&static_term),
             Arc::clone(&recursive_term),
             false,
@@ -558,9 +535,15 @@ mod tests {
         let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
         let recursive_term =
             empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);
+        let output_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]));
 
         let exec = RecursiveQueryExec::try_new(
             "numbers".to_string(),
+            Arc::clone(&output_schema),
             static_term,
             recursive_term,
             false,

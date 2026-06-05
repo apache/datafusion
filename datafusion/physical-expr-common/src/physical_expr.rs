@@ -619,6 +619,48 @@ pub mod proto_decode {
 
     use super::PhysicalExpr;
 
+    /// Open the outer [`PhysicalExprNode`] and assert it carries the expected
+    /// `ExprType` variant, returning the inner payload (auto-derefs through
+    /// `Box`) or bailing with an `Internal` error.
+    ///
+    /// Every `try_from_proto` starts with the same six-line `match`:
+    ///
+    /// ```ignore
+    /// let try_cast = match &node.expr_type {
+    ///     Some(protobuf::physical_expr_node::ExprType::TryCast(x)) => x.as_ref(),
+    ///     _ => return internal_err!("PhysicalExprNode is not a TryCastExpr"),
+    /// };
+    /// ```
+    ///
+    /// With this macro that collapses to:
+    ///
+    /// ```ignore
+    /// let try_cast = expect_expr_variant!(
+    ///     node,
+    ///     protobuf::physical_expr_node::ExprType::TryCast,
+    ///     "TryCastExpr",
+    /// );
+    /// ```
+    ///
+    /// Pass the variant as a `::` path so the macro stays agnostic to how
+    /// the caller imports the proto types.
+    #[macro_export]
+    macro_rules! expect_expr_variant {
+        ($node:expr, $variant:path, $expr_name:literal $(,)?) => {{
+            match &$node.expr_type {
+                ::core::option::Option::Some($variant(inner)) => inner,
+                _ => {
+                    return ::datafusion_common::internal_err!(concat!(
+                        "PhysicalExprNode is not a ",
+                        $expr_name
+                    ));
+                }
+            }
+        }};
+    }
+    #[doc(inline)]
+    pub use expect_expr_variant;
+
     /// Decoder context handed to per-expression `try_from_proto` constructors.
     ///
     /// Wraps an internal [`PhysicalExprDecode`] trait object plus a borrowed
@@ -691,6 +733,33 @@ pub mod proto_decode {
         {
             nodes.into_iter().map(|node| self.decode(node)).collect()
         }
+    }
+
+    /// Unwrap a required non-expression proto field.
+    ///
+    /// Mirrors [`PhysicalExprDecodeCtx::decode_required_expression`] for proto
+    /// fields that aren't [`PhysicalExprNode`]s — e.g. the `arrow_type` of a
+    /// `PhysicalCastNode` or the `scalar` of a `PhysicalLiteralNode`. Keeps
+    /// the "missing required field" message format identical across
+    /// expressions:
+    ///
+    /// ```ignore
+    /// let arrow_type = require_proto_field(
+    ///     cast_expr.arrow_type.as_ref(),
+    ///     "CastExpr",
+    ///     "arrow_type",
+    /// )?;
+    /// ```
+    pub fn require_proto_field<T>(
+        opt: Option<T>,
+        expr_name: &str,
+        field: &str,
+    ) -> Result<T> {
+        opt.ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "{expr_name} is missing required field '{field}'"
+            )
+        })
     }
 
     /// Internal dispatch trait. Implementors live in `datafusion-proto`.
@@ -1141,5 +1210,85 @@ mod test {
             &unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![true; 5]),
         );
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod proto_helper_tests {
+    use datafusion_common::DataFusionError;
+    use datafusion_proto_models::protobuf::{
+        self, PhysicalColumn, PhysicalExprNode, physical_expr_node,
+    };
+
+    use crate::expect_expr_variant;
+    use crate::physical_expr::proto_decode::require_proto_field;
+
+    fn column_node() -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::Column(PhysicalColumn {
+                name: "a".to_string(),
+                index: 0,
+            })),
+        }
+    }
+
+    #[test]
+    fn require_proto_field_returns_inner() {
+        let v = require_proto_field(Some(7_u32), "FooExpr", "answer").unwrap();
+        assert_eq!(v, 7);
+    }
+
+    #[test]
+    fn require_proto_field_reports_missing() {
+        let err = require_proto_field::<u32>(None, "FooExpr", "answer").unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("FooExpr is missing required field 'answer'")
+        ));
+    }
+
+    fn expect_column(
+        node: &PhysicalExprNode,
+    ) -> Result<&PhysicalColumn, DataFusionError> {
+        let inner =
+            expect_expr_variant!(node, physical_expr_node::ExprType::Column, "Column",);
+        Ok(inner)
+    }
+
+    #[test]
+    fn expect_expr_variant_returns_inner_payload() {
+        let node = column_node();
+        let col = expect_column(&node).unwrap();
+        assert_eq!(col.name, "a");
+    }
+
+    #[test]
+    fn expect_expr_variant_rejects_wrong_variant() {
+        let node = PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::Negative(Box::new(
+                protobuf::PhysicalNegativeNode { expr: None },
+            ))),
+        };
+        let err = expect_column(&node).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a Column")
+        ));
+    }
+
+    #[test]
+    fn expect_expr_variant_rejects_missing_expr_type() {
+        let node = PhysicalExprNode {
+            expr_id: None,
+            expr_type: None,
+        };
+        let err = expect_column(&node).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a Column")
+        ));
     }
 }

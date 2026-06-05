@@ -109,7 +109,7 @@ fn bench_arrays_zip(c: &mut Criterion, name: &str, null_density: f64) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    bench_arrays_zip(c, "arrays_zip_no_nulls_8192", 0.0);
+    bench_arrays_zip(c, "arrays_zip_perfect_zip_8192", 0.0);
     bench_arrays_zip(c, "arrays_zip_10pct_nulls_8192", 0.1);
 }
 
