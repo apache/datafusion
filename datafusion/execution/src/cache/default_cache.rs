@@ -266,16 +266,15 @@ impl<K: CacheKey, V: CacheValue> Cache<K, V> for DefaultCache<K, V> {
         state.ttl = ttl;
     }
 
-    fn drop_table_entries(&self, table_ref: &Option<TableReference>) -> Result<()> {
+    fn drop_table_entries(&self, table_ref: &TableReference) -> Result<()> {
         let mut state = self.state.lock().unwrap();
         let to_remove: Vec<K> = state
             .lru_queue
             .list_entries()
             .keys()
             .flat_map(|k| {
-                let matches = match (k.table_ref(), table_ref.as_ref()) {
+                let matches = match (k.table_ref(), Some(table_ref)) {
                     (Some(a), Some(b)) => a == b,
-                    (None, None) => true,
                     _ => false,
                 };
                 matches.then(|| (*k).clone())

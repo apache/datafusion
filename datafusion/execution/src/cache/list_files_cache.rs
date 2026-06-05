@@ -714,14 +714,14 @@ mod tests {
     fn test_drop_table_entries() {
         let cache = DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT);
 
-        let table_ref1 = Some(TableReference::from("table1"));
-        let table_ref2 = Some(TableReference::from("table2"));
+        let table_ref1 = TableReference::from("table1");
+        let table_ref2 = TableReference::from("table2");
         let (key1, value1) =
-            create_test_list_files_entry("path1", 1, 100, table_ref1.clone());
+            create_test_list_files_entry("path1", 1, 100, Some(table_ref1.clone()));
         let (key2, value2) =
-            create_test_list_files_entry("path2", 1, 100, table_ref1.clone());
+            create_test_list_files_entry("path2", 1, 100, Some(table_ref1.clone()));
         let (key3, value3) =
-            create_test_list_files_entry("path3", 1, 100, table_ref2.clone());
+            create_test_list_files_entry("path3", 1, 100, Some(table_ref2.clone()));
 
         cache.put(&key1, value1);
         cache.put(&key2, value2);

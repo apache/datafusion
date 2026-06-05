@@ -1448,7 +1448,7 @@ impl SessionContext {
             && table_provider.table_type() == table_type
         {
             schema.deregister_table(&table)?;
-            self.invalidate_caches(&Some(table_ref.clone()), table_type)?;
+            self.invalidate_caches(&table_ref, table_type)?;
             return Ok(true);
         }
         Ok(false)
@@ -1456,7 +1456,7 @@ impl SessionContext {
 
     fn invalidate_caches(
         &self,
-        table_ref: &Option<TableReference>,
+        table_ref: &TableReference,
         table_type: TableType,
     ) -> Result<()> {
         if table_type == TableType::Base {
@@ -1942,7 +1942,7 @@ impl SessionContext {
             .deregister_table(&table);
 
         if let Ok(Some(ref table_provider)) = result {
-            self.invalidate_caches(&Some(table_ref), table_provider.table_type())?;
+            self.invalidate_caches(&table_ref, table_provider.table_type())?;
         }
 
         result

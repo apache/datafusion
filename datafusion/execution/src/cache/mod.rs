@@ -86,7 +86,7 @@ pub trait Cache<K: CacheKey, V: CacheValue>: Send + Sync {
     /// Invalidate every entry associated with `table_ref`.
     fn drop_table_entries(
         &self,
-        table_ref: &Option<TableReference>,
+        table_ref: &TableReference,
     ) -> datafusion_common::Result<()>;
 
     /// Snapshot of all current entries with per-entry metadata (size, hits,
