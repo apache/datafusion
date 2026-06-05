@@ -108,7 +108,8 @@ pub struct GroupValuesDictionary<K: ArrowDictionaryKeyType + Send> {
 
     // cache the group id for nulls since they all map to the same group
     null_group_id: Option<usize>,
-    intern_called: bool,
+    // key to group vector scratch space, used to avoid re-allocating a new vector on each call to intern
+    key_to_group: Vec<Option<usize>>,
     // 0. cache pointer of arrays, this avoids having to re-compute hashing for arrays weve already seen on past iterations
     // 1. avoid re-allocating buffer inbetween calls, instead of allocating a new vector each time re-use inbetween calls
     values_cache: (Option<ArrayRef>, Vec<u64>),
@@ -123,7 +124,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
             _phantom: PhantomData,
             random_state: RandomState::with_seed(0),
             null_group_id: None,
-            intern_called: false,
+            key_to_group: Vec::new(),
             values_cache: (None, Vec::new()),
         }
     }
@@ -249,6 +250,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
                         StringBuilder::with_capacity(item_capacity, data_capacity),
                         item_capacity,
                     )
+                    .with_field(Arc::clone(field))
                 ),
                 DataType::LargeUtf8 => decode_list!(
                     raw,
@@ -256,6 +258,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
                         LargeStringBuilder::with_capacity(item_capacity, data_capacity),
                         item_capacity,
                     )
+                    .with_field(Arc::clone(field))
                 ),
                 DataType::Utf8View => decode_list!(
                     raw,
@@ -263,6 +266,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
                         StringViewBuilder::with_capacity(item_capacity),
                         item_capacity,
                     )
+                    .with_field(Arc::clone(field))
                 ),
                 other => Err(NotImplemented(format!(
                     "transform_into_array not implemented for List<{other:?}>"
@@ -273,6 +277,21 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
             ))),
         }
     }
+}
+
+fn valid_bounds<K: ArrowDictionaryKeyType>(n: usize) -> bool {
+    let max: usize = match K::DATA_TYPE {
+        DataType::Int8 => i8::MAX as usize,
+        DataType::Int16 => i16::MAX as usize,
+        DataType::Int32 => i32::MAX as usize,
+        DataType::Int64 => i64::MAX as usize,
+        DataType::UInt8 => u8::MAX as usize,
+        DataType::UInt16 => u16::MAX as usize,
+        DataType::UInt32 => u32::MAX as usize,
+        DataType::UInt64 => usize::MAX,
+        _ => return false,
+    };
+    n <= max
 }
 
 impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> {
@@ -340,33 +359,11 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
             self.compute_value_hashes(values)?;
             self.values_cache.0 = Some(Arc::clone(values));
         }
-        let mut key_to_group: Vec<Option<usize>> = vec![None; values.len()];
-        // For values already seen in prior batches, pre fill `key_to_group`
-        // so the main loop below can skip hash table lookups for those keys.
-        // This pre scan is skipped on the first batch since the hash table is empty.
-        if self.intern_called {
-            for i in 0..key_array.len() {
-                if key_array.is_null(i) {
-                    continue;
-                }
-                let original_key = key_array.value(i).to_usize().unwrap();
-                if values.is_null(original_key) {
-                    continue;
-                }
-                if key_to_group[original_key].is_some() {
-                    continue;
-                }
+        // avoid re-allocating the key_to_group vector on each call to intern by re-using it as scratch space and only updating self.key_to_group at the end of the function.
+        let mut key_to_group = std::mem::take(&mut self.key_to_group);
+        key_to_group.clear();
+        key_to_group.resize(values.len(), None);
 
-                let hash = self.values_cache.1[original_key];
-                let raw = Self::get_raw_bytes(values, original_key);
-                if let Some(entry) = self
-                    .unique_dict_value_mapping
-                    .find(hash, |e| e.bytes == raw.as_ref())
-                {
-                    key_to_group[original_key] = Some(entry.group_id);
-                }
-            }
-        }
         // iterate keys array (n iterations)
         // only d insertions at most, repeated work is cached
         for i in 0..key_array.len() {
@@ -390,8 +387,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
             };
             groups.push(group_id);
         }
-        // set flag to true to repeated calls to intern will pre-fill key_to_group cache
-        self.intern_called = true;
+        self.key_to_group = key_to_group;
         Ok(())
     }
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -428,6 +424,12 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
         };
 
         let n = elements_to_emit.len();
+        if !valid_bounds::<K>(n) {
+            return Err(Internal(format!(
+                "group count {n} overflows key type {:?}",
+                K::DATA_TYPE
+            )));
+        }
         let values_array = self.transform_into_array(&elements_to_emit)?; // ingest a buffer + n then produce an array. should also update the len+offset of other entries #TODO see https://github.com/apache/datafusion/issues/22078
 
         let mut keys_builder = PrimitiveBuilder::<K>::with_capacity(n);
@@ -455,8 +457,8 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
         self.unique_dict_value_mapping.clear();
         self.unique_dict_value_mapping
             .shrink_to(num_rows, |e| e.hash);
-        self.intern_called = false;
         self.values_cache.0 = None;
+        self.key_to_group.clear();
         self.values_cache.1.clear();
         self.values_cache.1.shrink_to(num_rows);
     }
@@ -763,6 +765,114 @@ mod test {
                 .expect("Expected StringArray");
             assert_eq!(string_array.value(0), "x");
             assert_eq!(string_array.value(1), "y");
+        }
+
+        #[test]
+        fn test_list_utf8_roundtrip() {
+            let field = Arc::new(Field::new("list_id_2032", DataType::Utf8, true));
+            let dt = DataType::List(Arc::clone(&field));
+
+            let mut b =
+                ListBuilder::new(StringBuilder::new()).with_field(Arc::clone(&field));
+            for items in [
+                Some(vec![Some("a"), Some("b")]),
+                Some(vec![Some("c")]),
+                Some(vec![Some("a"), Some("b")]),
+            ] {
+                match items {
+                    Some(strings) => {
+                        for s in strings {
+                            match s {
+                                Some(v) => b.values().append_value(v),
+                                None => b.values().append_null(),
+                            }
+                        }
+                        b.append(true);
+                    }
+                    None => b.append_null(),
+                }
+            }
+            let values: ArrayRef = Arc::new(b.finish());
+
+            let (mut gv, groups) =
+                run_intern(dt.clone(), values, vec![Some(0), Some(1), Some(2)]);
+
+            assert_eq!(groups, vec![0, 1, 0]);
+            assert_eq!(gv.len(), 2);
+
+            let result = gv.emit(EmitTo::All).expect("emit should succeed");
+            let emitted = result[0]
+                .as_any()
+                .downcast_ref::<DictionaryArray<Int32Type>>()
+                .expect("Expected DictionaryArray");
+
+            assert_eq!(emitted.values().data_type(), &dt);
+
+            let list_array = emitted
+                .values()
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("Expected ListArray");
+            let DataType::List(f) = list_array.data_type() else {
+                panic!("expected List data type");
+            };
+            assert_eq!(f.name(), "list_id_2032");
+            assert_eq!(list_array.len(), 2);
+
+            let row0 = list_array.value(0);
+            let row0_strings = row0.as_any().downcast_ref::<StringArray>().unwrap();
+            assert_eq!(row0_strings.value(0), "a");
+            assert_eq!(row0_strings.value(1), "b");
+
+            let row1 = list_array.value(1);
+            let row1_strings = row1.as_any().downcast_ref::<StringArray>().unwrap();
+            assert_eq!(row1_strings.value(0), "c");
+
+            assert!(gv.is_empty());
+        }
+    }
+
+    mod bounds_test {
+        use super::*;
+        use arrow::datatypes::UInt8Type;
+
+        // Build a DictionaryArray<UInt8Type> with `n` distinct utf8 values,
+        // one key per value, so interning it produces exactly `n` groups.
+        fn make_n_distinct(n: usize) -> ArrayRef {
+            let mut sb = StringBuilder::new();
+            for i in 0..n {
+                sb.append_value(format!("v{i}"));
+            }
+            let values: ArrayRef = Arc::new(sb.finish());
+            let mut kb = PrimitiveBuilder::<UInt8Type>::new();
+            for i in 0..n {
+                kb.append_value(i as u8);
+            }
+            Arc::new(DictionaryArray::<UInt8Type>::try_new(kb.finish(), values).unwrap())
+        }
+
+        #[test]
+        fn test_within_bounds_succeeds() {
+            let mut gv = GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
+            let mut groups = Vec::new();
+            gv.intern(&[make_n_distinct(254)], &mut groups).unwrap();
+            assert!(gv.emit(EmitTo::All).is_ok());
+        }
+
+        #[test]
+        fn test_exceeds_bounds_errors() {
+            let mut gv = GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
+            let mut groups = Vec::new();
+            gv.intern(&[make_n_distinct(256)], &mut groups).unwrap();
+            assert!(gv.emit(EmitTo::All).is_err());
+        }
+
+        #[test]
+        fn test_exact_boundary_succeeds() {
+            let mut gv = GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
+            let mut groups = Vec::new();
+            gv.intern(&[make_n_distinct(255)], &mut groups).unwrap();
+            assert!(gv.emit(EmitTo::All).is_ok());
         }
     }
 }
