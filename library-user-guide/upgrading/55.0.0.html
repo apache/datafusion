@@ -516,6 +516,102 @@ as a supertrait:</p>
 </pre></div>
 </div>
 </section>
+<section id="ddlstatement-createexternaltable-and-createfunction-are-now-boxed">
+<h3><code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateExternalTable</span></code> and <code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> are now boxed<a class="headerlink" href="#ddlstatement-createexternaltable-and-createfunction-are-now-boxed" title="Link to this heading">#</a></h3>
+<p>The two largest variants of <code class="docutils literal notranslate"><span class="pre">datafusion_expr::DdlStatement</span></code> are now
+<code class="docutils literal notranslate"><span class="pre">Box</span></code>ed:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">DdlStatement</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">CreateExternalTable</span><span class="p">(</span><span class="n">CreateExternalTable</span><span class="p">),</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="n">CreateFunction</span><span class="p">(</span><span class="n">CreateFunction</span><span class="p">),</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+
+<span class="c1">// After</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">DdlStatement</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">CreateExternalTable</span><span class="p">(</span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">CreateExternalTable</span><span class="o">&gt;</span><span class="p">),</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="n">CreateFunction</span><span class="p">(</span><span class="nb">Box</span><span class="o">&lt;</span><span class="n">CreateFunction</span><span class="o">&gt;</span><span class="p">),</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">CreateExternalTable</span></code> is 312 bytes and <code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> is 288 bytes, so
+without boxing they forced the entire <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> enum to 320 bytes
+even on SELECT-only query paths that never instantiate them. Boxing
+shrinks <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> from 320 → 176 bytes (−45%), making every
+<code class="docutils literal notranslate"><span class="pre">mem::take</span></code> / <code class="docutils literal notranslate"><span class="pre">mem::swap</span></code> / <code class="docutils literal notranslate"><span class="pre">Arc&lt;LogicalPlan&gt;</span></code> store on the planning
+hot path move a smaller payload.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who construct <code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateExternalTable(...)</span></code> or
+<code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateFunction(...)</span></code> from an owned struct.</p></li>
+<li><p>Users who pattern-match these variants and destructure the inner
+struct in the same pattern (e.g.
+<code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateExternalTable(CreateExternalTable</span> <span class="pre">{</span> <span class="pre">name,</span> <span class="pre">..</span> <span class="pre">})</span></code>).</p></li>
+<li><p>Code that consumes the inner struct out of these variants (e.g. to
+pass <code class="docutils literal notranslate"><span class="pre">CreateExternalTable</span></code> by value to another function).</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>When constructing the variants, wrap the inner struct in <code class="docutils literal notranslate"><span class="pre">Box::new</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">stmt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DdlStatement</span><span class="p">::</span><span class="n">CreateFunction</span><span class="p">(</span><span class="n">CreateFunction</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">});</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">stmt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DdlStatement</span><span class="p">::</span><span class="n">CreateFunction</span><span class="p">(</span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">CreateFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">name</span><span class="p">,</span>
+<span class="w">    </span><span class="n">args</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span>
+<span class="p">}));</span>
+</pre></div>
+</div>
+<p>When pattern-matching, bind the boxed value and either access fields
+through it (Rust auto-derefs the <code class="docutils literal notranslate"><span class="pre">Box</span></code>) or destructure via <code class="docutils literal notranslate"><span class="pre">.as_ref()</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="k">match</span><span class="w"> </span><span class="n">ddl</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">DdlStatement</span><span class="p">::</span><span class="n">CreateExternalTable</span><span class="p">(</span><span class="n">CreateExternalTable</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">location</span><span class="p">,</span><span class="w"> </span><span class="o">..</span>
+<span class="w">    </span><span class="p">})</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* use name, location */</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// After — access fields through the box</span>
+<span class="k">match</span><span class="w"> </span><span class="n">ddl</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">DdlStatement</span><span class="p">::</span><span class="n">CreateExternalTable</span><span class="p">(</span><span class="n">ce</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">ce</span><span class="p">.</span><span class="n">name</span><span class="p">;</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">ce</span><span class="p">.</span><span class="n">location</span><span class="p">;</span>
+<span class="w">        </span><span class="cm">/* ... */</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// After — destructure the dereferenced struct</span>
+<span class="k">match</span><span class="w"> </span><span class="n">ddl</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">DdlStatement</span><span class="p">::</span><span class="n">CreateExternalTable</span><span class="p">(</span><span class="n">ce</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">CreateExternalTable</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">location</span><span class="p">,</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ce</span><span class="p">.</span><span class="n">as_ref</span><span class="p">();</span>
+<span class="w">        </span><span class="cm">/* ... */</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>When you need an owned <code class="docutils literal notranslate"><span class="pre">CreateExternalTable</span></code> / <code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> out of
+the variant, dereference the box with <code class="docutils literal notranslate"><span class="pre">*</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="k">match</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">LogicalPlan</span><span class="p">::</span><span class="n">Ddl</span><span class="p">(</span><span class="n">DdlStatement</span><span class="p">::</span><span class="n">CreateExternalTable</span><span class="p">(</span><span class="n">cmd</span><span class="p">))</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">cmd</span><span class="p">),</span>
+<span class="w">    </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// After</span>
+<span class="k">match</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">LogicalPlan</span><span class="p">::</span><span class="n">Ddl</span><span class="p">(</span><span class="n">DdlStatement</span><span class="p">::</span><span class="n">CreateExternalTable</span><span class="p">(</span><span class="n">cmd</span><span class="p">))</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="o">*</span><span class="n">cmd</span><span class="p">),</span>
+<span class="w">    </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/22733">PR #22733</a> for
+details, including the per-variant size breakdown and benchmark
+results.</p>
+</section>
 <section id="spark-map-functions-now-reject-duplicate-keys-by-default">
 <h3>Spark map functions now reject duplicate keys by default<a class="headerlink" href="#spark-map-functions-now-reject-duplicate-keys-by-default" title="Link to this heading">#</a></h3>
 <p>The Spark-compatibility map-construction functions (<code class="docutils literal notranslate"><span class="pre">map_from_arrays</span></code>,
@@ -598,6 +694,7 @@ silently or raised a non-configurable error.</p></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-dynamic-physical-expr-is-deprecated"><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#queryplanner-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ddlstatement-createexternaltable-and-createfunction-are-now-boxed"><code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateExternalTable</span></code> and <code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> are now boxed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spark-map-functions-now-reject-duplicate-keys-by-default">Spark map functions now reject duplicate keys by default</a></li>
 </ul>
 </li>

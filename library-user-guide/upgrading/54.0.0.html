@@ -775,6 +775,38 @@ corresponding physical plan contains a new <code class="docutils literal notrans
 <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> trees, as well as <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> output, may need updating.</p></li>
 </ul>
 </section>
+<section id="filter-predicate-evaluation-order-may-differ-from-query-text">
+<h3>Filter predicate evaluation order may differ from query text<a class="headerlink" href="#filter-predicate-evaluation-order-may-differ-from-query-text" title="Link to this heading">#</a></h3>
+<p>The logical optimizer now reorders filters so that cheap predicates (most binary
+comparisons, <code class="docutils literal notranslate"><span class="pre">IS</span> <span class="pre">NULL</span></code>, <code class="docutils literal notranslate"><span class="pre">Between</span></code>, <code class="docutils literal notranslate"><span class="pre">InList</span></code>, etc.) evaluate before expensive
+ones (<code class="docutils literal notranslate"><span class="pre">LIKE</span></code>, regex, scalar function calls, subqueries). For example,
+<code class="docutils literal notranslate"><span class="pre">WHERE</span> <span class="pre">col</span> <span class="pre">LIKE</span> <span class="pre">'%foo%'</span> <span class="pre">AND</span> <span class="pre">col2</span> <span class="pre">=</span> <span class="pre">5</span></code> may evaluate <code class="docutils literal notranslate"><span class="pre">col2</span> <span class="pre">=</span> <span class="pre">5</span></code> before
+<code class="docutils literal notranslate"><span class="pre">col</span> <span class="pre">LIKE</span> <span class="pre">'%foo%'</span></code>.</p>
+<p><strong>Evaluation order has never been guaranteed to match the order written in the
+query.</strong> The SQL standard explicitly allows implementations to evaluate operands
+in any order; major engines (PostgreSQL, SQL Server, Oracle, MySQL) document the
+same. Queries should not rely on left-to-right evaluation or short-circuit
+semantics for <code class="docutils literal notranslate"><span class="pre">AND</span></code> or <code class="docutils literal notranslate"><span class="pre">OR</span></code>. Previous versions of DataFusion already reordered
+predicates (e.g., as part of expression simplification or predicate pushdown);
+the new reordering pass just increases the scenarios where the optimizer will
+change predicate evaluation order.</p>
+<p><strong>Fallible-predicate patterns are particularly affected.</strong> For example:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">WHERE</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="s1">&#39;^[0-9]+$&#39;</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">s</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="nb">INT</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</pre></div>
+</div>
+<p>The intent is likely to filter non-numeric strings before the <code class="docutils literal notranslate"><span class="pre">CAST</span></code> runs,
+but this depends on evaluation-order behavior the SQL standard does not
+guaranteed. The new reorder makes this kind of pattern more likely to fail
+at runtime if the optimizer moves the <code class="docutils literal notranslate"><span class="pre">CAST</span></code> ahead of the regex. To force
+conditional evaluation, rewrite using <code class="docutils literal notranslate"><span class="pre">CASE</span></code>, which has standardized
+short-circuit semantics:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">WHERE</span><span class="w"> </span><span class="k">CASE</span><span class="w"> </span><span class="k">WHEN</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="s1">&#39;^[0-9]+$&#39;</span><span class="w"> </span><span class="k">THEN</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">s</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="nb">INT</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">ELSE</span><span class="w"> </span><span class="k">false</span><span class="w"> </span><span class="k">END</span>
+</pre></div>
+</div>
+<p>Volatile expressions (<code class="docutils literal notranslate"><span class="pre">random()</span></code>, <code class="docutils literal notranslate"><span class="pre">now()</span></code>, etc.) are exempt — their position
+in the conjunct list is preserved so the number of times they evaluate per
+query does not change.</p>
+</section>
 <section id="datafusion-proto-expression-deserialization-now-takes-a-taskcontext">
 <h3><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: expression deserialization now takes a <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code><a class="headerlink" href="#datafusion-proto-expression-deserialization-now-takes-a-taskcontext" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">Serializeable::from_bytes_with_registry</span></code> is renamed to <code class="docutils literal notranslate"><span class="pre">from_bytes_with_ctx</span></code>
@@ -1315,6 +1347,7 @@ so user-defined higher-order functions can be registered</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#avro-api-and-timestamp-decoding-changes">Avro API and timestamp decoding changes</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#lpad-rpad-and-translate-now-operate-on-unicode-codepoints-instead-of-grapheme-clusters"><code class="docutils literal notranslate"><span class="pre">lpad</span></code>, <code class="docutils literal notranslate"><span class="pre">rpad</span></code>, and <code class="docutils literal notranslate"><span class="pre">translate</span></code> now operate on Unicode codepoints instead of grapheme clusters</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#scalar-subquery-execution-changes">Scalar subquery execution changes</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filter-predicate-evaluation-order-may-differ-from-query-text">Filter predicate evaluation order may differ from query text</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-expression-deserialization-now-takes-a-taskcontext"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: expression deserialization now takes a <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-physicalprotoconverterextension-reshaped"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: <code class="docutils literal notranslate"><span class="pre">PhysicalProtoConverterExtension</span></code> reshaped</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionprops-has-new-fields"><code class="docutils literal notranslate"><span class="pre">ExecutionProps</span></code> has new fields</a></li>
