@@ -2579,6 +2579,7 @@ dependencies = [
  "serde_json",
  "sha1 0.11.0",
  "sha2",
+ "tokio",
  "twox-hash",
  "url",
 ]
