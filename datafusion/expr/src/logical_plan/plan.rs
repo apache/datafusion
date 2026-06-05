@@ -420,6 +420,15 @@ impl LogicalPlan {
         exprs
     }
 
+    /// Returns `true` if any expression in this plan contains a volatile
+    /// function.
+    ///
+    /// This descends into subquery expressions, but does not model volatility
+    /// of table providers or external state.
+    pub fn contains_volatile_expr(&self) -> bool {
+        plan_contains_volatile(self)
+    }
+
     /// Returns all the out reference(correlated) expressions (recursively) in the current
     /// logical plan nodes and all its descendant nodes.
     pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
@@ -4431,7 +4440,7 @@ impl Subquery {
 
     /// Returns `true` if this subquery's plan contains a volatile expression.
     pub fn is_volatile(&self) -> bool {
-        plan_contains_volatile(&self.subquery)
+        self.subquery.contains_volatile_expr()
     }
 }
 
@@ -4790,8 +4799,8 @@ mod tests {
     use crate::select_expr::SelectExpr;
     use crate::test::function_stub::{count, count_udaf};
     use crate::{
-        GroupingSet, binary_expr, col, exists, in_subquery, lit, placeholder,
-        scalar_subquery,
+        ColumnarValue, GroupingSet, Volatility, binary_expr, col, create_udf, exists,
+        in_subquery, lit, placeholder, scalar_subquery,
     };
     use datafusion_common::metadata::ScalarAndMetadata;
     use datafusion_common::tree_node::{
@@ -4825,6 +4834,37 @@ mod tests {
         Ok(Arc::new(
             table_scan(Some(name), &Schema::new(fields), None)?.build()?,
         ))
+    }
+
+    fn volatile_expr() -> Expr {
+        create_udf(
+            "volatile_udf",
+            vec![],
+            DataType::Int64,
+            Volatility::Volatile,
+            Arc::new(|_| Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(0))))),
+        )
+        .call(vec![])
+    }
+
+    #[test]
+    fn contains_volatile_expr_detects_plan_expressions() -> Result<()> {
+        let stable_plan = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(1i64)])?
+            .build()?;
+        assert!(!stable_plan.contains_volatile_expr());
+
+        let volatile_plan = LogicalPlanBuilder::empty(true)
+            .project(vec![volatile_expr()])?
+            .build()?;
+        assert!(volatile_plan.contains_volatile_expr());
+
+        let nested_plan = LogicalPlanBuilder::empty(true)
+            .project(vec![scalar_subquery(Arc::new(volatile_plan))])?
+            .build()?;
+        assert!(nested_plan.contains_volatile_expr());
+
+        Ok(())
     }
 
     #[test]
