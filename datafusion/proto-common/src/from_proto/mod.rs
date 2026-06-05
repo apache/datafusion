@@ -39,7 +39,7 @@ use datafusion_common::{
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
-        CdcOptions, CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
+        CsvOptions, JsonOptions, ParquetCdcOptions, ParquetColumnOptions, ParquetOptions,
         TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
@@ -1130,18 +1130,19 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
             }).unwrap_or(None),
-            use_content_defined_chunking: value.content_defined_chunking.map(|cdc| {
-                let defaults = CdcOptions::default();
-                CdcOptions {
-                    // proto3 uses 0 as the wire default for uint64; a zero chunk size is
-                    // invalid, so treat it as "field not set" and fall back to the default.
-                    min_chunk_size: if cdc.min_chunk_size != 0 { cdc.min_chunk_size as usize } else { defaults.min_chunk_size },
-                    max_chunk_size: if cdc.max_chunk_size != 0 { cdc.max_chunk_size as usize } else { defaults.max_chunk_size },
-                    // norm_level = 0 is a valid value (and the default), so pass it through directly.
-                    norm_level: cdc.norm_level,
-                }
-            }),
+            content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::from).unwrap_or_default(),
         })
+    }
+}
+
+impl From<protobuf::ParquetCdcOptions> for ParquetCdcOptions {
+    fn from(value: protobuf::ParquetCdcOptions) -> Self {
+        ParquetCdcOptions {
+            enabled: value.enabled,
+            min_chunk_size: value.min_chunk_size as usize,
+            max_chunk_size: value.max_chunk_size as usize,
+            norm_level: value.norm_level,
+        }
     }
 }
 
@@ -1329,7 +1330,9 @@ pub(crate) fn csv_writer_options_from_proto(
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::config::{CdcOptions, ParquetOptions, TableParquetOptions};
+    use datafusion_common::config::{
+        ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+    };
 
     fn parquet_options_proto_round_trip(opts: ParquetOptions) -> ParquetOptions {
         let proto: crate::protobuf_common::ParquetOptions =
@@ -1348,7 +1351,7 @@ mod tests {
     #[test]
     fn test_parquet_options_cdc_disabled_round_trip() {
         let opts = ParquetOptions::default();
-        assert!(opts.use_content_defined_chunking.is_none());
+        assert!(!opts.content_defined_chunking.enabled);
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(opts, recovered);
     }
@@ -1389,15 +1392,17 @@ mod tests {
     #[test]
     fn test_parquet_options_cdc_enabled_round_trip() {
         let opts = ParquetOptions {
-            use_content_defined_chunking: Some(CdcOptions {
+            content_defined_chunking: ParquetCdcOptions {
+                enabled: true,
                 min_chunk_size: 128 * 1024,
                 max_chunk_size: 512 * 1024,
                 norm_level: 2,
-            }),
+            },
             ..ParquetOptions::default()
         };
         let recovered = parquet_options_proto_round_trip(opts.clone());
-        let cdc = recovered.use_content_defined_chunking.unwrap();
+        let cdc = recovered.content_defined_chunking;
+        assert!(cdc.enabled);
         assert_eq!(cdc.min_chunk_size, 128 * 1024);
         assert_eq!(cdc.max_chunk_size, 512 * 1024);
         assert_eq!(cdc.norm_level, 2);
@@ -1406,30 +1411,30 @@ mod tests {
     #[test]
     fn test_parquet_options_cdc_negative_norm_level_round_trip() {
         let opts = ParquetOptions {
-            use_content_defined_chunking: Some(CdcOptions {
+            content_defined_chunking: ParquetCdcOptions {
+                enabled: true,
                 norm_level: -3,
-                ..CdcOptions::default()
-            }),
+                ..ParquetCdcOptions::default()
+            },
             ..ParquetOptions::default()
         };
         let recovered = parquet_options_proto_round_trip(opts);
-        assert_eq!(
-            recovered.use_content_defined_chunking.unwrap().norm_level,
-            -3
-        );
+        assert_eq!(recovered.content_defined_chunking.norm_level, -3);
     }
 
     #[test]
     fn test_table_parquet_options_cdc_round_trip() {
         let mut opts = TableParquetOptions::default();
-        opts.global.use_content_defined_chunking = Some(CdcOptions {
+        opts.global.content_defined_chunking = ParquetCdcOptions {
+            enabled: true,
             min_chunk_size: 64 * 1024,
             max_chunk_size: 2 * 1024 * 1024,
             norm_level: -1,
-        });
+        };
 
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
-        let cdc = recovered.global.use_content_defined_chunking.unwrap();
+        let cdc = recovered.global.content_defined_chunking;
+        assert!(cdc.enabled);
         assert_eq!(cdc.min_chunk_size, 64 * 1024);
         assert_eq!(cdc.max_chunk_size, 2 * 1024 * 1024);
         assert_eq!(cdc.norm_level, -1);
@@ -1438,8 +1443,8 @@ mod tests {
     #[test]
     fn test_table_parquet_options_cdc_disabled_round_trip() {
         let opts = TableParquetOptions::default();
-        assert!(opts.global.use_content_defined_chunking.is_none());
+        assert!(!opts.global.content_defined_chunking.enabled);
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
-        assert!(recovered.global.use_content_defined_chunking.is_none());
+        assert!(!recovered.global.content_defined_chunking.enabled);
     }
 }

@@ -35,9 +35,7 @@ use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion_physical_plan::expressions::{
-    CaseExpr, DynamicFilterPhysicalExpr, Literal,
-};
+use datafusion_physical_plan::expressions::{CaseExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{
@@ -344,13 +342,6 @@ pub fn serialize_physical_expr_with_converter(
                     ),
                 ),
             ),
-        })
-    } else if let Some(lit) = expr.downcast_ref::<Literal>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
-                lit.value().try_into()?,
-            )),
         })
     } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
         let mut buf = Vec::new();
