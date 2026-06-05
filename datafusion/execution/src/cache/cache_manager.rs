@@ -56,7 +56,7 @@ pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 /// See [`crate::runtime_env::RuntimeEnv`] for more details
 pub type FileStatisticsCache = dyn Cache<TableScopedPath, CachedFileMetadata>;
 
-/// Cache for storing the [`ObjectMeta`]s that result from listing a path
+/// A cache for storing the [`ObjectMeta`]s that result from listing a path.
 ///
 /// Listing a path means doing an object store "list" operation or `ls`
 /// command on the local filesystem. This operation can be expensive,
@@ -70,16 +70,13 @@ pub type FileStatisticsCache = dyn Cache<TableScopedPath, CachedFileMetadata>;
 /// See [`crate::runtime_env::RuntimeEnv`] for more details.
 pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
 
-/// Cache for file-embedded metadata.
+/// A cache for storing file-embedded metadata.
 ///
 /// This cache stores per-file metadata in the form of [`CachedFileMetadataEntry`],
 /// which includes the [`ObjectMeta`] for validation.
 ///
 /// For example, the built in [`ListingTable`] uses this cache to avoid parsing
 /// Parquet footers multiple times for the same file.
-///
-/// DataFusion provides a default implementation,  and users can also provide their
-/// own implementations to implement custom caching strategies.
 ///
 /// The typical usage pattern is:
 /// 1. Call `get(path)` to check for cached value
