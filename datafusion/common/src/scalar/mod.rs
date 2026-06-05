@@ -23,7 +23,7 @@ mod struct_builder;
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::Write;
@@ -4751,6 +4751,18 @@ impl ScalarValue {
                 .iter()
                 .map(|sv| sv.size() - size_of_val(sv))
                 .sum::<usize>()
+    }
+
+    /// Estimates [size](Self::size) of [`HashMap`] keyed by [`ScalarValue`] in bytes.
+    ///
+    /// Includes the size of the [`HashMap`] container itself. Heap payload of
+    /// `V` is not accounted for; callers storing heap-backed values should
+    /// supplement this estimate.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
+    pub fn size_of_hashmap<V, S>(map: &HashMap<Self, V, S>) -> usize {
+        size_of_val(map)
+            + ((size_of::<ScalarValue>() + size_of::<V>()) * map.capacity())
+            + map.keys().map(|k| k.size() - size_of_val(k)).sum::<usize>()
     }
 
     /// Compacts the allocation referenced by `self` to the minimum, copying the data if
