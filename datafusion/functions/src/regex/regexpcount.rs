@@ -266,28 +266,26 @@ fn regexp_count_inner<'a, S>(
 where
     S: StringArrayType<'a>,
 {
-    let regex = StringValueSource::regex(regex_array, is_regex_scalar);
+    let values_len = values.len();
+    let regex = StringValueSource::regex_arg(regex_array, is_regex_scalar);
 
     // Preserve existing short-circuit behavior: a scalar NULL regex produces zeros
     // for every row without validating start or flags.
     if regex.is_null_scalar() {
-        return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
+        return Ok(Arc::new(Int64Array::from(vec![0; values_len])));
     }
 
     let start = StartValueSource::new(start_array, is_start_scalar);
-    let flags = StringValueSource::flags(flags_array, is_flags_scalar);
+    let flags = StringValueSource::flags_arg(flags_array, is_flags_scalar);
 
-    regex.validate_len("regex_array", values.len())?;
-    start.validate_len(values.len())?;
-    flags.validate_len("flags_array", values.len())?;
+    regex.validate_len("regex_array", values_len)?;
+    start.validate_len(values_len)?;
+    flags.validate_len("flags_array", values_len)?;
 
-    let scalar_pattern = match (regex.scalar(), flags.scalar()) {
-        (Some(Some(regex)), Some(flags)) => Some(compile_regex(regex, flags)?),
-        _ => None,
-    };
+    let scalar_pattern = compile_scalar_pattern(&regex, &flags)?;
 
     let mut regex_cache = HashMap::new();
-    let counts = (0..values.len())
+    let counts = (0..values_len)
         .map(|row| {
             let regex = match regex.value(row) {
                 None => return Ok(0),
@@ -295,12 +293,13 @@ where
             };
             let start = start.value(row);
             let flags = flags.value(row);
+            let value = string_value_opt(values, row);
 
             if let Some(pattern) = &scalar_pattern {
-                count_matches(values.value_opt(row), pattern, start)
+                count_matches(value, pattern, start)
             } else {
                 let pattern = compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                count_matches(values.value_opt(row), pattern, start)
+                count_matches(value, pattern, start)
             }
         })
         .collect::<Result<Int64Array, ArrowError>>()?;
@@ -308,13 +307,12 @@ where
     Ok(Arc::new(counts))
 }
 
-trait StringArrayValue<'a>: StringArrayType<'a> {
-    fn value_opt(&self, row: usize) -> Option<&'a str> {
-        (!self.is_null(row)).then(|| self.value(row))
-    }
+fn string_value_opt<'a, S>(array: &'a S, row: usize) -> Option<&'a str>
+where
+    S: StringArrayType<'a>,
+{
+    (!array.is_null(row)).then(|| array.value(row))
 }
-
-impl<'a, S> StringArrayValue<'a> for S where S: StringArrayType<'a> {}
 
 enum StringValueSource<'a, S> {
     Scalar(Option<&'a str>),
@@ -323,30 +321,25 @@ enum StringValueSource<'a, S> {
 
 impl<'a, S> StringValueSource<'a, S>
 where
-    S: StringArrayValue<'a>,
+    S: StringArrayType<'a>,
 {
-    fn regex(array: &'a S, is_scalar: bool) -> Self {
+    fn regex_arg(array: &'a S, is_scalar: bool) -> Self {
         if is_scalar || array.len() == 1 {
-            Self::Scalar(array.value_opt(0))
+            Self::Scalar(string_value_opt(array, 0))
         } else {
             Self::Array(array)
         }
     }
 
-    fn flags(array: Option<&'a S>, is_scalar: bool) -> Self {
+    fn flags_arg(array: Option<&'a S>, is_scalar: bool) -> Self {
         match array {
+            // Preserve prior behavior: scalar flags use value(0), not a null-aware
+            // lookup, before compile_regex handles the resulting flag value.
             Some(array) if is_scalar || array.len() == 1 => {
                 Self::Scalar(Some(array.value(0)))
             }
             Some(array) => Self::Array(array),
             None => Self::Scalar(None),
-        }
-    }
-
-    fn scalar(&self) -> Option<Option<&'a str>> {
-        match self {
-            Self::Scalar(value) => Some(*value),
-            Self::Array(_) => None,
         }
     }
 
@@ -357,7 +350,7 @@ where
     fn value(&self, row: usize) -> Option<&'a str> {
         match self {
             Self::Scalar(value) => *value,
-            Self::Array(array) => array.value_opt(row),
+            Self::Array(array) => string_value_opt(*array, row),
         }
     }
 
@@ -369,6 +362,18 @@ where
     }
 }
 
+fn compile_scalar_pattern<'a, S>(
+    regex: &StringValueSource<'a, S>,
+    flags: &StringValueSource<'a, S>,
+) -> Result<Option<Regex>, ArrowError> {
+    match (regex, flags) {
+        (StringValueSource::Scalar(Some(regex)), StringValueSource::Scalar(flags)) => {
+            compile_regex(regex, *flags).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
 enum StartValueSource<'a> {
     Scalar(Option<i64>),
     Array(&'a Int64Array),
@@ -377,6 +382,8 @@ enum StartValueSource<'a> {
 impl<'a> StartValueSource<'a> {
     fn new(array: Option<&'a Int64Array>, is_scalar: bool) -> Self {
         match array {
+            // Preserve prior behavior: scalar start uses value(0), not a null-aware
+            // lookup, before count_matches validates the resulting start value.
             Some(array) if is_scalar || array.len() == 1 => {
                 Self::Scalar(Some(array.value(0)))
             }
