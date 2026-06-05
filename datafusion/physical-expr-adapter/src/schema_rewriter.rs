@@ -432,7 +432,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         // We need a cast expression whenever the logical and physical fields differ,
         // whether that difference is only metadata/nullability or also data type.
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
-        // since that's much cheaper to evalaute.
+        // since that's much cheaper to evaluate.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
         validate_data_type_compatibility(
             resolved_column.name(),

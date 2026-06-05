@@ -1141,7 +1141,13 @@ async fn test_aggregate_name_collision() -> Result<()> {
         // The select expr has the same display_name as the group_expr,
         // but since they are different expressions, it should fail.
         .expect_err("Expected error");
-    assert_snapshot!(df.strip_backtrace(), @r#"Schema error: No field named aggregate_test_100.c2. Valid fields are "aggregate_test_100.c2 + aggregate_test_100.c3"."#);
+    assert_snapshot!(
+        df.strip_backtrace(),
+        @r#"
+Schema error: No field named aggregate_test_100.c2.
+Valid fields are "aggregate_test_100.c2 + aggregate_test_100.c3".
+"#
+    );
 
     Ok(())
 }
@@ -1204,7 +1210,7 @@ async fn window_using_aggregates() -> Result<()> {
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     | first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
-    |             |          |                 |               |        |     |      | 1  | -85  |
+    |             |          | 0               |               |        |     |      | 1  | -85  |
     | -85         | -101     | 14              | -12.0         | -12.0  | 83  | -101 | 4  | -54  |
     | -85         | -101     | 17              | -25.0         | -25.0  | 83  | -101 | 5  | -31  |
     | -85         | -12      | 10              | -32.75        | -34.0  | 83  | -85  | 3  | 13   |
@@ -6309,7 +6315,10 @@ async fn test_alias_nested() -> Result<()> {
     let select2 = df.select(vec![col("alias1.a")]);
     assert_snapshot!(
         select2.unwrap_err().strip_backtrace(),
-        @"Schema error: No field named alias1.a. Valid fields are alias2.a, alias2.b, alias2.one."
+        @r#"
+Schema error: No field named alias1.a. Did you mean 'alias2.a'?
+Valid fields are alias2.a, alias2.b, alias2.one.
+"#
     );
     Ok(())
 }
