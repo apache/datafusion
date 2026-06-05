@@ -180,32 +180,28 @@ impl LikeExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_common::internal_err;
+        use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
 
-        let like_expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::LikeExpr(like_expr)) => {
-                like_expr.as_ref()
-            }
-            _ => return internal_err!("PhysicalExprNode is not a LikeExpr"),
-        };
-
-        let expr = like_expr.expr.as_deref().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "LikeExpr is missing required field 'expr'".to_string(),
-            )
-        })?;
-        let pattern = like_expr.pattern.as_deref().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "LikeExpr is missing required field 'pattern'".to_string(),
-            )
-        })?;
+        let like_expr = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::LikeExpr,
+            "LikeExpr",
+        );
 
         Ok(Arc::new(LikeExpr::new(
             like_expr.negated,
             like_expr.case_insensitive,
-            ctx.decode(expr)?,
-            ctx.decode(pattern)?,
+            ctx.decode_required_expression(
+                like_expr.expr.as_deref(),
+                "LikeExpr",
+                "expr",
+            )?,
+            ctx.decode_required_expression(
+                like_expr.pattern.as_deref(),
+                "LikeExpr",
+                "pattern",
+            )?,
         )))
     }
 }
@@ -491,7 +487,9 @@ mod proto_tests {
     fn try_from_proto_rejects_missing_pattern() {
         let node = like_node(false, false, Some(Box::new(column_node("a"))), None);
         let schema = Schema::empty();
-        let decoder = UnreachableDecoder;
+        // `expr` is present, so it is decoded before the missing-`pattern`
+        // check fires; use a decoder that succeeds for that first child.
+        let decoder = StubDecoder::ok();
         let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
         let err = LikeExpr::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(

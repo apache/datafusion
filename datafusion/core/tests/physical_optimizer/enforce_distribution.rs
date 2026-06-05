@@ -3971,3 +3971,38 @@ fn adjust_input_keys_ordering_no_transform_for_filter_scan() -> Result<()> {
     );
     Ok(())
 }
+
+/// Verifies the `ensure_distribution` fast path: when no child of a node is
+/// replaced (no `RepartitionExec` or `SortExec` injection is required),
+/// the rule must reuse the input `Arc<dyn ExecutionPlan>` unchanged instead
+/// of calling `with_new_children`. For a deep `ProjectionExec` chain over a
+/// single-partition scan with `target_partitions = 1`, every node hits this
+/// fast path, so the root returned by `ensure_distribution` must be the
+/// same `Arc` as the input.
+///
+/// Regression test for the optimization that avoids
+/// `ProjectionExec::with_new_children` (which recomputes schema, equivalence
+/// properties, output ordering, and partitioning) on the common point-query
+/// plan shape.
+#[test]
+fn ensure_distribution_reuses_plan_arc_when_no_redistribution_needed() -> Result<()> {
+    let scan = parquet_exec();
+    let proj1 = projection_exec_with_alias(
+        scan,
+        vec![
+            ("a".to_string(), "a".to_string()),
+            ("b".to_string(), "b".to_string()),
+        ],
+    );
+    let proj2 =
+        projection_exec_with_alias(proj1, vec![("a".to_string(), "a".to_string())]);
+    let plan: Arc<dyn ExecutionPlan> = proj2;
+
+    let result = ensure_distribution_helper(Arc::clone(&plan), 1, false)?;
+
+    assert!(
+        Arc::ptr_eq(&result, &plan),
+        "ensure_distribution must reuse the input Arc when no children require redistribution"
+    );
+    Ok(())
+}

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`HigherOrderUDF`] definitions for array_transform function.
+//! [`datafusion_expr::HigherOrderUDF`] definitions for array_transform function.
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, LargeListArray, ListArray},
@@ -28,7 +28,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
-    HigherOrderSignature, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda,
+    HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda,
     Volatility,
 };
 use datafusion_macros::user_doc;
@@ -89,7 +89,7 @@ impl ArrayTransform {
     }
 }
 
-impl HigherOrderUDF for ArrayTransform {
+impl HigherOrderUDFImpl for ArrayTransform {
     fn name(&self) -> &str {
         "array_transform"
     }
