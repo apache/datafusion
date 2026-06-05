@@ -175,17 +175,18 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         .map(|(_, alias)| alias.clone())
                         .collect::<Vec<_>>();
                     subqueries_to_join.extend(subqueries);
-                    rewrite_states.push(ProjectionRewriteState {
+                    let state = ProjectionRewriteState {
                         rewritten_expr,
                         subquery_aliases,
-                    });
+                    };
                     alias_to_state_index.extend(
-                        rewrite_states[state_idx]
+                        state
                             .subquery_aliases
                             .iter()
                             .cloned()
                             .map(|alias| (alias, state_idx)),
                     );
+                    rewrite_states.push(state);
                 }
                 assert_or_internal_err!(
                     !subqueries_to_join.is_empty(),
