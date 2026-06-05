@@ -303,7 +303,7 @@ where
             };
             let start = start.value(row);
             let flags = flags.value(row);
-            let value = string_value_opt(values, row);
+            let value = string_value_opt(&values, row);
 
             if let Some(pattern) = &scalar_pattern {
                 count_matches(value, pattern, start)
@@ -317,7 +317,7 @@ where
     Ok(Arc::new(counts))
 }
 
-fn string_value_opt<'a, S>(array: S, row: usize) -> Option<&'a str>
+fn string_value_opt<'a, S>(array: &S, row: usize) -> Option<&'a str>
 where
     S: StringArrayType<'a>,
 {
@@ -335,7 +335,7 @@ where
 {
     fn regex_arg(array: S, is_scalar: bool) -> Self {
         if is_scalar || array.len() == 1 {
-            Self::Scalar(string_value_opt(array, 0))
+            Self::Scalar(string_value_opt(&array, 0))
         } else {
             Self::Array(array)
         }
@@ -364,7 +364,7 @@ where
     fn value(&self, row: usize) -> Option<&'a str> {
         match self {
             Self::Scalar(value) => *value,
-            Self::Array(array) => string_value_opt(*array, row),
+            Self::Array(array) => string_value_opt(array, row),
         }
     }
 
