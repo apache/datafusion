@@ -672,133 +672,139 @@ a<span class="p">;</span>b
 <td><p><code class="docutils literal notranslate"><span class="pre">'max_row_group_size'</span></code></p></td>
 <td><p>1048576</p></td>
 </tr>
-<tr class="row-even"><td><p>ENABLE_PAGE_INDEX</p></td>
+<tr class="row-even"><td><p>MAX_ROW_GROUP_BYTES</p></td>
+<td><p>No</p></td>
+<td><p>Sets the maximum size of each row group in bytes. When both this and <code class="docutils literal notranslate"><span class="pre">MAX_ROW_GROUP_SIZE</span></code> are set, the row group flushes whenever either limit is reached. Mirrors <code class="docutils literal notranslate"><span class="pre">parquet.block.size</span></code> from parquet-mr. Currently only honored when <code class="docutils literal notranslate"><span class="pre">allow_single_file_parallelism</span></code> is <code class="docutils literal notranslate"><span class="pre">false</span></code>; by default the parallel file writer ignores it.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'max_row_group_bytes'</span></code></p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-odd"><td><p>ENABLE_PAGE_INDEX</p></td>
 <td><p>No</p></td>
 <td><p>If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce I/O and decoding.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'enable_page_index'</span></code></p></td>
 <td><p>true</p></td>
 </tr>
-<tr class="row-odd"><td><p>PRUNING</p></td>
+<tr class="row-even"><td><p>PRUNING</p></td>
 <td><p>No</p></td>
 <td><p>If true, enables row group pruning based on min/max statistics.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'pruning'</span></code></p></td>
 <td><p>true</p></td>
 </tr>
-<tr class="row-even"><td><p>SKIP_METADATA</p></td>
+<tr class="row-odd"><td><p>SKIP_METADATA</p></td>
 <td><p>No</p></td>
 <td><p>If true, skips optional embedded metadata in the file schema.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'skip_metadata'</span></code></p></td>
 <td><p>true</p></td>
 </tr>
-<tr class="row-odd"><td><p>METADATA_SIZE_HINT</p></td>
+<tr class="row-even"><td><p>METADATA_SIZE_HINT</p></td>
 <td><p>No</p></td>
 <td><p>Sets the size hint (in bytes) for fetching Parquet file metadata.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'metadata_size_hint'</span></code></p></td>
 <td><p>None</p></td>
 </tr>
-<tr class="row-even"><td><p>PUSHDOWN_FILTERS</p></td>
+<tr class="row-odd"><td><p>PUSHDOWN_FILTERS</p></td>
 <td><p>No</p></td>
 <td><p>If true, enables filter pushdown during Parquet decoding.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'pushdown_filters'</span></code></p></td>
 <td><p>false</p></td>
 </tr>
-<tr class="row-odd"><td><p>REORDER_FILTERS</p></td>
+<tr class="row-even"><td><p>REORDER_FILTERS</p></td>
 <td><p>No</p></td>
 <td><p>If true, enables heuristic reordering of filters during Parquet decoding.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'reorder_filters'</span></code></p></td>
 <td><p>false</p></td>
 </tr>
-<tr class="row-even"><td><p>SCHEMA_FORCE_VIEW_TYPES</p></td>
+<tr class="row-odd"><td><p>SCHEMA_FORCE_VIEW_TYPES</p></td>
 <td><p>No</p></td>
 <td><p>If true, reads Utf8/Binary columns as view types.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'schema_force_view_types'</span></code></p></td>
 <td><p>true</p></td>
 </tr>
-<tr class="row-odd"><td><p>BINARY_AS_STRING</p></td>
+<tr class="row-even"><td><p>BINARY_AS_STRING</p></td>
 <td><p>No</p></td>
 <td><p>If true, reads Binary columns as strings.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'binary_as_string'</span></code></p></td>
 <td><p>false</p></td>
 </tr>
-<tr class="row-even"><td><p>DATA_PAGESIZE_LIMIT</p></td>
+<tr class="row-odd"><td><p>DATA_PAGESIZE_LIMIT</p></td>
 <td><p>No</p></td>
 <td><p>Sets best effort maximum size of data page in bytes.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'data_pagesize_limit'</span></code></p></td>
 <td><p>1048576</p></td>
 </tr>
-<tr class="row-odd"><td><p>DATA_PAGE_ROW_COUNT_LIMIT</p></td>
+<tr class="row-even"><td><p>DATA_PAGE_ROW_COUNT_LIMIT</p></td>
 <td><p>No</p></td>
 <td><p>Sets best effort maximum number of rows in data page.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'data_page_row_count_limit'</span></code></p></td>
 <td><p>20000</p></td>
 </tr>
-<tr class="row-even"><td><p>DICTIONARY_PAGE_SIZE_LIMIT</p></td>
+<tr class="row-odd"><td><p>DICTIONARY_PAGE_SIZE_LIMIT</p></td>
 <td><p>No</p></td>
 <td><p>Sets best effort maximum dictionary page size, in bytes.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'dictionary_page_size_limit'</span></code></p></td>
 <td><p>1048576</p></td>
 </tr>
-<tr class="row-odd"><td><p>WRITE_BATCH_SIZE</p></td>
+<tr class="row-even"><td><p>WRITE_BATCH_SIZE</p></td>
 <td><p>No</p></td>
 <td><p>Sets write_batch_size in rows.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'write_batch_size'</span></code></p></td>
 <td><p>1024</p></td>
 </tr>
-<tr class="row-even"><td><p>WRITER_VERSION</p></td>
+<tr class="row-odd"><td><p>WRITER_VERSION</p></td>
 <td><p>No</p></td>
 <td><p>Sets the Parquet writer version (<code class="docutils literal notranslate"><span class="pre">1.0</span></code> or <code class="docutils literal notranslate"><span class="pre">2.0</span></code>).</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'writer_version'</span></code></p></td>
 <td><p>1.0</p></td>
 </tr>
-<tr class="row-odd"><td><p>SKIP_ARROW_METADATA</p></td>
+<tr class="row-even"><td><p>SKIP_ARROW_METADATA</p></td>
 <td><p>No</p></td>
 <td><p>If true, skips writing Arrow schema information into the Parquet file metadata.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'skip_arrow_metadata'</span></code></p></td>
 <td><p>false</p></td>
 </tr>
-<tr class="row-even"><td><p>CREATED_BY</p></td>
+<tr class="row-odd"><td><p>CREATED_BY</p></td>
 <td><p>No</p></td>
 <td><p>Sets the “created by” string in the Parquet file metadata.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'created_by'</span></code></p></td>
 <td><p>datafusion version X.Y.Z</p></td>
 </tr>
-<tr class="row-odd"><td><p>COLUMN_INDEX_TRUNCATE_LENGTH</p></td>
+<tr class="row-even"><td><p>COLUMN_INDEX_TRUNCATE_LENGTH</p></td>
 <td><p>No</p></td>
 <td><p>Sets the length (in bytes) to truncate min/max values in column indexes.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'column_index_truncate_length'</span></code></p></td>
 <td><p>64</p></td>
 </tr>
-<tr class="row-even"><td><p>STATISTICS_TRUNCATE_LENGTH</p></td>
+<tr class="row-odd"><td><p>STATISTICS_TRUNCATE_LENGTH</p></td>
 <td><p>No</p></td>
 <td><p>Sets statistics truncate length.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'statistics_truncate_length'</span></code></p></td>
 <td><p>None</p></td>
 </tr>
-<tr class="row-odd"><td><p>BLOOM_FILTER_ON_WRITE</p></td>
+<tr class="row-even"><td><p>BLOOM_FILTER_ON_WRITE</p></td>
 <td><p>No</p></td>
 <td><p>Sets whether bloom filters should be written for all columns by default (can be overridden per column).</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'bloom_filter_on_write'</span></code></p></td>
 <td><p>false</p></td>
 </tr>
-<tr class="row-even"><td><p>ALLOW_SINGLE_FILE_PARALLELISM</p></td>
+<tr class="row-odd"><td><p>ALLOW_SINGLE_FILE_PARALLELISM</p></td>
 <td><p>No</p></td>
 <td><p>Enables parallel serialization of columns in a single file.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'allow_single_file_parallelism'</span></code></p></td>
 <td><p>true</p></td>
 </tr>
-<tr class="row-odd"><td><p>MAXIMUM_PARALLEL_ROW_GROUP_WRITERS</p></td>
+<tr class="row-even"><td><p>MAXIMUM_PARALLEL_ROW_GROUP_WRITERS</p></td>
 <td><p>No</p></td>
 <td><p>Maximum number of parallel row group writers.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'maximum_parallel_row_group_writers'</span></code></p></td>
 <td><p>1</p></td>
 </tr>
-<tr class="row-even"><td><p>MAXIMUM_BUFFERED_RECORD_BATCHES_PER_STREAM</p></td>
+<tr class="row-odd"><td><p>MAXIMUM_BUFFERED_RECORD_BATCHES_PER_STREAM</p></td>
 <td><p>No</p></td>
 <td><p>Maximum number of buffered record batches per stream.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'maximum_buffered_record_batches_per_stream'</span></code></p></td>
 <td><p>2</p></td>
 </tr>
-<tr class="row-odd"><td><p>KEY_VALUE_METADATA</p></td>
+<tr class="row-even"><td><p>KEY_VALUE_METADATA</p></td>
 <td><p>No (Key is specific)</p></td>
 <td><p>Adds custom key-value pairs to the file metadata. Use the format <code class="docutils literal notranslate"><span class="pre">'metadata::your_key_name'</span> <span class="pre">'your_value'</span></code>. Multiple entries allowed.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'metadata::key_name'</span></code></p></td>
