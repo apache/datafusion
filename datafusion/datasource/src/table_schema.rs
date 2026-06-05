@@ -102,6 +102,13 @@ pub struct TableSchema {
     /// This is pre-computed during construction by concatenating the three
     /// parts, so it can be returned as a cheap reference.
     table_schema: SchemaRef,
+
+    /// Schema of file + partition columns, excluding virtual columns.
+    ///
+    /// Pre-computed during construction so [`Self::schema_without_virtual_columns`]
+    /// can return a cheap reference. When there are no virtual columns this
+    /// shares the same `Arc` as `table_schema`.
+    schema_without_virtual_columns: SchemaRef,
 }
 
 impl TableSchema {
@@ -173,21 +180,6 @@ impl TableSchema {
             .build()
     }
 
-    /// Return a new `TableSchema` with `virtual_columns` as its virtual columns,
-    /// replacing any existing ones. Existing partition columns are preserved.
-    ///
-    /// Virtual columns are produced by the file reader (e.g. a Parquet
-    /// `row_number` column) rather than stored in the files or derived from
-    /// partition paths. Each field must carry an arrow virtual extension type so
-    /// the reader can recognize it; `ParquetOpener` forwards these fields to
-    /// `parquet::arrow::arrow_reader::ArrowReaderOptions::with_virtual_columns`.
-    pub fn with_virtual_columns(self, virtual_columns: Vec<FieldRef>) -> Self {
-        TableSchemaBuilder::new(self.file_schema)
-            .with_table_partition_cols(self.table_partition_cols)
-            .with_virtual_columns(virtual_columns)
-            .build()
-    }
-
     /// Get the file schema (without partition columns).
     ///
     /// This is the schema of the actual data files on disk.
@@ -232,13 +224,8 @@ impl TableSchema {
     ///
     /// When there are no virtual columns this returns the same schema as
     /// [`Self::table_schema`].
-    pub fn schema_without_virtual_columns(&self) -> SchemaRef {
-        if self.virtual_columns.is_empty() {
-            return Arc::clone(&self.table_schema);
-        }
-        let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
-        builder.extend(self.table_partition_cols.iter().cloned());
-        Arc::new(builder.finish())
+    pub fn schema_without_virtual_columns(&self) -> &SchemaRef {
+        &self.schema_without_virtual_columns
     }
 }
 
@@ -329,12 +316,22 @@ impl TableSchemaBuilder {
 
         let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
         builder.extend(self.table_partition_cols.iter().cloned());
-        builder.extend(self.virtual_columns.iter().cloned());
+        let (table_schema, schema_without_virtual_columns) =
+            if self.virtual_columns.is_empty() {
+                let schema = Arc::new(builder.finish());
+                (Arc::clone(&schema), schema)
+            } else {
+                let without_virtual = Arc::new(builder.finish());
+                let mut builder = SchemaBuilder::from(without_virtual.as_ref());
+                builder.extend(self.virtual_columns.iter().cloned());
+                (Arc::new(builder.finish()), without_virtual)
+            };
         TableSchema {
             file_schema: self.file_schema,
             table_partition_cols: self.table_partition_cols,
             virtual_columns: self.virtual_columns,
-            table_schema: Arc::new(builder.finish()),
+            table_schema,
+            schema_without_virtual_columns,
         }
     }
 }

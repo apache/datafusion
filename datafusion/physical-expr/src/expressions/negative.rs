@@ -200,14 +200,16 @@ impl NegativeExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
 
-        let expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::Negative(n)) => {
-                ctx.decode_required_expression(n.expr.as_deref(), "NegativeExpr", "expr")?
-            }
-            _ => return internal_err!("PhysicalExprNode is not a Negative"),
-        };
+        let n = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::Negative,
+            "Negative",
+        );
+        let expr =
+            ctx.decode_required_expression(n.expr.as_deref(), "NegativeExpr", "expr")?;
 
         Ok(Arc::new(NegativeExpr::new(expr)))
     }

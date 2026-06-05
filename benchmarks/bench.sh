@@ -99,6 +99,7 @@ tpcds:                  TPCDS inspired benchmark on Scale Factor (SF) 1 (~1GB), 
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
 sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
 topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H dataset (SF=1)
+push_down_topk:         Benchmark of ORDER BY ... LIMIT over outer joins on TPC-H dataset (SF=1) — exercises pushing TopK through a join
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
 wide_schema:            Small-projection queries on a wide synthetic dataset (1024 cols × 256 files) — measures per-file metadata overhead
                           (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
@@ -341,6 +342,10 @@ main() {
                     # same data as for tpch
                     data_tpch "1" "parquet"
                     ;;
+                push_down_topk)
+                    # same data as for tpch
+                    data_tpch "1" "parquet"
+                    ;;
                 nlj)
                     # nlj uses range() function, no data generation needed
                     echo "NLJ benchmark does not require data generation"
@@ -561,6 +566,9 @@ main() {
                 topk_tpch)
                     run_topk_tpch
                     ;;
+                push_down_topk)
+                    run_push_down_topk
+                    ;;
                 nlj)
                     run_nlj
                     ;;
@@ -773,6 +781,20 @@ run_wide_schema() {
 
     echo "Running wide_schema benchmark (narrow baseline subgroup)..."
     debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=narrow \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the push_down_topk benchmark (ORDER BY ... LIMIT over outer joins).
+# Reuses the TPC-H parquet data, so it needs `./bench.sh data tpch` (or
+# `data push_down_topk`) first.
+run_push_down_topk() {
+    echo "Running push_down_topk benchmark..."
+
+    debug_run env BENCH_NAME=push_down_topk \
+      BENCH_SIZE="1" \
+      DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"

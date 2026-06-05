@@ -557,10 +557,10 @@ mod test {
         // Check that we have 2 partitions
         assert_eq!(statistics.len(), 2);
         // Cross join output schema: [left.id, left.date, right.id]
-        // Cross join doesn't propagate Column's byte_size
         let expected_statistic_partition_1 = Statistics {
             num_rows: Precision::Exact(8),
-            total_byte_size: Precision::Exact(512),
+            total_byte_size: Precision::Exact(96),
+            // Cross join doesn't propagate Column's byte_size
             column_statistics: vec![
                 // column 0: left.id (Int32, file column from t1)
                 ColumnStatistics {
@@ -594,7 +594,7 @@ mod test {
         };
         let expected_statistic_partition_2 = Statistics {
             num_rows: Precision::Exact(8),
-            total_byte_size: Precision::Exact(512),
+            total_byte_size: Precision::Exact(96),
             column_statistics: vec![
                 // column 0: left.id (Int32, file column from t1)
                 ColumnStatistics {

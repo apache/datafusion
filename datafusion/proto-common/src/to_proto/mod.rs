@@ -36,7 +36,7 @@ use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, JoinSide, ScalarValue, Statistics,
     config::{
-        CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
+        CsvOptions, JsonOptions, ParquetCdcOptions, ParquetColumnOptions, ParquetOptions,
         TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
@@ -938,14 +938,20 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
             coerce_int96_tz_opt: value.coerce_int96_tz.clone().map(protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
-            content_defined_chunking: value.use_content_defined_chunking.as_ref().map(|cdc|
-                protobuf::CdcOptions {
-                    min_chunk_size: cdc.min_chunk_size as u64,
-                    max_chunk_size: cdc.max_chunk_size as u64,
-                    norm_level: cdc.norm_level,
-                }
-            ),
+            max_row_group_bytes_opt: value.max_row_group_bytes.map(|v| protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v.get() as u64)),
+            content_defined_chunking: Some((&value.content_defined_chunking).into()),
         })
+    }
+}
+
+impl From<&ParquetCdcOptions> for protobuf::ParquetCdcOptions {
+    fn from(value: &ParquetCdcOptions) -> Self {
+        protobuf::ParquetCdcOptions {
+            enabled: value.enabled,
+            min_chunk_size: value.min_chunk_size as u64,
+            max_chunk_size: value.max_chunk_size as u64,
+            norm_level: value.norm_level,
+        }
     }
 }
 

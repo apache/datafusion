@@ -180,15 +180,14 @@ impl LikeExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_common::internal_err;
+        use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
 
-        let like_expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::LikeExpr(like_expr)) => {
-                like_expr.as_ref()
-            }
-            _ => return internal_err!("PhysicalExprNode is not a LikeExpr"),
-        };
+        let like_expr = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::LikeExpr,
+            "LikeExpr",
+        );
 
         Ok(Arc::new(LikeExpr::new(
             like_expr.negated,
