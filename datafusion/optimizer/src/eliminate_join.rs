@@ -74,7 +74,73 @@ use std::sync::Arc;
 /// The columns that are "live" at a plan node, i.e., which of its output
 /// columns are referenced by an ancestor node. Represented as a set of column
 /// indices, relative to the node's schema.
-type LiveColumns = HashSet<usize>;
+///
+/// See the module-level docs for how this set is threaded down the plan and
+/// narrowed or split at each node.
+#[derive(Debug, Default, Clone)]
+struct LiveColumns(HashSet<usize>);
+
+impl LiveColumns {
+    fn new() -> Self {
+        Self(HashSet::new())
+    }
+
+    /// Every column of `schema` is live.
+    fn all(schema: &DFSchema) -> Self {
+        Self((0..schema.fields().len()).collect())
+    }
+
+    /// The columns of `schema` referenced by any of `exprs`.
+    fn try_new<'a>(
+        exprs: impl IntoIterator<Item = &'a Expr>,
+        schema: &DFSchema,
+    ) -> Result<Self> {
+        let mut live = Self::new();
+        live.extend_from(exprs, schema)?;
+        Ok(live)
+    }
+
+    /// Inserts the index, within `schema`, of every column referenced by any of
+    /// `exprs`, including columns reached through correlated subquery outer
+    /// references.
+    fn extend_from<'a>(
+        &mut self,
+        exprs: impl IntoIterator<Item = &'a Expr>,
+        schema: &DFSchema,
+    ) -> Result<()> {
+        for expr in exprs {
+            for_each_referenced_index(expr, schema, |idx| {
+                self.0.insert(idx);
+            })?;
+        }
+        Ok(())
+    }
+
+    fn insert(&mut self, idx: usize) {
+        self.0.insert(idx);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Splits live columns spanning a join's combined output (the left input's
+    /// columns first, then the right input's) into the per-side sets, rebasing
+    /// the right side's indices to start at zero. `left_len` is the number of
+    /// columns contributed by the left input.
+    fn split_at(&self, left_len: usize) -> (Self, Self) {
+        let mut left = Self::new();
+        let mut right = Self::new();
+        for &idx in &self.0 {
+            if idx < left_len {
+                left.insert(idx);
+            } else {
+                right.insert(idx - left_len);
+            }
+        }
+        (left, right)
+    }
+}
 
 /// Rewrites an inner join to a semi join when one input only filters the other,
 /// and replaces an always-false inner join with an empty relation.
@@ -97,7 +163,7 @@ impl OptimizerRule for EliminateJoin {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let live = all_columns(plan.schema());
+        let live = LiveColumns::all(plan.schema());
         rewrite_subtree(plan, live, false)
     }
 }
@@ -116,7 +182,7 @@ fn rewrite_subtree(
 ) -> Result<Transformed<LogicalPlan>> {
     rewrite_node(plan, live, duplicate_insensitive)?.transform_data(|plan| {
         plan.map_subqueries(|subquery| {
-            let live = all_columns(subquery.schema());
+            let live = LiveColumns::all(subquery.schema());
             rewrite_subtree(subquery, live, false)
         })
     })
@@ -137,7 +203,7 @@ fn rewrite_node(
             ..
         }) => {
             // Narrows `live` to the columns the projection's expressions reference.
-            let child_live = live_columns(&expr, input.schema())?;
+            let child_live = LiveColumns::try_new(&expr, input.schema())?;
             rewrite_single_input(input, child_live, duplicate_insensitive, |input| {
                 Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
                     expr, input, schema,
@@ -149,7 +215,7 @@ fn rewrite_node(
         }) => {
             // Adds the predicate's columns to `live` (a side used only by the filter stays live).
             let mut child_live = live;
-            extend_live_columns(&mut child_live, [&predicate], input.schema())?;
+            child_live.extend_from([&predicate], input.schema())?;
             rewrite_single_input(input, child_live, duplicate_insensitive, |input| {
                 Ok(LogicalPlan::Filter(Filter::new(predicate, input)))
             })
@@ -162,8 +228,10 @@ fn rewrite_node(
             ..
         }) => {
             // Narrows `live` to the grouping and aggregate expressions' columns.
-            let child_live =
-                live_columns(group_expr.iter().chain(&aggr_expr), input.schema())?;
+            let child_live = LiveColumns::try_new(
+                group_expr.iter().chain(&aggr_expr),
+                input.schema(),
+            )?;
 
             // A grouping aggregate with no aggregate functions (`GROUP BY` with
             // an empty `aggr_expr`) only observes which group-key values exist,
@@ -187,7 +255,7 @@ fn rewrite_node(
             // `SELECT DISTINCT *` is equivalent to a no-aggregate `GROUP BY`
             // over every input column, so the input is duplicate-insensitive,
             // but every column is part of the dedup key.
-            let child_live = all_columns(input.schema());
+            let child_live = LiveColumns::all(input.schema());
             rewrite_single_input(input, child_live, true, |input| {
                 Ok(LogicalPlan::Distinct(Distinct::All(input)))
             })
@@ -204,13 +272,10 @@ fn rewrite_node(
             // insensitive; the live columns are exactly those of the
             // ON/SELECT/ORDER BY expressions.
             let mut child_live =
-                live_columns(on_expr.iter().chain(&select_expr), input.schema())?;
+                LiveColumns::try_new(on_expr.iter().chain(&select_expr), input.schema())?;
             if let Some(sort_expr) = &sort_expr {
-                extend_live_columns(
-                    &mut child_live,
-                    sort_expr.iter().map(|s| &s.expr),
-                    input.schema(),
-                )?;
+                child_live
+                    .extend_from(sort_expr.iter().map(|s| &s.expr), input.schema())?;
             }
 
             rewrite_single_input(input, child_live, true, |input| {
@@ -226,11 +291,7 @@ fn rewrite_node(
         LogicalPlan::Sort(Sort { expr, input, fetch }) => {
             // Adds the sort-key columns to `live`.
             let mut child_live = live;
-            extend_live_columns(
-                &mut child_live,
-                expr.iter().map(|s| &s.expr),
-                input.schema(),
-            )?;
+            child_live.extend_from(expr.iter().map(|s| &s.expr), input.schema())?;
 
             // A `fetch` (top-N) makes the row count observable, so duplicate-
             // insensitivity does not survive past it.
@@ -264,7 +325,7 @@ fn rewrite_node(
             let mut child_live = live;
             match &partitioning_scheme {
                 Partitioning::Hash(exprs, _) | Partitioning::DistributeBy(exprs) => {
-                    extend_live_columns(&mut child_live, exprs, input.schema())?;
+                    child_live.extend_from(exprs, input.schema())?;
                 }
                 Partitioning::RoundRobinBatch(_) => {}
             }
@@ -278,7 +339,7 @@ fn rewrite_node(
         // Conservatively treat any other plan node as a fresh root, since we are
         // not sure of its semantics with respect to duplicates or live columns.
         _ => plan.map_children(|child| {
-            let live = all_columns(child.schema());
+            let live = LiveColumns::all(child.schema());
             rewrite_subtree(child, live, false)
         }),
     }
@@ -451,20 +512,12 @@ fn add_join_condition_columns(
     left_live: &mut LiveColumns,
     right_live: &mut LiveColumns,
 ) -> Result<()> {
-    extend_live_columns(
-        left_live,
-        join.on.iter().map(|(l, _)| l),
-        join.left.schema(),
-    )?;
-    extend_live_columns(
-        right_live,
-        join.on.iter().map(|(_, r)| r),
-        join.right.schema(),
-    )?;
+    left_live.extend_from(join.on.iter().map(|(l, _)| l), join.left.schema())?;
+    right_live.extend_from(join.on.iter().map(|(_, r)| r), join.right.schema())?;
 
     if let Some(filter) = &join.filter {
-        extend_live_columns(left_live, [filter], join.left.schema())?;
-        extend_live_columns(right_live, [filter], join.right.schema())?;
+        left_live.extend_from([filter], join.left.schema())?;
+        right_live.extend_from([filter], join.right.schema())?;
     }
 
     Ok(())
@@ -477,7 +530,7 @@ fn split_join_output_columns(
     let left_len = join.left.schema().fields().len();
     match join.join_type {
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            split_columns_at(live, left_len)
+            live.split_at(left_len)
         }
         // A semi/anti/mark join outputs only the surviving side's columns, with
         // the same index space, so `live` passes straight through to that side.
@@ -488,19 +541,6 @@ fn split_join_output_columns(
             (LiveColumns::new(), live.clone())
         }
     }
-}
-
-fn split_columns_at(live: &LiveColumns, left_len: usize) -> (LiveColumns, LiveColumns) {
-    let mut left = LiveColumns::new();
-    let mut right = LiveColumns::new();
-    for idx in live {
-        if *idx < left_len {
-            left.insert(*idx);
-        } else {
-            right.insert(*idx - left_len);
-        }
-    }
-    (left, right)
 }
 
 fn side_unique_on_join<'a>(
@@ -526,35 +566,6 @@ fn side_unique_on_join<'a>(
     })
 }
 
-fn all_columns(schema: &DFSchema) -> LiveColumns {
-    (0..schema.fields().len()).collect()
-}
-
-/// The columns of `schema` referenced by any of `exprs`.
-fn live_columns<'a>(
-    exprs: impl IntoIterator<Item = &'a Expr>,
-    schema: &DFSchema,
-) -> Result<LiveColumns> {
-    let mut live = LiveColumns::new();
-    extend_live_columns(&mut live, exprs, schema)?;
-    Ok(live)
-}
-
-/// Inserts into `live` the index, within `schema`, of every column referenced
-/// by any of `exprs`.
-fn extend_live_columns<'a>(
-    live: &mut LiveColumns,
-    exprs: impl IntoIterator<Item = &'a Expr>,
-    schema: &DFSchema,
-) -> Result<()> {
-    for expr in exprs {
-        for_each_referenced_index(expr, schema, |idx| {
-            live.insert(idx);
-        })?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::OptimizerContext;
@@ -564,7 +575,7 @@ mod tests {
     use datafusion_common::{Constraint, Constraints, NullEquality, Result};
     use datafusion_expr::JoinType::Inner;
     use datafusion_expr::{
-        Expr, col, exists, lit,
+        Expr, JoinType, Partitioning, col, exists, lit,
         logical_plan::builder::{
             LogicalPlanBuilder, table_scan, table_source_with_constraints,
         },
@@ -965,6 +976,129 @@ mod tests {
         assert_optimized_plan_equal!(plan, @r"
         Projection: l.y
           Inner Join: l.id = r.id
+            TableScan: l
+            TableScan: r
+        ")
+    }
+
+    #[test]
+    fn top_n_sort_blocks_duplicate_insensitive_rewrite() -> Result<()> {
+        // A top-N `Sort` (one with a `fetch`) makes the row count observable, so
+        // the duplicate-insensitivity established by the `GROUP BY` does not survive
+        // past it. With a non-unique right side the join must stay an inner join: a
+        // semi join could drop matching duplicates and change which rows fall within
+        // the top N.
+        let plan = left_join_right()?
+            .sort_with_limit(vec![col("l.x").sort(true, false)], Some(5))?
+            .aggregate(vec![col("l.x")], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[l.x]], aggr=[[]]
+          Sort: l.x ASC NULLS LAST, fetch=5
+            Inner Join: l.id = r.id
+              TableScan: l
+              TableScan: r
+        ")
+    }
+
+    #[test]
+    fn sort_without_fetch_preserves_duplicate_insensitive_rewrite() -> Result<()> {
+        // A `Sort` without a `fetch` does not make the row count observable, so it
+        // forwards the parent's duplicate-insensitivity to the join unchanged
+        // (sorting before or after duplicate removal is equivalent). The non-unique
+        // right side is unreferenced, so the inner join collapses to a semi join.
+        let plan = left_join_right()?
+            .sort(vec![col("l.x").sort(true, false)])?
+            .aggregate(vec![col("l.x")], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[l.x]], aggr=[[]]
+          Sort: l.x ASC NULLS LAST
+            LeftSemi Join: l.id = r.id
+              TableScan: l
+              TableScan: r
+        ")
+    }
+
+    #[test]
+    fn limit_blocks_duplicate_insensitive_rewrite() -> Result<()> {
+        // `LIMIT` makes the row count observable, clearing the duplicate-
+        // insensitivity established by the `GROUP BY`. With a non-unique right side
+        // the join must stay an inner join, since a semi join could drop matching
+        // duplicates and change which rows the limit returns.
+        let plan = left_join_right()?
+            .limit(0, Some(5))?
+            .aggregate(vec![col("l.x")], Vec::<Expr>::new())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[l.x]], aggr=[[]]
+          Limit: skip=0, fetch=5
+            Inner Join: l.id = r.id
+              TableScan: l
+              TableScan: r
+        ")
+    }
+
+    #[test]
+    fn repartition_hash_key_keeps_removed_side_live() -> Result<()> {
+        // The projection keeps only `l.x`, and the right side is unique (PK), so
+        // absent any other use of `r` the inner join would collapse to a semi join.
+        // But the `Repartition` hashes on `r.y`, which keeps the right side live, so
+        // the join must stay an inner join to preserve `r.y` for the partitioning.
+        let plan = left_join_right_with_constraints(primary_key_on_id())?
+            .repartition(Partitioning::Hash(vec![col("r.y")], 4))?
+            .project(vec![col("l.x")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: l.x
+          Repartition: Hash(r.y) partition_count=4
+            Inner Join: l.id = r.id
+              TableScan: l
+              TableScan: r
+        ")
+    }
+
+    #[test]
+    fn distinct_on_enables_semi_join_rewrite() -> Result<()> {
+        // `DISTINCT ON (l.x)` is a no-aggregate `GROUP BY` on the columns it reads,
+        // so it makes its input duplicate-insensitive. The non-unique right side is
+        // unreferenced, so the inner join collapses to a semi join.
+        let plan = left_join_right()?
+            .distinct_on(vec![col("l.x")], vec![col("l.x")], None)?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        DistinctOn: on_expr=[[l.x]], select_expr=[[l.x]], sort_expr=[[]]
+          LeftSemi Join: l.id = r.id
+            TableScan: l
+            TableScan: r
+        ")
+    }
+
+    #[test]
+    fn existing_semi_join_passes_through_unchanged() -> Result<()> {
+        // A join that is already a semi join is threaded through unchanged: the rule
+        // only rewrites inner joins. This exercises the context-propagation paths for
+        // a non-inner join type, whose existence side contributes no live columns.
+        let left = scan("l", &test_schema(), Constraints::default())?;
+        let right = scan("r", &test_schema(), Constraints::default())?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::LeftSemi,
+                (vec!["l.id"], vec!["r.id"]),
+                None,
+            )?
+            .project(vec![col("l.x")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: l.x
+          LeftSemi Join: l.id = r.id
             TableScan: l
             TableScan: r
         ")
