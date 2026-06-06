@@ -315,3 +315,47 @@ query I
 SELECT length(concat_ws(',', repeat('x', 1000), repeat('y', 1000)));
 ----
 2001
+
+## ── List variants (FixedSizeList / ListView) ────────────────
+
+## FixedSizeList argument is expanded element-by-element
+query T
+SELECT concat_ws(',', arrow_cast(make_array('a', 'b', 'c'), 'FixedSizeList(3, Utf8)'));
+----
+a,b,c
+
+## ListView argument is expanded element-by-element
+query T
+SELECT concat_ws(',', arrow_cast(make_array('a', 'b'), 'ListView(Utf8)'));
+----
+a,b
+
+## LargeListView argument is expanded element-by-element
+query T
+SELECT concat_ws(',', arrow_cast(make_array('a', 'b'), 'LargeListView(Utf8)'));
+----
+a,b
+
+## ── Binary coercion (Spark casts binary to its UTF-8 view) ──
+
+## Binary argument is coerced to its string representation
+query T
+SELECT concat_ws(',', X'4869');
+----
+Hi
+
+## ── Null-separator-over-rows shape ──────────────────────────
+
+## Null separator on a multi-row column yields NULL on every row
+query T
+SELECT concat_ws(NULL, v) AS result FROM VALUES ('a'), ('b'), ('c') AS t(v) ORDER BY v;
+----
+NULL
+NULL
+NULL
+
+## ── Struct rejection ────────────────────────────────────────
+
+## Struct argument is rejected (not coerced to string)
+query error
+SELECT concat_ws(',', named_struct('a', 1));

@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Spark-compatible `concat_ws` function.
+//! Spark-compatible `concat_ws`: joins strings (and array elements) with a separator.
+//!
+//! Null scalar args and null array elements are skipped; a null separator yields a
+//! null row. Non-string args are coerced to STRING; list args (`List`, `LargeList`,
+//! `ListView`, `LargeListView`, `FixedSizeList`) expand their elements.
 //!
 //! Differences with DataFusion core `concat_ws`:
 //! - Accepts list arguments and expands their elements
@@ -26,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericListArray, LargeStringArray, OffsetSizeTrait,
-    StringArray, StringBuilder, StringViewArray,
+    StringArray, StringBuilder, StringViewArray, new_null_array,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
@@ -79,9 +83,18 @@ impl ScalarUDFImpl for SparkConcatWs {
             .enumerate()
             .map(|(i, dt)| match dt {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => dt.clone(),
-                // Lists are kept as-is for non-separator args; their elements
-                // are expanded at runtime.
-                DataType::List(_) | DataType::LargeList(_) if i > 0 => dt.clone(),
+                // Non-separator list args expand their elements at runtime;
+                // normalize list variants so the kernel only sees List/LargeList.
+                DataType::List(f)
+                | DataType::ListView(f)
+                | DataType::FixedSizeList(f, _)
+                    if i > 0 =>
+                {
+                    DataType::List(Arc::clone(f))
+                }
+                DataType::LargeList(f) | DataType::LargeListView(f) if i > 0 => {
+                    DataType::LargeList(Arc::clone(f))
+                }
                 // Spark casts everything else (numbers, booleans, dates,
                 // binary, null...) to STRING.
                 _ => DataType::Utf8,
@@ -125,9 +138,13 @@ fn only_separator(sep: &ColumnarValue) -> Result<ColumnarValue> {
 fn spark_concat_ws(args: &[ColumnarValue], num_rows: usize) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(args)?;
 
-    // All-null separator type → all rows NULL.
+    // Untyped-NULL separator → every row is NULL. Return an N-null array (not a
+    // scalar) so the shape matches the other (possibly array) columns.
     if *arrays[0].data_type() == DataType::Null {
-        return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+        return Ok(ColumnarValue::Array(new_null_array(
+            &DataType::Utf8,
+            num_rows,
+        )));
     }
 
     let sep_view = StringView::try_new(&arrays[0])?;
@@ -252,7 +269,9 @@ fn write_list_row<O: OffsetSizeTrait>(
         return Ok(());
     }
     let values = list.value(row_idx);
-    if *values.data_type() == DataType::Null {
+    // An empty array (e.g. `array()`) or an all-null-typed array contributes
+    // nothing — Spark renders it as the empty string, not an error.
+    if values.is_empty() || *values.data_type() == DataType::Null {
         return Ok(());
     }
     let view = StringView::try_new(&values)?;
