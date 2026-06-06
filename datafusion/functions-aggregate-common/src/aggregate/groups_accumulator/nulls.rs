@@ -43,7 +43,7 @@ pub fn set_nulls<T: ArrowNumericType + Send>(
 ///
 /// The output is `true` for rows where the filter is `Some(true)`, and `false`
 /// for rows where the filter is `Some(false)` or `None`.
-pub(crate) fn filter_to_validity(filter: &BooleanArray) -> BooleanBuffer {
+pub fn filter_to_validity(filter: &BooleanArray) -> BooleanBuffer {
     let Some(filter_nulls) = filter.nulls() else {
         return filter.values().clone();
     };
