@@ -15,12 +15,17 @@
 # specific language governing permissions and limitations
 # under the License.
 
-## Spark `arrays_zip` returns a list of structs whose fields use 0-based ordinal
-## names (`0`, `1`, ...), in contrast to DataFusion's 1-based ordinals.
+## Spark `arrays_zip` returns a list of structs. Field naming rules
+## (per SPARK-35876 / `DataFrameFunctionsSuite#"dataframe arrays_zip function"`):
+##   - Column reference          -> use the column name          (`a`, `b`, ...)
+##   - Aliased expression        -> use the alias                (`x`, `y`, ...)
+##   - Anything else (literals,  -> use a 0-based ordinal        (`0`, `1`, ...)
+##     function calls, etc.)
 ##
-## Scenarios below mirror Apache Spark's
-## `DataFrameFunctionsSuite#"dataframe arrays_zip function"` and
-## `"SPARK-24633: arrays_zip splits input processing correctly"`.
+## DataFusion's native `arrays_zip` uses 1-based ordinals; the Spark variant is
+## installed by `SessionStateBuilderSpark::with_spark_features` together with
+## the analyzer-time `SparkArraysZipRewrite` rule that captures the field name
+## for each argument before optimizer passes can rename it.
 
 # Spark docs example: arrays_zip(array(1, 2, 3), array(2, 3, 4), array(3, 4, 5))
 query ?
@@ -94,23 +99,58 @@ SELECT arrays_zip(array(1, 2, 3));
 ----
 [{0: 1}, {0: 2}, {0: 3}]
 
-# Column-level: multiple rows with different lengths.
+# Column-level: multiple rows with different lengths. Struct fields take the
+# column names from the outer SELECT (Spark SPARK-35876 semantics).
 query ?
 SELECT arrays_zip(a, b)
 FROM (VALUES ([1, 2], [10, 20]), ([3, 4, 5], [30]), ([6], [60, 70])) AS t(a, b);
 ----
-[{0: 1, 1: 10}, {0: 2, 1: 20}]
-[{0: 3, 1: 30}, {0: 4, 1: NULL}, {0: 5, 1: NULL}]
-[{0: 6, 1: 60}, {0: NULL, 1: 70}]
+[{a: 1, b: 10}, {a: 2, b: 20}]
+[{a: 3, b: 30}, {a: 4, b: NULL}, {a: 5, b: NULL}]
+[{a: 6, b: 60}, {a: NULL, b: 70}]
 
 # Column-level: NULL rows in the input.
 query ?
 SELECT arrays_zip(a, b)
 FROM (VALUES ([1, 2], [10, 20]), (null, [30, 40]), ([5, 6], null)) AS t(a, b);
 ----
-[{0: 1, 1: 10}, {0: 2, 1: 20}]
-[{0: NULL, 1: 30}, {0: NULL, 1: 40}]
-[{0: 5, 1: NULL}, {0: 6, 1: NULL}]
+[{a: 1, b: 10}, {a: 2, b: 20}]
+[{a: NULL, b: 30}, {a: NULL, b: 40}]
+[{a: 5, b: NULL}, {a: 6, b: NULL}]
+
+# Aliased input columns: struct fields take the aliases the inner SELECT
+# assigned.
+query ?
+SELECT arrays_zip(x, y)
+FROM (SELECT a AS x, b AS y FROM (VALUES ([1, 2], [10, 20])) AS t(a, b));
+----
+[{x: 1, y: 10}, {x: 2, y: 20}]
+
+# Mixed: column reference + literal expression. Column keeps its name; the
+# literal-built array falls back to a 0-based ordinal.
+query ?
+SELECT arrays_zip(a, array(99, 100))
+FROM (VALUES ([1, 2], [10, 20])) AS t(a, b);
+----
+[{a: 1, 1: 99}, {a: 2, 1: 100}]
+
+# Constant projection in a subquery: optimizer may inline column references,
+# but the analyzer-time rewrite has already pinned the field names so the
+# struct schema stays stable.
+query ?
+SELECT arrays_zip(a, b)
+FROM (SELECT array(1, 2, 3) AS a, array(3, 4, 5) AS b);
+----
+[{a: 1, b: 3}, {a: 2, b: 4}, {a: 3, b: 5}]
+
+# Duplicate input names are disambiguated with a `_<n>` suffix (per
+# `SparkArraysZipRewrite::dedup_names`) so the struct can be written to
+# formats that require unique field names.
+query ?
+SELECT arrays_zip(a, a, a)
+FROM (VALUES ([1, 2], [1, 2], [1, 2])) AS t(a, b, c);
+----
+[{a: 1, a_1: 1, a_2: 1}, {a: 2, a_1: 2, a_2: 2}]
 
 # LargeList inputs are accepted (DataFusion-specific list flavor).
 query ?
