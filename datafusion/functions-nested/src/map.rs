@@ -63,15 +63,37 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn make_map_batch(args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
     let [keys_arg, values_arg] = take_function_args("make_map", args)?;
 
     let can_evaluate_to_const = can_evaluate_to_const(args);
 
-    let keys = get_first_array_ref(keys_arg)?;
+    // If we have a mix of scalar and array args, expand the scalar to an array
+    // so that the rest of the logic handles uniform array inputs.
+    // This handles cases like: map(['a','b'], [col1, col2]) where keys are all
+    // literals (scalar FixedSizeList) but values contain column references (array).
+    let (keys_arg, values_arg) = if !can_evaluate_to_const {
+        let keys_arg = match keys_arg {
+            ColumnarValue::Scalar(s) => {
+                ColumnarValue::Array(s.to_array_of_size(number_rows)?)
+            }
+            other => other.clone(),
+        };
+        let values_arg = match values_arg {
+            ColumnarValue::Scalar(s) => {
+                ColumnarValue::Array(s.to_array_of_size(number_rows)?)
+            }
+            other => other.clone(),
+        };
+        (keys_arg, values_arg)
+    } else {
+        (keys_arg.clone(), values_arg.clone())
+    };
+
+    let keys = get_first_array_ref(&keys_arg)?;
     let key_array = keys.as_ref();
 
-    match keys_arg {
+    match &keys_arg {
         ColumnarValue::Array(_) => match key_array.data_type() {
             DataType::List(_) => keys
                 .as_list::<i32>()
@@ -101,7 +123,7 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     }
 
-    let values = get_first_array_ref(values_arg)?;
+    let values = get_first_array_ref(&values_arg)?;
 
     make_map_batch_internal(&keys, &values, can_evaluate_to_const, &keys_arg.data_type())
 }
@@ -399,7 +421,7 @@ impl ScalarUDFImpl for MapFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_map_batch(&args.args)
+        make_map_batch(&args.args, args.number_rows)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -716,10 +738,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            &[
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            3,
+        );
 
         assert!(result.is_ok(), "Should handle NULL maps correctly");
 
@@ -764,10 +789,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should fail
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            &[
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            1,
+        );
 
         assert!(result.is_err(), "Should reject null keys within maps");
 
@@ -812,10 +840,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            &[
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            2,
+        );
 
         assert!(
             result.is_ok(),
@@ -882,10 +913,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            &[
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            3,
+        );
 
         assert!(
             result.is_ok(),
@@ -903,5 +937,71 @@ mod tests {
         assert!(!map_array.is_null(0), "First map should not be NULL");
         assert!(map_array.is_null(1), "Second map should be NULL");
         assert!(!map_array.is_null(2), "Third map should not be NULL");
+    }
+
+    #[test]
+    fn test_make_map_scalar_keys_array_values() {
+        // Regression test: map(['a','b'], [col, col * 10]) where keys are all
+        // literals (evaluate to ColumnarValue::Scalar(FixedSizeList)) and values
+        // contain column references (evaluate to ColumnarValue::Array).
+        // Previously this failed with "map requires key and value lists to have
+        // the same length" because the scalar key list length (N=number of keys)
+        // was compared against the batch size.
+
+        use arrow::array::FixedSizeListBuilder;
+
+        // Simulate keys = make_array('a', 'b') which evaluates to a scalar
+        // FixedSizeList of size 2 containing ['a', 'b']
+        let key_values_builder = arrow::array::StringBuilder::new();
+        let mut key_builder = FixedSizeListBuilder::new(key_values_builder, 2);
+        key_builder.values().append_value("a");
+        key_builder.values().append_value("b");
+        key_builder.append(true);
+        let keys_fsl = Arc::new(key_builder.finish());
+        let keys_scalar = ScalarValue::FixedSizeList(keys_fsl);
+
+        // Simulate values = make_array(column1, column1 * 10) which evaluates
+        // to an Array(FixedSizeList) with 3 rows (batch_size=3)
+        let value_values_builder = arrow::array::Int64Builder::new();
+        let mut value_builder = FixedSizeListBuilder::new(value_values_builder, 2);
+        // Row 1: [1, 10]
+        value_builder.values().append_value(1);
+        value_builder.values().append_value(10);
+        value_builder.append(true);
+        // Row 2: [2, 20]
+        value_builder.values().append_value(2);
+        value_builder.values().append_value(20);
+        value_builder.append(true);
+        // Row 3: [3, 30]
+        value_builder.values().append_value(3);
+        value_builder.values().append_value(30);
+        value_builder.append(true);
+        let values_array: ArrayRef = Arc::new(value_builder.finish());
+
+        // Call make_map_batch with mixed scalar keys + array values
+        let result = make_map_batch(
+            &[
+                ColumnarValue::Scalar(keys_scalar),
+                ColumnarValue::Array(values_array),
+            ],
+            3,
+        );
+
+        assert!(
+            result.is_ok(),
+            "Should handle scalar keys + array values: {:?}",
+            result.err()
+        );
+
+        // Verify the result is an array with 3 maps
+        let map_array = match result.unwrap() {
+            ColumnarValue::Array(arr) => arr,
+            _ => panic!("Expected Array result"),
+        };
+
+        assert_eq!(map_array.len(), 3, "Should have 3 maps (one per row)");
+        assert!(!map_array.is_null(0));
+        assert!(!map_array.is_null(1));
+        assert!(!map_array.is_null(2));
     }
 }

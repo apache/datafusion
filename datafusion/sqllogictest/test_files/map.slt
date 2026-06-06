@@ -901,3 +901,14 @@ NULL
 
 statement ok
 drop table tt;
+
+# Regression test: map with literal keys and column-reference values
+# Previously failed with "map requires key and value lists to have the same length"
+# because scalar keys (FixedSizeList) had length=N (number of keys) while
+# array values had length=batch_size.
+query ?
+SELECT map(['a','b'], [column1, column1 * 10]) FROM (VALUES (1), (2), (3)) t;
+----
+{a: 1, b: 10}
+{a: 2, b: 20}
+{a: 3, b: 30}
