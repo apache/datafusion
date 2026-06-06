@@ -41,16 +41,20 @@ pub(super) struct Partial;
 /// Marker for partial state -> final value aggregation.
 pub(super) struct Final;
 
-/// Grouped hash table shared by the initial-partial and partial-final paths.
+/// Grouped hash table shared by the partial and final paths.
 ///
 /// While building, it consumes input batches and updates group / accumulator
 /// state. While outputting, it incrementally output the materialized batches.
 ///
 /// # Marker Type
-/// `AggrMode` is a zero-sized marker type used with `PhantomData` to keep the
-/// initial-partial and partial-final update logic in separate impl blocks. Different
-/// stages has different semantics and applicable optimizations, this makes the
-/// implementation easier to follow.
+/// `AggrMode` selects the aggregate semantics.
+///
+/// e.g. `AggregateHashTable::<Partial>::new(...)` creates an aggregate hash table
+/// for the partial hash aggregate stage, the input schema is raw rows and output
+/// schema is intermediate states.
+///
+/// It is a zero-sized compile-time marker, so each stage keeps its update logic
+/// in a separate impl block, to make the behavior difference explicit.
 pub(super) struct AggregateHashTable<AggrMode> {
     /// Grouping and accumulator-specific timing metrics.
     group_by_metrics: GroupByMetrics,
