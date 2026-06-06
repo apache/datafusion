@@ -489,7 +489,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // Resize vectors to accommodate total number of groups
@@ -507,11 +506,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let partial_sum_xy = values[3].as_primitive::<Float64Type>();
         let partial_sum_xx = values[4].as_primitive::<Float64Type>();
         let partial_sum_yy = values[5].as_primitive::<Float64Type>();
-
-        assert!(
-            opt_filter.is_none(),
-            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
-        );
 
         accumulate_correlation_states(
             group_indices,

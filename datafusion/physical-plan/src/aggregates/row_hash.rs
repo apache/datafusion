@@ -1016,7 +1016,7 @@ impl GroupedHashAggregateStream {
 
                     // if aggregation is over intermediate states,
                     // use merge
-                    acc.merge_batch(values, group_indices, None, total_num_groups)?;
+                    acc.merge_batch(values, group_indices, total_num_groups)?;
                 }
                 self.group_by_metrics
                     .aggregation_time
@@ -1204,17 +1204,19 @@ impl GroupedHashAggregateStream {
             // Prime each accumulator for the registered group count with no data.
             //
             // We build 1-row null arrays for each aggregate argument and pass them
-            // with an all-false filter.  The filter ensures no row is accumulated
-            // into any group, which keeps every group in its "zero" initial state
-            // (NULL for SUM/AVG/MIN/MAX, 0 for COUNT).
+            // with an all-false filter to update_batch.  The filter ensures no row
+            // is accumulated into any group, which keeps every group in its "zero"
+            // initial state (NULL for SUM/AVG/MIN/MAX, 0 for COUNT).
             //
             // Using a 1-row batch rather than 0 rows is required to avoid a fast
             // path in `NullState::accumulate` that treats "0 nulls in a 0-row
             // array" as "all groups have been seen", which would cause SUM to
             // return 0 instead of NULL.
             //
-            // Argument types are inferred directly from the expression metadata so
-            // we never need to construct a full `RecordBatch`.
+            // update_batch is used in all modes (Raw and Partial) because it
+            // always takes raw input argument types, which is exactly what
+            // aggregate_arguments provides.  Since every row is filtered out,
+            // the actual data content never matters.
             let total_groups = self.group_values.len();
             let null_args: Vec<Vec<ArrayRef>> = self
                 .aggregate_arguments
@@ -1230,11 +1232,7 @@ impl GroupedHashAggregateStream {
                 .collect::<Result<Vec<_>>>()?;
             let false_filter = BooleanArray::from(vec![false]);
             for (acc, args) in self.accumulators.iter_mut().zip(null_args.iter()) {
-                if self.mode.input_mode() == AggregateInputMode::Raw {
-                    acc.update_batch(args, &[0], Some(&false_filter), total_groups)?;
-                } else {
-                    acc.merge_batch(args, &[0], Some(&false_filter), total_groups)?;
-                }
+                acc.update_batch(args, &[0], Some(&false_filter), total_groups)?;
             }
         }
 
