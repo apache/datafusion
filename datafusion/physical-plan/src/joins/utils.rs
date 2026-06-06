@@ -42,8 +42,8 @@ pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
     Array, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
-    RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder, UInt64Array,
-    builder::UInt64Builder, downcast_array, new_null_array,
+    PrimitiveBuilder, RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder,
+    UInt64Array, builder::UInt64Builder, downcast_array, new_null_array,
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -1555,7 +1555,9 @@ pub(crate) fn append_right_indices(
     }
 }
 
-/// Returns `range` indices which are not present in `input_indices`
+/// Returns `range` indices which are not present in `input_indices`.
+///
+/// `input_indices` must be sorted ascending.
 pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
     range: Range<usize>,
     input_indices: &PrimitiveArray<T>,
@@ -1563,18 +1565,46 @@ pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let bitmap = build_range_bitmap(&range, input_indices);
-    let offset = range.start;
+    debug_assert!(
+        input_indices
+            .values()
+            .windows(2)
+            .all(|w| w[0].as_usize() <= w[1].as_usize()),
+        "get_anti_indices requires ascending input_indices"
+    );
 
-    // get the anti index
-    (range)
-        .filter_map(|idx| {
-            (!bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
-        })
-        .collect()
+    let mut next_unmatched_idx = range.start;
+    let mut output = PrimitiveBuilder::<T>::new();
+
+    for v in input_indices.iter().flatten() {
+        let idx = v.as_usize();
+
+        if idx < range.start {
+            continue;
+        }
+        if idx >= range.end {
+            break;
+        }
+
+        if next_unmatched_idx < idx {
+            for value in next_unmatched_idx..idx {
+                output.append_option(T::Native::from_usize(value));
+            }
+        }
+        next_unmatched_idx = idx + 1;
+    }
+
+    if next_unmatched_idx < range.end {
+        for value in next_unmatched_idx..range.end {
+            output.append_option(T::Native::from_usize(value));
+        }
+    }
+    output.finish()
 }
 
-/// Returns intersection of `range` and `input_indices` omitting duplicates
+/// Returns the intersection of `range` and `input_indices`, omitting duplicates.
+///
+/// `input_indices` must be sorted ascending.
 pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
     range: Range<usize>,
     input_indices: &PrimitiveArray<T>,
@@ -1582,12 +1612,21 @@ pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let bitmap = build_range_bitmap(&range, input_indices);
-    let offset = range.start;
-    // get the semi index
-    (range)
-        .filter_map(|idx| {
-            (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
+    debug_assert!(
+        input_indices
+            .values()
+            .windows(2)
+            .all(|w| w[0].as_usize() <= w[1].as_usize()),
+        "get_semi_indices requires ascending input_indices"
+    );
+
+    let mut prev_idx: Option<usize> = None;
+    input_indices
+        .iter()
+        .flatten()
+        .filter_map(|v| {
+            let idx = v.as_usize();
+            (range.contains(&idx) && prev_idx.replace(idx) != Some(idx)).then_some(v)
         })
         .collect()
 }
@@ -2352,6 +2391,82 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use rstest::rstest;
+
+    fn assert_u32_values(array: &UInt32Array, expected: &[u32]) {
+        assert_eq!(array.values().as_ref(), expected);
+    }
+
+    #[test]
+    fn get_anti_indices_returns_unmatched_range_indices() {
+        let input = UInt32Array::from(vec![3, 5, 5]);
+
+        let result = get_anti_indices(2..8, &input);
+
+        assert_u32_values(&result, &[2, 4, 6, 7]);
+    }
+
+    #[test]
+    fn get_anti_indices_ignores_out_of_range_indices() {
+        let input = UInt32Array::from(vec![0, 1, 3, 5, 8, 12]);
+
+        let result = get_anti_indices(2..8, &input);
+
+        assert_u32_values(&result, &[2, 4, 6, 7]);
+    }
+
+    #[test]
+    fn get_anti_indices_handles_dense_matches() {
+        let input = UInt32Array::from(vec![2, 3, 4, 5]);
+
+        let result = get_anti_indices(2..6, &input);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn get_anti_indices_handles_sparse_matches() {
+        let input = UInt32Array::from(vec![0, 8]);
+
+        let result = get_anti_indices(2..6, &input);
+
+        assert_u32_values(&result, &[2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn get_semi_indices_returns_distinct_matches_in_range() {
+        let input = UInt32Array::from(vec![1, 3, 3, 3, 5, 8]);
+
+        let result = get_semi_indices(2..7, &input);
+
+        assert_u32_values(&result, &[3, 5]);
+    }
+
+    #[test]
+    fn get_semi_indices_ignores_out_of_range_indices() {
+        let input = UInt32Array::from(vec![0, 1, 3, 5, 8, 12]);
+
+        let result = get_semi_indices(2..8, &input);
+
+        assert_u32_values(&result, &[3, 5]);
+    }
+
+    #[test]
+    fn get_semi_indices_handles_dense_matches() {
+        let input = UInt32Array::from(vec![2, 3, 4, 5]);
+
+        let result = get_semi_indices(2..6, &input);
+
+        assert_u32_values(&result, &[2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn get_semi_indices_handles_empty_input() {
+        let input = UInt32Array::from(Vec::<u32>::new());
+
+        let result = get_semi_indices(2..6, &input);
+
+        assert!(result.is_empty());
+    }
 
     fn check(
         left: &[Column],
