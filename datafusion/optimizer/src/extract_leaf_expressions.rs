@@ -1145,7 +1145,6 @@ fn try_push_into_inputs(
 
     // Unnest may output a column with the same name but different value/type
     // than its input column. Name-based routing cannot distinguish those.
-    // On top of that Unnest can't go through the `node.with_new_exprs(node.expressions(), new_inputs)` rebuild
     if matches!(node, LogicalPlan::Unnest(_)) {
         return Ok(None);
     }

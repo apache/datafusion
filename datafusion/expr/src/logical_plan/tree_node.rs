@@ -671,9 +671,40 @@ impl LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
+            LogicalPlan::Unnest(Unnest {
+                input,
+                exec_columns,
+                list_type_columns,
+                struct_type_columns,
+                dependency_indices,
+                schema,
+                options,
+            }) => {
+                let exprs: Vec<Expr> =
+                    exec_columns.into_iter().map(Expr::Column).collect();
+                exprs.map_elements(f)?.update_data(|mapped_exprs| {
+                    let new_columns = mapped_exprs
+                        .into_iter()
+                        .map(|e| match e {
+                            Expr::Column(c) => c,
+                            _ => unreachable!(
+                                "Unnest exec_columns must remain Column expressions"
+                            ),
+                        })
+                        .collect();
+                    LogicalPlan::Unnest(Unnest {
+                        input,
+                        exec_columns: new_columns,
+                        list_type_columns,
+                        struct_type_columns,
+                        dependency_indices,
+                        schema,
+                        options,
+                    })
+                })
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
