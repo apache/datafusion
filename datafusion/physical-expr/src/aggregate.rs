@@ -38,8 +38,11 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::expressions::Column;
-use crate::physical_expr::create_physical_sort_exprs;
-use crate::planner::{create_physical_expr, create_physical_exprs};
+use crate::physical_expr::create_physical_sort_exprs_with_subquery_context;
+use crate::planner::{
+    create_physical_expr_with_subquery_context,
+    create_physical_exprs_with_subquery_context,
+};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
@@ -47,7 +50,7 @@ use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, internal_err, not_impl_err,
 };
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
 };
@@ -423,6 +426,7 @@ pub struct LoweredAggregateBuilder<'a> {
     logical_input_schema: &'a DFSchema,
     physical_input_schema: &'a Schema,
     execution_props: &'a ExecutionProps,
+    subquery_ctx: Option<&'a SubqueryContext>,
 }
 
 impl<'a> LoweredAggregateBuilder<'a> {
@@ -446,7 +450,16 @@ impl<'a> LoweredAggregateBuilder<'a> {
             logical_input_schema,
             physical_input_schema,
             execution_props,
+            subquery_ctx: None,
         }
+    }
+
+    /// Provide a [`SubqueryContext`] to be used when lowering expressions that
+    /// reference uncorrelated scalar subqueries. If unset, scalar-subquery
+    /// expressions will fail to lower.
+    pub fn with_subquery_context(mut self, subquery_ctx: &'a SubqueryContext) -> Self {
+        self.subquery_ctx = Some(subquery_ctx);
+        self
     }
 
     /// Override the output column name for the aggregate.
@@ -484,7 +497,17 @@ impl<'a> LoweredAggregateBuilder<'a> {
             logical_input_schema,
             physical_input_schema,
             execution_props,
+            subquery_ctx,
         } = self;
+
+        let default_ctx;
+        let subquery_ctx = match subquery_ctx {
+            Some(ctx) => ctx,
+            None => {
+                default_ctx = SubqueryContext::default();
+                &default_ctx
+            }
+        };
 
         let (name, human_display, output_metadata, expr) = lower_aggregate_display(
             expr,
@@ -515,16 +538,29 @@ impl<'a> LoweredAggregateBuilder<'a> {
             physical_name(&expr)?
         };
 
-        let physical_args =
-            create_physical_exprs(args, logical_input_schema, execution_props)?;
+        let physical_args = create_physical_exprs_with_subquery_context(
+            args,
+            logical_input_schema,
+            execution_props,
+            subquery_ctx,
+        )?;
         let filter = filter
             .as_ref()
             .map(|filter| {
-                create_physical_expr(filter, logical_input_schema, execution_props)
+                create_physical_expr_with_subquery_context(
+                    filter,
+                    logical_input_schema,
+                    execution_props,
+                    subquery_ctx,
+                )
             })
             .transpose()?;
-        let order_bys =
-            create_physical_sort_exprs(order_by, logical_input_schema, execution_props)?;
+        let order_bys = create_physical_sort_exprs_with_subquery_context(
+            order_by,
+            logical_input_schema,
+            execution_props,
+            subquery_ctx,
+        )?;
         let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
             == NullTreatment::IgnoreNulls;
 

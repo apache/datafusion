@@ -64,12 +64,6 @@ pub struct ExecutionProps {
     pub config_options: Option<Arc<ConfigOptions>>,
     /// Providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
-    /// Maps each logical `Subquery` to its index in `subquery_results`.
-    /// Populated by the physical planner before calling `create_physical_expr`.
-    pub subquery_indexes: HashMap<crate::logical_plan::Subquery, SubqueryIndex>,
-    /// Shared results container for uncorrelated scalar subquery values.
-    /// Populated at execution time by `ScalarSubqueryExec`.
-    pub subquery_results: ScalarSubqueryResults,
     /// Maps each lambda variable name to its lambda qualifier generated
     /// during physical planning. Populated by the physical planner for
     /// each lambda before calling `create_physical_expr`.
@@ -90,8 +84,6 @@ impl ExecutionProps {
             alias_generator: Arc::new(AliasGenerator::new()),
             config_options: None,
             var_providers: None,
-            subquery_indexes: HashMap::new(),
-            subquery_results: ScalarSubqueryResults::default(),
             lambda_variable_qualifier: HashMap::new(),
         }
     }
@@ -166,6 +158,57 @@ impl ExecutionProps {
         }
 
         self
+    }
+}
+
+/// Per-plan context used by the physical planner to lower
+/// [`Expr::ScalarSubquery`] expressions into physical expressions that
+/// read from a shared [`ScalarSubqueryResults`] container.
+///
+/// The physical planner builds this from the set of uncorrelated scalar
+/// subqueries it has scheduled for execution. It is then passed
+/// explicitly through `create_physical_expr_with_subquery_context` so
+/// the lowering can find the slot index for each [`Subquery`].
+///
+/// An empty [`SubqueryContext`] (the [`Default`]) is what every
+/// non-physical-planner caller passes; if such a caller encounters a
+/// scalar subquery the lowering returns a `not_impl_err`.
+///
+/// [`Expr::ScalarSubquery`]: crate::Expr::ScalarSubquery
+/// [`Subquery`]: crate::logical_plan::Subquery
+#[derive(Clone, Debug, Default)]
+pub struct SubqueryContext {
+    indexes: HashMap<crate::logical_plan::Subquery, SubqueryIndex>,
+    results: ScalarSubqueryResults,
+}
+
+impl SubqueryContext {
+    /// Create a [`SubqueryContext`] from an index map and a shared results
+    /// container. The index map must use the same indices as slots in
+    /// `results`.
+    pub fn new(
+        indexes: HashMap<crate::logical_plan::Subquery, SubqueryIndex>,
+        results: ScalarSubqueryResults,
+    ) -> Self {
+        Self { indexes, results }
+    }
+
+    /// Returns the slot index assigned to `subquery`, if any.
+    pub fn index_of(
+        &self,
+        subquery: &crate::logical_plan::Subquery,
+    ) -> Option<SubqueryIndex> {
+        self.indexes.get(subquery).copied()
+    }
+
+    /// Returns the shared results container.
+    pub fn results(&self) -> &ScalarSubqueryResults {
+        &self.results
+    }
+
+    /// Returns true if no subqueries are registered.
+    pub fn is_empty(&self) -> bool {
+        self.indexes.is_empty()
     }
 }
 
@@ -274,7 +317,7 @@ mod test {
     fn debug() {
         let props = ExecutionProps::new();
         assert_eq!(
-            "ExecutionProps { query_execution_start_time: None, alias_generator: AliasGenerator { next_id: 1 }, config_options: None, var_providers: None, subquery_indexes: {}, subquery_results: [], lambda_variable_qualifier: {} }",
+            "ExecutionProps { query_execution_start_time: None, alias_generator: AliasGenerator { next_id: 1 }, config_options: None, var_providers: None, lambda_variable_qualifier: {} }",
             format!("{props:?}")
         );
     }

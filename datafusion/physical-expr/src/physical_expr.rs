@@ -18,14 +18,14 @@
 use std::sync::Arc;
 
 use crate::expressions::{self, Column};
-use crate::{LexOrdering, PhysicalSortExpr, create_physical_expr};
+use crate::{LexOrdering, PhysicalSortExpr, create_physical_expr_with_subquery_context};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{DFSchema, HashMap};
 use datafusion_common::{Result, plan_err};
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::execution_props::{ExecutionProps, SubqueryContext};
 use datafusion_expr::{Expr, SortExpr};
 
 use itertools::izip;
@@ -198,7 +198,29 @@ pub fn create_physical_sort_expr(
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
-    create_physical_expr(&e.expr, input_dfschema, execution_props).map(|expr| {
+    create_physical_sort_expr_with_subquery_context(
+        e,
+        input_dfschema,
+        execution_props,
+        &SubqueryContext::default(),
+    )
+}
+
+/// Create a physical sort expression from a logical expression, threading an
+/// explicit [`SubqueryContext`] for scalar-subquery lowering.
+pub fn create_physical_sort_expr_with_subquery_context(
+    e: &SortExpr,
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+    subquery_ctx: &SubqueryContext,
+) -> Result<PhysicalSortExpr> {
+    create_physical_expr_with_subquery_context(
+        &e.expr,
+        input_dfschema,
+        execution_props,
+        subquery_ctx,
+    )
+    .map(|expr| {
         let options = SortOptions::new(!e.asc, e.nulls_first);
         PhysicalSortExpr::new(expr, options)
     })
@@ -210,9 +232,32 @@ pub fn create_physical_sort_exprs(
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<Vec<PhysicalSortExpr>> {
+    create_physical_sort_exprs_with_subquery_context(
+        exprs,
+        input_dfschema,
+        execution_props,
+        &SubqueryContext::default(),
+    )
+}
+
+/// Create vector of physical sort expressions from a vector of logical
+/// expressions with an explicit [`SubqueryContext`].
+pub fn create_physical_sort_exprs_with_subquery_context(
+    exprs: &[SortExpr],
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+    subquery_ctx: &SubqueryContext,
+) -> Result<Vec<PhysicalSortExpr>> {
     exprs
         .iter()
-        .map(|e| create_physical_sort_expr(e, input_dfschema, execution_props))
+        .map(|e| {
+            create_physical_sort_expr_with_subquery_context(
+                e,
+                input_dfschema,
+                execution_props,
+                subquery_ctx,
+            )
+        })
         .collect()
 }
 

@@ -65,8 +65,10 @@ pub use expressions::{DynamicFilterTracker, DynamicFilterTracking};
 pub use partitioning::{Distribution, Partitioning, RangePartitioning, SplitPoint};
 pub use physical_expr::{
     add_offset_to_expr, add_offset_to_physical_sort_exprs, create_lex_ordering,
-    create_ordering, create_physical_sort_expr, create_physical_sort_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
+    create_ordering, create_physical_sort_expr,
+    create_physical_sort_expr_with_subquery_context, create_physical_sort_exprs,
+    create_physical_sort_exprs_with_subquery_context, physical_exprs_bag_equal,
+    physical_exprs_contains, physical_exprs_equal,
 };
 
 pub use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
@@ -76,7 +78,10 @@ pub use datafusion_physical_expr_common::sort_expr::{
 };
 
 pub use higher_order_function::HigherOrderFunctionExpr;
-pub use planner::{create_physical_expr, create_physical_exprs};
+pub use planner::{
+    create_physical_expr, create_physical_expr_with_subquery_context,
+    create_physical_exprs, create_physical_exprs_with_subquery_context,
+};
 pub use scalar_function::ScalarFunctionExpr;
 pub use simplifier::PhysicalExprSimplifier;
 pub use utils::{conjunction, conjunction_opt, split_conjunction};
