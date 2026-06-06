@@ -89,6 +89,13 @@ NULL
 NULL
 NULL
 
+query ?
+select array_remove(column1, column2) from (values (NULL, 1), (NULL, 2), (NULL, 3)) as t(column1, column2);
+----
+NULL
+NULL
+NULL
+
 query ??
 select
  array_remove(make_array(1, null, 2), null),
