@@ -6376,4 +6376,87 @@ mod tests {
         assert!(join.with_dynamic_filter_expr(df).is_err());
         Ok(())
     }
+
+    /// Exercises the early-termination path for RightSemi/RightAnti joins
+    /// when one key has many duplicate rows on the build side.
+    /// The optimization short-circuits the collision chain walk after the
+    /// first equality match, so 1000 duplicates should behave identically
+    /// to 1 duplicate.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn join_right_semi_high_cardinality_duplicates(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+
+        // Build side: 1000 rows all with the same key (b1=42), plus a few
+        // rows with distinct keys to ensure non-matching probe rows work.
+        let n_duplicates = 1000;
+        let mut a1_vals: Vec<i32> = (0..n_duplicates).collect();
+        let mut b1_vals: Vec<i32> = vec![42; n_duplicates as usize];
+        let mut c1_vals: Vec<i32> = (0..n_duplicates).map(|i| i * 10).collect();
+        // Add a non-matching key
+        a1_vals.push(9999);
+        b1_vals.push(99);
+        c1_vals.push(9990);
+
+        let left = build_table(("a1", &a1_vals), ("b1", &b1_vals), ("c1", &c1_vals));
+
+        // Probe side: two rows — one matches key 42, one does not.
+        let right = build_table(
+            ("a2", &vec![1, 2]),
+            ("b2", &vec![42, 7]),
+            ("c2", &vec![100, 200]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        // RightSemi: only the matching probe row should appear
+        let join_semi = join(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNothing,
+        )?;
+
+        let stream = join_semi.execute(0, Arc::clone(&task_ctx))?;
+        let batches = common::collect(stream).await?;
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+----+-----+
+            | a2 | b2 | c2  |
+            +----+----+-----+
+            | 1  | 42 | 100 |
+            +----+----+-----+
+            ");
+        }
+
+        // RightAnti: only the non-matching probe row should appear
+        let join_anti = join(
+            left,
+            right,
+            on,
+            &JoinType::RightAnti,
+            NullEquality::NullEqualsNothing,
+        )?;
+
+        let stream = join_anti.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+----+-----+
+            | a2 | b2 | c2  |
+            +----+----+-----+
+            | 2  | 7  | 200 |
+            +----+----+-----+
+            ");
+        }
+
+        Ok(())
+    }
 }

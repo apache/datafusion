@@ -405,6 +405,26 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         build_size: "100K",
         probe_size: "60M_RightAnti",
     },
+    // Build-side fanout > 1 coverage.
+    // `l_suppkey % 60000` collapses lineitem (60M rows) to ~60K distinct keys
+    // with ~1K rows per key on the build side; supplier (100K rows) probes.
+    //
+    // Q22: RightSemi — ~1K:1 build-side duplicates per key
+    HashJoinQuery {
+        sql: r###"SELECT s_suppkey FROM supplier WHERE EXISTS (SELECT 1 FROM lineitem WHERE l_suppkey % 60000 = s_suppkey % 60000)"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "60M_(~1K:1_dup)",
+        probe_size: "100K",
+    },
+    // Q23: RightAnti — ~1K:1 build-side duplicates per key
+    HashJoinQuery {
+        sql: r###"SELECT s_suppkey FROM supplier WHERE NOT EXISTS (SELECT 1 FROM lineitem WHERE l_suppkey % 60000 = s_suppkey % 60000)"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "60M_(~1K:1_dup)",
+        probe_size: "100K",
+    },
 ];
 
 impl RunOpt {

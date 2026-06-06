@@ -33,7 +33,7 @@ use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{
-    OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
+    JoinKeyComparator, OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
@@ -50,6 +50,7 @@ use crate::{
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::SortOptions;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
 };
@@ -458,6 +459,94 @@ fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
     count
 }
 
+/// Optimized probe for RightSemi/RightAnti joins (HashMap path, no filter).
+///
+/// For each probe row, walks the build-side collision chain via
+/// [`JoinHashMapType::get_first_match`] and stops at the first entry passing
+/// equality (verified by [`JoinKeyComparator::is_equal`], zero-alloc per row).
+///
+/// - **RightSemi**: collects probe rows where at least one match was found.
+/// - **RightAnti**: collects probe rows where no match was found.
+///
+/// # Example
+///
+/// ```text
+/// Build side (customers):
+///   Row 0: {id: 10}  Row 1: {id: 20}  Row 2: {id: 10}
+///   Row 3: {id: 30}  Row 4: {id: 10}  Row 5: {id: 40}
+///
+/// Hash(10) chain: row 4 → row 2 → row 0 → end  (3 entries)
+///
+/// Probe batch (orders):
+///   Row 0: {customer_id: 10}  Row 1: {customer_id: 99}
+///   Row 2: {customer_id: 10}  Row 3: {customer_id: 30}
+///
+/// RightSemi: output probe rows that have at least one match
+///   Probe 0: get_first_match(Hash(10)) → row 4, eq check ✓ → matched
+///   Probe 1: get_first_match(Hash(99)) → None                → not matched
+///   Probe 2: get_first_match(Hash(10)) → row 4, eq check ✓ → matched
+///   Probe 3: get_first_match(Hash(30)) → row 3, eq check ✓ → matched
+///   Output: probe rows [0, 2, 3]
+///
+/// RightAnti: output probe rows with NO match (inverted)
+///   Output: probe row [1]
+/// ```
+#[expect(clippy::too_many_arguments)]
+fn process_probe_batch_right_semi_anti(
+    probe_batch: &RecordBatch,
+    probe_values: &[ArrayRef],
+    hashes_buffer: &[u64],
+    build_values: &[ArrayRef],
+    build_batch: &RecordBatch,
+    map: &dyn JoinHashMapType,
+    join_type: JoinType,
+    null_equality: NullEquality,
+    output_schema: &Schema,
+    column_indices: &[ColumnIndex],
+) -> Result<(RecordBatch, usize)> {
+    let num_probe_rows = probe_batch.num_rows();
+    let is_semi = join_type == JoinType::RightSemi;
+
+    let sort_options = vec![SortOptions::default(); build_values.len()];
+    let comparator =
+        JoinKeyComparator::new(build_values, probe_values, &sort_options, null_equality)?;
+
+    let mut matched_probe_indices: Vec<u32> = Vec::new();
+    let mut probe_rows_with_hash_match: usize = 0;
+
+    for (probe_row, &hash) in hashes_buffer.iter().enumerate().take(num_probe_rows) {
+        let found = map.get_first_match(hash, &mut |build_row| {
+            comparator.is_equal(build_row as usize, probe_row)
+        });
+
+        if found.is_some() {
+            probe_rows_with_hash_match += 1;
+        }
+
+        if found.is_some() == is_semi {
+            matched_probe_indices.push(probe_row as u32);
+        }
+    }
+
+    let probe_indices = UInt32Array::from(matched_probe_indices);
+    // Build-side indices unused for RightSemi/Anti output,
+    // but build_batch_from_indices requires them.
+    let build_indices = UInt64Array::from(vec![0u64; probe_indices.len()]);
+
+    let batch = build_batch_from_indices(
+        output_schema,
+        build_batch,
+        probe_batch,
+        &build_indices,
+        &probe_indices,
+        column_indices,
+        JoinSide::Left,
+        join_type,
+    )?;
+
+    Ok((batch, probe_rows_with_hash_match))
+}
+
 impl HashJoinStream {
     #[expect(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -778,6 +867,37 @@ impl HashJoinStream {
             self.output_buffer.push_batch(result)?;
             self.state = HashJoinStreamState::FetchProbeBatch;
 
+            return Ok(StatefulStreamResult::Continue);
+        }
+
+        // Optimized path for RightSemi/RightAnti joins without filter on HashMap:
+        // Uses get_first_match to stop chain traversal after first verified match.
+        if matches!(self.join_type, JoinType::RightSemi | JoinType::RightAnti)
+            && self.filter.is_none()
+            && !self.null_aware
+            && let Map::HashMap(map) = build_side.left_data.map()
+        {
+            let (result, probe_hits) = process_probe_batch_right_semi_anti(
+                &state.batch,
+                &state.values,
+                &self.hashes_buffer,
+                build_side.left_data.values(),
+                build_side.left_data.batch(),
+                map.as_ref(),
+                self.join_type,
+                self.null_equality,
+                &self.schema,
+                &self.column_indices,
+            )?;
+            timer.done();
+
+            self.join_metrics.probe_hit_rate.add_part(probe_hits);
+            // First-match only: fanout is 1 for every matched probe row
+            self.join_metrics.avg_fanout.add_part(probe_hits);
+            self.join_metrics.avg_fanout.add_total(probe_hits);
+
+            self.output_buffer.push_batch(result)?;
+            self.state = HashJoinStreamState::FetchProbeBatch;
             return Ok(StatefulStreamResult::Continue);
         }
 

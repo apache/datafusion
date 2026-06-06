@@ -24,8 +24,8 @@ use std::sync::Arc;
 
 use crate::joins::MapOffset;
 use crate::joins::join_hash_map::{
-    contain_hashes, get_matched_indices, get_matched_indices_with_limit_offset,
-    update_from_iter,
+    contain_hashes, get_first_match_impl, get_matched_indices,
+    get_matched_indices_with_limit_offset, update_from_iter,
 };
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use crate::metrics::{
@@ -108,6 +108,15 @@ impl JoinHashMapType for PruningJoinHashMap {
 
     fn len(&self) -> usize {
         self.map.len()
+    }
+
+    fn get_first_match(
+        &self,
+        hash_value: u64,
+        predicate: &mut dyn FnMut(u64) -> bool,
+    ) -> Option<u64> {
+        let next: Vec<u64> = self.next.iter().copied().collect();
+        get_first_match_impl::<u64>(&self.map, next, hash_value, predicate)
     }
 }
 

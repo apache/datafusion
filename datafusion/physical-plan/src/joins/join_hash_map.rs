@@ -134,6 +134,31 @@ pub trait JoinHashMapType: Send + Sync {
 
     /// Returns the number of entries in the join hash map.
     fn len(&self) -> usize;
+
+    /// Returns the first build-side row index in the collision chain for `hash_value`
+    /// where `predicate` returns true. Returns `None` if no entry matches.
+    ///
+    /// Walks the LIFO chain from head to tail, calling `predicate(build_row_index)`
+    /// on each entry. Stops and returns as soon as one returns true.
+    ///
+    /// Used by RightSemi/RightAnti joins to find the first equality match per probe
+    /// row without enumerating the full chain.
+    ///
+    /// # Example
+    ///
+    /// ```text
+    /// Hash(10) chain: row 4 → row 2 → row 0 → end
+    ///
+    /// get_first_match(Hash(10), |row| row == 2)
+    ///   row 4: predicate(4) → false
+    ///   row 2: predicate(2) → true → returns Some(2)
+    ///   (row 0 never visited)
+    /// ```
+    fn get_first_match(
+        &self,
+        hash_value: u64,
+        predicate: &mut dyn FnMut(u64) -> bool,
+    ) -> Option<u64>;
 }
 
 pub struct JoinHashMapU32 {
@@ -211,6 +236,14 @@ impl JoinHashMapType for JoinHashMapU32 {
 
     fn len(&self) -> usize {
         self.map.len()
+    }
+
+    fn get_first_match(
+        &self,
+        hash_value: u64,
+        predicate: &mut dyn FnMut(u64) -> bool,
+    ) -> Option<u64> {
+        get_first_match_impl::<u32>(&self.map, &self.next, hash_value, predicate)
     }
 }
 
@@ -290,11 +323,49 @@ impl JoinHashMapType for JoinHashMapU64 {
     fn len(&self) -> usize {
         self.map.len()
     }
+
+    fn get_first_match(
+        &self,
+        hash_value: u64,
+        predicate: &mut dyn FnMut(u64) -> bool,
+    ) -> Option<u64> {
+        get_first_match_impl::<u64>(&self.map, &self.next, hash_value, predicate)
+    }
 }
 
 use crate::joins::MapOffset;
 use crate::joins::chain::traverse_chain;
 
+/// Returns the first build-side row in the collision chain where `predicate` is true.
+pub fn get_first_match_impl<T>(
+    map: &HashTable<(u64, T)>,
+    next_chain: impl AsRef<[T]>,
+    hash_value: u64,
+    predicate: &mut dyn FnMut(u64) -> bool,
+) -> Option<u64>
+where
+    T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
+{
+    let next_chain = next_chain.as_ref();
+    let zero = T::try_from(0).unwrap();
+    let one = T::try_from(1).unwrap();
+
+    if let Some((_, idx)) = map.find(hash_value, |(h, _)| hash_value == *h) {
+        let mut i = *idx - one;
+        loop {
+            if predicate(i.into()) {
+                return Some(i.into());
+            }
+            let next = next_chain[i.into() as usize];
+            if next == zero {
+                return None;
+            }
+            i = next - one;
+        }
+    }
+    None
+}
 pub fn update_from_iter<'a, T>(
     map: &mut HashTable<(u64, T)>,
     next: &mut [T],
