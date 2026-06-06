@@ -17,6 +17,7 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
+use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -67,10 +68,10 @@ use datafusion_catalog::{
 use datafusion_common::config::{ConfigField, ConfigOptions};
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
-    DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
+    DFSchema, DataFusionError, ParamValues, SchemaError, SchemaReference, TableReference,
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    plan_datafusion_err, plan_err, schema_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
 };
 pub use datafusion_execution::TaskContext;
@@ -83,6 +84,7 @@ use datafusion_execution::disk_manager::{
     DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
 };
 use datafusion_execution::registry::SerializerRegistry;
+use datafusion_expr::HigherOrderUDF;
 pub use datafusion_expr::execution_props::ExecutionProps;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::RelationPlanner;
@@ -101,6 +103,7 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_execution::cache::file_statistics_cache::DEFAULT_FILE_STATISTICS_MEMORY_LIMIT;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
@@ -711,7 +714,7 @@ impl SessionContext {
                         Box::pin(self.drop_schema(cmd)).await
                     }
                     DdlStatement::CreateFunction(cmd) => {
-                        Box::pin(self.create_function(cmd)).await
+                        Box::pin(self.create_function(*cmd)).await
                     }
                     DdlStatement::DropFunction(cmd) => {
                         Box::pin(self.drop_function(cmd)).await
@@ -885,6 +888,7 @@ impl SessionContext {
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
+                Self::ensure_unique_column_names(input.schema())?;
                 self.deregister_table(name.clone())?;
                 let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
@@ -904,6 +908,7 @@ impl SessionContext {
                 exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
             }
             (_, _, Err(_)) => {
+                Self::ensure_unique_column_names(input.schema())?;
                 let schema = Arc::clone(input.schema().inner());
                 let physical = DataFrame::new(self.state(), input);
 
@@ -949,20 +954,37 @@ impl SessionContext {
 
         match (or_replace, view) {
             (true, Ok(_)) => {
+                let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
+                Self::ensure_unique_column_names(input.schema())?;
                 self.deregister_table(name.clone())?;
-                let input = Self::apply_type_coercion(input.as_ref().clone())?;
                 let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
-                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let input = Self::apply_type_coercion(Arc::unwrap_or_clone(input))?;
+                Self::ensure_unique_column_names(input.schema())?;
                 let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (false, Ok(_)) => exec_err!("Table '{name}' already exists"),
         }
+    }
+
+    fn ensure_unique_column_names(schema: &DFSchema) -> Result<()> {
+        // DFSchema name checks allow duplicate unqualified names as long as their
+        // qualifiers differ. DDL persistence drops qualifiers, so this helper must
+        // enforce uniqueness on the final unqualified names instead.
+        let mut seen = HashSet::with_capacity(schema.fields().len());
+        for field in schema.fields() {
+            if !seen.insert(field.name().as_str()) {
+                return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                    name: field.name().to_string(),
+                });
+            }
+        }
+        Ok(())
     }
 
     async fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {
@@ -1182,6 +1204,10 @@ impl SessionContext {
                 let duration = Self::parse_duration(variable, value)?;
                 builder.with_object_list_cache_ttl(Some(duration))
             }
+            "file_statistics_cache_limit" => {
+                let limit = Self::parse_capacity_limit(variable, value)?;
+                builder.with_file_statistics_cache_limit(limit)
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
             // Remember to update `reset_runtime_variable()` when adding new options
         };
@@ -1221,9 +1247,13 @@ impl SessionContext {
                 builder =
                     builder.with_object_list_cache_ttl(DEFAULT_LIST_FILES_CACHE_TTL);
             }
+            "file_statistics_cache_limit" => {
+                builder = builder.with_file_statistics_cache_limit(
+                    DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+                );
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
-
         *state = SessionStateBuilder::from(state.clone())
             .with_runtime_env(Arc::new(builder.build()?))
             .build();
@@ -1274,7 +1304,7 @@ impl SessionContext {
     }
 
     /// Parse capacity limit from string to number of bytes by allowing units: K, M and G.
-    /// Supports formats like '1.5G', '100M', '512K'
+    /// Supports formats like '1.5G', '100M', '512K'. Capacity limit can be set to 0 with '0'.
     ///
     /// # Examples
     /// ```
@@ -1294,6 +1324,9 @@ impl SessionContext {
             return Err(plan_datafusion_err!(
                 "Empty limit value found for '{config_name}'"
             ));
+        }
+        if limit == "0" {
+            return Ok(0);
         }
         let (number, unit) = limit.split_at(limit.len() - 1);
         let number: f64 = number.parse().map_err(|_| {
@@ -1416,15 +1449,27 @@ impl SessionContext {
             && table_provider.table_type() == table_type
         {
             schema.deregister_table(&table)?;
-            if table_type == TableType::Base
-                && let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache()
-            {
-                lfc.drop_table_entries(&Some(table_ref))?;
-            }
+            self.invalidate_caches(&Some(table_ref.clone()), table_type)?;
             return Ok(true);
         }
-
         Ok(false)
+    }
+
+    fn invalidate_caches(
+        &self,
+        table_ref: &Option<TableReference>,
+        table_type: TableType,
+    ) -> Result<()> {
+        if table_type == TableType::Base {
+            if let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache() {
+                lfc.drop_table_entries(table_ref)?;
+            }
+            if let Some(fsc) = self.runtime_env().cache_manager.get_file_statistic_cache()
+            {
+                fsc.drop_table_entries(table_ref)?;
+            }
+        }
+        Ok(())
     }
 
     async fn create_function(&self, stmt: CreateFunction) -> Result<DataFrame> {
@@ -1452,6 +1497,9 @@ impl SessionContext {
             RegisterFunction::Window(f) => {
                 self.state.write().register_udwf(f)?;
             }
+            RegisterFunction::HigherOrder(f) => {
+                self.state.write().register_higher_order_function(f)?;
+            }
             RegisterFunction::Table(name, f) => self.register_udtf(&name, f),
         };
 
@@ -1466,6 +1514,11 @@ impl SessionContext {
         dropped |= self.state.write().deregister_udaf(&stmt.name)?.is_some();
         dropped |= self.state.write().deregister_udwf(&stmt.name)?.is_some();
         dropped |= self.state.write().deregister_udtf(&stmt.name)?.is_some();
+        dropped |= self
+            .state
+            .write()
+            .deregister_higher_order_function(&stmt.name)?
+            .is_some();
 
         // DROP FUNCTION IF EXISTS drops the specified function only if that
         // function exists and in this way, it avoids error. While the DROP FUNCTION
@@ -1565,6 +1618,20 @@ impl SessionContext {
         state.register_udf(Arc::new(f)).ok();
     }
 
+    /// Registers a higher-order function within this context.
+    ///
+    /// Note in SQL queries, function names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_HIGHER_ORDER_FUNC(x)...` will look for a function named `"my_higher_order_func"`
+    /// - `SELECT "my_HIGHER_ORDER_FUNC"(x)` will look for a function named `"my_HIGHER_ORDER_FUNC"`
+    ///
+    /// Any functions registered with the function name or its aliases will be overwritten with this new function
+    pub fn register_higher_order_function(&self, f: Arc<HigherOrderUDF>) {
+        let mut state = self.state.write();
+        state.register_higher_order_function(f).ok();
+    }
+
     /// Registers an aggregate UDF within this context.
     ///
     /// Note in SQL queries, aggregate names are looked up using
@@ -1602,6 +1669,14 @@ impl SessionContext {
     /// Deregisters a UDF within this context.
     pub fn deregister_udf(&self, name: &str) {
         self.state.write().deregister_udf(name).ok();
+    }
+
+    /// Deregisters a higher-order function within this context.
+    pub fn deregister_higher_order_function(&self, name: &str) {
+        self.state
+            .write()
+            .deregister_higher_order_function(name)
+            .ok();
     }
 
     /// Deregisters a UDAF within this context.
@@ -1657,7 +1732,8 @@ impl SessionContext {
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
+        let provider = ListingTable::try_new(config)?
+            .with_cache(self.runtime_env().cache_manager.get_file_statistic_cache());
         self.read_table(Arc::new(provider))
     }
 
@@ -1744,7 +1820,9 @@ impl SessionContext {
         provided_schema: Option<SchemaRef>,
         sql_definition: Option<String>,
     ) -> Result<()> {
-        let table_path = ListingTableUrl::parse(table_path)?;
+        let table_ref = table_ref.into();
+        let table_path =
+            ListingTableUrl::parse(table_path)?.with_table_ref(table_ref.clone());
         let resolved_schema = match provided_schema {
             Some(s) => s,
             None => options.infer_schema(&self.state(), &table_path).await?,
@@ -1752,7 +1830,9 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?.with_definition(sql_definition);
+        let table = ListingTable::try_new(config)?
+            .with_definition(sql_definition)
+            .with_cache(self.runtime_env().cache_manager.get_file_statistic_cache());
         self.register_table(table_ref, Arc::new(table))?;
         Ok(())
     }
@@ -1856,10 +1936,17 @@ impl SessionContext {
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_owned();
-        self.state
+        let result = self
+            .state
             .read()
-            .schema_for_ref(table_ref)?
-            .deregister_table(&table)
+            .schema_for_ref(table_ref.clone())?
+            .deregister_table(&table);
+
+        if let Ok(Some(ref table_provider)) = result {
+            self.invalidate_caches(&Some(table_ref), table_provider.table_type())?;
+        }
+
+        result
     }
 
     /// Return `true` if the specified table exists in the schema provider.
@@ -1977,6 +2064,10 @@ impl FunctionRegistry for SessionContext {
         self.state.read().udf(name)
     }
 
+    fn higher_order_function(&self, name: &str) -> Result<Arc<HigherOrderUDF>> {
+        self.state.read().higher_order_function(name)
+    }
+
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         self.state.read().udaf(name)
     }
@@ -1987,6 +2078,13 @@ impl FunctionRegistry for SessionContext {
 
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         self.state.write().register_udf(udf)
+    }
+
+    fn register_higher_order_function(
+        &mut self,
+        function: Arc<HigherOrderUDF>,
+    ) -> Result<Option<Arc<HigherOrderUDF>>> {
+        self.state.write().register_higher_order_function(function)
     }
 
     fn register_udaf(
@@ -2016,6 +2114,10 @@ impl FunctionRegistry for SessionContext {
         expr_planner: Arc<dyn ExprPlanner>,
     ) -> Result<()> {
         self.state.write().register_expr_planner(expr_planner)
+    }
+
+    fn higher_order_function_names(&self) -> HashSet<String> {
+        self.state.read().higher_order_function_names()
     }
 
     fn udafs(&self) -> HashSet<String> {
@@ -2054,7 +2156,7 @@ impl From<SessionContext> for SessionStateBuilder {
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
-pub trait QueryPlanner: Debug {
+pub trait QueryPlanner: Any + Debug {
     /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
@@ -2119,6 +2221,8 @@ pub enum RegisterFunction {
     Aggregate(Arc<AggregateUDF>),
     /// Window user defined function
     Window(Arc<WindowUDF>),
+    /// Higher-order user defined function
+    HigherOrder(Arc<HigherOrderUDF>),
     /// Table user defined function
     Table(String, Arc<dyn TableFunctionImpl>),
 }
@@ -2954,6 +3058,7 @@ mod tests {
 
         // Valid capacity_limit
         for (limit, want) in [
+            ("0", 0),
             ("1.5K", (1.5 * 1024.0) as usize),
             ("2M", (2f64 * 1024.0 * 1024.0) as usize),
             ("1G", (1f64 * 1024.0 * 1024.0 * 1024.0) as usize),

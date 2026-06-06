@@ -24,6 +24,7 @@ use std::task::{Context, Poll};
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
+use crate::common::project_plan_to_schema;
 use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
@@ -36,12 +37,12 @@ use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{
+    Result, exec_datafusion_err, internal_datafusion_err, not_impl_err,
+};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 use futures::{Stream, StreamExt, ready};
@@ -83,6 +84,7 @@ impl RecursiveQueryExec {
     /// Create a new RecursiveQueryExec
     pub fn try_new(
         name: String,
+        output_schema: SchemaRef,
         static_term: Arc<dyn ExecutionPlan>,
         recursive_term: Arc<dyn ExecutionPlan>,
         is_distinct: bool,
@@ -90,8 +92,10 @@ impl RecursiveQueryExec {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new(name.clone()));
         // Use the same work table for both the WorkTableExec and the recursive term
+        let static_term = project_plan_to_schema(static_term, &output_schema)?;
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
-        let cache = Self::compute_properties(static_term.schema());
+        let recursive_term = project_plan_to_schema(recursive_term, &output_schema)?;
+        let cache = Self::compute_properties(output_schema);
         Ok(RecursiveQueryExec {
             name,
             static_term,
@@ -149,13 +153,6 @@ impl ExecutionPlan for RecursiveQueryExec {
         vec![&self.static_term, &self.recursive_term]
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     // TODO: control these hints and see whether we can
     // infer some from the child plans (static/recursive terms).
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -179,6 +176,7 @@ impl ExecutionPlan for RecursiveQueryExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         RecursiveQueryExec::try_new(
             self.name.clone(),
+            self.schema(),
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
             self.is_distinct,
@@ -317,6 +315,7 @@ impl RecursiveQueryStream {
         mut batch: RecordBatch,
     ) -> Poll<Option<Result<RecordBatch>>> {
         let baseline_metrics = self.baseline_metrics.clone();
+
         if let Some(deduplicator) = &mut self.distinct_deduplicator {
             let _timer_guard = baseline_metrics.elapsed_compute().timer();
             batch = deduplicator.deduplicate(&batch)?;
@@ -459,7 +458,14 @@ impl DistinctDeduplicator {
     /// We also detect duplicates by enforcing that group ids are increasing.
     fn deduplicate(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let size_before = self.group_values.len();
-        self.intern_output_buffer.reserve(batch.num_rows());
+        let additional = batch.num_rows();
+        self.intern_output_buffer
+            .try_reserve(additional)
+            .map_err(|e| {
+                exec_datafusion_err!(
+                    "failed to reserve {additional} recursive query group ids: {e}"
+                )
+            })?;
         self.group_values
             .intern(batch.columns(), &mut self.intern_output_buffer)?;
         let mask = new_groups_mask(&self.intern_output_buffer, size_before);
@@ -488,4 +494,64 @@ fn new_groups_mask(
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::empty::EmptyExec;
+    use crate::projection::ProjectionExec;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    fn empty_exec(fields: Vec<Field>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(EmptyExec::new(Arc::new(Schema::new(fields))))
+    }
+
+    #[test]
+    fn recursive_query_exec_projects_recursive_term_to_reconciled_schema() -> Result<()> {
+        let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
+        let recursive_term =
+            empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, false)]);
+
+        let exec = RecursiveQueryExec::try_new(
+            "numbers".to_string(),
+            static_term.schema(),
+            Arc::clone(&static_term),
+            Arc::clone(&recursive_term),
+            false,
+        )?;
+
+        assert_eq!(exec.schema(), static_term.schema());
+        let projection = exec
+            .recursive_term()
+            .downcast_ref::<ProjectionExec>()
+            .expect("recursive term should be aligned with ProjectionExec");
+        assert!(Arc::ptr_eq(projection.input(), &recursive_term));
+        assert!(!projection.schema().field(0).is_nullable());
+        assert_eq!(projection.expr()[0].alias, "value");
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_query_exec_reconciles_nullability() -> Result<()> {
+        let static_term = empty_exec(vec![Field::new("value", DataType::Int32, false)]);
+        let recursive_term =
+            empty_exec(vec![Field::new("value + Int32(1)", DataType::Int32, true)]);
+        let output_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]));
+
+        let exec = RecursiveQueryExec::try_new(
+            "numbers".to_string(),
+            Arc::clone(&output_schema),
+            static_term,
+            recursive_term,
+            false,
+        )?;
+
+        assert!(exec.schema().field(0).is_nullable());
+        assert!(exec.static_term().schema().field(0).is_nullable());
+        assert!(exec.recursive_term().schema().field(0).is_nullable());
+        Ok(())
+    }
+}

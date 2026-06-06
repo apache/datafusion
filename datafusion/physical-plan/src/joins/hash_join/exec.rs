@@ -72,7 +72,6 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
@@ -903,12 +902,32 @@ impl HashJoinExec {
     }
 
     /// Get the dynamic filter expression for testing purposes.
-    /// Returns `None` if no dynamic filter has been set.
-    ///
-    /// This method is intended for testing only and should not be used in production code.
-    #[doc(hidden)]
-    pub fn dynamic_filter_for_test(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
+    /// Returns the dynamic filter expression for this hash join, if set.
+    pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
+    }
+
+    /// Set the dynamic filter on this hash join.
+    ///
+    /// Resets any internal state that depends on any existing dynamic filter.
+    ///
+    /// Validates that the filter's children reference valid columns in
+    /// the probe (right) side's schema.
+    pub fn with_dynamic_filter_expr(
+        mut self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        let probe_schema = self.right.schema();
+        for child in filter.children() {
+            child.data_type(&probe_schema)?;
+        }
+        self.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter,
+            // Initialize with an empty accumulator which will be lazily populated
+            // during execution.
+            build_accumulator: OnceLock::new(),
+        });
+        Ok(self)
     }
 
     /// Calculate order preservation flags for this hash join.
@@ -1231,30 +1250,6 @@ impl ExecutionPlan for HashJoinExec {
         vec![&self.left, &self.right]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to join key expressions from both sides
-        let mut tnr = TreeNodeRecursion::Continue;
-        for (left, right) in &self.on {
-            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
-            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
-        }
-
-        // Apply to join filter expression if present
-        if let Some(filter) = &self.filter {
-            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
-        }
-
-        // Apply to dynamic filter expression if present
-        if let Some(df) = &self.dynamic_filter {
-            tnr = tnr.visit_sibling(|| f(df.filter.as_ref()))?;
-        }
-
-        Ok(tnr)
-    }
-
     /// Creates a new HashJoinExec with different children while preserving configuration.
     ///
     /// This method is called during query optimization when the optimizer creates new
@@ -1316,6 +1311,33 @@ impl ExecutionPlan for HashJoinExec {
             .with_category(MetricCategory::Rows)
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
 
+        // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
+        // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
+        let repartition_random_state = REPARTITION_RANDOM_STATE;
+        let build_accumulator = enable_dynamic_filter_pushdown
+            .then(|| {
+                self.dynamic_filter.as_ref().map(|df| {
+                    let filter = Arc::clone(&df.filter);
+                    let on_right = self
+                        .on
+                        .iter()
+                        .map(|(_, right_expr)| Arc::clone(right_expr))
+                        .collect::<Vec<_>>();
+                    Some(Arc::clone(df.build_accumulator.get_or_init(|| {
+                        Arc::new(SharedBuildAccumulator::new_from_partition_mode(
+                            self.mode,
+                            self.left.as_ref(),
+                            self.right.as_ref(),
+                            filter,
+                            on_right,
+                            repartition_random_state,
+                        ))
+                    })))
+                })
+            })
+            .flatten()
+            .flatten();
+
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
@@ -1343,7 +1365,6 @@ impl ExecutionPlan for HashJoinExec {
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
-
                 OnceFut::new(collect_left_input(
                     self.random_state.random_state().clone(),
                     left_stream,
@@ -1367,33 +1388,6 @@ impl ExecutionPlan for HashJoinExec {
         };
 
         let batch_size = context.session_config().batch_size();
-
-        // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
-        // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
-        let repartition_random_state = REPARTITION_RANDOM_STATE;
-        let build_accumulator = enable_dynamic_filter_pushdown
-            .then(|| {
-                self.dynamic_filter.as_ref().map(|df| {
-                    let filter = Arc::clone(&df.filter);
-                    let on_right = self
-                        .on
-                        .iter()
-                        .map(|(_, right_expr)| Arc::clone(right_expr))
-                        .collect::<Vec<_>>();
-                    Some(Arc::clone(df.build_accumulator.get_or_init(|| {
-                        Arc::new(SharedBuildAccumulator::new_from_partition_mode(
-                            self.mode,
-                            self.left.as_ref(),
-                            self.right.as_ref(),
-                            filter,
-                            on_right,
-                            repartition_random_state,
-                        ))
-                    })))
-                })
-            })
-            .flatten()
-            .flatten();
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
@@ -1451,9 +1445,10 @@ impl ExecutionPlan for HashJoinExec {
                 let right_stats = self.right.partition_statistics(Some(partition))?;
 
                 estimate_join_statistics(
-                    (*left_stats).clone(),
-                    (*right_stats).clone(),
+                    Arc::unwrap_or_clone(left_stats),
+                    Arc::unwrap_or_clone(right_stats),
                     &self.on,
+                    self.null_equality,
                     &self.join_type,
                     &self.join_schema,
                 )?
@@ -1466,9 +1461,10 @@ impl ExecutionPlan for HashJoinExec {
                 let right_stats = self.right.partition_statistics(Some(partition))?;
 
                 estimate_join_statistics(
-                    (*left_stats).clone(),
-                    (*right_stats).clone(),
+                    Arc::unwrap_or_clone(left_stats),
+                    Arc::unwrap_or_clone(right_stats),
                     &self.on,
+                    self.null_equality,
                     &self.join_type,
                     &self.join_schema,
                 )?
@@ -1483,9 +1479,10 @@ impl ExecutionPlan for HashJoinExec {
                 let left_stats = self.left.partition_statistics(None)?;
                 let right_stats = self.right.partition_statistics(None)?;
                 estimate_join_statistics(
-                    (*left_stats).clone(),
-                    (*right_stats).clone(),
+                    Arc::unwrap_or_clone(left_stats),
+                    Arc::unwrap_or_clone(right_stats),
                     &self.on,
+                    self.null_equality,
                     &self.join_type,
                     &self.join_schema,
                 )?
@@ -1641,8 +1638,14 @@ impl ExecutionPlan for HashJoinExec {
             ChildFilterDescription::all_unsupported(&parent_filters)
         };
 
-        // Add dynamic filters in Post phase if enabled
+        // Add dynamic filters in Post phase if enabled. Skip when this join
+        // already carries a dynamic filter from a previous pass — the shared
+        // `Arc<DynamicFilterPhysicalExpr>` is still wired into the probe-side
+        // scan's predicate, and re-creating it would AND a fresh duplicate
+        // onto every Post-phase invocation (apache/datafusion-ballista#1359
+        // surfaces this in AQE replan loops).
         if phase == FilterPushdownPhase::Post
+            && self.dynamic_filter.is_none()
             && self.allow_join_dynamic_filter_pushdown(config)
         {
             // Add actual dynamic filter to right side (probe side)
@@ -2348,6 +2351,22 @@ mod tests {
         on: JoinOn,
         join_type: JoinType,
     ) -> Result<(HashJoinExec, Arc<DynamicFilterPhysicalExpr>)> {
+        hash_join_with_dynamic_filter_and_mode(
+            left,
+            right,
+            on,
+            join_type,
+            PartitionMode::CollectLeft,
+        )
+    }
+
+    fn hash_join_with_dynamic_filter_and_mode(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: JoinOn,
+        join_type: JoinType,
+        mode: PartitionMode,
+    ) -> Result<(HashJoinExec, Arc<DynamicFilterPhysicalExpr>)> {
         let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
         let mut join = HashJoinExec::try_new(
             left,
@@ -2356,7 +2375,7 @@ mod tests {
             None,
             &join_type,
             None,
-            PartitionMode::CollectLeft,
+            mode,
             NullEquality::NullEqualsNothing,
             false,
         )?;
@@ -5629,6 +5648,158 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_partitioned_dynamic_filter_reports_empty_canceled_partitions()
+    -> Result<()> {
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_dynamic_filter_pushdown = true;
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let child_left_schema = Arc::new(Schema::new(vec![
+            Field::new("child_left_payload", DataType::Int32, false),
+            Field::new("child_key", DataType::Int32, false),
+            Field::new("child_left_extra", DataType::Int32, false),
+        ]));
+        let child_right_schema = Arc::new(Schema::new(vec![
+            Field::new("child_right_payload", DataType::Int32, false),
+            Field::new("child_right_key", DataType::Int32, false),
+            Field::new("child_right_extra", DataType::Int32, false),
+        ]));
+        let parent_left_schema = Arc::new(Schema::new(vec![
+            Field::new("parent_payload", DataType::Int32, false),
+            Field::new("parent_key", DataType::Int32, false),
+            Field::new("parent_extra", DataType::Int32, false),
+        ]));
+
+        let child_left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[
+                vec![build_table_i32(
+                    ("child_left_payload", &vec![10]),
+                    ("child_key", &vec![0]),
+                    ("child_left_extra", &vec![100]),
+                )],
+                vec![build_table_i32(
+                    ("child_left_payload", &vec![11]),
+                    ("child_key", &vec![1]),
+                    ("child_left_extra", &vec![101]),
+                )],
+                vec![build_table_i32(
+                    ("child_left_payload", &vec![12]),
+                    ("child_key", &vec![2]),
+                    ("child_left_extra", &vec![102]),
+                )],
+                vec![build_table_i32(
+                    ("child_left_payload", &vec![13]),
+                    ("child_key", &vec![3]),
+                    ("child_left_extra", &vec![103]),
+                )],
+            ],
+            Arc::clone(&child_left_schema),
+            None,
+        )?;
+        let child_right: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[
+                vec![build_table_i32(
+                    ("child_right_payload", &vec![20]),
+                    ("child_right_key", &vec![0]),
+                    ("child_right_extra", &vec![200]),
+                )],
+                vec![build_table_i32(
+                    ("child_right_payload", &vec![21]),
+                    ("child_right_key", &vec![1]),
+                    ("child_right_extra", &vec![201]),
+                )],
+                vec![build_table_i32(
+                    ("child_right_payload", &vec![22]),
+                    ("child_right_key", &vec![2]),
+                    ("child_right_extra", &vec![202]),
+                )],
+                vec![build_table_i32(
+                    ("child_right_payload", &vec![23]),
+                    ("child_right_key", &vec![3]),
+                    ("child_right_extra", &vec![203]),
+                )],
+            ],
+            Arc::clone(&child_right_schema),
+            None,
+        )?;
+        let parent_left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[
+                vec![build_table_i32(
+                    ("parent_payload", &vec![30]),
+                    ("parent_key", &vec![0]),
+                    ("parent_extra", &vec![300]),
+                )],
+                vec![RecordBatch::new_empty(Arc::clone(&parent_left_schema))],
+                vec![build_table_i32(
+                    ("parent_payload", &vec![32]),
+                    ("parent_key", &vec![2]),
+                    ("parent_extra", &vec![302]),
+                )],
+                vec![RecordBatch::new_empty(Arc::clone(&parent_left_schema))],
+            ],
+            Arc::clone(&parent_left_schema),
+            None,
+        )?;
+
+        let child_on = vec![(
+            Arc::new(Column::new_with_schema("child_key", &child_left_schema)?) as _,
+            Arc::new(Column::new_with_schema(
+                "child_right_key",
+                &child_right_schema,
+            )?) as _,
+        )];
+        let (child_join, _child_dynamic_filter) = hash_join_with_dynamic_filter_and_mode(
+            child_left,
+            child_right,
+            child_on,
+            JoinType::Inner,
+            PartitionMode::Partitioned,
+        )?;
+        let child_join: Arc<dyn ExecutionPlan> = Arc::new(child_join);
+
+        let parent_on = vec![(
+            Arc::new(Column::new_with_schema("parent_key", &parent_left_schema)?) as _,
+            Arc::new(Column::new_with_schema("child_key", &child_join.schema())?) as _,
+        )];
+        let parent_join = HashJoinExec::try_new(
+            parent_left,
+            child_join,
+            parent_on,
+            None,
+            &JoinType::RightSemi,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        let batches = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::execution_plan::collect(Arc::new(parent_join), task_ctx),
+        )
+        .await
+        .expect("partitioned right-semi join should not hang")?;
+
+        assert_batches_sorted_eq!(
+            [
+                "+--------------------+-----------+------------------+---------------------+-----------------+-------------------+",
+                "| child_left_payload | child_key | child_left_extra | child_right_payload | child_right_key | child_right_extra |",
+                "+--------------------+-----------+------------------+---------------------+-----------------+-------------------+",
+                "| 10                 | 0         | 100              | 20                  | 0               | 200               |",
+                "| 12                 | 2         | 102              | 22                  | 2               | 202               |",
+                "+--------------------+-----------+------------------+---------------------+-----------------+-------------------+",
+            ],
+            &batches
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_hash_join_skips_probe_on_empty_build_after_partition_bounds_report()
     -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
@@ -6139,5 +6310,70 @@ mod tests {
         assert_eq!(lr_is_preserved(JoinType::RightSemi), (true, true));
         assert_eq!(lr_is_preserved(JoinType::RightAnti), (true, true));
         assert_eq!(lr_is_preserved(JoinType::RightMark), (false, true));
+    }
+
+    #[test]
+    fn test_with_dynamic_filter() -> Result<()> {
+        let (_, _, on) = build_schema_and_on()?;
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        assert!(join.dynamic_filter_expr().is_none());
+
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("b1", 1)) as _],
+            lit(true),
+        ));
+        let join = join.with_dynamic_filter_expr(Arc::clone(&df))?;
+
+        let restored = join
+            .dynamic_filter_expr()
+            .expect("should have dynamic filter");
+        assert_eq!(
+            restored
+                .expression_id()
+                .expect("DynamicFilterPhysicalExpr always has an expression_id"),
+            df.expression_id()
+                .expect("DynamicFilterPhysicalExpr always has an expression_id"),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter_rejects_invalid_columns() -> Result<()> {
+        let (_, _, on) = build_schema_and_on()?;
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        // Column index 99 is out of bounds for the right (probe) side schema.
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("bad", 99)) as _],
+            lit(true),
+        ));
+        assert!(join.with_dynamic_filter_expr(df).is_err());
+        Ok(())
     }
 }

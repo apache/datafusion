@@ -860,8 +860,8 @@ ufoor_score ufoość core u🔥der_score u🔥 iść core NULL NULL
 pfooent pfooTadeusz ma iść w kąt p🔥rcent p🔥n Tadeusz ma iść w kąt NULL NULL
 foo foo 🔥 🔥 NULL NULL
 foo foo 🔥 🔥 NULL NULL
-foo foo 🔥 🔥 NULL NULL
-foo foo 🔥 🔥 NULL NULL
+%foo foo %🔥 🔥 NULL NULL
+_foo foo _🔥 🔥 NULL NULL
 NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
 
@@ -884,10 +884,10 @@ Xiangpeng bar NULL bar NULL datafusion数据融合
 Raphael baraphael NULL datafusionДатbarион NULL datafusionДатаФусион
 under_score under_score NULL un iść core NULL un iść core
 percent percent NULL pan Tadeusz ma iść w kąt NULL pan Tadeusz ma iść w kąt
-(empty) (empty) NULL bar NULL (empty)
-(empty) (empty) NULL bar NULL (empty)
-% % NULL bar NULL (empty)
-_ _ NULL bar NULL (empty)
+(empty) (empty) NULL (empty) NULL (empty)
+(empty) (empty) NULL (empty) NULL (empty)
+% % NULL (empty) NULL (empty)
+_ _ NULL (empty) NULL (empty)
 NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
 
@@ -1865,3 +1865,74 @@ query TT
 SELECT arrow_typeof(left(ascii_1, 3)), arrow_typeof(right(ascii_1, 3)) FROM test_basic_operator LIMIT 1
 ----
 Utf8View Utf8View
+
+# --------------------------------------
+# Test repeat() against array inputs with various null patterns. The scalar
+# paths are covered in `string_literal.slt`; these tests exercise the array
+# execution path of repeat() including the bulk null-buffer computation.
+# --------------------------------------
+
+# array string + array count, neither side has nulls
+query T
+SELECT repeat(ascii_2, 2) FROM test_basic_operator
+----
+XX
+XiangpengXiangpeng
+RR
+un_____coreun_____core
+p%tp%t
+%%
+%%%%
+\%\%
+\_\_
+%%
+RR
+
+# array string + array count, only the string side has nulls
+query T
+SELECT repeat(ascii_1, 2) FROM test_basic_operator
+----
+AndrewAndrew
+XiangpengXiangpeng
+RaphaelRaphael
+under_scoreunder_score
+percentpercent
+(empty)
+(empty)
+%%
+__
+NULL
+NULL
+
+# array string + array count, only the count side has nulls
+query T
+SELECT repeat(ascii_2, CASE WHEN length(ascii_2) = 2 THEN NULL ELSE 2 END) FROM test_basic_operator
+----
+XX
+XiangpengXiangpeng
+RR
+un_____coreun_____core
+p%tp%t
+%%
+NULL
+NULL
+NULL
+%%
+RR
+
+# array string + array count, nulls interleaved on both sides (the string
+# side is null at rows 9-10; the count side is null at rows 6-8)
+query T
+SELECT repeat(ascii_1, CASE WHEN length(ascii_2) = 2 THEN NULL ELSE 2 END) FROM test_basic_operator
+----
+AndrewAndrew
+XiangpengXiangpeng
+RaphaelRaphael
+under_scoreunder_score
+percentpercent
+(empty)
+NULL
+NULL
+NULL
+NULL
+NULL

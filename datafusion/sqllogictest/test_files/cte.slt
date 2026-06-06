@@ -171,7 +171,7 @@ logical_plan
 07)--------TableScan: nodes projection=[id]
 physical_plan
 01)RecursiveQueryExec: name=nodes, is_distinct=false
-02)--ProjectionExec: expr=[1 as id]
+02)--ProjectionExec: expr=[CAST(1 AS Int64) as id]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
 05)----ProjectionExec: expr=[id@0 + 1 as id]
@@ -1079,10 +1079,10 @@ logical_plan
 07)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
-02)--ProjectionExec: expr=[1 as n]
+02)--ProjectionExec: expr=[CAST(1 AS Int64) as n]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
-05)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
+05)----ProjectionExec: expr=[n@0 + 1 as n]
 06)------FilterExec: n@0 < 10
 07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)----------WorkTableExec: name=numbers
@@ -1104,10 +1104,10 @@ logical_plan
 07)--------TableScan: numbers projection=[n]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
-02)--ProjectionExec: expr=[1 as n]
+02)--ProjectionExec: expr=[CAST(1 AS Int64) as n]
 03)----PlaceholderRowExec
 04)--CoalescePartitionsExec
-05)----ProjectionExec: expr=[n@0 + 1 as numbers.n + Int64(1)]
+05)----ProjectionExec: expr=[n@0 + 1 as n]
 06)------FilterExec: n@0 < 10
 07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)----------WorkTableExec: name=numbers
@@ -1161,7 +1161,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--RecursiveQueryExec: name=r, is_distinct=false
-03)----ProjectionExec: expr=[0 as k, 0 as v]
+03)----ProjectionExec: expr=[CAST(0 AS Int64) as k, CAST(0 AS Int64) as v]
 04)------PlaceholderRowExec
 05)----SortExec: TopK(fetch=1), expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false]
 06)------WorkTableExec: name=r
@@ -1222,6 +1222,263 @@ physical_plan
 06)--------WorkTableExec: name=trans
 07)------RepartitionExec: partitioning=Hash([start@0], 4), input_partitions=1
 08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/closure.csv]]}, projection=[start, end], file_type=csv, has_header=true
+
+# Regression test: recursive CTE column-name stability under ORDER BY + LIMIT.
+#
+# The recursive CTE below has an anchor that aliases a computed column
+# (`upper(val) AS val`) while the recursive term leaves the same expression
+# un-aliased (`upper(r.val)`). RecursiveQueryExec declares its output schema
+# from the anchor, so the plan-level column is `val`; but if it forwards the
+# recursive term's batches without rebinding their schema to the anchor's,
+# downstream consumers that read `batch.schema().field(i).name()` observe
+# the leaked `upper(r.val)` name. The outer `ORDER BY ts LIMIT 10` routes
+# through the TopK path in SortExec, which passes batch schemas through
+# verbatim — so the leak surfaces there.
+#
+# sqllogictest compares row values and can't assert column names directly.
+# To surface the leak inside SLT, we `COPY` the result to a CSV file with a
+# header row (the CSV writer names header columns from each batch's own
+# schema) and then read the file back as headerless CSV so the header line
+# appears as a data row we can compare against the expected column names.
+statement ok
+CREATE TABLE cte_schema_records (
+    id VARCHAR NOT NULL,
+    parent_id VARCHAR,
+    ts TIMESTAMP NOT NULL,
+    val VARCHAR
+);
+
+statement ok
+INSERT INTO cte_schema_records VALUES
+  ('a00', NULL,  TIMESTAMP '2025-01-01 00:00:00', 'v_span'),
+  ('a01', 'a00', TIMESTAMP '2025-01-01 00:00:01', 'v_log_1'),
+  ('a02', 'a01', TIMESTAMP '2025-01-01 00:00:02', 'v_log_2'),
+  ('a03', 'a02', TIMESTAMP '2025-01-01 00:00:03', 'v_log_3'),
+  ('a04', 'a03', TIMESTAMP '2025-01-01 00:00:04', 'v_log_4'),
+  ('a05', 'a04', TIMESTAMP '2025-01-01 00:00:05', 'v_log_5');
+
+query I
+COPY (WITH RECURSIVE descendants AS (
+    SELECT id, parent_id, ts, upper(val) AS val
+      FROM cte_schema_records WHERE id = 'a00'
+    UNION ALL
+    SELECT r.id, r.parent_id, r.ts, upper(r.val)
+      FROM cte_schema_records r
+      INNER JOIN descendants d ON r.parent_id = d.id
+  )
+  SELECT id, parent_id, ts, val
+    FROM descendants
+    ORDER BY ts ASC
+    LIMIT 10)
+TO 'test_files/scratch/cte/recursive_order_limit_schema/'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE cte_schema_reread (
+    id VARCHAR, parent_id VARCHAR, ts VARCHAR, val VARCHAR
+)
+STORED AS CSV
+LOCATION 'test_files/scratch/cte/recursive_order_limit_schema/'
+OPTIONS ('format.has_header' 'false');
+
+# The CSV header row appears as a data row here because we re-read with
+# has_header='false'. It must match the CTE's declared column names; if
+# RecursiveQueryExec leaked the recursive branch's schema, the last field
+# would read `upper(r.val)` instead of `val`.
+query TTTT
+SELECT id, parent_id, ts, val
+  FROM cte_schema_reread
+  WHERE id = 'id';
+----
+id parent_id ts val
+
+statement ok
+DROP TABLE cte_schema_reread;
+
+statement ok
+DROP TABLE cte_schema_records;
+
+##########
+## Recursive CTE nullability widening
+##
+## A recursive term can introduce NULLs that the static (anchor) term never
+## produces. The recursive CTE output schema must therefore widen nullability
+## across both terms, otherwise nullability-based optimizer simplifications
+## (e.g. removing IS NULL / IS NOT NULL predicates) produce wrong results.
+##########
+
+# recursive self-reference must use conservative nullability even when the
+# anchor term uses non-null literals. Otherwise optimizer nullability-based
+# simplification can remove this semantically required IS NOT NULL guard.
+query II rowsort
+WITH RECURSIVE t(a, b) AS (
+  SELECT 0 AS a, 0 AS b
+  UNION ALL
+  SELECT b AS a, CAST(NULL AS INT) AS b FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t
+----
+0 0
+0 NULL
+NULL NULL
+
+# outer IS NOT NULL filters must see recursive output as nullable, not just the
+# non-null anchor literal.
+query II rowsort
+WITH RECURSIVE t(a, b) AS (
+  SELECT 0 AS a, 0 AS b
+  UNION ALL
+  SELECT b AS a, CAST(NULL AS INT) AS b FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t WHERE a IS NOT NULL
+----
+0 0
+0 NULL
+
+# outer IS NULL filters must see recursive output as nullable, not just the
+# non-null anchor literal.
+query I
+WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t WHERE a IS NULL
+----
+NULL
+
+# deduplicating recursive CTE must preserve widened nullability for outer filters.
+query I
+WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t WHERE a IS NULL
+----
+NULL
+
+# recursive output nullability must be tracked per column, not just for the
+# first column.
+query II rowsort
+WITH RECURSIVE t(a, b) AS (
+  SELECT 0 AS a, 0 AS b
+  UNION ALL
+  SELECT b AS a, CAST(NULL AS INT) AS b FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t WHERE b IS NULL
+----
+0 NULL
+NULL NULL
+
+# recursive output nullability must survive recursive term type coercion.
+query I
+WITH RECURSIVE t(a) AS (
+  SELECT 1::INT AS a
+  UNION ALL
+  SELECT CAST(NULL AS BIGINT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t WHERE a IS NULL
+----
+NULL
+
+# DESCRIBE should expose the widened recursive output nullability.
+query TTT
+DESCRIBE WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT * FROM t
+----
+a Int64 YES
+
+# recursive self-reference must not simplify away IS NULL guards when the
+# anchor term is nullable and the recursive term is non-null.
+query I rowsort
+WITH RECURSIVE t(a) AS (
+  SELECT CAST(NULL AS INT) AS a
+  UNION ALL
+  SELECT 1 AS a FROM t WHERE a IS NULL
+)
+SELECT * FROM t
+----
+1
+NULL
+
+# widened recursive nullability must survive aggregate physical planning.
+query III
+WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT COUNT(*), COUNT(a), SUM(a) FROM t
+----
+2 1 1
+
+# outer filters must still see widened nullability through a derived projection.
+query I
+WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT x FROM (SELECT a AS x FROM t) WHERE x IS NULL
+----
+NULL
+
+# per-column nullability widening must survive type coercion in multi-column
+# recursive terms.
+query II
+WITH RECURSIVE t(a, b) AS (
+  SELECT 1::INT AS a, 2::INT AS b
+  UNION ALL
+  SELECT a + 1 AS a, CAST(NULL AS BIGINT) AS b FROM t WHERE a < 2
+)
+SELECT * FROM t WHERE b IS NULL
+----
+2 NULL
+
+# join planning must preserve recursive output nullability for null-sensitive
+# predicates above the recursive query.
+query II
+WITH RECURSIVE t(a) AS (
+  SELECT 1 AS a
+  UNION ALL
+  SELECT CAST(NULL AS INT) AS a FROM t WHERE a IS NOT NULL
+)
+SELECT t.a, u.b FROM t LEFT JOIN (SELECT 1 AS b) u ON t.a = u.b WHERE u.b IS NULL
+----
+NULL NULL
+
+# A recursive CTE must not inherit the static term's uniqueness / primary-key
+# functional dependencies: the recursive term can append rows that duplicate
+# the static term's "unique" keys, so an outer DISTINCT must not be optimized
+# away based on a stale dependency.
+statement ok
+CREATE TABLE recursive_cte_pk(id INT NOT NULL PRIMARY KEY);
+
+statement ok
+INSERT INTO recursive_cte_pk VALUES (2), (1);
+
+query I rowsort
+SELECT DISTINCT id FROM (
+  WITH RECURSIVE t(id) AS (
+    SELECT id FROM recursive_cte_pk
+    UNION ALL
+    SELECT id - 1 FROM t WHERE id > 1
+  )
+  SELECT id FROM t
+)
+----
+1
+2
+
+statement ok
+DROP TABLE recursive_cte_pk;
 
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;

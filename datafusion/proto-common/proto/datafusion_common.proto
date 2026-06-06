@@ -199,7 +199,7 @@ message Union{
   repeated int32 type_ids = 3;
 }
 
-// Used for List/FixedSizeList/LargeList/Struct/Map
+// Used for List/FixedSizeList/LargeList/ListView/LargeListView/Struct/Map
 message ScalarNestedValue {
   message Dictionary {
     bytes ipc_message = 1;
@@ -306,6 +306,8 @@ message ScalarValue{
     ScalarNestedValue large_list_value = 16;
     ScalarNestedValue list_value = 17;
     ScalarNestedValue fixed_size_list_value = 18;
+    ScalarNestedValue list_view_value = 46;
+    ScalarNestedValue large_list_view_value = 47;
     ScalarNestedValue struct_value = 32;
     ScalarNestedValue map_value = 41;
 
@@ -398,6 +400,8 @@ message ArrowType{
     List LIST = 25;
     List LARGE_LIST = 26;
     FixedSizeList FIXED_SIZE_LIST = 27;
+    List LIST_VIEW = 43;
+    List LARGE_LIST_VIEW = 44;
     Struct STRUCT = 28;
     Union UNION = 29;
     Dictionary DICTIONARY = 30;
@@ -430,6 +434,13 @@ message JsonWriterOptions {
 }
 
 
+enum CsvQuoteStyle {
+  NECESSARY = 0;
+  ALWAYS = 1;
+  NON_NUMERIC = 2;
+  NEVER = 3;
+}
+
 message CsvWriterOptions {
   // Compression type
   CompressionTypeVariant compression = 1;
@@ -453,6 +464,12 @@ message CsvWriterOptions {
   string escape = 10;
   // Optional flag whether to double quotes, instead of escaping. Defaults to `true`
   bool double_quote = 11;
+  // Quote style for CSV writing
+  CsvQuoteStyle quote_style = 12;
+  // Whether to ignore leading whitespace in string values
+  bool ignore_leading_whitespace = 13;
+  // Whether to ignore trailing whitespace in string values
+  bool ignore_trailing_whitespace = 14;
 }
 
 // Options controlling CSV format
@@ -476,6 +493,12 @@ message CsvOptions {
   bytes terminator = 17; // Optional terminator character as a byte
   bytes truncated_rows = 18; // Indicates if truncated rows are allowed
   optional uint32 compression_level = 19; // Optional compression level
+  // Quote style for CSV writing
+  CsvQuoteStyle quote_style = 20;
+  // Whether to ignore leading whitespace in string values
+  bytes ignore_leading_whitespace = 21;
+  // Whether to ignore trailing whitespace in string values
+  bytes ignore_trailing_whitespace = 22;
 }
 
 // Options controlling CSV format
@@ -604,13 +627,27 @@ message ParquetOptions {
     uint64 max_predicate_cache_size = 33;
   }
 
-  CdcOptions content_defined_chunking = 35;
+  oneof max_row_group_bytes_opt {
+    uint64 max_row_group_bytes = 37;
+  }
+
+  ParquetCdcOptions content_defined_chunking = 35;
+
+  // Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
+  // is set. When `Some`, INT96 columns coerce to
+  // `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+  // `Timestamp(<coerce_int96>, None)`. No effect when `coerce_int96` is unset.
+  oneof coerce_int96_tz_opt {
+    string coerce_int96_tz = 36;
+  }
 }
 
-message CdcOptions {
-  uint64 min_chunk_size = 1;
-  uint64 max_chunk_size = 2;
-  int32 norm_level = 3;
+// Content-defined chunking (CDC) options for writing parquet files.
+message ParquetCdcOptions {
+  bool enabled = 1;
+  uint64 min_chunk_size = 2;
+  uint64 max_chunk_size = 3;
+  int32 norm_level = 4;
 }
 
 enum JoinSide {
@@ -645,4 +682,37 @@ message ColumnStats {
   Precision null_count = 3;
   Precision distinct_count = 4;
   Precision byte_size = 6;
+}
+
+enum ExplainFormat {
+  EXPLAIN_FORMAT_INDENT = 0;
+  EXPLAIN_FORMAT_TREE = 1;
+  EXPLAIN_FORMAT_PGJSON = 2;
+  EXPLAIN_FORMAT_GRAPHVIZ = 3;
+}
+
+// Verbosity level for `EXPLAIN ANALYZE`. Mirrors
+// `datafusion_common::format::MetricType`.
+enum MetricType {
+  METRIC_TYPE_SUMMARY = 0;
+  METRIC_TYPE_DEV = 1;
+}
+
+// Category of an `EXPLAIN ANALYZE` metric. Mirrors
+// `datafusion_common::format::MetricCategory`.
+enum MetricCategory {
+  METRIC_CATEGORY_ROWS = 0;
+  METRIC_CATEGORY_BYTES = 1;
+  METRIC_CATEGORY_TIMING = 2;
+  METRIC_CATEGORY_UNCATEGORIZED = 3;
+}
+
+// Wire encoding for `datafusion_common::format::ExplainAnalyzeCategories`.
+//
+// If `all` is true, every category is shown (the `only` list is ignored).
+// If `all` is false, only the categories listed in `only` are shown — an
+// empty `only` means "plan only", i.e. suppress all metrics.
+message ExplainAnalyzeCategoriesNode {
+  bool all = 1;
+  repeated MetricCategory only = 2;
 }

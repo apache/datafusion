@@ -113,6 +113,18 @@ Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusio
 
 DataFusion has integrated [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the [README](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite) file for instructions.
 
+### Allocator-level memory accounting (`--features memory-accounting`)
+
+For tests that need to verify DataFusion's voluntary memory tracking
+matches actual heap usage, the `sqllogictest` runner ships an optional
+`memory-accounting` feature that installs a global allocator wrapper.
+Adding `SET datafusion.runtime.memory_limit = 'N'` at the top of an
+`.slt` file opts that file into allocator-vs-`MemoryPool` reconciliation
+with 10% headroom — any divergence panics the test with an
+`OverdraftPanic` reporting the actual allocator balance. See
+[the sqllogictest README](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-allocator-level-memory-accounting)
+for the runner flag and the full mechanism.
+
 ## Snapshot testing (`cargo insta`)
 
 [Insta](https://github.com/mitsuhiko/insta) is used for snapshot testing. Snapshots are generated
@@ -185,6 +197,34 @@ tested in the same way using the [doc_comment] crate. See the end of
 [doctest]: https://doc.rust-lang.org/rust-by-example/testing/doc_testing.html
 [doc_comment]: https://docs.rs/doc-comment/latest/doc_comment
 [core/src/lib.rs]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs#L583
+
+## Documentation Link Checks
+
+Run the internal markdown link check locally:
+
+```shell
+source ci/scripts/utils/tool_versions.sh
+cargo install lychee --locked --version "${LYCHEE_VERSION}"
+bash ci/scripts/markdown_link_check.sh
+```
+
+Notes:
+
+- The script is run with `bash` and is compatible with the default Bash on macOS (no `mapfile` dependency).
+- The CI configuration currently checks internal markdown links only. External `http(s)` and `mailto` links are excluded to avoid flaky failures.
+
+When a link is broken, lychee prints the file and URL/path that failed. For example:
+
+```text
+[docs/source/user-guide/cli/overview.md]:
+  [ERROR] file:///.../docs/source/user-guide/cli/missing-page.md | Cannot find file: File not found. Check if file exists and path is correct
+```
+
+Rust doc comments are validated by rustdoc in CI and can be checked locally with:
+
+```shell
+bash ci/scripts/rust_docs.sh
+```
 
 ## Benchmarks
 

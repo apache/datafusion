@@ -31,11 +31,10 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// A vector of record batches with a memory reservation.
 #[derive(Debug)]
@@ -184,13 +183,6 @@ impl ExecutionPlan for WorkTableExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

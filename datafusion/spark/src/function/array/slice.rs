@@ -172,6 +172,15 @@ fn calculate_start_end(args: &[ArrayRef]) -> Result<(ArrayRef, ArrayRef)> {
             start
         };
 
+        // Spark returns an empty array when the adjusted start lands before
+        // position 1 (e.g. slice([1], -2, 2)). array_slice would otherwise
+        // treat 0 the same as 1 and return the first element.
+        if adjusted_start_value < 1 {
+            adjusted_start.append_value(1);
+            end.append_value(0);
+            continue;
+        }
+
         adjusted_start.append_value(adjusted_start_value);
         end.append_value(adjusted_start_value + (length - 1));
     }

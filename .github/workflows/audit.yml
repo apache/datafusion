@@ -33,16 +33,19 @@ on:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
-  
+
   merge_group:
+
+permissions:
+  contents: read
 
 jobs:
   security_audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Install cargo-audit
-        uses: taiki-e/install-action@85b24a67ef0c632dfefad70b9d5ce8fddb040754  # v2.75.10
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09  # v2.81.3
         with:
           tool: cargo-audit
       - name: Run audit check

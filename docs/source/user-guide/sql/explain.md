@@ -227,8 +227,9 @@ Elapsed 0.010 seconds.
 
 ## `EXPLAIN ANALYZE`
 
-Shows the execution plan and metrics of a statement. Note that `EXPLAIN ANALYZE`
-only supports the `indent` format.
+Shows the execution plan and metrics of a statement. `EXPLAIN ANALYZE` supports
+the `indent` format (the default) and the [`pgjson`](#pgjson-format-with-analyze)
+format; the `tree` and `graphviz` formats are not supported with `ANALYZE`.
 
 ```sql
 EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
@@ -250,5 +251,47 @@ EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
 By default `EXPLAIN ANALYZE` shows the aggregated metrics from all partitions for each operator. If you need to display per-partition metrics, use `EXPLAIN ANALYZE VERBOSE`.
 
 You can also set `datafusion.explain.analyze_level` from the [configuration value] to control the detail level for the metrics displayed.
+
+### `pgjson` format with `ANALYZE`
+
+`EXPLAIN ANALYZE` can also emit the physical plan and its live execution
+metrics in the [`pgjson`](#pgjson-format) format, so the analyzed plan can be
+loaded into PostgreSQL plan visualizers such as [dalibo]. Each node reports its
+`Actual Rows` and `Actual Total Time` (compute time, in milliseconds) using the
+PostgreSQL key names, with any remaining DataFusion metrics under `Extras`.
+
+The format can be requested with either the keyword form
+(`EXPLAIN ANALYZE FORMAT pgjson ...`) or, more idiomatically, the PostgreSQL
+[option-list form](../explain-usage.md), which also lets you combine it with the
+`METRICS` and `LEVEL` knobs in a single statement:
+
+```sql
+> CREATE TABLE t(x int, b int) AS VALUES (1, 2), (2, 3);
+> EXPLAIN (ANALYZE, FORMAT pgjson, METRICS 'rows') SELECT x FROM t WHERE b > 2;
++-------------------+---------------------------------------------------------------------------+
+| plan_type         | plan                                                                      |
++-------------------+---------------------------------------------------------------------------+
+| Plan with Metrics | [                                                                         |
+|                   |   {                                                                       |
+|                   |     "Plan": {                                                             |
+|                   |       "Node Type": "FilterExec",                                          |
+|                   |       "Details": "FilterExec: b@1 > 2, projection=[x@0]",                 |
+|                   |       "Actual Rows": 1,                                                   |
+|                   |       "Extras": {                                                         |
+|                   |         "output_batches": 1,                                              |
+|                   |         "selectivity": "50% (1/2)"                                        |
+|                   |       },                                                                  |
+|                   |       "Plans": [                                                          |
+|                   |         {                                                                 |
+|                   |           "Node Type": "DataSourceExec",                                  |
+|                   |           "Details": "DataSourceExec: partitions=1, partition_sizes=[1]", |
+|                   |           "Plans": []                                                     |
+|                   |         }                                                                 |
+|                   |       ]                                                                   |
+|                   |     }                                                                     |
+|                   |   }                                                                       |
+|                   | ]                                                                         |
++-------------------+---------------------------------------------------------------------------+
+```
 
 [configuration value]: ../configs.md

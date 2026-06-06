@@ -20,7 +20,7 @@
 # Output field name semantics
 
 This specification documents how field names in output record batches should be
-generated based on given user queries. The filed name rules apply to
+generated based on given user queries. The field name rules apply to
 DataFusion queries planned from both SQL queries and Dataframe APIs.
 
 ## Field name rules
