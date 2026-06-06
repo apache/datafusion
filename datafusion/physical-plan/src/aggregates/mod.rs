@@ -3090,8 +3090,11 @@ mod tests {
             Arc::clone(&schema),
         )?);
         let task_ctx = Arc::new(
-            TaskContext::default()
-                .with_session_config(SessionConfig::new().with_batch_size(2)),
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(2)
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
+            ),
         );
 
         let partial_stream = partial_aggregate.execute_typed(0, &task_ctx)?;
