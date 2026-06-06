@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericListArray, LargeStringArray, OffsetSizeTrait,
-    StringArray, StringBuilder, StringViewArray, new_null_array,
+    StringArray, StringBuilder, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
@@ -138,13 +138,10 @@ fn only_separator(sep: &ColumnarValue) -> Result<ColumnarValue> {
 fn spark_concat_ws(args: &[ColumnarValue], num_rows: usize) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(args)?;
 
-    // Untyped-NULL separator → every row is NULL. Return an N-null array (not a
-    // scalar) so the shape matches the other (possibly array) columns.
+    // Untyped-NULL separator → every row is NULL. Returning a scalar is enough;
+    // the framework broadcasts it to `num_rows` nulls when needed.
     if *arrays[0].data_type() == DataType::Null {
-        return Ok(ColumnarValue::Array(new_null_array(
-            &DataType::Utf8,
-            num_rows,
-        )));
+        return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
     }
 
     let sep_view = StringView::try_new(&arrays[0])?;
