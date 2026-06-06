@@ -71,7 +71,7 @@ fn make_map_batch(args: &[ColumnarValue], number_rows: usize) -> Result<Columnar
     // If we have a mix of scalar and array args, expand the scalar to an array
     // so that the rest of the logic handles uniform array inputs.
     // This handles cases like: map(['a','b'], [col1, col2]) where keys are all
-    // literals (scalar FixedSizeList) but values contain column references (array).
+    // literals (scalar FixedSizeList) but values contain column references.
     let (keys_arg, values_arg) = if !can_evaluate_to_const {
         let keys_arg = match keys_arg {
             ColumnarValue::Scalar(s) => {
