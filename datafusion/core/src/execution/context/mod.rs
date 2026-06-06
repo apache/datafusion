@@ -307,6 +307,11 @@ impl Default for SessionContext {
 }
 
 impl SessionContext {
+    fn split_number_and_unit(value: &str) -> (&str, &str) {
+        let unit_start = value.char_indices().next_back().map_or(0, |(idx, _)| idx);
+        value.split_at(unit_start)
+    }
+
     /// Creates a new `SessionContext` using the default [`SessionConfig`].
     pub fn new() -> Self {
         Self::new_with_config(SessionConfig::new())
@@ -1285,7 +1290,7 @@ impl SessionContext {
         if limit.trim().is_empty() {
             return Err(plan_datafusion_err!("Empty limit value found!"));
         }
-        let (number, unit) = limit.split_at(limit.len() - 1);
+        let (number, unit) = Self::split_number_and_unit(limit);
         let number: f64 = number.parse().map_err(|_| {
             plan_datafusion_err!("Failed to parse number from memory limit '{limit}'")
         })?;
@@ -1328,7 +1333,7 @@ impl SessionContext {
         if limit == "0" {
             return Ok(0);
         }
-        let (number, unit) = limit.split_at(limit.len() - 1);
+        let (number, unit) = Self::split_number_and_unit(limit);
         let number: f64 = number.parse().map_err(|_| {
             plan_datafusion_err!(
                 "Failed to parse number from '{config_name}', limit '{limit}'"
@@ -1362,7 +1367,7 @@ impl SessionContext {
         let mut seconds = None;
 
         for duration in duration.split_inclusive(&['m', 's']) {
-            let (number, unit) = duration.split_at(duration.len() - 1);
+            let (number, unit) = Self::split_number_and_unit(duration);
             let number: u64 = number.parse().map_err(|_| {
                 plan_datafusion_err!("Failed to parse number from duration '{duration}' for '{config_name}'")
             })?;
@@ -2949,7 +2954,7 @@ mod tests {
         // Invalid durations
         for duration in [
             "0s", "0m", "1s0m", "1s1m", "XYZ", "1h", "XYZm2s", "", " ", "-1m", "1m 1s",
-            "1m1s ", " 1m1s",
+            "1m1s ", " 1m1s", "é", "1mé",
         ] {
             let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
             assert!(have.is_err());
@@ -3045,6 +3050,8 @@ mod tests {
             "G",
             "1024B",
             "invalid_size",
+            "é",
+            "1é",
         ] {
             #[expect(deprecated)]
             let have = SessionContext::parse_memory_limit(limit);
@@ -3080,6 +3087,8 @@ mod tests {
             "G",
             "1024B",
             "invalid_size",
+            "é",
+            "1é",
         ] {
             let have = SessionContext::parse_capacity_limit(MEMORY_LIMIT, limit);
             assert!(have.is_err());
