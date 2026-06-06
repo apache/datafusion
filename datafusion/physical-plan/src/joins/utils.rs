@@ -42,8 +42,8 @@ pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
     Array, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
-    PrimitiveBuilder, RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder,
-    UInt64Array, builder::UInt64Builder, downcast_array, new_null_array,
+    RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder, UInt64Array,
+    builder::UInt64Builder, downcast_array, new_null_array,
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -1557,7 +1557,7 @@ pub(crate) fn append_right_indices(
 
 /// Returns `range` indices which are not present in `input_indices`.
 ///
-/// `input_indices` must be sorted ascending.
+/// `input_indices` must be sorted ascending and contain no nulls.
 pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
     range: Range<usize>,
     input_indices: &PrimitiveArray<T>,
@@ -1565,6 +1565,11 @@ pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
+    debug_assert_eq!(
+        input_indices.null_count(),
+        0,
+        "get_anti_indices requires non-null input_indices"
+    );
     debug_assert!(
         input_indices
             .values()
@@ -1574,9 +1579,9 @@ where
     );
 
     let mut next_unmatched_idx = range.start;
-    let mut output = PrimitiveBuilder::<T>::new();
+    let mut output: Vec<T::Native> = Vec::with_capacity(range.len());
 
-    for v in input_indices.iter().flatten() {
+    for &v in input_indices.values() {
         let idx = v.as_usize();
 
         if idx < range.start {
@@ -1587,24 +1592,24 @@ where
         }
 
         if next_unmatched_idx < idx {
-            for value in next_unmatched_idx..idx {
-                output.append_option(T::Native::from_usize(value));
-            }
+            output.extend((next_unmatched_idx..idx).map(|idx| {
+                T::Native::from_usize(idx).expect("join index exceeds output index type")
+            }));
         }
         next_unmatched_idx = idx + 1;
     }
 
     if next_unmatched_idx < range.end {
-        for value in next_unmatched_idx..range.end {
-            output.append_option(T::Native::from_usize(value));
-        }
+        output.extend((next_unmatched_idx..range.end).map(|idx| {
+            T::Native::from_usize(idx).expect("join index exceeds output index type")
+        }));
     }
-    output.finish()
+    PrimitiveArray::<T>::new(output.into(), None)
 }
 
 /// Returns the intersection of `range` and `input_indices`, omitting duplicates.
 ///
-/// `input_indices` must be sorted ascending.
+/// `input_indices` must be sorted ascending and contain no nulls.
 pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
     range: Range<usize>,
     input_indices: &PrimitiveArray<T>,
@@ -1612,6 +1617,11 @@ pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
+    debug_assert_eq!(
+        input_indices.null_count(),
+        0,
+        "get_semi_indices requires non-null input_indices"
+    );
     debug_assert!(
         input_indices
             .values()
@@ -1621,14 +1631,24 @@ where
     );
 
     let mut prev_idx: Option<usize> = None;
-    input_indices
-        .iter()
-        .flatten()
-        .filter_map(|v| {
-            let idx = v.as_usize();
-            (range.contains(&idx) && prev_idx.replace(idx) != Some(idx)).then_some(v)
-        })
-        .collect()
+    let mut output = Vec::with_capacity(input_indices.len().min(range.len()));
+
+    for &v in input_indices.values() {
+        let idx = v.as_usize();
+
+        if idx < range.start {
+            continue;
+        }
+        if idx >= range.end {
+            break;
+        }
+
+        if prev_idx.replace(idx) != Some(idx) {
+            output.push(v);
+        }
+    }
+
+    PrimitiveArray::<T>::new(output.into(), None)
 }
 
 pub(crate) fn get_mark_indices<T: ArrowPrimitiveType>(
