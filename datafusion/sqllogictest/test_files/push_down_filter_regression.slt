@@ -315,6 +315,14 @@ set datafusion.explain.analyze_level = summary;
 statement ok
 set datafusion.explain.analyze_categories = 'none';
 
+# Disable the cost-aware partial-agg skip path. Even on tiny inputs that
+# never reach the probe-rows threshold, having the cost model enabled
+# alters the partial-agg state machine slightly and perturbs the
+# parallel race between partial-agg publishing its MIN/MAX and the scan
+# reading each partition — flaking these EXPLAIN ANALYZE expectations.
+statement ok
+set datafusion.execution.skip_partial_aggregation_use_cost_model = false;
+
 # MIN(a) -> DynamicFilter [ a < 1 ]
 query TT
 EXPLAIN ANALYZE SELECT MIN(a) FROM agg_dyn_single;
@@ -587,3 +595,7 @@ drop table t1;
 
 statement ok
 drop table t2;
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_use_cost_model;
+

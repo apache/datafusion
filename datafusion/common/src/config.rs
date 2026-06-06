@@ -704,6 +704,41 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
+        /// (experimental) When true, run an A/B sampling window after
+        /// the partial probe completes (see
+        /// `skip_partial_aggregation_probe_rows_threshold`): route the
+        /// next `skip_partial_aggregation_ab_sampling_rows` input rows
+        /// through the passthrough (`transform_to_states`) path,
+        /// measure `passthrough_ns/row`, and compare it against the
+        /// previously measured `partial_ns/row` plus the observed
+        /// `num_groups / input_rows` ratio. Skip partial aggregation
+        /// iff `ratio > passthrough_ns / partial_ns` — the cost
+        /// crossover from the closed-form comparison of
+        /// `keep_partial` vs `skip_partial` total work.
+        ///
+        /// Targets ClickBench Q18-shape queries where the ratio
+        /// (~0.56) sits below the fixed 0.8 threshold so partial agg
+        /// keeps running, but the absolute work (heavy variable-length
+        /// keys, complex aggregates) makes it net-negative. The
+        /// existing `skip_partial_aggregation_probe_ratio_threshold`
+        /// short-circuit still fires before A/B when it applies.
+        ///
+        /// EXPLAIN ANALYZE surfaces the measured numbers via four dev
+        /// gauges: `partial_agg_probe_partial_ns_per_row`,
+        /// `partial_agg_probe_passthrough_ns_per_row`,
+        /// `partial_agg_probe_ratio_per_mille`, and
+        /// `partial_agg_probe_cost_decision_skip`.
+        pub skip_partial_aggregation_use_cost_model: bool, default = true
+
+        /// Number of input rows used in the A/B sampling window after the
+        /// initial partial probe completes. During this window the operator
+        /// routes input through the passthrough (`transform_to_states`)
+        /// path so the probe can measure `passthrough_ns/row` and compare
+        /// it against the previously measured `partial_ns/row`. Default
+        /// 10000 — large enough to amortise per-row noise, small enough to
+        /// be cheap if the decision turns out to be "keep partial".
+        pub skip_partial_aggregation_ab_sampling_rows: usize, default = 10_000
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.
