@@ -376,13 +376,15 @@ mod parquet {
     use super::*;
 
     use crate::protobuf::{
-        CdcOptions as CdcOptionsProto, ParquetColumnOptions as ParquetColumnOptionsProto,
-        ParquetColumnSpecificOptions, ParquetOptions as ParquetOptionsProto,
+        ParquetCdcOptions as ParquetCdcOptionsProto,
+        ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
+        ParquetOptions as ParquetOptionsProto,
         TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
         parquet_options,
     };
     use datafusion_common::config::{
-        CdcOptions, ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions, ParquetOptions,
+        TableParquetOptions,
     };
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
@@ -454,12 +456,14 @@ mod parquet {
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
                 }),
-                content_defined_chunking: global_options.global.use_content_defined_chunking.as_ref().map(|cdc| {
-                    CdcOptionsProto {
-                        min_chunk_size: cdc.min_chunk_size as u64,
-                        max_chunk_size: cdc.max_chunk_size as u64,
-                        norm_level: cdc.norm_level,
-                    }
+                max_row_group_bytes_opt: global_options.global.max_row_group_bytes.map(|size| {
+                    parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size.get() as u64)
+                }),
+                content_defined_chunking: Some(ParquetCdcOptionsProto {
+                    enabled: global_options.global.content_defined_chunking.enabled,
+                    min_chunk_size: global_options.global.content_defined_chunking.min_chunk_size as u64,
+                    max_chunk_size: global_options.global.content_defined_chunking.max_chunk_size as u64,
+                    norm_level: global_options.global.content_defined_chunking.norm_level,
                 }),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
@@ -497,6 +501,17 @@ mod parquet {
                 })
                 .collect(),
         }
+        }
+    }
+
+    impl FromProto<ParquetCdcOptionsProto> for ParquetCdcOptions {
+        fn from_proto(value: ParquetCdcOptionsProto) -> Self {
+            ParquetCdcOptions {
+                enabled: value.enabled,
+                min_chunk_size: value.min_chunk_size as usize,
+                max_chunk_size: value.max_chunk_size as usize,
+                norm_level: value.norm_level,
+            }
         }
     }
 
@@ -617,27 +632,18 @@ mod parquet {
                             size,
                         ) => *size as usize,
                     }),
-                use_content_defined_chunking: proto.content_defined_chunking.map(
-                    |cdc| {
-                        let defaults = CdcOptions::default();
-                        CdcOptions {
-                            // proto3 uses 0 as the wire default for uint64; a zero chunk size is
-                            // invalid, so treat it as "field not set" and fall back to the default.
-                            min_chunk_size: if cdc.min_chunk_size != 0 {
-                                cdc.min_chunk_size as usize
-                            } else {
-                                defaults.min_chunk_size
-                            },
-                            max_chunk_size: if cdc.max_chunk_size != 0 {
-                                cdc.max_chunk_size as usize
-                            } else {
-                                defaults.max_chunk_size
-                            },
-                            // norm_level = 0 is a valid value (and the default), so pass it through directly.
-                            norm_level: cdc.norm_level,
+                max_row_group_bytes: proto
+                    .max_row_group_bytes_opt
+                    .as_ref()
+                    .and_then(|opt| match opt {
+                        parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size) => {
+                            MaxRowGroupBytes::try_new(*size as usize).ok()
                         }
-                    },
-                ),
+                    }),
+                content_defined_chunking: proto
+                    .content_defined_chunking
+                    .map(ParquetCdcOptions::from_proto)
+                    .unwrap_or_default(),
             })
         }
     }
