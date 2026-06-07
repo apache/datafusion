@@ -1588,7 +1588,7 @@ physical_plan
 01)ScalarSubqueryExec: subqueries=1
 02)--SortExec: expr=[k@0 ASC NULLS LAST, v1@1 ASC NULLS LAST], preserve_partitioning=[false]
 03)----RecursiveQueryExec: name=r, is_distinct=false
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte/test.parquet]]}, projection=[k, v1], output_ordering=[k@0 ASC NULLS LAST], file_type=parquet
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/cte/test.parquet]]}, projection=[CAST(k@0 AS Int64) as k, CAST(v1@1 AS Int64) as v1], output_ordering=[k@0 ASC NULLS LAST], file_type=parquet
 05)------CoalescePartitionsExec
 06)--------ProjectionExec: expr=[k@0 * 10 as k, v1@1 as v1]
 07)----------FilterExec: k@0 < scalar_subquery(<pending>)
