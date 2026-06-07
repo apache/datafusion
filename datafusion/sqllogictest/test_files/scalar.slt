@@ -234,7 +234,26 @@ select round(atanh(a), 5), round(atanh(b), 5), round(atanh(c), 5) from small_flo
 query RRR rowsort
 select atan2(0, 1), atan2(1, 2), atan2(2, 2);
 ----
-0 0.4636476 0.7853982
+0 0.463647609001 0.785398163397
+
+# atan2 returns Float32 only when both arguments are Float32; every other
+# numeric combination (integers, Float64, mixed, NULL) is computed in Float64
+query TTTTTT
+select
+  arrow_typeof(atan2(arrow_cast(1.0, 'Float32'), arrow_cast(1.0, 'Float32'))),
+  arrow_typeof(atan2(1, 1)),
+  arrow_typeof(atan2(arrow_cast(1.0, 'Float32'), arrow_cast(1.0, 'Float64'))),
+  arrow_typeof(atan2(arrow_cast(1.0, 'Float64'), arrow_cast(1.0, 'Float32'))),
+  arrow_typeof(atan2(null, null)),
+  arrow_typeof(atan2(null, 64));
+----
+Float32 Float64 Float64 Float64 Float64 Float64
+
+# atan2 with integer inputs is computed in double precision
+query B
+select atan2(1, 1000000) = atan2(1.0, 1000000.0);
+----
+true
 
 # atan2 scalar nulls
 query R rowsort
@@ -1107,12 +1126,16 @@ NULL
 
 # sqrt with columns (round is needed to normalize the outputs of different operating systems)
 query RRR rowsort
-select round(sqrt(a), 5), round(sqrt(b), 5), round(sqrt(c), 5) from signed_integers;
+select round(sqrt(abs(a)), 5), round(sqrt(abs(b)), 5), round(sqrt(abs(c)), 5) from signed_integers;
 ----
-1.41421 NaN 11.09054
+1 10 23.81176
+1.41421 31.62278 11.09054
+1.73205 100 31.27299
 2 NULL NULL
-NaN 10 NaN
-NaN 100 NaN
+
+# sqrt with negative column values should error
+query error cannot take square root of a negative number
+select round(sqrt(a), 5), round(sqrt(b), 5), round(sqrt(c), 5) from signed_integers;
 
 # sqrt scalar fraction
 query RR rowsort
@@ -1128,10 +1151,12 @@ select sqrt(cast(10e8 as double));
 
 
 # sqrt scalar negative
-query R rowsort
+query error cannot take square root of a negative number
 select sqrt(-1);
-----
-NaN
+
+# sqrt scalar negative float8
+query error cannot take square root of a negative number
+select sqrt((-1.0)::float8);
 
 ## tan
 
@@ -1299,6 +1324,12 @@ NULL -32
 
 statement ok
 set datafusion.sql_parser.dialect = postgresql;
+
+# postgresql exponentiation uses caret
+query R
+select 2 ^ 3;
+----
+8
 
 # postgresql bitwise xor with column and scalar
 query I rowsort

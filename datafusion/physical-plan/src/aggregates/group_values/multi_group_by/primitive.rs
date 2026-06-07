@@ -28,6 +28,7 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use arrow::util::bit_util::apply_bitwise_binary_op;
 use datafusion_common::Result;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use std::iter;
 use std::sync::Arc;
@@ -267,8 +268,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        let first_n = self.group_values.drain(0..n).collect::<Vec<_>>();
-
+        let first_n = split_vec_min_alloc(&mut self.group_values, n);
         let first_n_nulls = if NULLABLE { self.nulls.take_n(n) } else { None };
 
         Arc::new(
@@ -583,5 +583,41 @@ mod tests {
         assert!(results[2]);
         assert!(results[3]);
         assert!(results[4]);
+    }
+
+    #[test]
+    fn test_primitive_take_n() {
+        // drain branch: n * 2 <= len
+        let mut builder =
+            PrimitiveGroupValueBuilder::<Int64Type, true>::new(DataType::Int64);
+        let array = Arc::new(Int64Array::from(vec![
+            Some(10),
+            None,
+            Some(30),
+            Some(40),
+            Some(50),
+        ])) as ArrayRef;
+        for i in 0..5 {
+            builder.append_val(&array, i).unwrap();
+        }
+        // len=5, n=2, n*2=4 <= 5  →  drain branch
+        let out = builder.take_n(2);
+        let expected = Arc::new(Int64Array::from(vec![Some(10), None])) as ArrayRef;
+        assert_eq!(&out, &expected);
+        // remaining: [30, 40, 50]
+        assert_eq!(builder.len(), 3);
+
+        // split_off branch: remaining < n  (len=3, n=2, n*2=4 > 3)
+        let out2 = builder.take_n(2);
+        let expected2 = Arc::new(Int64Array::from(vec![Some(30), Some(40)])) as ArrayRef;
+        assert_eq!(&out2, &expected2);
+        // remaining: [50]
+        assert_eq!(builder.len(), 1);
+
+        // take the last element
+        let out3 = builder.take_n(1);
+        let expected3 = Arc::new(Int64Array::from(vec![Some(50)])) as ArrayRef;
+        assert_eq!(&out3, &expected3);
+        assert_eq!(builder.len(), 0);
     }
 }

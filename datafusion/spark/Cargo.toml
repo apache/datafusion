@@ -64,13 +64,15 @@ rand = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
 sha1 = "0.11"
 sha2 = { workspace = true }
+twox-hash = "2.1"
 url = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
 # for SessionStateBuilderSpark tests
-datafusion = { workspace = true, default-features = false }
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
+tokio = { workspace = true, features = ["rt"] }
 
 [[bench]]
 harness = false

@@ -47,9 +47,10 @@ members = [
     "datafusion/pruning",
     "datafusion/physical-plan",
     "datafusion/proto",
-    "datafusion/proto/gen",
     "datafusion/proto-common",
     "datafusion/proto-common/gen",
+    "datafusion/proto-models",
+    "datafusion/proto-models/gen",
     "datafusion/session",
     "datafusion/spark",
     "datafusion/sql",
@@ -118,8 +119,8 @@ bytes = "1.11"
 bzip2 = "0.6.1"
 chrono = { version = "0.4.44", default-features = false }
 criterion = "0.8"
-ctor = "1.0.5"
-dashmap = "6.0.1"
+ctor = "1.0.7"
+dashmap = "6.2.1"
 datafusion = { path = "datafusion/core", version = "53.1.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "53.1.0" }
 datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "53.1.0" }
@@ -152,6 +153,7 @@ datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", versio
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "53.1.0" }
 datafusion-proto = { path = "datafusion/proto", version = "53.1.0" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "53.1.0" }
+datafusion-proto-models = { path = "datafusion/proto-models", version = "53.1.0" }
 datafusion-pruning = { path = "datafusion/pruning", version = "53.1.0" }
 datafusion-session = { path = "datafusion/session", version = "53.1.0" }
 datafusion-spark = { path = "datafusion/spark", version = "53.1.0" }
@@ -172,7 +174,7 @@ itertools = "0.14"
 itoa = "1.0"
 liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
-memchr = "2.8.0"
+memchr = "2.8.1"
 num-traits = { version = "0.2" }
 object_store = { version = "0.13.2", default-features = false }
 parking_lot = "0.12"

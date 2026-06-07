@@ -114,7 +114,7 @@ impl SessionStateDefaults {
     }
 
     /// returns the list of default [`HigherOrderUDF`]s
-    pub fn default_higher_order_functions() -> Vec<Arc<dyn HigherOrderUDF>> {
+    pub fn default_higher_order_functions() -> Vec<Arc<HigherOrderUDF>> {
         #[cfg(feature = "nested_expressions")]
         return functions_nested::all_default_higher_order_functions();
 

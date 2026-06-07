@@ -50,8 +50,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -79,7 +79,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -104,7 +104,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -141,8 +141,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -173,8 +173,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -239,7 +239,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -276,8 +276,8 @@ jobs:
       volumes:
         - /usr/local:/host/usr/local
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -322,8 +322,8 @@ jobs:
     needs: linux-build-lib
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -354,8 +354,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -385,8 +385,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -407,8 +407,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -420,7 +420,7 @@ jobs:
     name: build and run with wasm-pack
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup for wasm32
         run: |
           rustup target add wasm32-unknown-unknown
@@ -429,7 +429,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8  # v2.77.6
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09  # v2.81.3
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -448,8 +448,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -471,7 +471,7 @@ jobs:
           export RUST_MIN_STACK=20971520
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
           cargo test plan_q --package datafusion-benchmarks --profile ci --features=ci -- --test-threads=1
-          INCLUDE_TPCH=true cargo test --features backtrace,parquet_encryption,substrait --profile ci --package datafusion-sqllogictest --test sqllogictests
+          INCLUDE_TPCH=true cargo test --features backtrace,parquet_encryption,substrait,memory-accounting --profile ci --package datafusion-sqllogictest --test sqllogictests -- --default-pool-size-mb 16384
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -496,8 +496,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -521,8 +521,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -565,7 +565,7 @@ jobs:
     name: cargo test (macos-aarch64)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -581,7 +581,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -598,14 +598,13 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Run
         run: |
-          echo '' > datafusion/proto/src/generated/datafusion.rs
           ci/scripts/rust_fmt.sh
 
   # Coverage job disabled due to
@@ -657,8 +656,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -683,7 +682,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -704,8 +703,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0  # v2.1.0
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -740,7 +739,7 @@ jobs:
       image: amd64/rust
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -770,11 +769,11 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8  # v2.77.6
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09  # v2.81.3
         with:
           tool: cargo-msrv
 
