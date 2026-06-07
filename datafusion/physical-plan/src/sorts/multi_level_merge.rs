@@ -384,7 +384,7 @@ impl MultiLevelMergeBuilder {
                 spill.max_record_batch_memory,
                 // Size will be the same as the sliced size, bc it is a spilled batch.
                 spill.max_record_batch_memory,
-            ) * buffer_len;
+            ) * buffer_len + spill.max_record_batch_memory;
             total_needed += per_spill;
 
             // For memory pools that are not shared this is good, for other
