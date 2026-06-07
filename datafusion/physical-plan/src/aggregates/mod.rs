@@ -206,6 +206,12 @@ pub enum AggregateMode {
     ///     /         \      /         \
     ///  Partial   Partial  Partial   Partial
     /// ```
+    ///
+    /// # Motivation
+    ///
+    /// This reduces shuffling traffic in a distributed setting. See
+    /// <https://github.com/datafusion-contrib/datafusion-distributed/issues/360>
+    /// for details.
     PartialReduce,
 }
 
