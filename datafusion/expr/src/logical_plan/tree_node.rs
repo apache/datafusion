@@ -217,6 +217,7 @@ impl TreeNode for LogicalPlan {
             }),
             LogicalPlan::Analyze(Analyze {
                 verbose,
+                format,
                 input,
                 schema,
                 analyze_level,
@@ -224,6 +225,7 @@ impl TreeNode for LogicalPlan {
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Analyze(Analyze {
                     verbose,
+                    format,
                     input,
                     schema,
                     analyze_level,
@@ -335,13 +337,18 @@ impl TreeNode for LogicalPlan {
                 static_term,
                 recursive_term,
                 is_distinct,
+                schema,
             }) => (static_term, recursive_term).map_elements(f)?.update_data(
                 |(static_term, recursive_term)| {
+                    // Ordinary child rewrites preserve derived schemas. Call
+                    // `LogicalPlan::recompute_schema` when child schemas should
+                    // be reconciled again.
                     LogicalPlan::RecursiveQuery(RecursiveQuery {
                         name,
                         static_term,
                         recursive_term,
                         is_distinct,
+                        schema,
                     })
                 },
             ),

@@ -1468,7 +1468,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     function_body,
                 };
 
-                let statement = DdlStatement::CreateFunction(CreateFunction {
+                let statement = DdlStatement::CreateFunction(Box::new(CreateFunction {
                     or_replace,
                     temporary,
                     name,
@@ -1476,7 +1476,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     args,
                     params,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                });
+                }));
 
                 Ok(LogicalPlan::Ddl(statement))
             }
@@ -1855,18 +1855,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let constraints =
             self.new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-            PlanCreateExternalTable::builder(name, location, file_type, df_schema)
-                .with_partition_cols(table_partition_cols)
-                .with_if_not_exists(if_not_exists)
-                .with_or_replace(or_replace)
-                .with_temporary(temporary)
-                .with_definition(definition)
-                .with_order_exprs(ordered_exprs)
-                .with_unbounded(unbounded)
-                .with_options(options_map)
-                .with_constraints(constraints)
-                .with_column_defaults(column_defaults)
-                .build(),
+            Box::new(
+                PlanCreateExternalTable::builder(name, location, file_type, df_schema)
+                    .with_partition_cols(table_partition_cols)
+                    .with_if_not_exists(if_not_exists)
+                    .with_or_replace(or_replace)
+                    .with_temporary(temporary)
+                    .with_definition(definition)
+                    .with_order_exprs(ordered_exprs)
+                    .with_unbounded(unbounded)
+                    .with_options(options_map)
+                    .with_constraints(constraints)
+                    .with_column_defaults(column_defaults)
+                    .build(),
+            ),
         )))
     }
 
@@ -2049,12 +2051,43 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return plan_err!("EXPLAIN option COSTS cannot be combined with ANALYZE");
         }
 
+        // Resolve the requested output format.
+        //
+        // Verbose mode only supports indent format, and for EXPLAIN ANALYZE
+        // only `Indent` and `PostgresJSON` are supported today — `Tree` and
+        // `Graphviz` require additional work to render with live metrics.
+        let options = self.context_provider.options();
+        let format = if verbose {
+            ExplainFormat::Indent
+        } else if let Some(format) = format {
+            format
+        } else if analyze {
+            ExplainFormat::Indent
+        } else {
+            options.explain.format.clone()
+        };
+
         if analyze {
-            if format.is_some() {
-                return plan_err!("EXPLAIN ANALYZE with FORMAT is not supported");
+            match &format {
+                ExplainFormat::Indent => {}
+                ExplainFormat::PostgresJSON => {
+                    // The pgjson renderer does not emit statistics yet, so
+                    // reject the combination rather than silently ignoring it.
+                    if options.explain.show_statistics {
+                        return plan_err!(
+                            "EXPLAIN ANALYZE with FORMAT pgjson does not support show_statistics"
+                        );
+                    }
+                }
+                ExplainFormat::Tree | ExplainFormat::Graphviz => {
+                    return plan_err!(
+                        "EXPLAIN ANALYZE with FORMAT {format} is not supported"
+                    );
+                }
             }
             Ok(LogicalPlan::Analyze(Analyze {
                 verbose,
+                format,
                 input: plan,
                 schema,
                 analyze_level,
@@ -2063,17 +2096,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             let stringified_plans =
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
-
-            // default to configuration value
-            // verbose mode only supports indent format
-            let options = self.context_provider.options();
-            let format = if verbose {
-                ExplainFormat::Indent
-            } else if let Some(format) = format {
-                format
-            } else {
-                options.explain.format.clone()
-            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
@@ -2465,17 +2487,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         span: _,
                     }) = val
                     {
-                        let name =
-                            name.replace('$', "").parse::<usize>().map_err(|_| {
-                                plan_datafusion_err!("Can't parse placeholder: {name}")
-                            })? - 1;
+                        let index = match name[1..].parse::<usize>().map_err(|_| {
+                            plan_datafusion_err!("Can't parse placeholder: {name}")
+                        })? {
+                            0 => {
+                                return plan_err!(
+                                    "Invalid placeholder, zero is not a valid index: {name}"
+                                );
+                            }
+                            index => index - 1,
+                        };
                         let field = fields.get(idx).ok_or_else(|| {
                             plan_datafusion_err!(
                                 "Placeholder ${} refers to a non existent column",
                                 idx + 1
                             )
                         })?;
-                        let _ = prepare_param_data_types.insert(name, Arc::clone(field));
+                        let _ = prepare_param_data_types.insert(index, Arc::clone(field));
                     }
                 }
             }

@@ -61,7 +61,8 @@ pub trait ContextProvider {
         not_impl_err!("Table Functions are not supported")
     }
 
-    /// Provides an intermediate table that is used to store the results of a CTE during execution
+    /// Provides an intermediate table that is used to expose a recursive CTE
+    /// self-reference during planning and execution.
     ///
     /// CTE stands for "Common Table Expression"
     ///
@@ -72,6 +73,9 @@ pub trait ContextProvider {
     /// of the sql crate (for example [`CteWorkTable`]).
     ///
     /// The [`ContextProvider`] provides a way to "hide" this dependency.
+    /// The schema argument is the schema to expose for scans of the recursive
+    /// self-reference, which may be more conservative than the final recursive
+    /// query output schema.
     ///
     /// [`SqlToRel`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/struct.SqlToRel.html
     /// [`CteWorkTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/cte_worktable/struct.CteWorkTable.html

@@ -627,7 +627,11 @@ message ParquetOptions {
     uint64 max_predicate_cache_size = 33;
   }
 
-  CdcOptions content_defined_chunking = 35;
+  oneof max_row_group_bytes_opt {
+    uint64 max_row_group_bytes = 37;
+  }
+
+  ParquetCdcOptions content_defined_chunking = 35;
 
   // Optional timezone applied to INT96-coerced timestamps when `coerce_int96`
   // is set. When `Some`, INT96 columns coerce to
@@ -638,10 +642,12 @@ message ParquetOptions {
   }
 }
 
-message CdcOptions {
-  uint64 min_chunk_size = 1;
-  uint64 max_chunk_size = 2;
-  int32 norm_level = 3;
+// Content-defined chunking (CDC) options for writing parquet files.
+message ParquetCdcOptions {
+  bool enabled = 1;
+  uint64 min_chunk_size = 2;
+  uint64 max_chunk_size = 3;
+  int32 norm_level = 4;
 }
 
 enum JoinSide {
