@@ -1360,17 +1360,23 @@ mod tests {
         let filter = Arc::new(FilterExec::try_new(predicate, input)?);
         let statistics = filter.partition_statistics(None)?;
 
+        let input_num_rows = 100.0_f64;
         let num_rows = statistics.num_rows.get_value().copied().unwrap_or(100);
         // Interval analysis must narrow the estimate below the full 100-row input.
         assert!(
-            num_rows < 100,
+            (num_rows as f64) < input_num_rows,
             "expected interval analysis to narrow row estimate, got {num_rows}"
         );
-        // The conservative bound is x ∈ [11, 16] out of [8, 16] → ~62 rows.
-        // Allow a generous range to be robust to float-cardinality rounding.
+        // Conservative bound x ∈ [11, 16] out of [8, 16] → selectivity 5/8 ≈ 62
+        // rows. Derive the expected value from the formula and allow a 20%
+        // tolerance to absorb float-cardinality rounding without masking real
+        // regressions.
+        let expected_rows = input_num_rows * (16.0 - 11.0) / (16.0 - 8.0);
+        let lower_bound = expected_rows * 0.8;
         assert!(
-            num_rows >= 50,
-            "expected at least 50 rows after ceil(x) > 12.0 on [8,16], got {num_rows}"
+            (num_rows as f64) >= lower_bound,
+            "expected materially narrowed estimate after ceil(x) > 12.0 on \
+             [8,16]; expected at least {lower_bound:.1}, got {num_rows}"
         );
         Ok(())
     }

@@ -199,8 +199,9 @@ impl ScalarUDFImpl for CeilFunc {
         };
         let data_type = input.data_type();
         match (ceil_scalar(input.lower()), ceil_scalar(input.upper())) {
-            (Some(lo), Some(hi)) => Interval::try_new(lo, hi)
-                .or_else(|_| Interval::make_unbounded(&data_type)),
+            // Both bounds finite → ceil preserves type and monotonicity, so
+            // `try_new` always succeeds; let it propagate if that ever breaks.
+            (Some(lo), Some(hi)) => Interval::try_new(lo, hi),
             _ => Interval::make_unbounded(&data_type),
         }
     }
@@ -236,12 +237,18 @@ impl ScalarUDFImpl for CeilFunc {
             }
             _ => None,
         };
+        // If either side of the output is finite we can still narrow that side
+        // of the input; the unknown side falls back to the input's own bound so
+        // the intersect is a no-op on it.
         match (lo, hi) {
-            (Some(lo), Some(hi)) => {
-                let constraint = Interval::try_new(lo, hi)?;
+            (None, None) => Ok(Some(vec![(*input_interval).clone()])),
+            (lo, hi) => {
+                let constraint = Interval::try_new(
+                    lo.unwrap_or_else(|| input_interval.lower().clone()),
+                    hi.unwrap_or_else(|| input_interval.upper().clone()),
+                )?;
                 Ok(input_interval.intersect(constraint)?.map(|r| vec![r]))
             }
-            _ => Ok(Some(vec![(*input_interval).clone()])),
         }
     }
 
@@ -413,6 +420,38 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(result[0], f64_interval(-4.0, -1.0));
+    }
+
+    #[test]
+    fn test_propagate_constraints_one_sided_upper() {
+        // Output (-Inf, 3.5] → x ≤ floor(3.5) = 3.0; input [0.0, 10.0] → [0.0, 3.0]
+        let output = Interval::try_new(
+            ScalarValue::Float64(None),
+            ScalarValue::Float64(Some(3.5)),
+        )
+        .unwrap();
+        let input = f64_interval(0.0, 10.0);
+        let result = ceil()
+            .propagate_constraints(&output, &[&input])
+            .unwrap()
+            .unwrap();
+        assert_eq!(result[0], f64_interval(0.0, 3.0));
+    }
+
+    #[test]
+    fn test_propagate_constraints_one_sided_lower() {
+        // Output [5.0, +Inf) → x > ceil(5.0) - 1 = 4.0; input [0.0, 10.0] → [4.0, 10.0]
+        let output = Interval::try_new(
+            ScalarValue::Float64(Some(5.0)),
+            ScalarValue::Float64(None),
+        )
+        .unwrap();
+        let input = f64_interval(0.0, 10.0);
+        let result = ceil()
+            .propagate_constraints(&output, &[&input])
+            .unwrap()
+            .unwrap();
+        assert_eq!(result[0], f64_interval(4.0, 10.0));
     }
 
     #[test]
