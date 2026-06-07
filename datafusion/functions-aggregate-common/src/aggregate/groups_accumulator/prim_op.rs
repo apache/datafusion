@@ -29,7 +29,7 @@ use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::{
-    BlockedNullState, BooleanBlock, FlatNullState, NullState, SeenValueStore,
+    BlockedNullState, BooleanBlock, FlatNullState, NullState,
 };
 use crate::aggregate::groups_accumulator::block_store::{
     BlockStore, BlockedBlockStore, FlatBlockStore, VecBlockStore,
@@ -103,7 +103,7 @@ where
     V: Clone + Debug + Send,
     VB: BlockStore<Vec<V>> + Send,
     O: GroupIndexOperations,
-    S: SeenValueStore + Send,
+    S: BlockStore<BooleanBlock> + Send,
 {
     values: VecBlockStore<V, VB>,
     null_state: NullState<O, S>,
@@ -115,7 +115,7 @@ where
     V: Clone + Debug + Send,
     VB: BlockStore<Vec<V>> + Send,
     O: GroupIndexOperations,
-    S: SeenValueStore + Send,
+    S: BlockStore<BooleanBlock> + Send,
 {
     fn new(values: VecBlockStore<V, VB>, null_state: NullState<O, S>) -> Self {
         Self {

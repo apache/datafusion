@@ -21,6 +21,7 @@
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::ops::{Index, IndexMut};
 
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
@@ -94,39 +95,132 @@ impl Block for BooleanBlock {
 /// had at least one value to accumulate so they do not need to track
 /// if they have seen values for a particular group.
 #[derive(Debug)]
-pub enum SeenValues<S> {
+pub enum SeenValues<S>
+where
+    S: BlockStore<BooleanBlock>,
+{
     /// All groups seen so far have seen at least one non-null value
     All {
         num_values: usize,
     },
     // Some groups have not yet seen a non-null value
     Some {
-        builder: S,
+        builder: SeenValueStore<S>,
     },
 }
 
-impl<S> Default for SeenValues<S> {
+impl<S> Default for SeenValues<S>
+where
+    S: BlockStore<BooleanBlock>,
+{
     fn default() -> Self {
         SeenValues::All { num_values: 0 }
     }
 }
 
-pub trait SeenValueStore: BlockStore<BooleanBlock> {
-    fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool) {
-        self[block_id as usize].set_bit(block_offset as usize, value);
-    }
-
-    fn size(&self) -> usize {
-        if self.is_empty() {
-            return 0;
-        }
-        self[0].capacity() / 8 * self.num_blocks()
-    }
-
-    fn emit(&mut self, emit_to: EmitTo) -> NullBuffer;
+/// Wrapper around a [`BlockStore<BooleanBlock>`] that tracks per-group
+/// "have we seen a non-null value yet" bits and produces [`NullBuffer`]s on
+/// emit.
+///
+/// `emit` is implemented purely via [`BlockStore::push_block`] and
+/// [`BlockStore::pop_block`] so it works uniformly over flat and blocked
+/// storage; per-store specialization is no longer needed.
+#[derive(Debug)]
+pub struct SeenValueStore<S>
+where
+    S: BlockStore<BooleanBlock>,
+{
+    inner: S,
 }
 
-impl<S: SeenValueStore> SeenValues<S> {
+impl<S> SeenValueStore<S>
+where
+    S: BlockStore<BooleanBlock>,
+{
+    pub fn new(inner: S) -> Self {
+        Self { inner }
+    }
+
+    pub fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool) {
+        self.inner[block_id as usize].set_bit(block_offset as usize, value);
+    }
+
+    pub fn size(&self) -> usize {
+        if self.inner.is_empty() {
+            return 0;
+        }
+        self.inner[0].capacity() / 8 * self.inner.num_blocks()
+    }
+
+    pub fn resize(&mut self, total_num_groups: usize, default_value: bool) {
+        self.inner.resize(total_num_groups, default_value);
+    }
+
+    pub fn num_blocks(&self) -> usize {
+        self.inner.num_blocks()
+    }
+
+    /// Emit seen-values according to `emit_to`, expressed only in terms of
+    /// [`BlockStore::push_block`] / [`BlockStore::pop_block`].
+    ///
+    /// - [`EmitTo::All`] / [`EmitTo::NextBlock`]: pop one block and finish it.
+    /// - [`EmitTo::First`]`(n)`: pop the (only) block, finish it, take the first
+    ///   `n` bits, rebuild a block from the remainder and push it back. Only
+    ///   meaningful when the first block holds at least `n` bits (true for flat
+    ///   storage).
+    pub fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
+        match emit_to {
+            EmitTo::All | EmitTo::NextBlock => {
+                let mut block = self
+                    .inner
+                    .pop_block()
+                    .expect("should not try to emit empty seen-values block");
+                NullBuffer::new(block.finish())
+            }
+            EmitTo::First(n) => {
+                let mut block = self
+                    .inner
+                    .pop_block()
+                    .expect("should not try to emit empty seen-values block");
+                let buffer = block.finish();
+                let first_n: BooleanBuffer = buffer.iter().take(n).collect();
+                let mut rest = BooleanBlock::new(0);
+                for seen in buffer.iter().skip(n) {
+                    rest.append(seen);
+                }
+                self.inner.push_block(rest);
+                NullBuffer::new(first_n)
+            }
+        }
+    }
+}
+
+impl<S> Index<usize> for SeenValueStore<S>
+where
+    S: BlockStore<BooleanBlock>,
+{
+    type Output = BooleanBlock;
+
+    #[inline]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.inner[index]
+    }
+}
+
+impl<S> IndexMut<usize> for SeenValueStore<S>
+where
+    S: BlockStore<BooleanBlock>,
+{
+    #[inline]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.inner[index]
+    }
+}
+
+impl<S> SeenValues<S>
+where
+    S: BlockStore<BooleanBlock>,
+{
     /// Return a mutable reference to the `BooleanBufferBuilder` in `SeenValues::Some`.
     ///
     /// If `self` is `SeenValues::All`, it is transitioned to `SeenValues::Some`
@@ -138,8 +232,8 @@ impl<S: SeenValueStore> SeenValues<S> {
     fn get_big_enough_builder(
         &mut self,
         total_num_groups: usize,
-        pending_builder: &mut Option<S>,
-    ) -> &mut S {
+        pending_builder: &mut Option<SeenValueStore<S>>,
+    ) -> &mut SeenValueStore<S> {
         // If `self` is `SeenValues::All`, transition it to `SeenValues::Some` with `num_values trues` firstly,
         // then return mutable reference to the builder.
         // If `self` is `SeenValues::Some`, just directly return mutable reference to the builder.
@@ -192,7 +286,11 @@ impl<S: SeenValueStore> SeenValues<S> {
 ///
 /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 #[derive(Debug)]
-pub struct NullState<O: GroupIndexOperations, S: SeenValueStore> {
+pub struct NullState<O, S>
+where
+    O: GroupIndexOperations,
+    S: BlockStore<BooleanBlock>,
+{
     /// Have we seen any non-filtered input values for `group_index`?
     ///
     /// If `seen_values` is `SeenValues::Some(buffer)` and buffer\[i\] is true, have seen at least one non null
@@ -206,7 +304,7 @@ pub struct NullState<O: GroupIndexOperations, S: SeenValueStore> {
 
     /// Empty seen-values builder, supplied at construction time and consumed
     /// when transitioning `SeenValues::All` -> `SeenValues::Some`.
-    pending_builder: Option<S>,
+    pending_builder: Option<SeenValueStore<S>>,
 
     /// Size of one seen values block, can be None if only desire single block
     block_size: Option<usize>,
@@ -218,7 +316,7 @@ pub struct NullState<O: GroupIndexOperations, S: SeenValueStore> {
 impl<O, S> NullState<O, S>
 where
     O: GroupIndexOperations,
-    S: SeenValueStore + Send,
+    S: BlockStore<BooleanBlock> + Send,
 {
     /// Create a new `NullState` with the given empty seen-values builder.
     ///
@@ -235,7 +333,7 @@ where
         );
         Self {
             seen_values: SeenValues::All { num_values: 0 },
-            pending_builder: Some(empty_builder),
+            pending_builder: Some(SeenValueStore::new(empty_builder)),
             block_size,
             _phantom: PhantomData,
         }
@@ -454,7 +552,7 @@ where
                     None
                 }
             },
-            SeenValues::Some { builder } => Some(SeenValueStore::emit(builder, emit_to)),
+            SeenValues::Some { builder } => Some(builder.emit(emit_to)),
         }
     }
 
@@ -471,7 +569,7 @@ where
 impl<O, S> NullState<O, S>
 where
     O: GroupIndexOperations,
-    S: SeenValueStore + Send,
+    S: BlockStore<BooleanBlock> + Send,
 {
     /// Clone and build a single [`BooleanBuffer`] from `seen_values`,
     /// only used for testing.
@@ -574,60 +672,6 @@ pub type FlatNullState =
 /// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator::supports_blocked_groups
 ///
 pub type BlockedNullState = NullState<BlockedGroupIndexOperations, BlockedBlockStore<BooleanBlock>>;
-
-impl SeenValueStore for BlockedBlockStore<BooleanBlock> {
-    fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
-        let nulls = match emit_to {
-            EmitTo::All | EmitTo::First(_) => self[0].finish(),
-            EmitTo::NextBlock => {
-                let mut block = self
-                    .pop_block()
-                    .expect("should not try to emit empty blocks");
-                block.finish()
-            }
-        };
-
-        let nulls = if let EmitTo::First(n) = emit_to {
-            // split off the first N values in seen_values
-            //
-            // TODO make this more efficient rather than two
-            // copies and bitwise manipulation
-            let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
-            // reset the existing seen buffer
-            for seen in nulls.iter().skip(n) {
-                self[0].append(seen);
-            }
-            first_n_null
-        } else {
-            nulls
-        };
-
-        NullBuffer::new(nulls)
-    }
-}
-
-impl SeenValueStore for FlatBlockStore<BooleanBlock> {
-    fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
-        let nulls = match emit_to {
-            EmitTo::All | EmitTo::First(_) => self[0].finish(),
-            EmitTo::NextBlock => {
-                unreachable!("flat seen values do not support emitting next block")
-            }
-        };
-
-        let nulls = if let EmitTo::First(n) = emit_to {
-            let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
-            for seen in nulls.iter().skip(n) {
-                self[0].append(seen);
-            }
-            first_n_null
-        } else {
-            nulls
-        };
-
-        NullBuffer::new(nulls)
-    }
-}
 
 /// Invokes `value_fn(group_index, value)` for each non null, non
 /// filtered value of `value`,
