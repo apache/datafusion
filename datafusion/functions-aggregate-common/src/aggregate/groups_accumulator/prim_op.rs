@@ -32,7 +32,7 @@ use crate::aggregate::groups_accumulator::accumulate::{
     BlockedNullState, BooleanBlock, FlatNullState, NullState, SeenValueStore,
 };
 use crate::aggregate::groups_accumulator::block_store::{
-    BlockedBlockStore, FlatBlockStore, VecBlockStore,
+    BlockStore, BlockedBlockStore, FlatBlockStore, VecBlockStore,
 };
 use crate::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
@@ -100,24 +100,24 @@ struct UpdateBatchInput<'a, T: ArrowPrimitiveType> {
 #[derive(Debug)]
 struct PrimitiveGroupsState<V, VB, O, S>
 where
-    V: Clone + Debug,
-    VB: VecBlockStore<V> + Send,
+    V: Clone + Debug + Send,
+    VB: BlockStore<Vec<V>> + Send,
     O: GroupIndexOperations,
     S: SeenValueStore + Send,
 {
-    values: VB,
+    values: VecBlockStore<V, VB>,
     null_state: NullState<O, S>,
     _phantom: PhantomData<V>,
 }
 
 impl<V, VB, O, S> PrimitiveGroupsState<V, VB, O, S>
 where
-    V: Clone + Debug,
-    VB: VecBlockStore<V> + Send,
+    V: Clone + Debug + Send,
+    VB: BlockStore<Vec<V>> + Send,
     O: GroupIndexOperations,
     S: SeenValueStore + Send,
 {
-    fn new(values: VB, null_state: NullState<O, S>) -> Self {
+    fn new(values: VecBlockStore<V, VB>, null_state: NullState<O, S>) -> Self {
         Self {
             values,
             null_state,
@@ -190,14 +190,14 @@ enum PrimitiveGroupsStateAdapter<V: Clone + Debug + Send> {
 impl<V: Clone + Debug + Send> PrimitiveGroupsStateAdapter<V> {
     fn new_flat() -> Self {
         Self::Flat(PrimitiveGroupsState::new(
-            FlatBlockStore::new(),
+            VecBlockStore::new(FlatBlockStore::new()),
             FlatNullState::new(FlatBlockStore::new(), None),
         ))
     }
 
     fn new_blocked(block_size: usize) -> Self {
         Self::Blocked(PrimitiveGroupsState::new(
-            BlockedBlockStore::new(block_size),
+            VecBlockStore::new(BlockedBlockStore::new(block_size)),
             BlockedNullState::new(BlockedBlockStore::new(block_size), Some(block_size)),
         ))
     }

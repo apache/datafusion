@@ -27,7 +27,7 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::block_store::{
-    BlockedBlockStore, FlatBlockStore, VecBlockStore,
+    BlockStore, BlockedBlockStore, FlatBlockStore, VecBlockStore,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::group_index_operations::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
@@ -124,22 +124,22 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
 struct GroupValuesPrimitiveState<V, VB, O>
 where
     V: Clone + std::fmt::Debug,
-    VB: VecBlockStore<V> + Send,
+    VB: BlockStore<Vec<V>> + Send,
     O: GroupIndexOperations,
 {
-    values: VB,
+    values: VecBlockStore<V, VB>,
     _phantom: PhantomData<(V, O)>,
 }
 
 impl<V, VB, O> GroupValuesPrimitiveState<V, VB, O>
 where
     V: Clone + std::fmt::Debug,
-    VB: VecBlockStore<V> + Send,
+    VB: BlockStore<Vec<V>> + Send,
     O: GroupIndexOperations,
 {
     fn new(values: VB) -> Self {
         Self {
-            values,
+            values: VecBlockStore::new(values),
             _phantom: PhantomData,
         }
     }

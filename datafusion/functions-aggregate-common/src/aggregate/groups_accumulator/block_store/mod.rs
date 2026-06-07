@@ -36,6 +36,10 @@ pub use vec_block_store::VecBlockStore;
 pub trait BlockStore<B: Block>:
     Debug + Index<usize, Output = B> + IndexMut<usize>
 {
+    fn push_block(&mut self, block: B);
+
+    fn pop_block(&mut self) -> Option<B>;
+
     /// Ensure the store has a block available for pushing a new value.
     fn allocate_block(&mut self);
 

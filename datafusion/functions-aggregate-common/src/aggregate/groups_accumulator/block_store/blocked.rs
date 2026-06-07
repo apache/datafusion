@@ -23,12 +23,7 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-use datafusion_common::{Result, internal_datafusion_err, internal_err};
-use datafusion_expr_common::groups_accumulator::EmitTo;
-
-use crate::aggregate::groups_accumulator::block_store::{
-    Block, BlockStore, VecBlockStore,
-};
+use crate::aggregate::groups_accumulator::block_store::{Block, BlockStore};
 
 /// Structure used to store aggregation intermediate results in `blocked approach`
 ///
@@ -36,16 +31,18 @@ use crate::aggregate::groups_accumulator::block_store::{
 /// (simply you can think a [`Block`] as a `Vec`). And `Blocks` is the structure
 /// to represent such multiple [`Block`]s.
 ///
-/// The lifecycle is split into two phases:
-/// - **Accumulation** (`emit_cursor` is `None`): blocks are appended via
+/// The lifecycle is split into two phases, encoded in the type system via
+/// [`EmitContext`]:
+/// - **Accumulation** (`emit_ctx` is `None`): blocks are appended via
 ///   [`BlockStore::resize`], [`BlockStore::allocate_block`], or [`Self::push_block`].
-/// - **Emission** (`emit_cursor` is `Some`): blocks are drained one-by-one via
-///   [`Self::pop_block`] until all blocks are consumed, then [`BlockStore::clear`]
-///   resets the state back to accumulation.
+/// - **Emission** (`emit_ctx` is `Some`): the first call to [`Self::pop_block`]
+///   moves all accumulated blocks into the [`EmitContext`]; subsequent calls
+///   drain from there one-by-one. [`BlockStore::clear`] resets the state back
+///   to accumulation.
 ///
 /// When blocks are popped via [`Self::pop_block`], the block is swapped
-/// out in O(1) using `mem::replace` and the cursor advances, avoiding
-/// the O(n) shift cost of `Vec::remove(0)`.
+/// out in O(1) using `mem::take` and the cursor advances, avoiding the
+/// O(n) shift cost of `Vec::remove(0)`.
 ///
 /// More details about `blocked approach` can see in: [`GroupsAccumulator::supports_blocked_groups`].
 ///
@@ -54,53 +51,64 @@ use crate::aggregate::groups_accumulator::block_store::{
 #[derive(Debug)]
 pub struct BlockedBlockStore<B: Block> {
     inner: Vec<B>,
-    /// Tracks emission progress. `None` during accumulation, `Some(idx)`
-    /// points to the next block to pop during emission.
-    emit_cursor: Option<usize>,
     block_size: usize,
+    /// `None` during accumulation; `Some` once emission has begun.
+    emit_ctx: Option<EmitContext<B>>,
+}
+
+/// Emission state for [`BlockedBlockStore`].
+///
+/// Created lazily when [`BlockedBlockStore::pop_block`] is first called. The
+/// store's accumulation `inner` is moved here in one shot, after which blocks
+/// are drained by advancing `emit_cursor` (using `mem::take` for O(1) removal).
+#[derive(Debug)]
+struct EmitContext<B: Block> {
+    /// Index of the next block to pop.
+    emit_cursor: usize,
+    /// Blocks moved out of the store at the start of emission.
+    inner: Vec<B>,
 }
 
 impl<B: Block> BlockedBlockStore<B> {
     pub fn new(block_size: usize) -> Self {
         Self {
             inner: Vec::new(),
-            emit_cursor: None,
+            emit_ctx: None,
             block_size,
         }
     }
 
-    /// Push a new block to the end of the blocks.
-    pub fn push_block(&mut self, block: B) {
-        assert!(
-            self.emit_cursor.is_none(),
-            "push_block must not be called during emission"
-        );
-        self.inner.push(block);
-    }
-
-    /// Pop the first active block in O(1) by swapping it with an empty
-    /// placeholder and advancing the emit cursor.
-    pub fn pop_block(&mut self) -> Option<B> {
-        let cursor = self.emit_cursor.get_or_insert(0);
-        if *cursor >= self.inner.len() {
-            None
-        } else {
-            let block = mem::take(&mut self.inner[*cursor]);
-            *cursor += 1;
-            Some(block)
-        }
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = &B> {
-        let start = self.emit_cursor.unwrap_or(0);
-        self.inner[start..].iter()
+        match &self.emit_ctx {
+            None => self.inner.iter(),
+            Some(ctx) => ctx.inner[ctx.emit_cursor..].iter(),
+        }
     }
 }
 
 impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
+    fn push_block(&mut self, block: B) {
+        self.inner.push(block);
+    }
+
+    fn pop_block(&mut self) -> Option<B> {
+        let ctx = self.emit_ctx.get_or_insert_with(|| EmitContext {
+            emit_cursor: 0,
+            inner: mem::take(&mut self.inner),
+        });
+
+        if ctx.emit_cursor >= ctx.inner.len() {
+            return None;
+        }
+
+        let block = mem::take(&mut ctx.inner[ctx.emit_cursor]);
+        ctx.emit_cursor += 1;
+        Some(block)
+    }
+
     fn allocate_block(&mut self) {
         assert!(
-            self.emit_cursor.is_none(),
+            self.emit_ctx.is_none(),
             "allocate_block must not be called during emission"
         );
 
@@ -117,7 +125,7 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
 
     fn resize(&mut self, total_num_groups: usize, default_value: B::T) {
         assert!(
-            self.emit_cursor.is_none(),
+            self.emit_ctx.is_none(),
             "resize must not be called during emission"
         );
 
@@ -162,8 +170,10 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
     }
 
     fn num_blocks(&self) -> usize {
-        let start = self.emit_cursor.unwrap_or(0);
-        self.inner.len() - start
+        match &self.emit_ctx {
+            None => self.inner.len(),
+            Some(ctx) => ctx.inner.len() - ctx.emit_cursor,
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -172,7 +182,7 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
 
     fn clear(&mut self) {
         self.inner.clear();
-        self.emit_cursor = None;
+        self.emit_ctx = None;
     }
 }
 
@@ -182,7 +192,7 @@ impl<B: Block> Index<usize> for BlockedBlockStore<B> {
     #[inline]
     fn index(&self, index: usize) -> &Self::Output {
         debug_assert!(
-            self.emit_cursor.is_none(),
+            self.emit_ctx.is_none(),
             "index must not be called during emission"
         );
         unsafe { self.inner.get_unchecked(index) }
@@ -193,31 +203,12 @@ impl<B: Block> IndexMut<usize> for BlockedBlockStore<B> {
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         debug_assert!(
-            self.emit_cursor.is_none(),
+            self.emit_ctx.is_none(),
             "index_mut must not be called during emission"
         );
         unsafe { self.inner.get_unchecked_mut(index) }
     }
 }
-
-
-
-impl<T: Clone + Debug> VecBlockStore<T> for BlockedBlockStore<Vec<T>> {
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<T>> {
-        match emit_to {
-            EmitTo::NextBlock => self
-                .pop_block()
-                .ok_or_else(|| internal_datafusion_err!("no more blocks to emit")),
-            EmitTo::All | EmitTo::First(_) => {
-                internal_err!(
-                    "blocks value block store does not support emitting all or first"
-                )
-            }
-        }
-    }
-}
-
-
 
 #[cfg(test)]
 mod tests {
