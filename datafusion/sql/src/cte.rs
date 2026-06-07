@@ -25,7 +25,7 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
-use sqlparser::ast::{Query, SetExpr, SetOperator, With};
+use sqlparser::ast::{CteAsMaterialized, Query, SetExpr, SetOperator, With};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn plan_with_clause(
@@ -44,8 +44,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 );
             }
 
+            // Track MATERIALIZED / NOT MATERIALIZED hints
+            if let Some(ref materialized) = cte.materialized {
+                match materialized {
+                    CteAsMaterialized::Materialized => {
+                        planner_context.insert_materialized_cte(&cte_name);
+                    }
+                    CteAsMaterialized::NotMaterialized => {
+                        planner_context.insert_not_materialized_cte(&cte_name);
+                    }
+                }
+            }
+
             // Create a logical plan for the CTE
             let cte_plan = if is_recursive {
+                planner_context.insert_recursive_cte(&cte_name);
                 self.recursive_cte(&cte_name, *cte.query, planner_context)?
             } else {
                 self.non_recursive_cte(*cte.query, planner_context)?

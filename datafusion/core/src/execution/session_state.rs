@@ -2313,7 +2313,9 @@ impl QueryPlanner for DefaultQueryPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let planner = DefaultPhysicalPlanner::default();
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+            crate::materialized_cte_planner::MaterializedCtePlanner::new(),
+        )]);
         planner
             .create_physical_plan(logical_plan, session_state)
             .await

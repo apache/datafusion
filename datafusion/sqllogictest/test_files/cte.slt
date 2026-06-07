@@ -1499,3 +1499,46 @@ RESET datafusion.execution.enable_recursive_ctes;
 
 statement ok
 RESET datafusion.sql_parser.enable_ident_normalization;
+
+# Enable materialized CTEs for the following tests
+statement ok
+set datafusion.execution.enable_materialized_ctes = true;
+
+# Materialized CTEs collect all input partitions before readers consume them.
+query I
+WITH t AS (
+  SELECT 1 AS a
+  UNION ALL SELECT 2 AS a
+  UNION ALL SELECT 3 AS a
+  UNION ALL SELECT 4 AS a
+)
+SELECT sum(l.a + r.a)
+FROM t l
+JOIN t r ON l.a = r.a;
+----
+20
+
+# Materialized CTE readers can feed repartitioning join plans without
+# re-entering a shared repartition output partition.
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+query II rowsort
+WITH t1 AS (
+  SELECT 11 AS a, 12 AS b
+  UNION ALL
+  SELECT 11 AS a, 13 AS b
+)
+SELECT t2.*
+FROM t1
+RIGHT SEMI JOIN t1 t2
+ON t1.a = t2.a AND t1.b = t2.b;
+----
+11 12
+11 13
+
+statement ok
+RESET datafusion.optimizer.prefer_hash_join;
+
+statement ok
+RESET datafusion.execution.enable_materialized_ctes;

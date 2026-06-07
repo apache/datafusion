@@ -64,6 +64,7 @@ macro_rules! assert_metrics {
 
 pub mod aggregates;
 pub mod create_drop;
+mod cte;
 pub mod explain_analyze;
 pub mod joins;
 mod path_partition;
