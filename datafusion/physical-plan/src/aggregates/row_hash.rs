@@ -194,6 +194,10 @@ impl SkipAggregationProbe {
         self.input_rows += input_rows;
         self.num_groups = num_groups;
         if self.input_rows >= self.probe_rows_threshold {
+            // Strict `>` (not `>=`): the boundary `ratio == threshold` must NOT
+            // trigger skip — without this, threshold=1.0 (100% cardinality, the
+            // documented way to disable the feature) would still cause skipping
+            // when every row is its own group.
             self.should_skip = self.num_groups as f64 / self.input_rows as f64
                 > self.probe_ratio_threshold;
             // Set is_locked to true only if we have decided to skip, otherwise we can try to skip

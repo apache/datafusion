@@ -58,7 +58,11 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
     } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
         check_support(negative.arg(), schema)
     } else if let Some(scalar_fn) = expr.downcast_ref::<ScalarFunctionExpr>() {
-        scalar_fn.fun().signature().volatility == Volatility::Immutable
+        // Stable functions (e.g. `now()`, `current_date()`) are deterministic
+        // within a single query execution, so their bounds are well-defined for
+        // interval analysis — only Volatile functions (e.g. `random()`) must be
+        // excluded.
+        scalar_fn.fun().signature().volatility != Volatility::Volatile
             && is_datatype_supported(scalar_fn.return_type())
             && scalar_fn
                 .args()
@@ -338,6 +342,73 @@ mod tests {
         let fn_expr = scalar_fn_expr(utf8_udf(), vec![col_x()], DataType::Utf8);
         let expr: Arc<dyn PhysicalExpr> =
             Arc::new(BinaryExpr::new(fn_expr, Operator::Gt, lit_f64(5.0)));
+        assert!(!check_support(&expr, &schema));
+    }
+
+    /// A Float64-returning UDF parameterised by volatility, used to verify
+    /// that `check_support` accepts Immutable/Stable and rejects Volatile.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct VolatilityUDF {
+        name: &'static str,
+        signature: Signature,
+    }
+
+    impl VolatilityUDF {
+        fn new(name: &'static str, volatility: Volatility) -> Self {
+            Self {
+                name,
+                signature: Signature::uniform(1, vec![DataType::Float64], volatility),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for VolatilityUDF {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Float64)
+        }
+        fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+        }
+    }
+
+    fn volatility_udf(
+        name: &'static str,
+        volatility: Volatility,
+    ) -> Arc<datafusion_expr::ScalarUDF> {
+        Arc::new(datafusion_expr::ScalarUDF::from(VolatilityUDF::new(
+            name, volatility,
+        )))
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_stable_is_supported() {
+        // Stable functions are deterministic within a query → safe for interval
+        // analysis; check_support must accept them.
+        let schema = f64_schema();
+        let expr = scalar_fn_expr(
+            volatility_udf("stable_udf", Volatility::Stable),
+            vec![col_x()],
+            DataType::Float64,
+        );
+        assert!(check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_volatile_is_unsupported() {
+        // Volatile functions (e.g. random()) can return different values on each
+        // call → interval analysis is unsound; check_support must reject them.
+        let schema = f64_schema();
+        let expr = scalar_fn_expr(
+            volatility_udf("volatile_udf", Volatility::Volatile),
+            vec![col_x()],
+            DataType::Float64,
+        );
         assert!(!check_support(&expr, &schema));
     }
 }
