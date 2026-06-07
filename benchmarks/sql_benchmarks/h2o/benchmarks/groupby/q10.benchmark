@@ -1,0 +1,18 @@
+subgroup groupby
+
+name Q10
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} groupby ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_groupby_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run
+SELECT id1, id2, id3, id4, id5, id6, SUM(v3) AS v3, COUNT(*) AS count FROM x GROUP BY id1, id2, id3, id4, id5, id6;
+
+result sql_benchmarks/h2o/results/groupby/${H2O_BENCH_SIZE:-small}/q10.csv

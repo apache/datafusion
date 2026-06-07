@@ -25,6 +25,7 @@ use super::{
     SendableRecordBatchStream,
 };
 use crate::display::DisplayableExecutionPlan;
+use crate::execution_plan::EvaluationType;
 use crate::metrics::{MetricCategory, MetricType};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
@@ -172,6 +173,7 @@ impl AnalyzeExec {
             input.pipeline_behavior(),
             input.boundedness(),
         )
+        .with_evaluation_type(EvaluationType::Eager)
     }
 }
 

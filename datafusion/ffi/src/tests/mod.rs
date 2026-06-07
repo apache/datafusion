@@ -113,6 +113,8 @@ pub struct ForeignLibraryModule {
 
     pub create_physical_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
+    pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
+
     pub version: extern "C" fn() -> u64,
 }
 
@@ -259,6 +261,8 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_table_with_statistics,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
+        create_context_aware_optimizer_rule:
+            physical_optimizer::create_context_aware_optimizer_rule,
         version: super::version,
     }
 }
