@@ -24,6 +24,7 @@ use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
 use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
+use crate::opener::build_virtual_columns_state;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
@@ -346,7 +347,11 @@ impl ParquetSource {
         self
     }
 
-    /// Set predicate information
+    /// Set predicate information.
+    ///
+    /// Predicates referencing virtual columns must go through
+    /// [`Self::try_pushdown_filters`]. Passing them here with pushdown
+    /// enabled trips a debug assert in the opener.
     #[expect(clippy::needless_pass_by_value)]
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
@@ -584,6 +589,22 @@ impl FileSource for ParquetSource {
             );
         }
 
+        // Validate virtual columns (extension-type allowlist) and, when
+        // pushdown is enabled, reject predicates that reference them. Both
+        // checks depend only on morselizer-level state, so we pay their cost
+        // once per scan partition rather than per file.
+        //
+        // Gating predicate validation on `pushdown_filters` is deliberate:
+        // when pushdown is off the predicate stays above the scan as a
+        // `FilterExec` and resolves virtual columns there; the row-filter
+        // ban only applies to the pushdown path.
+        let virtual_state = build_virtual_columns_state(
+            self.table_schema.virtual_columns(),
+            self.table_schema.file_schema(),
+            self.predicate.as_ref(),
+            self.pushdown_filters(),
+        )?;
+
         Ok(Box::new(ParquetMorselizer {
             partition_index: partition,
             projection: self.projection.clone(),
@@ -613,6 +634,7 @@ impl FileSource for ParquetSource {
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
+            virtual_state,
         }))
     }
 
@@ -727,7 +749,12 @@ impl FileSource for ParquetSource {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
-        let table_schema = self.table_schema.table_schema();
+        // Use the schema excluding virtual columns: virtual columns (e.g.
+        // Parquet `row_number`) are produced by the reader itself and cannot
+        // be referenced inside a RowFilter, so predicates that reference them
+        // must not be marked as pushed down — otherwise the scan would
+        // silently drop them and produce wrong results.
+        let pushable_schema = self.table_schema.schema_without_virtual_columns();
         // Determine if based on configs we should push filters down.
         // If either the table / scan itself or the config has pushdown enabled,
         // we will push down the filters.
@@ -743,7 +770,7 @@ impl FileSource for ParquetSource {
         let filters: Vec<PushedDownPredicate> = filters
             .into_iter()
             .map(|filter| {
-                if can_expr_be_pushed_down_with_schemas(&filter, table_schema) {
+                if can_expr_be_pushed_down_with_schemas(&filter, pushable_schema) {
                     PushedDownPredicate::supported(filter)
                 } else {
                     PushedDownPredicate::unsupported(filter)
@@ -1287,7 +1314,9 @@ mod tests {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let partition_b = Arc::new(Field::new("b", DataType::Int32, true));
-        let table_schema = TableSchema::new(file_schema, vec![partition_b]);
+        let table_schema = TableSchema::builder(file_schema)
+            .with_table_partition_cols(vec![partition_b])
+            .build();
         let source = ParquetSource::new(table_schema);
 
         // EquivalenceProperties is built on the *full* table schema so
@@ -1580,5 +1609,68 @@ mod tests {
                 "{mode:?} display must surface sort_order_for_reorder, got: {out}",
             );
         }
+    }
+
+    #[test]
+    fn test_try_pushdown_filters_rejects_virtual_column_refs() {
+        // Virtual columns are produced by the reader and cannot be referenced
+        // inside a RowFilter. `try_pushdown_filters` must report such filters
+        // as `PushedDown::No` so the FilterExec above the scan stays in
+        // place — otherwise the scan would silently drop the predicate and
+        // produce wrong results.
+        use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_datasource::TableSchema;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_plan::filter_pushdown::PushedDown;
+        use parquet::arrow::RowNumber;
+
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let row_number_field: FieldRef = Arc::new(
+            Field::new("row_number", DataType::Int64, false)
+                .with_extension_type(RowNumber),
+        );
+        let table_schema = TableSchema::builder(file_schema)
+            .with_virtual_columns(vec![row_number_field])
+            .build();
+
+        let source = ParquetSource::new(table_schema).with_pushdown_filters(true);
+
+        let full_schema = source.table_schema.table_schema();
+
+        let pushable = logical2physical(&col("value").eq(logical_lit(1i64)), full_schema);
+        let virtual_only =
+            logical2physical(&col("row_number").eq(logical_lit(2i64)), full_schema);
+        let mixed = logical2physical(
+            &col("row_number")
+                .eq(logical_lit(2i64))
+                .or(col("value").eq(logical_lit(4i64))),
+            full_schema,
+        );
+
+        let config = ConfigOptions::default();
+        let prop = source
+            .try_pushdown_filters(vec![pushable, virtual_only, mixed], &config)
+            .expect("try_pushdown_filters must not error");
+
+        assert_eq!(prop.filters.len(), 3);
+        assert!(
+            matches!(prop.filters[0], PushedDown::Yes),
+            "file-column filter should be pushable"
+        );
+        assert!(
+            matches!(prop.filters[1], PushedDown::No),
+            "filter referencing only a virtual column must not be pushed down"
+        );
+        assert!(
+            matches!(prop.filters[2], PushedDown::No),
+            "filter mixing a virtual column with a file column must not be \
+             pushed down (row filter would silently drop it)"
+        );
     }
 }

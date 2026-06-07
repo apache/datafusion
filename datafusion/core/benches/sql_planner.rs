@@ -133,15 +133,23 @@ fn create_context() -> SessionContext {
 
 /// Register the table definitions as a MemTable with the context and return the
 /// context
-#[expect(clippy::needless_pass_by_value)]
 fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
-    defs.iter().for_each(|TableDef { name, schema }| {
+    for TableDef {
+        name,
+        schema,
+        constraints,
+    } in defs
+    {
         ctx.register_table(
-            name,
-            Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![vec![]]).unwrap()),
+            &name,
+            Arc::new(
+                MemTable::try_new(Arc::new(schema), vec![vec![]])
+                    .unwrap()
+                    .with_constraints(constraints),
+            ),
         )
         .unwrap();
-    });
+    }
     ctx
 }
 

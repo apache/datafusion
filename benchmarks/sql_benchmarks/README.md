@@ -36,6 +36,7 @@ in the community:
 | `hj`                  | Hash join benchmark                                                |
 | `imdb`                | IMDb benchmark                                                     |
 | `nlj`                 | Nested‑loop join benchmark                                         |
+| `push_down_topk`      | `ORDER BY ... LIMIT` over outer joins (TPC-H data); exercises pushing a TopK through a join |
 | `smj`                 | Sort‑merge join benchmark                                          |
 | `sort tpch`           | Sorting benchmarks against the TPC-H lineitem table                |
 | `taxi`                | NYC taxi dataset benchmark                                         |

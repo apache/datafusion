@@ -595,6 +595,12 @@ SELECT to_timestamp(arrow_cast(123456789.123456789, 'Decimal128(18,9)')) as c1, 
 ----
 1973-11-29T21:33:09.123456784 1970-01-01T00:00:00.123456789 1970-01-01T00:00:00.123456789
 
+# Regression test for https://github.com/apache/datafusion/issues/22213
+query error .*overflows timestamp nanoseconds
+SELECT to_timestamp(
+  arrow_cast('99999999999999999999999999999999999999', 'Decimal128(38,0)')
+);
+
 
 # from_unixtime
 
@@ -2474,6 +2480,51 @@ SELECT TIMESTAMPTZ '2020-01-01 00:00:00Z' = TIMESTAMP '2020-01-01'
 ----
 true
 
+query BBB
+SELECT
+  arrow_cast(TIMESTAMP '2024-01-01 00:00:00', 'Timestamp(Second, None)') =
+    arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)'),
+  arrow_cast(TIMESTAMP '2024-01-01 00:00:00', 'Timestamp(Second, None)') =
+    arrow_cast(TIMESTAMP '2024-01-01 00:00:00.000', 'Timestamp(Millisecond, None)'),
+  arrow_cast(TIMESTAMP '2024-01-01 00:00:00', 'Timestamp(Second, None)') <
+    arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)')
+----
+false true true
+
+query ?
+SELECT
+  arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)') -
+    arrow_cast(TIMESTAMP '2024-01-01 00:00:00', 'Timestamp(Second, None)')
+----
+0 days 0 hours 0 mins 0.123 secs
+
+query TP
+SELECT arrow_typeof(ts), ts
+FROM (
+  SELECT arrow_cast(TIMESTAMP '2024-01-01 00:00:00', 'Timestamp(Second, None)') AS ts
+  UNION ALL
+  SELECT arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)') AS ts
+)
+ORDER BY ts
+----
+Timestamp(ms) 2024-01-01T00:00:00
+Timestamp(ms) 2024-01-01T00:00:00.123
+
+query TP
+SELECT
+  arrow_typeof(
+    coalesce(
+      arrow_cast(NULL, 'Timestamp(Second, None)'),
+      arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)')
+    )
+  ),
+  coalesce(
+    arrow_cast(NULL, 'Timestamp(Second, None)'),
+    arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)')
+  )
+----
+Timestamp(ms) 2024-01-01T00:00:00.123
+
 # verify timestamp cast with integer input
 query PPPPPP
 SELECT to_timestamp(null), to_timestamp(0), to_timestamp(1926632005), to_timestamp(1), to_timestamp(-1), to_timestamp(0-1)
@@ -3953,17 +4004,17 @@ true
 query ?
 select arrow_cast('2024-06-17T11:00:00', 'Timestamp(Nanosecond, Some("UTC"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("UTC"))');
 ----
-0 days -1 hours 0 mins 0.000000 secs
+0 days -1 hours 0 mins 0.000000000 secs
 
 query ?
 select arrow_cast('2024-06-17T13:00:00', 'Timestamp(Nanosecond, Some("+00:00"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("UTC"))');
 ----
-0 days 1 hours 0 mins 0.000000 secs
+0 days 1 hours 0 mins 0.000000000 secs
 
 query ?
 select arrow_cast('2024-06-17T13:00:00', 'Timestamp(Nanosecond, Some("UTC"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("+00:00"))');
 ----
-0 days 1 hours 0 mins 0.000000 secs
+0 days 1 hours 0 mins 0.000000000 secs
 
 # not supported: coercion across timezones
 query error
@@ -5325,7 +5376,7 @@ SELECT to_timestamp(arrow_cast(-9223372036, 'Int64'));
 1677-09-21T00:12:44
 
 # Overflow error when value exceeds valid range
-query error Arithmetic overflow
+query error converted value exceeds the representable i64 range
 SELECT to_timestamp(arrow_cast(9223372037, 'Int64'));
 
 # Float truncation behavior
@@ -5338,6 +5389,13 @@ query P
 SELECT to_timestamp_millis(arrow_cast(-1.9, 'Float64'));
 ----
 1969-12-31T23:59:59.999
+
+# Regression test for https://github.com/apache/datafusion/issues/22214
+query error .*out of range after truncating to year
+SELECT date_trunc(
+  'year',
+  arrow_cast(TIMESTAMP '1677-09-22 00:00:00', 'Timestamp(Nanosecond, None)')
+);
 
 
 ##########

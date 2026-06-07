@@ -26,6 +26,7 @@ use arrow::array::{
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
+use datafusion_common::utils::split_vec_min_alloc;
 use std::marker::PhantomData;
 use std::mem::{replace, size_of};
 use std::sync::Arc;
@@ -363,7 +364,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         //
         //   - Shift the `buffer index` of remaining non-inlined `views`
         //
-        let first_n_views = self.views.drain(0..n).collect::<Vec<_>>();
+        let first_n_views = split_vec_min_alloc(&mut self.views, n);
 
         let last_non_inlined_view = first_n_views
             .iter()
