@@ -45,7 +45,7 @@ use crate::expr::columnar_value::FFI_ColumnarValue;
 use crate::expr::expr_properties::FFI_ExprProperties;
 use crate::placement::FFI_ExpressionPlacement;
 use crate::util::{
-    FFI_Result, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped,
+    FFI_Option, FFI_Result, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped,
 };
 use crate::volatility::FFI_Volatility;
 use crate::{df_result, sresult, sresult_return};
@@ -123,6 +123,17 @@ pub struct FFI_ScalarUDF {
         udf: &Self,
         inputs: SVec<FFI_ExprProperties>,
     ) -> FFI_Result<bool>,
+
+    /// FFI equivalent to [`ScalarUDFImpl`]'s `with_updated_config`. Given the
+    /// session [`ConfigOptions`], optionally returns a reconfigured copy of the
+    /// UDF, or `None` when the provider does not specialize on config. Wrapped
+    /// in an `FFI_Result` because recovering the `ConfigOptions` on the provider
+    /// side is fallible.
+    pub with_updated_config:
+        unsafe extern "C" fn(
+            udf: &Self,
+            config: FFI_ConfigOptions,
+        ) -> FFI_Result<FFI_Option<FFI_ScalarUDF>>,
 }
 
 unsafe impl Send for FFI_ScalarUDF {}
@@ -197,6 +208,21 @@ unsafe extern "C" fn preserves_lex_ordering_fn_wrapper(
         .and_then(|inputs| udf.inner().preserves_lex_ordering(&inputs));
 
     sresult!(result)
+}
+
+unsafe extern "C" fn with_updated_config_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    config: FFI_ConfigOptions,
+) -> FFI_Result<FFI_Option<FFI_ScalarUDF>> {
+    let config = sresult_return!(ConfigOptions::try_from(config));
+
+    let updated: Option<FFI_ScalarUDF> = udf
+        .inner()
+        .inner()
+        .with_updated_config(&config)
+        .map(|updated| Arc::new(updated).into());
+
+    FFI_Result::Ok(updated.into())
 }
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
@@ -298,6 +324,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
             preserves_lex_ordering: preserves_lex_ordering_fn_wrapper,
+            with_updated_config: with_updated_config_fn_wrapper,
         }
     }
 }
@@ -494,6 +521,19 @@ impl ScalarUDFImpl for ForeignScalarUDF {
                 df_result!(result)
             })
     }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        let config: FFI_ConfigOptions = config.into();
+
+        let result = unsafe { (self.udf.with_updated_config)(&self.udf, config) };
+
+        // The trait method is infallible, so a transport-level error (the config
+        // failing to round-trip on the provider side) degrades to `None`; the
+        // same outcome as a provider that does not specialize on config.
+        let updated = df_result!(result).ok()?.into_option()?;
+
+        Some(ScalarUDF::new_from_shared_impl((&updated).into()))
+    }
 }
 
 #[cfg(test)]
@@ -628,6 +668,65 @@ mod tests {
                 .unwrap()
         );
         assert!(foreign_udf.preserves_lex_ordering(&[]).is_err());
+
+        Ok(())
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct ConfigSpecializingUdf {
+        signature: Signature,
+        specialized: bool,
+    }
+
+    impl ScalarUDFImpl for ConfigSpecializingUdf {
+        fn name(&self) -> &str {
+            if self.specialized {
+                "specialized"
+            } else {
+                "base"
+            }
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            internal_err!("ConfigSpecializingUdf is not meant to be invoked")
+        }
+
+        fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+            Some(ScalarUDF::from(ConfigSpecializingUdf {
+                signature: self.signature.clone(),
+                specialized: true,
+            }))
+        }
+    }
+
+    #[test]
+    fn test_ffi_udf_with_updated_config() -> Result<()> {
+        let original_udf = Arc::new(ScalarUDF::from(ConfigSpecializingUdf {
+            signature: Signature::exact(vec![], datafusion_expr::Volatility::Immutable),
+            specialized: false,
+        }));
+
+        let mut ffi_udf = FFI_ScalarUDF::from(Arc::clone(&original_udf));
+        ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
+        assert!(foreign_udf.is::<ForeignScalarUDF>());
+
+        // The producer override must survive the foreign path; the trait default
+        // returns `None`.
+        let updated = foreign_udf.with_updated_config(&ConfigOptions::default());
+        assert_eq!(
+            updated.map(|udf| udf.name().to_string()),
+            Some("specialized".to_string())
+        );
 
         Ok(())
     }
