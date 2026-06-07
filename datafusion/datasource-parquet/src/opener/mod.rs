@@ -872,8 +872,11 @@ impl PreparedParquetOpen {
         // unnecessary I/O. We decide later if it is needed to evaluate the
         // pruning predicates. Thus default to not requesting it from the
         // underlying reader.
-        let options =
+        let mut options =
             ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
+        if let Some(schema) = self.partitioned_file.arrow_schema.as_ref() {
+            options = options.with_schema(Arc::clone(schema));
+        }
         #[cfg(feature = "parquet_encryption")]
         let mut options = options;
         #[cfg(feature = "parquet_encryption")]
@@ -2396,6 +2399,55 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_opener_prioritizes_partitioned_file_schema() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(2), Some(2)]),
+            ("b", Float32, vec![Some(1.0), Some(2.0), None])
+        )
+        .unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
+
+        let schema = batch.schema();
+        let query_file = async |schema: SchemaRef| -> Result<(usize, usize)> {
+            let file = PartitionedFile::new(
+                "test.parquet".to_string(),
+                u64::try_from(data_size).unwrap(),
+            )
+            .with_arrow_schema(schema.clone());
+
+            let predicate = logical2physical(&col("a").eq(lit(1)), &schema);
+            let opener = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(predicate)
+                .build();
+
+            let stream = open_file(&opener, file.clone()).await?;
+            Ok(count_batches_and_rows(stream).await)
+        };
+
+        let (num_batches, num_rows) =
+            query_file(schema.clone()).await.expect("query_file");
+        assert_eq!(num_batches, 1);
+        assert_eq!(num_rows, 3);
+
+        let mismatching_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Float64, true),
+        ]);
+        assert_eq!(
+            query_file(SchemaRef::new(mismatching_schema))
+                .await
+                .unwrap_err()
+                .message(),
+            "Arrow: Incompatible supplied Arrow schema: data type mismatch for field b: requested Float64 but found Float32"
+        );
     }
 
     #[tokio::test]

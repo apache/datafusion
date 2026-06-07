@@ -911,144 +911,6 @@ impl<'de> serde::Deserialize<'de> for AvroOptions {
         deserializer.deserialize_struct("datafusion_common.AvroOptions", FIELDS, GeneratedVisitor)
     }
 }
-impl serde::Serialize for CdcOptions {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.min_chunk_size != 0 {
-            len += 1;
-        }
-        if self.max_chunk_size != 0 {
-            len += 1;
-        }
-        if self.norm_level != 0 {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion_common.CdcOptions", len)?;
-        if self.min_chunk_size != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("minChunkSize", ToString::to_string(&self.min_chunk_size).as_str())?;
-        }
-        if self.max_chunk_size != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("maxChunkSize", ToString::to_string(&self.max_chunk_size).as_str())?;
-        }
-        if self.norm_level != 0 {
-            struct_ser.serialize_field("normLevel", &self.norm_level)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for CdcOptions {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "min_chunk_size",
-            "minChunkSize",
-            "max_chunk_size",
-            "maxChunkSize",
-            "norm_level",
-            "normLevel",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            MinChunkSize,
-            MaxChunkSize,
-            NormLevel,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl serde::de::Visitor<'_> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "minChunkSize" | "min_chunk_size" => Ok(GeneratedField::MinChunkSize),
-                            "maxChunkSize" | "max_chunk_size" => Ok(GeneratedField::MaxChunkSize),
-                            "normLevel" | "norm_level" => Ok(GeneratedField::NormLevel),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = CdcOptions;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion_common.CdcOptions")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<CdcOptions, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut min_chunk_size__ = None;
-                let mut max_chunk_size__ = None;
-                let mut norm_level__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::MinChunkSize => {
-                            if min_chunk_size__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("minChunkSize"));
-                            }
-                            min_chunk_size__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::MaxChunkSize => {
-                            if max_chunk_size__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("maxChunkSize"));
-                            }
-                            max_chunk_size__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::NormLevel => {
-                            if norm_level__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("normLevel"));
-                            }
-                            norm_level__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                    }
-                }
-                Ok(CdcOptions {
-                    min_chunk_size: min_chunk_size__.unwrap_or_default(),
-                    max_chunk_size: max_chunk_size__.unwrap_or_default(),
-                    norm_level: norm_level__.unwrap_or_default(),
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion_common.CdcOptions", FIELDS, GeneratedVisitor)
-    }
-}
 impl serde::Serialize for Column {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -5896,6 +5758,161 @@ impl<'de> serde::Deserialize<'de> for NullEquality {
         deserializer.deserialize_any(GeneratedVisitor)
     }
 }
+impl serde::Serialize for ParquetCdcOptions {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.enabled {
+            len += 1;
+        }
+        if self.min_chunk_size != 0 {
+            len += 1;
+        }
+        if self.max_chunk_size != 0 {
+            len += 1;
+        }
+        if self.norm_level != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetCdcOptions", len)?;
+        if self.enabled {
+            struct_ser.serialize_field("enabled", &self.enabled)?;
+        }
+        if self.min_chunk_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("minChunkSize", ToString::to_string(&self.min_chunk_size).as_str())?;
+        }
+        if self.max_chunk_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("maxChunkSize", ToString::to_string(&self.max_chunk_size).as_str())?;
+        }
+        if self.norm_level != 0 {
+            struct_ser.serialize_field("normLevel", &self.norm_level)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ParquetCdcOptions {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "enabled",
+            "min_chunk_size",
+            "minChunkSize",
+            "max_chunk_size",
+            "maxChunkSize",
+            "norm_level",
+            "normLevel",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Enabled,
+            MinChunkSize,
+            MaxChunkSize,
+            NormLevel,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "enabled" => Ok(GeneratedField::Enabled),
+                            "minChunkSize" | "min_chunk_size" => Ok(GeneratedField::MinChunkSize),
+                            "maxChunkSize" | "max_chunk_size" => Ok(GeneratedField::MaxChunkSize),
+                            "normLevel" | "norm_level" => Ok(GeneratedField::NormLevel),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ParquetCdcOptions;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion_common.ParquetCdcOptions")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ParquetCdcOptions, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut enabled__ = None;
+                let mut min_chunk_size__ = None;
+                let mut max_chunk_size__ = None;
+                let mut norm_level__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Enabled => {
+                            if enabled__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("enabled"));
+                            }
+                            enabled__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::MinChunkSize => {
+                            if min_chunk_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("minChunkSize"));
+                            }
+                            min_chunk_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::MaxChunkSize => {
+                            if max_chunk_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxChunkSize"));
+                            }
+                            max_chunk_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NormLevel => {
+                            if norm_level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("normLevel"));
+                            }
+                            norm_level__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(ParquetCdcOptions {
+                    enabled: enabled__.unwrap_or_default(),
+                    min_chunk_size: min_chunk_size__.unwrap_or_default(),
+                    max_chunk_size: max_chunk_size__.unwrap_or_default(),
+                    norm_level: norm_level__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion_common.ParquetCdcOptions", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ParquetColumnOptions {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -6431,6 +6448,9 @@ impl serde::Serialize for ParquetOptions {
         if self.max_predicate_cache_size_opt.is_some() {
             len += 1;
         }
+        if self.max_row_group_bytes_opt.is_some() {
+            len += 1;
+        }
         if self.coerce_int96_tz_opt.is_some() {
             len += 1;
         }
@@ -6602,6 +6622,15 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.max_row_group_bytes_opt.as_ref() {
+            match v {
+                parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("maxRowGroupBytes", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
         if let Some(v) = self.coerce_int96_tz_opt.as_ref() {
             match v {
                 parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => {
@@ -6682,6 +6711,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "coerceInt96",
             "max_predicate_cache_size",
             "maxPredicateCacheSize",
+            "max_row_group_bytes",
+            "maxRowGroupBytes",
             "coerce_int96_tz",
             "coerceInt96Tz",
         ];
@@ -6721,6 +6752,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             BloomFilterNdv,
             CoerceInt96,
             MaxPredicateCacheSize,
+            MaxRowGroupBytes,
             CoerceInt96Tz,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -6776,6 +6808,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
                             "coerceInt96" | "coerce_int96" => Ok(GeneratedField::CoerceInt96),
                             "maxPredicateCacheSize" | "max_predicate_cache_size" => Ok(GeneratedField::MaxPredicateCacheSize),
+                            "maxRowGroupBytes" | "max_row_group_bytes" => Ok(GeneratedField::MaxRowGroupBytes),
                             "coerceInt96Tz" | "coerce_int96_tz" => Ok(GeneratedField::CoerceInt96Tz),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -6829,6 +6862,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut bloom_filter_ndv_opt__ = None;
                 let mut coerce_int96_opt__ = None;
                 let mut max_predicate_cache_size_opt__ = None;
+                let mut max_row_group_bytes_opt__ = None;
                 let mut coerce_int96_tz_opt__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -7044,6 +7078,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             max_predicate_cache_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(x.0));
                         }
+                        GeneratedField::MaxRowGroupBytes => {
+                            if max_row_group_bytes_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxRowGroupBytes"));
+                            }
+                            max_row_group_bytes_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(x.0));
+                        }
                         GeneratedField::CoerceInt96Tz => {
                             if coerce_int96_tz_opt__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("coerceInt96Tz"));
@@ -7086,6 +7126,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
                     coerce_int96_opt: coerce_int96_opt__,
                     max_predicate_cache_size_opt: max_predicate_cache_size_opt__,
+                    max_row_group_bytes_opt: max_row_group_bytes_opt__,
                     coerce_int96_tz_opt: coerce_int96_tz_opt__,
                 })
             }

@@ -30,7 +30,9 @@ use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow_schema::{DataType, FieldRef};
+#[cfg(feature = "sql")]
+use arrow_schema::DataType;
+use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, InformationSchemaProvider,
@@ -437,9 +439,8 @@ impl SessionState {
     ) -> datafusion_common::Result<Statement> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: \
-                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+                Dialect::AVAILABLE
             )
         })?;
 
@@ -486,9 +487,8 @@ impl SessionState {
     ) -> datafusion_common::Result<SQLExprWithAlias> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: \
-                         Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+                Dialect::AVAILABLE
             )
         })?;
 

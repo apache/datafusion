@@ -714,7 +714,7 @@ impl SessionContext {
                         Box::pin(self.drop_schema(cmd)).await
                     }
                     DdlStatement::CreateFunction(cmd) => {
-                        Box::pin(self.create_function(cmd)).await
+                        Box::pin(self.create_function(*cmd)).await
                     }
                     DdlStatement::DropFunction(cmd) => {
                         Box::pin(self.drop_function(cmd)).await

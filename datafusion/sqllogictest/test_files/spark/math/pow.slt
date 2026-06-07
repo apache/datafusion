@@ -22,6 +22,154 @@
 #   https://github.com/apache/datafusion/issues/15914
 
 ## Original Query: SELECT pow(2, 3);
-## PySpark 3.5.5 Result: {'pow(2, 3)': 8.0, 'typeof(pow(2, 3))': 'double', 'typeof(2)': 'int', 'typeof(3)': 'int'}
-#query
-#SELECT pow(2::int, 3::int);
+## PySpark 3.5.5 Result: {'pow(2, 3)': 8.0, 'typeof(pow(2, 3))': 'double'}
+## DataFusion: pow(int, int) returns int. Sqllogictest prints 8.
+query R
+SELECT pow(2::int, 3::int);
+----
+8
+
+## Spark returns Infinity for pow(0, negative) — see https://github.com/apache/datafusion/issues/22598
+## PostgreSQL / DataFusion default raises an error instead.
+## PySpark 3.5.5:  spark.sql("select pow(0, -1)").show()  =>  Infinity
+
+query R
+SELECT pow(0::double, -1::double);
+----
+Infinity
+
+query R
+SELECT power(0::double, -1::double);
+----
+Infinity
+
+query R
+SELECT pow(0.0, -1.0);
+----
+Infinity
+
+# nulls
+query R
+SELECT pow(CAST(NULL AS DOUBLE), 1.0);
+----
+NULL
+
+query R
+SELECT pow(1.0, CAST(NULL AS DOUBLE));
+----
+NULL
+
+query R
+SELECT pow(CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE));
+----
+NULL
+
+# nans
+query R
+SELECT pow(CAST('NaN' AS DOUBLE), 1.0);
+----
+NaN
+
+query R
+SELECT pow(1.0, CAST('NaN' AS DOUBLE));
+----
+1
+
+query R
+SELECT pow(CAST('NaN' AS DOUBLE), 0.0);
+----
+1
+
+# -0, +0
+query R
+SELECT pow(0.0, 1.0);
+----
+0
+
+query R
+SELECT pow(CAST('-0.0' AS DOUBLE), 1.0);
+----
+0
+
+query R
+SELECT pow(0.0, -1.0);
+----
+Infinity
+
+query R
+SELECT pow(CAST('-0.0' AS DOUBLE), -1.0);
+----
+Infinity
+
+# -inf, +inf
+query R
+SELECT pow(CAST('Infinity' AS DOUBLE), 1.0);
+----
+Infinity
+
+query R
+SELECT pow(CAST('Infinity' AS DOUBLE), -1.0);
+----
+0
+
+query R
+SELECT pow(CAST('-Infinity' AS DOUBLE), 1.0);
+----
+-Infinity
+
+query R
+SELECT pow(CAST('-Infinity' AS DOUBLE), 2.0);
+----
+Infinity
+
+query R
+SELECT pow(2.0, CAST('Infinity' AS DOUBLE));
+----
+Infinity
+
+query R
+SELECT pow(0.5, CAST('Infinity' AS DOUBLE));
+----
+0
+
+query R
+SELECT pow(2.0, CAST('-Infinity' AS DOUBLE));
+----
+0
+
+query R
+SELECT pow(0.5, CAST('-Infinity' AS DOUBLE));
+----
+Infinity
+
+# Test Array x Array
+statement ok
+CREATE TABLE t1(a DOUBLE, b DOUBLE) AS VALUES
+(0.0, -1.0),
+(2.0, 3.0),
+(CAST(NULL AS DOUBLE), 1.0);
+
+query R
+SELECT pow(a, b) FROM t1;
+----
+Infinity
+8
+NULL
+
+statement ok
+DROP TABLE t1;
+
+# Test Scalar x Array
+statement ok
+CREATE TABLE t2(b DOUBLE) AS VALUES
+(-1.0),
+(2.0);
+
+query R
+SELECT pow(0.0, b) FROM t2;
+----
+Infinity
+0
+
+statement ok
+DROP TABLE t2;
