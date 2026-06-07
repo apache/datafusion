@@ -69,6 +69,7 @@ mod parquet_encrypted;
 mod parquet_encrypted_with_kms;
 mod parquet_exec_visitor;
 mod parquet_index;
+mod partitioned_file_schema;
 mod query_http_csv;
 mod remote_catalog;
 
@@ -89,6 +90,7 @@ enum ExampleKind {
     ParquetEncWithKms,
     ParquetExecVisitor,
     ParquetIdx,
+    PartitionedFileSchema,
     QueryHttpCsv,
     RemoteCatalog,
 }
@@ -127,6 +129,9 @@ impl ExampleKind {
                 parquet_exec_visitor::parquet_exec_visitor().await?
             }
             ExampleKind::ParquetIdx => parquet_index::parquet_index().await?,
+            ExampleKind::PartitionedFileSchema => {
+                partitioned_file_schema::read_partitioned_file().await?
+            }
             ExampleKind::QueryHttpCsv => query_http_csv::query_http_csv().await?,
             ExampleKind::RemoteCatalog => remote_catalog::remote_catalog().await?,
         }
