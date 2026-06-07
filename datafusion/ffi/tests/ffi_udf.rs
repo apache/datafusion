@@ -21,6 +21,7 @@
 mod tests {
     use arrow::array::{Array, AsArray};
     use arrow::datatypes::DataType;
+    use datafusion::common::config::ConfigOptions;
     use datafusion::common::record_batch;
     use datafusion::error::Result;
     use datafusion::logical_expr::{ExpressionPlacement, ScalarUDF, ScalarUDFImpl};
@@ -149,6 +150,27 @@ mod tests {
         assert!(!result[0].column(0).as_string::<i32>().is_null(0));
         let result = result[0].column(0).as_string::<i32>().value(0);
         assert_eq!(result, "AEST");
+
+        Ok(())
+    }
+
+    /// Validates that a provider's `with_updated_config` override survives the
+    /// FFI boundary (the trait default returns `None`).
+    #[test]
+    fn test_with_updated_config_on_scalar_udf() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_udf = (module.create_with_config_udf)();
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("AEST".into());
+
+        let updated = foreign_udf.with_updated_config(&options);
+        assert_eq!(
+            updated.map(|udf| udf.name().to_string()),
+            Some("with_config_AEST".to_string())
+        );
 
         Ok(())
     }
