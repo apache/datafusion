@@ -380,7 +380,10 @@ fn optimize_projections(
             return Ok(Transformed::no(plan));
         }
         LogicalPlan::RecursiveQuery(_) => {
-            // optimize the static and recursive terms
+            // optimize the static and recursive terms: treat each recursive CTE term like a
+            // standalone subquery: optimize its internals, but do not push parent required indices
+            // through the RecursiveQuery boundary, as this can otherwise lead to bugs
+            // (see: https://github.com/apache/datafusion/issues/22249)
             return plan.map_children(|c| {
                 let indices = RequiredIndices::new_for_all_exprs(&c);
                 optimize_projections(c, config, indices)
