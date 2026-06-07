@@ -270,6 +270,15 @@ The recognized options are:
 Boolean arguments can be written bare (`ANALYZE` → `true`), as `TRUE`/`FALSE`,
 `ON`/`OFF`, or `0`/`1`.
 
+When combined with `ANALYZE`, `FORMAT` supports `indent` (the default) and
+`pgjson`; `tree` and `graphviz` are rejected. The `pgjson` form emits the
+physical plan with live metrics, which is handy for plan visualizers — see
+[`pgjson` format with `ANALYZE`](sql/explain.md#pgjson-format-with-analyze):
+
+```sql
+EXPLAIN (ANALYZE, FORMAT pgjson) SELECT ...;
+```
+
 The statement-level options take precedence over session config, so you can leave
 the session defaults alone and override just for the current query:
 
