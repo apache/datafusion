@@ -143,9 +143,9 @@ FROM (SELECT array(1, 2, 3) AS a, array(3, 4, 5) AS b);
 ----
 [{a: 1, b: 3}, {a: 2, b: 4}, {a: 3, b: 5}]
 
-# Duplicate input names are disambiguated with a `_<n>` suffix (per
-# `SparkArraysZipRewrite::dedup_names`) so the struct can be written to
-# formats that require unique field names.
+# Spark produces `Struct<a, a, a>` for this case (fields inaccessible
+# by name; verified Spark 4.1.1). Diverge by deduping to
+# `Struct<a, a_1, a_2>` so field names stay unique and addressable.
 query ?
 SELECT arrays_zip(a, a, a)
 FROM (VALUES ([1, 2], [1, 2], [1, 2])) AS t(a, b, c);
