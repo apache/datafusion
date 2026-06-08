@@ -64,9 +64,8 @@ use datafusion_expr::{
     Statement, WindowUDF, dml,
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
-        DdlStatement, Distinct, EmptyRelation, Extension, Join, JoinConstraint, Prepare,
-        Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
-        builder::project,
+        DdlStatement, Distinct, EmptyRelation, Extension, Join, Prepare, Projection,
+        Repartition, Sort, SubqueryAlias, TableScan, Values, Window, builder::project,
     },
 };
 
@@ -850,6 +849,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     from_proto::parse_exprs(&join.left_join_key, ctx, extension_codec)?;
                 let right_keys: Vec<Expr> =
                     from_proto::parse_exprs(&join.right_join_key, ctx, extension_codec)?;
+                if left_keys.len() != right_keys.len() {
+                    return Err(proto_error(format!(
+                        "Received a JoinNode message with left_join_key and right_join_key of different lengths: {} and {}",
+                        left_keys.len(),
+                        right_keys.len()
+                    )));
+                }
                 let join_type =
                     protobuf::JoinType::try_from(join.join_type).map_err(|_| {
                         proto_error(format!(
@@ -866,44 +872,39 @@ impl AsLogicalPlan for LogicalPlanNode {
                         join.join_constraint
                     ))
                 })?;
+                let null_equality = protobuf::NullEquality::try_from(join.null_equality)
+                    .map_err(|_| {
+                        proto_error(format!(
+                            "Received a JoinNode message with unknown NullEquality {}",
+                            join.null_equality
+                        ))
+                    })?;
                 let filter: Option<Expr> = join
                     .filter
                     .as_ref()
                     .map(|expr| from_proto::parse_expr(expr, ctx, extension_codec))
                     .map_or(Ok(None), |v| v.map(Some))?;
+                let left = into_logical_plan!(join.left, ctx, extension_codec)?;
+                let right = into_logical_plan!(join.right, ctx, extension_codec)?;
+                let on: Vec<(Expr, Expr)> =
+                    left_keys.into_iter().zip(right_keys).collect();
 
-                let builder = LogicalPlanBuilder::from(into_logical_plan!(
-                    join.left,
-                    ctx,
-                    extension_codec
-                )?);
-                let builder = match join_constraint.into() {
-                    JoinConstraint::On => builder.join_with_expr_keys(
-                        into_logical_plan!(join.right, ctx, extension_codec)?,
-                        join_type.into(),
-                        (left_keys, right_keys),
-                        filter,
-                    )?,
-                    JoinConstraint::Using => {
-                        // The equijoin keys in using-join must be column.
-                        let using_keys = left_keys
-                            .into_iter()
-                            .map(|key| {
-                                key.try_as_col().cloned()
-                                    .ok_or_else(|| internal_datafusion_err!(
-                                        "Using join keys must be column references, got: {key:?}"
-                                    ))
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        builder.join_using(
-                            into_logical_plan!(join.right, ctx, extension_codec)?,
-                            join_type.into(),
-                            using_keys,
-                        )?
-                    }
-                };
-
-                builder.build()
+                // Construct the Join directly instead of going through
+                // LogicalPlanBuilder. The builder methods hardcode
+                // `null_equality` and `null_aware`, so a round trip through
+                // them silently loses both fields. Both sides of the round
+                // trip should already have validated keys, so we don't need
+                // the builder's normalization / equijoin-pair checks.
+                Ok(LogicalPlan::Join(Join::try_new(
+                    Arc::new(left),
+                    Arc::new(right),
+                    on,
+                    filter,
+                    join_type.into(),
+                    join_constraint.into(),
+                    null_equality.into(),
+                    join.null_aware,
+                )?))
             }
             LogicalPlanType::Union(union) => {
                 assert_or_internal_err!(
@@ -1492,7 +1493,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 join_type,
                 join_constraint,
                 null_equality,
-                ..
+                null_aware,
+                // Not encoded; recomputed by `Join::try_new` on decode.
+                schema: _,
             }) => {
                 let left: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     left.as_ref(),
@@ -1533,6 +1536,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             right_join_key,
                             null_equality: null_equality.into(),
                             filter,
+                            null_aware: *null_aware,
                         },
                     ))),
                 })
