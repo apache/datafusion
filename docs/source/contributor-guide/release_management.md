@@ -45,11 +45,10 @@ Changes reach a release branch in one of two ways:
 - Fix the issue on the release branch and then forward-port the change to `main`
 
 Releases are coordinated using GitHub issues. Each planned release is listed in
-the [DataFusion Releases tracking issue], and the coordination for each specific
-release is done on a dedicated issues (for example, the [release issue for
-50.3.0]). If you think a fix should be included in a patch release, please
-discuss it on the relevant tracking issue, optionally opening a backport PR as
-well.
+the [DataFusion Releases tracking issue], and each release is coordinated in a
+dedicated issue, such as the [release issue for 50.3.0]. If you think a fix
+should be included in a patch release, discuss it on the relevant tracking issue
+or open a backport PR and link it there.
 
 To prepare for a new release series, maintainers:
 
