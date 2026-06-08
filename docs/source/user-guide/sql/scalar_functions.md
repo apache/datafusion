@@ -4576,7 +4576,7 @@ array_subtract(array1, array2)
 
 ### `array_sum`
 
-Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL or every element is NULL. Returns 0.0 for an empty array.
+Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL, every element is NULL, or the array is empty.
 
 ```sql
 array_sum(array)

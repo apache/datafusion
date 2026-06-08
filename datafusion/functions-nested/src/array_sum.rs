@@ -44,7 +44,7 @@ make_udf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL or every element is NULL. Returns 0.0 for an empty array.",
+    description = "Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL, every element is NULL, or the array is empty.",
     syntax_example = "array_sum(array)",
     sql_example = r#"```sql
 > select array_sum([1.0, 2.0, 3.0]);
