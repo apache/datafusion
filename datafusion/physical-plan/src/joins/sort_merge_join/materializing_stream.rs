@@ -38,7 +38,7 @@ use crate::joins::sort_merge_join::filter::{
     get_filter_columns, needs_deferred_filtering,
 };
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
-use crate::joins::utils::{JoinFilter, JoinKeyComparator};
+use crate::joins::utils::{JoinFilter, JoinKeyComparator, is_contiguous_range};
 use crate::metrics::RecordOutput;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::EmptyRecordBatchStream;
@@ -1793,30 +1793,6 @@ fn produce_buffered_null_batch(
         Arc::clone(schema),
         left_columns,
     )?))
-}
-
-/// Checks if a `UInt64Array` contains a contiguous ascending range (e.g. \[3,4,5,6\]).
-/// Returns `Some(start..start+len)` if so, `None` otherwise.
-/// This allows replacing an O(n) `take` with an O(1) `slice`.
-#[inline]
-fn is_contiguous_range(indices: &UInt64Array) -> Option<Range<usize>> {
-    if indices.is_empty() || indices.null_count() > 0 {
-        return None;
-    }
-    let values = indices.values();
-    let start = values[0];
-    let len = values.len() as u64;
-    // Quick rejection: if last element doesn't match expected, not contiguous
-    if values[values.len() - 1] != start + len - 1 {
-        return None;
-    }
-    // Verify every element is sequential (handles duplicates and gaps)
-    for i in 1..values.len() {
-        if values[i] != start + i as u64 {
-            return None;
-        }
-    }
-    Some(start as usize..(start + len) as usize)
 }
 
 /// Get `buffered_indices` rows for `buffered_data[buffered_batch_idx]` by specific column indices
