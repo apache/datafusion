@@ -9197,6 +9197,14 @@ SELECT a, sum(c) AS total FROM post_aggregate_clause_validation GROUP BY a ORDER
 1 300
 2 400
 
+# ORDER BY preserves sort direction and null ordering when remapping a SELECT aggregate alias.
+query II
+SELECT a, sum(c) AS total
+FROM post_aggregate_clause_validation GROUP BY a ORDER BY total DESC NULLS LAST, a;
+----
+2 400
+1 300
+
 # DISTINCT ON still accepts a top-level SELECT aggregate alias after aggregation.
 query II
 SELECT DISTINCT ON (total) a, sum(c) AS total
