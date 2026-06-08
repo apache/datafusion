@@ -1317,6 +1317,21 @@ physical_plan
 04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)------DataSourceExec: partitions=1, partition_sizes=[2]
 
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or exists (select 1 from t2 where t2.t2_int = t1.t1_int)
+----
+11
+33
+44
+
+query I rowsort
+select t1_id from t1
+where t1_id > 40 or not exists (select 1 from t2 where t2.t2_int = t1.t1_int)
+----
+22
+44
+
 statement ok
 set datafusion.explain.logical_plan_only = true;
 

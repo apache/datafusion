@@ -1503,20 +1503,25 @@ impl ExecutionPlan for HashJoinExec {
             return Ok(None);
         }
 
+        let is_mark_join =
+            matches!(self.join_type(), JoinType::LeftMark | JoinType::RightMark);
+
         let schema = self.schema();
-        if let Some(JoinData {
-            projected_left_child,
-            projected_right_child,
-            join_filter,
-            join_on,
-        }) = try_pushdown_through_join(
-            projection,
-            self.left(),
-            self.right(),
-            self.on(),
-            &schema,
-            self.filter(),
-        )? {
+        if !is_mark_join
+            && let Some(JoinData {
+                projected_left_child,
+                projected_right_child,
+                join_filter,
+                join_on,
+            }) = try_pushdown_through_join(
+                projection,
+                self.left(),
+                self.right(),
+                self.on(),
+                &schema,
+                self.filter(),
+            )?
+        {
             self.builder()
                 .with_new_children(vec![
                     Arc::new(projected_left_child),
