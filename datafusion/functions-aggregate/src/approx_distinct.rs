@@ -684,15 +684,8 @@ impl<H: HllValueHasher> GroupsAccumulator for HllGroupsAccumulator<H> {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        assert!(
-            opt_filter.is_none(),
-            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
-        );
-
         self.ensure_groups(total_num_groups);
         let states = downcast_value!(values[0], BinaryArray);
         let mut delta: isize = 0;
