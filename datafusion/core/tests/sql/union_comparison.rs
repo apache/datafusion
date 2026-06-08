@@ -377,8 +377,6 @@ async fn test_union_non_matching_variants_are_null() -> Result<()> {
         .await?;
     let results = df.collect().await?;
 
-    dbg!(&results);
-
     let expected = [
         "+----+---------+",
         "| id | val_int |",
