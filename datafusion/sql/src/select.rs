@@ -1360,19 +1360,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             ),
         )?;
 
-        // Rewrite the DISTINCT ON expressions to use the columns produced by
-        // the aggregation. Same shape as ORDER BY rewriting so a hidden
-        // grouping column or a raw aggregate expression in ON is resolved.
-        let on_exprs_post_aggr = on_exprs
-            .iter()
-            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
-            .collect::<Result<Vec<Expr>>>()?;
-        check_columns_satisfy_exprs(
+        // Rewrite DISTINCT ON expressions to use the columns produced by the
+        // aggregation. Validate against aggregate outputs plus SELECT aliases
+        // so a hidden grouping column, raw aggregate expression, or allowed
+        // top-level SELECT alias in ON is resolved.
+        let on_exprs_post_aggr = rebase_and_validate_post_aggregate_exprs(
+            on_exprs,
+            &aggr_projection_exprs,
+            input,
             &all_valid_exprs,
-            &on_exprs_post_aggr,
-            CheckColumnsSatisfyExprsPurpose::Aggregate(
-                CheckColumnsMustReferenceAggregatePurpose::DistinctOn,
-            ),
+            CheckColumnsMustReferenceAggregatePurpose::DistinctOn,
         )?;
 
         Ok(AggregatePlanResult {
