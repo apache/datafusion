@@ -938,6 +938,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| binary_coercion(lhs_type, rhs_type))
         .or_else(|| struct_coercion(lhs_type, rhs_type, comparison_coercion))
         .or_else(|| map_coercion(lhs_type, rhs_type, comparison_coercion))
+        .or_else(|| union_coercion(lhs_type, rhs_type))
 }
 
 /// Coerce a numeric/string pair to the numeric type.
@@ -1417,6 +1418,28 @@ fn map_coercion(
                 },
             )
         }
+        _ => None,
+    }
+}
+
+/// Coerce a Union and an "opaque" (non-Union) type for comparison.
+///
+/// the resulting type is the opaque scalar type whenever any union variant
+/// can be cast to it. at execution time, arrow's `cast(Union -> T)` extracts
+/// values from the matching variant; rows whose active variant cannot be
+/// cast to `T` become NULL.
+///
+/// Identical union types are already handled by the `equals_datatype` fast path
+/// in [`comparison_coercion`]; coercing between two different union types is not
+/// supported.
+fn union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    match (lhs_type, rhs_type) {
+        (Union(fields, _), opaque) | (opaque, Union(fields, _)) => fields
+            .iter()
+            .any(|(_, f)| can_cast_types(f.data_type(), opaque))
+            .then(|| opaque.clone()),
         _ => None,
     }
 }
