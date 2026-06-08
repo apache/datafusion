@@ -886,7 +886,9 @@ mod tests {
 
     use crate::datetime::date_bin::{DateBinFunc, date_bin_nanos_interval};
     use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
+    use arrow::array::{
+        Array, IntervalDayTimeArray, Time64MicrosecondArray, TimestampNanosecondArray,
+    };
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 
@@ -1121,6 +1123,55 @@ mod tests {
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
+        );
+    }
+
+    #[test]
+    fn test_date_bin_time64_microsecond_scalar_scaling_overflow_reproducer() {
+        let return_field = &Arc::new(Field::new(
+            "f",
+            DataType::Time64(TimeUnit::Microsecond),
+            true,
+        ));
+
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, 0, 1)),
+            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(i64::MAX))),
+            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(0))),
+        ];
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            invoke_date_bin_with_args(args, 1, return_field)
+        }));
+
+        assert!(
+            result.is_err(),
+            "DATE_BIN Time64Microsecond scaling overflow should not complete successfully"
+        );
+    }
+
+    #[test]
+    fn test_date_bin_time64_microsecond_array_scaling_overflow_reproducer() {
+        let return_field = &Arc::new(Field::new(
+            "f",
+            DataType::Time64(TimeUnit::Microsecond),
+            true,
+        ));
+        let times = Arc::new(Time64MicrosecondArray::from(vec![Some(i64::MAX)]));
+
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, 0, 1)),
+            ColumnarValue::Array(times),
+            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(0))),
+        ];
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            invoke_date_bin_with_args(args, 1, return_field)
+        }));
+
+        assert!(
+            result.is_err(),
+            "DATE_BIN Time64Microsecond array scaling overflow should not complete successfully"
         );
     }
 
