@@ -564,47 +564,51 @@ fn date_bin_impl(
         return exec_err!("DATE_BIN stride must be non-zero");
     }
 
-    fn stride_map_fn<T: ArrowTimestampType>(
+    fn transform_scalar_with_stride<T: ArrowTimestampType>(
+        value: Option<i64>,
         origin: i64,
         stride: i64,
         stride_fn: BinFunction,
-    ) -> impl Fn(i64) -> Result<i64> {
+    ) -> Option<i64> {
         let scale = timestamp_scale(T::UNIT);
-        move |x: i64| {
-            Ok(stride_fn(stride, checked_scale_to_nanos(x, scale)?, origin)? / scale)
-        }
+        value.and_then(|val| {
+            checked_scale_to_nanos(val, scale)
+                .and_then(|scaled| stride_fn(stride, scaled, origin))
+                .map(|binned| binned / scale)
+                .ok()
+        })
     }
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampNanosecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                v.and_then(|val| apply_stride_fn(val).ok()),
+                transform_scalar_with_stride::<TimestampNanosecondType>(
+                    *v, origin, stride, stride_fn,
+                ),
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampMicrosecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                v.and_then(|val| apply_stride_fn(val).ok()),
+                transform_scalar_with_stride::<TimestampMicrosecondType>(
+                    *v, origin, stride, stride_fn,
+                ),
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampMillisecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                v.and_then(|val| apply_stride_fn(val).ok()),
+                transform_scalar_with_stride::<TimestampMillisecondType>(
+                    *v, origin, stride, stride_fn,
+                ),
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
-            let apply_stride_fn =
-                stride_map_fn::<TimestampSecondType>(origin, stride, stride_fn);
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                v.and_then(|val| apply_stride_fn(val).ok()),
+                transform_scalar_with_stride::<TimestampSecondType>(
+                    *v, origin, stride, stride_fn,
+                ),
                 tz_opt.clone(),
             ))
         }
@@ -1375,12 +1379,6 @@ mod tests {
             TimestampSecondArray,
         };
 
-        let return_field = &Arc::new(Field::new(
-            "f",
-            DataType::Timestamp(TimeUnit::Second, None),
-            true,
-        ));
-
         let scalar_cases = [
             ScalarValue::TimestampSecond(Some(i64::MAX), None),
             ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
@@ -1388,12 +1386,13 @@ mod tests {
         ];
         for source in scalar_cases {
             let expected_type = source.data_type();
+            let return_field = Arc::new(Field::new("f", expected_type.clone(), true));
             let args = vec![
                 ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
                 ColumnarValue::Scalar(source),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(0), None)),
             ];
-            let result = invoke_date_bin_with_args(args, 1, return_field)
+            let result = invoke_date_bin_with_args(args, 1, &return_field)
                 .unwrap_or_else(|e| panic!("expected Ok for {expected_type}, got {e:?}"));
             assert_null_scalar(result, expected_type);
         }
@@ -1411,12 +1410,13 @@ mod tests {
         ];
         for array in array_cases {
             let dt = array.data_type().clone();
+            let return_field = Arc::new(Field::new("f", dt.clone(), true));
             let args = vec![
                 ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
                 ColumnarValue::Array(array),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(0), None)),
             ];
-            let result = invoke_date_bin_with_args(args, 2, return_field)
+            let result = invoke_date_bin_with_args(args, 2, &return_field)
                 .unwrap_or_else(|e| panic!("expected Ok for {dt:?}, got {e:?}"));
             assert_array_null_then_valid(result, dt);
         }
