@@ -429,6 +429,13 @@ pub(super) fn lookup_join_hashmap(
     Ok((build_indices, probe_indices, next_offset))
 }
 
+fn can_use_array_map_right_semi_fast_path(
+    join_type: JoinType,
+    filter: &Option<JoinFilter>,
+) -> bool {
+    matches!(join_type, JoinType::RightSemi) && filter.is_none()
+}
+
 /// Counts the number of distinct elements in the input array.
 ///
 /// The input array must be sorted (e.g., `[0, 1, 1, 2, 2, ...]`) and contain no null values.
@@ -781,6 +788,9 @@ impl HashJoinStream {
             return Ok(StatefulStreamResult::Continue);
         }
 
+        let use_array_map_right_semi_fast_path =
+            can_use_array_map_right_semi_fast_path(self.join_type, &self.filter);
+
         // get the matched by join keys indices
         let (left_indices, right_indices, next_offset) = match build_side.left_data.map()
         {
@@ -795,6 +805,27 @@ impl HashJoinStream {
                 &mut self.probe_indices_buffer,
                 &mut self.build_indices_buffer,
             )?,
+            Map::ArrayMap(array_map) if use_array_map_right_semi_fast_path => {
+                let next_offset = array_map
+                    .get_matching_probe_indices_with_limit_offset(
+                        &state.values,
+                        self.batch_size,
+                        state.offset,
+                        &mut self.probe_indices_buffer,
+                        &mut self.build_indices_buffer,
+                    )?;
+                (
+                    UInt64Array::from(std::mem::replace(
+                        &mut self.build_indices_buffer,
+                        Vec::with_capacity(self.batch_size),
+                    )),
+                    UInt32Array::from(std::mem::replace(
+                        &mut self.probe_indices_buffer,
+                        Vec::with_capacity(self.batch_size),
+                    )),
+                    next_offset,
+                )
+            }
             Map::ArrayMap(array_map) => {
                 let next_offset = array_map.get_matched_indices_with_limit_offset(
                     &state.values,

@@ -264,6 +264,35 @@ impl ArrayMap {
         )
     }
 
+    pub fn get_matching_probe_indices_with_limit_offset(
+        &self,
+        prob_side_keys: &[ArrayRef],
+        limit: usize,
+        current_offset: MapOffset,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) -> Result<Option<MapOffset>> {
+        if prob_side_keys.len() != 1 {
+            return internal_err!(
+                "ArrayMap expects 1 join key, but got {}",
+                prob_side_keys.len()
+            );
+        }
+        let array = &prob_side_keys[0];
+
+        downcast_supported_integer!(
+            array.data_type() => (
+                lookup_and_get_probe_indices,
+                self,
+                array,
+                limit,
+                current_offset,
+                probe_indices,
+                build_indices
+            )
+        )
+    }
+
     fn lookup_and_get_indices<T: ArrowNumericType>(
         &self,
         array: &ArrayRef,
@@ -368,6 +397,57 @@ impl ArrayMap {
             }
             Ok(None)
         }
+    }
+
+    fn lookup_and_get_probe_indices<T: ArrowNumericType>(
+        &self,
+        array: &ArrayRef,
+        limit: usize,
+        current_offset: MapOffset,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) -> Result<Option<MapOffset>>
+    where
+        T::Native: Copy + AsPrimitive<u64>,
+    {
+        probe_indices.clear();
+        build_indices.clear();
+
+        if limit == 0 {
+            return Ok(Some(current_offset));
+        }
+
+        debug_assert!(
+            current_offset.1.is_none(),
+            "existence lookup should only resume between probe rows"
+        );
+
+        let arr = array.as_primitive::<T>();
+        let mut remaining_output = limit;
+
+        for prob_idx in current_offset.0..arr.len() {
+            if arr.is_null(prob_idx) {
+                continue;
+            }
+
+            // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
+            let prob_val: u64 = unsafe { arr.value_unchecked(prob_idx) }.as_();
+            let idx_in_build_side = prob_val.wrapping_sub(self.offset) as usize;
+
+            if idx_in_build_side >= self.data.len() || self.data[idx_in_build_side] == 0 {
+                continue;
+            }
+
+            build_indices.push((self.data[idx_in_build_side] - 1) as u64);
+            probe_indices.push(prob_idx as u32);
+            remaining_output -= 1;
+
+            if remaining_output == 0 {
+                return Ok((prob_idx + 1 < arr.len()).then_some((prob_idx + 1, None)));
+            }
+        }
+
+        Ok(None)
     }
 
     pub fn contain_keys(&self, probe_side_keys: &[ArrayRef]) -> Result<BooleanArray> {
@@ -503,6 +583,43 @@ mod tests {
         assert_eq!(prob_indices, vec![1, 1, 3]);
         assert_eq!(build_indices, vec![0, 1, 0]);
         assert_eq!(result_offset, Some((3, Some(2))));
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_map_matching_probe_indices_omits_build_duplicates() -> Result<()> {
+        let build_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 1, 2]));
+        let array_map = ArrayMap::try_new(&build_array, 1, 2)?;
+        let probe_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 1]));
+        let prob_side_keys = [probe_array];
+
+        let mut prob_indices = Vec::new();
+        let mut build_indices = Vec::new();
+
+        let result_offset = array_map.get_matching_probe_indices_with_limit_offset(
+            &prob_side_keys,
+            2,
+            (0, None),
+            &mut prob_indices,
+            &mut build_indices,
+        )?;
+
+        assert_eq!(prob_indices, vec![0, 1]);
+        assert_eq!(build_indices, vec![0, 2]);
+        assert_eq!(result_offset, Some((2, None)));
+
+        let result_offset = array_map.get_matching_probe_indices_with_limit_offset(
+            &prob_side_keys,
+            2,
+            result_offset.unwrap(),
+            &mut prob_indices,
+            &mut build_indices,
+        )?;
+
+        assert_eq!(prob_indices, vec![3]);
+        assert_eq!(build_indices, vec![0]);
+        assert_eq!(result_offset, None);
+
         Ok(())
     }
 
