@@ -606,16 +606,16 @@ fn date_bin_impl(
         }
     }
 
-    fn timestamp_scale_overflow_error(x: i64) -> DataFusionError {
+    fn nanos_scale_overflow_error(x: i64) -> DataFusionError {
         DataFusionError::Execution(format!(
-            "DATE_BIN source timestamp {x} cannot be represented in nanoseconds"
+            "DATE_BIN value {x} cannot be represented in nanoseconds"
         ))
     }
 
     fn value_to_nanos(value: i64, scale: i64) -> Result<i64> {
         value
             .checked_mul(scale)
-            .ok_or_else(|| timestamp_scale_overflow_error(value))
+            .ok_or_else(|| nanos_scale_overflow_error(value))
     }
 
     Ok(match array {
@@ -934,6 +934,27 @@ mod tests {
         DateBinFunc::new().invoke_with_args(args)
     }
 
+    fn invoke_time64_microsecond_date_bin(
+        source: ColumnarValue,
+        number_rows: usize,
+    ) -> Result<ColumnarValue, DataFusionError> {
+        let return_field = Arc::new(Field::new(
+            "f",
+            DataType::Time64(TimeUnit::Microsecond),
+            true,
+        ));
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, 0, 1)),
+            source,
+            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(0))),
+        ];
+
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            invoke_date_bin_with_args(args, number_rows, &return_field)
+        }))
+        .expect("DATE_BIN Time64Microsecond scaling should not panic")
+    }
+
     #[test]
     fn test_date_bin() {
         let return_field = &Arc::new(Field::new(
@@ -1143,57 +1164,25 @@ mod tests {
 
     #[test]
     fn test_date_bin_time64_microsecond_scalar_scaling_overflow_reproducer() {
-        let return_field = &Arc::new(Field::new(
-            "f",
-            DataType::Time64(TimeUnit::Microsecond),
-            true,
-        ));
-
-        let args = vec![
-            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, 0, 1)),
+        let result = invoke_time64_microsecond_date_bin(
             ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(i64::MAX))),
-            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(0))),
-        ];
+            1,
+        );
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            invoke_date_bin_with_args(args, 1, return_field)
-        }));
-
-        let result = result.expect("DATE_BIN Time64Microsecond scaling should not panic");
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN source timestamp 9223372036854775807 cannot be represented in nanoseconds"
+            "Execution error: DATE_BIN value 9223372036854775807 cannot be represented in nanoseconds"
         );
     }
 
     #[test]
     fn test_date_bin_time64_microsecond_array_scaling_overflow_reproducer() {
-        let return_field = &Arc::new(Field::new(
-            "f",
-            DataType::Time64(TimeUnit::Microsecond),
-            true,
-        ));
         let times = Arc::new(Time64MicrosecondArray::from(vec![Some(i64::MAX)]));
+        let result = invoke_time64_microsecond_date_bin(ColumnarValue::Array(times), 1);
 
-        let args = vec![
-            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, 0, 1)),
-            ColumnarValue::Array(times),
-            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(0))),
-        ];
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            invoke_date_bin_with_args(args, 1, return_field)
-        }));
-
-        let result =
-            result.expect("DATE_BIN Time64Microsecond array scaling should not panic");
-        assert!(
-            result
-                .err()
-                .unwrap()
-                .strip_backtrace()
-                .contains("DATE_BIN source timestamp 9223372036854775807 cannot be represented in nanoseconds")
-        );
+        assert!(result.err().unwrap().strip_backtrace().contains(
+            "DATE_BIN value 9223372036854775807 cannot be represented in nanoseconds"
+        ));
     }
 
     #[test]
