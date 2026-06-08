@@ -339,7 +339,7 @@ pub(super) struct HashJoinStream {
     /// Output buffer for coalescing small batches into larger ones with optional fetch limit.
     /// Uses `LimitedBatchCoalescer` to efficiently combine batches and absorb limit with 'fetch'
     output_buffer: LimitedBatchCoalescer,
-    /// Whether this is a null-aware anti or mark joins
+    /// Whether this is a null-aware anti or mark join
     null_aware: bool,
 }
 
