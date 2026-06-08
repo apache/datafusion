@@ -63,7 +63,6 @@ select
 ----
 [1, NULL, 3] [NULL, 2.2, 3.3] [NULL, bc]
 
-#TODO: https://github.com/apache/datafusion/issues/7142
 # follow PostgreSQL behavior
 # A NULL-typed array argument returns NULL, matching array_replace and SQL
 # three-valued logic.
@@ -74,11 +73,6 @@ NULL
 
 query ?
 select array_remove_n(NULL, 1, 2);
-----
-NULL
-
-query ?
-select array_remove_all(NULL, 1);
 ----
 NULL
 
@@ -431,12 +425,11 @@ select array_remove_n(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], 
 
 ## array_remove_all (aliases: `list_removes`)
 
-#TODO: https://github.com/apache/datafusion/issues/7142
 # array_remove_all with NULL elements
-#query ?
-#select array_remove_all(NULL, 1);
-#----
-#NULL
+query ?
+select array_remove_all(NULL, 1);
+----
+NULL
 
 query ?
 select array_remove_all(make_array(1, 2, 2, 1, 1), NULL);
