@@ -101,8 +101,9 @@ sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries o
 topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H dataset (SF=1)
 push_down_topk:         Benchmark of ORDER BY ... LIMIT over outer joins on TPC-H dataset (SF=1) — exercises pushing TopK through a join
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
-wide_schema:            Small-projection queries on a wide synthetic dataset (1024 cols × 256 files) — measures per-file metadata overhead
+wide_schema:            Small-projection queries on a wide synthetic dataset (512 cols × 64 files) — measures per-file metadata overhead
                           (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
+                          (override size with WIDE_SCHEMA_WIDTH_FACTOR / WIDE_SCHEMA_NUM_FILES / WIDE_SCHEMA_ROWS_PER_FILE)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
@@ -727,16 +728,28 @@ run_tpch() {
 # Synthesizes two parquet datasets used to measure per-file metadata
 # overhead of a wide schema:
 #
-#   - data/wide_schema/wide/    1024-col events × 256 files (~225 MB)
-#   - data/wide_schema/narrow/    8-col events × 256 files (~110 MB)
+#   - data/wide_schema/wide/    512-col events × 64 files (~55 MB)
+#   - data/wide_schema/narrow/    8-col events × 64 files (~28 MB)
 #
 # Both share row count, file count, and per-file row-group shape; only
 # schema width differs. No external data source required — gen_wide_data
-# synthesizes everything from scratch in ~60 s.
+# synthesizes everything from scratch in a few seconds.
+#
+# Size is tunable via environment variables so the suite can be dialed
+# down for memory-constrained runners (the original 1024×256 default
+# drove peak RSS into tens of GB on 12-core runners through per-iteration
+# allocator churn — memory scales with num_files × width_factor):
+#
+#   WIDE_SCHEMA_WIDTH_FACTOR   column replication factor (8 base cols × N)
+#   WIDE_SCHEMA_NUM_FILES      number of parquet files
+#   WIDE_SCHEMA_ROWS_PER_FILE  rows per file (one row group each)
+#
+# NOTE: the "data already exists" check below only counts files, not
+# schema width — clear data/wide_schema before changing WIDTH_FACTOR.
 data_wide_schema() {
-    NUM_FILES=256
-    ROWS_PER_FILE=50000
-    WIDTH_FACTOR=128
+    NUM_FILES="${WIDE_SCHEMA_NUM_FILES:-64}"
+    ROWS_PER_FILE="${WIDE_SCHEMA_ROWS_PER_FILE:-50000}"
+    WIDTH_FACTOR="${WIDE_SCHEMA_WIDTH_FACTOR:-64}"
 
     DST_DIR="${DATA_DIR}/wide_schema"
     WIDE_DIR="${DST_DIR}/wide"

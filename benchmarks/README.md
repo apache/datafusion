@@ -630,7 +630,7 @@ dataset rather than with the number of columns the query references.
 
 The suite has two subgroups, selected via `BENCH_SUBGROUP`:
 
-- **`wide`** — runs against a 1024-col synthetic dataset. This is the
+- **`wide`** — runs against a 512-col synthetic dataset. This is the
   actual workload.
 - **`narrow`** — runs the same SQL against an 8-col version of the same
   dataset (same row count, file count, per-file row-group shape).
@@ -646,16 +646,30 @@ wide-vs-narrow pair.
 The data preparation step (`gen_wide_data`) synthesizes a generic
 8-column base schema (`id`, `value`, `count`, `ts`, `category`,
 `flag`, `status`, `text`) with deterministic data, then replicates it
-128× via suffix renaming (`_2`, `_3`, …) for 1024 columns total —
-written across 256 files at 50 k rows per file with one row group per
-file and ZSTD(1) compression. Copies 2..128 are zero-filled arrays so
+64× via suffix renaming (`_2`, `_3`, …) for 512 columns total —
+written across 64 files at 50 k rows per file with one row group per
+file and ZSTD(1) compression. Copies 2..64 are zero-filled arrays so
 the schema is wide (every column still has its own footer / page
 index / column-chunk metadata) but the on-disk size stays around
-225 MB. The narrow dataset is written the same way without the suffix
+55 MB. The narrow dataset is written the same way without the suffix
 copies. The only variable between wide and narrow is schema width.
 
+The dataset size is tunable via environment variables. Peak memory
+scales with `num_files × width_factor` (the total column-chunk metadata
+parsed per iteration), so dial these down on memory-constrained
+runners and up for a more aggressive signal:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `WIDE_SCHEMA_WIDTH_FACTOR` | `64` | column replication factor (8 base cols × N) |
+| `WIDE_SCHEMA_NUM_FILES` | `64` | number of parquet files |
+| `WIDE_SCHEMA_ROWS_PER_FILE` | `50000` | rows per file (one row group each) |
+
+(Clear `data/wide_schema/` before changing `WIDE_SCHEMA_WIDTH_FACTOR` —
+the data-reuse check only counts files, not schema width.)
+
 ```shell
-./benchmarks/bench.sh data wide_schema    # synthesizes wide (1024 cols × 256 files) + narrow (8 cols × 256 files), ~60 s, ~335 MB
+./benchmarks/bench.sh data wide_schema    # synthesizes wide (512 cols × 64 files) + narrow (8 cols × 64 files), ~55 MB
 ./benchmarks/bench.sh run  wide_schema    # runs both 'wide' and 'narrow' subgroups; compare the per-query times for the slowdown ratio
 ```
 
