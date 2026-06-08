@@ -5564,3 +5564,47 @@ DROP TABLE t1;
 
 statement ok
 DROP TABLE t2;
+
+# Regression test for a LEFT JOIN with a non-equijoin predicate (forces
+# NestedLoopJoinExec) and a multi-partition probe side. Previously the unmatched
+# left rows could be emitted before all partitions finished probing, adding
+# spurious NULL-padded rows. The result must include every left row exactly once.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+statement ok
+CREATE TABLE nlj_left(id INT, v INT) AS VALUES (1, 4), (2, 72), (3, 41), (4, 98), (5, 91);
+
+statement ok
+CREATE TABLE nlj_right(w INT) AS VALUES (49), (58), (83), (3), (76);
+
+query III
+SELECT id, v, w FROM nlj_left LEFT JOIN nlj_right ON nlj_left.v < nlj_right.w ORDER BY id, w;
+----
+1 4 49
+1 4 58
+1 4 76
+1 4 83
+2 72 76
+2 72 83
+3 41 49
+3 41 58
+3 41 76
+3 41 83
+4 98 NULL
+5 91 NULL
+
+statement ok
+DROP TABLE nlj_left;
+
+statement ok
+DROP TABLE nlj_right;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.execution.batch_size;
