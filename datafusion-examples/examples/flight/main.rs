@@ -38,8 +38,18 @@
 //!
 //! - `sql_server`
 //!   (file: sql_server.rs, desc: Standalone SQL server for JDBC clients)
+//!
+//! ## OomGuard
+//!
+//! `sql_server` wraps the global allocator with [`oom_guard::OomGuard`]
+//! to convert process-wide OOM kills into per-query panics. The guard
+//! installs an `alloc_error_hook`, which is currently an unstable Rust
+//! API (`#![feature(alloc_error_hook)]`); the workspace `.cargo/config.toml`
+//! sets `RUSTC_BOOTSTRAP=1` so this builds on stable.
+#![feature(alloc_error_hook)]
 
 mod client;
+mod oom_guard;
 mod server;
 mod sql_server;
 
@@ -83,19 +93,48 @@ impl ExampleKind {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let usage = format!(
-        "Usage: cargo run --example {} -- [{}]",
-        ExampleKind::EXAMPLE_NAME,
-        ExampleKind::VARIANTS.join("|")
-    );
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install the alloc-error hook BEFORE building the runtime so even
+    // early allocations on the main thread benefit. When OomGuard returns
+    // NULL on overdraft, the Rust runtime invokes this hook from a clean
+    // safe-Rust frame *outside* the `unsafe impl GlobalAlloc` block.
+    // Panicking here gives us per-query isolation without the unwind-ABI
+    // corruption we'd hit firing `panic_any` from inside the allocator.
+    // Non-OomGuard nulls (genuine allocator OOM) fall through to `abort`.
+    std::alloc::set_alloc_error_hook(|_layout| {
+        if oom_guard::take_kill_pending() {
+            let balance = oom_guard::balance();
+            std::panic::panic_any(oom_guard::OomGuardPanic { balance });
+        }
+        std::process::abort();
+    });
 
-    let example: ExampleKind = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| ExampleKind::All.to_string())
-        .parse()
-        .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
+    // Manual runtime construction so we can `on_thread_start` to stamp
+    // worker threads as eligible for the OomGuard overdraft panic.
+    // Unstamped threads (control plane, the poll task itself) still debit
+    // the bank but are exempt from the kill.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .on_thread_start(|| {
+            oom_guard::stamp_current_thread();
+        })
+        .build()?;
 
-    example.run().await
+    runtime.block_on(async {
+        let usage = format!(
+            "Usage: cargo run --example {} -- [{}]",
+            ExampleKind::EXAMPLE_NAME,
+            ExampleKind::VARIANTS.join("|")
+        );
+
+        let example: ExampleKind = std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| ExampleKind::All.to_string())
+            .parse()
+            .map_err(|_| {
+                DataFusionError::Execution(format!("Unknown example. {usage}"))
+            })?;
+
+        example.run().await
+    })
 }

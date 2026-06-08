@@ -1,0 +1,8 @@
+# The `flight` example uses `#![feature(alloc_error_hook)]` so that
+# `OomGuard` can convert process-wide OOMs into per-query panics via
+# `std::alloc::set_alloc_error_hook` (tracking issue rust-lang/rust#51245,
+# API-frozen since 2018 but still unstable). Setting `RUSTC_BOOTSTRAP=1`
+# unblocks the feature gate on stable toolchains; same trick used by
+# downstream crates like comet and the dataprime-query-engine executor.
+[env]
+RUSTC_BOOTSTRAP = "1"
