@@ -80,7 +80,7 @@ select date_bin(
 NULL
 
 # Source timestamp scaling to nanoseconds overflows: should return an error, not panic
-query error DataFusion error: Execution error: DATE_BIN value 9223372036854775807 cannot be represented in nanoseconds
+query error DataFusion error: Execution error: DATE_BIN source timestamp 9223372036854775807 cannot be represented in nanoseconds
 select date_bin(
   interval '1 nanosecond',
   arrow_cast(9223372036854775807, 'Timestamp(Second, None)'),
@@ -88,7 +88,7 @@ select date_bin(
 );
 
 # Source timestamp scaling to nanoseconds overflows in array path: should return an error, not panic
-query error DataFusion error: Execution error: DATE_BIN value 9223372036854775807 cannot be represented in nanoseconds
+query error DataFusion error: Execution error: DATE_BIN source timestamp 9223372036854775807 cannot be represented in nanoseconds
 select date_bin(
   interval '1 nanosecond',
   ts,
