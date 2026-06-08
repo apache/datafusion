@@ -2515,9 +2515,8 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    #[expect(clippy::needless_pass_by_value)]
-    pub fn fill_nan(&self, value: ScalarValue, columns: &[&str]) -> Result<DataFrame> {
-        self.fill_columns(&value, columns, &nanvl(), |field| {
+    pub fn fill_nan(&self, value: &ScalarValue, columns: &[&str]) -> Result<DataFrame> {
+        self.fill_columns(value, columns, &nanvl(), |field| {
             field.data_type().is_floating()
         })
     }
