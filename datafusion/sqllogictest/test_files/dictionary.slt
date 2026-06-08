@@ -515,3 +515,17 @@ DROP TABLE dict_hash_10;
 
 statement ok
 DROP TABLE dict_hash_src;
+
+# GROUP BY on Dictionary(Int32, Utf8View) — end-to-end coverage of the Utf8View value type
+
+query TI
+SELECT
+  arrow_cast(tag, 'Dictionary(Int32, Utf8View)') AS tag,
+  SUM(val) AS total
+FROM (VALUES ('a', 1), ('b', 2), ('a', 3), ('b', 4), ('c', 5)) AS t(tag, val)
+GROUP BY tag
+ORDER BY tag;
+----
+a 4
+b 6
+c 5

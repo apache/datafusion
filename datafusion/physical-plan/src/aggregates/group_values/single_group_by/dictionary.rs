@@ -831,6 +831,60 @@ mod test {
         }
     }
 
+    mod streaming_emit {
+        use super::*;
+
+        #[test]
+        fn test_emit_first_shifts_and_retains() {
+            let mut gv = GroupValuesDictionary::<Int32Type>::new(&DataType::Utf8);
+            let mut groups = Vec::new();
+
+            let v1 = make_utf8_values(vec![Some("a"), Some("b"), Some("c"), Some("d")]);
+            let d1 = make_dict_array(v1, vec![Some(0), Some(1), Some(2), Some(3)]);
+            gv.intern(&[d1], &mut groups).unwrap();
+
+            gv.emit(EmitTo::First(2)).unwrap();
+            assert_eq!(gv.len(), 2); // "c"=0, "d"=1 remain
+
+            groups.clear();
+            let v2 = make_utf8_values(vec![Some("c"), Some("e")]);
+            let d2 = make_dict_array(v2, vec![Some(0), Some(1)]);
+            gv.intern(&[d2], &mut groups).unwrap();
+
+            assert_eq!(groups[0], 0); // "c" kept its shifted id
+            assert_eq!(groups[1], 2); // "e" is new
+            assert_eq!(gv.len(), 3);
+        }
+    }
+
+    mod cross_batch_dedup {
+        use super::*;
+
+        // Same string value appearing in two batches with different values buffers
+        // must map to the same group id.
+        #[test]
+        fn test_same_value_different_values_buffers() {
+            let mut gv = GroupValuesDictionary::<Int32Type>::new(&DataType::Utf8);
+            let mut groups = Vec::new();
+
+            let v1 = make_utf8_values(vec![Some("foo"), Some("bar")]);
+            let d1 = make_dict_array(v1, vec![Some(0), Some(1)]);
+            gv.intern(&[d1], &mut groups).unwrap();
+            let foo_group = groups[0];
+            let bar_group = groups[1];
+
+            groups.clear();
+            // new values buffer, different pointer, same strings
+            let v2 = make_utf8_values(vec![Some("bar"), Some("foo")]);
+            let d2 = make_dict_array(v2, vec![Some(0), Some(1)]);
+            gv.intern(&[d2], &mut groups).unwrap();
+
+            assert_eq!(groups[0], bar_group);
+            assert_eq!(groups[1], foo_group);
+            assert_eq!(gv.len(), 2);
+        }
+    }
+
     mod bounds_test {
         use super::*;
         use arrow::datatypes::UInt8Type;
