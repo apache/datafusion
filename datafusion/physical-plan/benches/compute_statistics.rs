@@ -187,7 +187,7 @@ fn compute_statistics_without_shared_cache(
     for child in plan.children() {
         compute_statistics_without_shared_cache(child.as_ref(), None)?;
     }
-    let args = StatisticsArgs::new(partition);
+    let args = StatisticsArgs::new().with_partition(partition);
     plan.statistics_with_args(&args)
 }
 
@@ -198,10 +198,7 @@ fn bench_compute_statistics(c: &mut Criterion) {
     for depth in [10, 20, 50] {
         let plan = build_coalesce_chain(depth);
         group.bench_with_input(BenchmarkId::new("cached", depth), &plan, |b, plan| {
-            b.iter(|| {
-                plan.statistics_with_args(&StatisticsArgs::new(None))
-                    .unwrap()
-            });
+            b.iter(|| plan.statistics_with_args(&StatisticsArgs::new()).unwrap());
         });
         group.bench_with_input(
             BenchmarkId::new("no_shared_cache", depth),
@@ -228,7 +225,7 @@ fn bench_compute_statistics(c: &mut Criterion) {
         let label = format!("depth={depth}_leaves={}", 1usize << depth);
         group.bench_with_input(BenchmarkId::new("cached", &label), &plan, |b, plan| {
             b.iter(|| {
-                plan.statistics_with_args(&StatisticsArgs::new(Some(0)))
+                plan.statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))
                     .unwrap()
             });
         });
@@ -257,8 +254,10 @@ fn bench_compute_statistics(c: &mut Criterion) {
             &plan,
             |b, plan| {
                 b.iter(|| {
-                    plan.statistics_with_args(&StatisticsArgs::new(Some(0)))
-                        .unwrap()
+                    plan.statistics_with_args(
+                        &StatisticsArgs::new().with_partition(Some(0)),
+                    )
+                    .unwrap()
                 });
             },
         );
@@ -266,10 +265,7 @@ fn bench_compute_statistics(c: &mut Criterion) {
             BenchmarkId::new("cached_overall", depth),
             &plan,
             |b, plan| {
-                b.iter(|| {
-                    plan.statistics_with_args(&StatisticsArgs::new(None))
-                        .unwrap()
-                });
+                b.iter(|| plan.statistics_with_args(&StatisticsArgs::new()).unwrap());
             },
         );
         group.bench_with_input(
@@ -294,7 +290,7 @@ fn bench_compute_statistics(c: &mut Criterion) {
         let depth = groups * 3; // 2 filters + 1 coalesce per group
         group.bench_with_input(BenchmarkId::new("cached", depth), &plan, |b, plan| {
             b.iter(|| {
-                plan.statistics_with_args(&StatisticsArgs::new(Some(0)))
+                plan.statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))
                     .unwrap()
             });
         });

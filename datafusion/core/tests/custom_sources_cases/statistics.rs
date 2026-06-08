@@ -233,7 +233,7 @@ async fn sql_basic() -> Result<()> {
     // the statistics should be those of the source
     assert_eq!(
         stats,
-        *physical_plan.statistics_with_args(&StatisticsArgs::new(None))?
+        *physical_plan.statistics_with_args(&StatisticsArgs::new())?
     );
 
     Ok(())
@@ -250,7 +250,7 @@ async fn sql_filter() -> Result<()> {
         .unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
-    let stats = physical_plan.statistics_with_args(&StatisticsArgs::new(None))?;
+    let stats = physical_plan.statistics_with_args(&StatisticsArgs::new())?;
     assert_eq!(stats.num_rows, Precision::Inexact(7));
 
     Ok(())
@@ -265,7 +265,7 @@ async fn sql_limit() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is smaller than the original number of lines we mark the statistics as inexact
     // and cap NDV at the new row count
-    let limit_stats = physical_plan.statistics_with_args(&StatisticsArgs::new(None))?;
+    let limit_stats = physical_plan.statistics_with_args(&StatisticsArgs::new())?;
     assert_eq!(limit_stats.num_rows, Precision::Exact(5));
     // c1: NDV=2 stays at 2 (already below limit of 5)
     assert_eq!(
@@ -286,7 +286,7 @@ async fn sql_limit() -> Result<()> {
     // when the limit is larger than the original number of lines, statistics remain unchanged
     assert_eq!(
         stats,
-        *physical_plan.statistics_with_args(&StatisticsArgs::new(None))?
+        *physical_plan.statistics_with_args(&StatisticsArgs::new())?
     );
 
     Ok(())
@@ -304,7 +304,7 @@ async fn sql_window() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
 
-    let result = physical_plan.statistics_with_args(&StatisticsArgs::new(None))?;
+    let result = physical_plan.statistics_with_args(&StatisticsArgs::new())?;
 
     assert_eq!(stats.num_rows, result.num_rows);
     let col_stats = &result.column_statistics;

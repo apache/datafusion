@@ -353,7 +353,7 @@ fn limit_eliminable_exact_num_rows(
 
     if matches!(
         current
-            .statistics_with_args(&StatisticsArgs::new(None))?
+            .statistics_with_args(&StatisticsArgs::new())?
             .num_rows,
         Precision::Exact(0)
     ) {

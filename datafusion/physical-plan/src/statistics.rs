@@ -68,7 +68,7 @@ impl StatsCache {
 /// Arguments passed to [`ExecutionPlan::statistics_with_args`] carrying
 /// external information that operators can use when computing their
 /// statistics.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct StatisticsArgs {
     partition: Option<usize>,
     /// Shared memoization cache for the current statistics walk.
@@ -77,13 +77,39 @@ pub struct StatisticsArgs {
 
 impl StatisticsArgs {
     /// Creates new statistics arguments with a fresh cache.
-    pub fn new(partition: Option<usize>) -> Self {
-        Self {
-            partition,
-            cache: Rc::new(RefCell::new(StatsCache::default())),
+    ///
+    /// By default the partition is set to `None` (statistics should be computed
+    /// for the entire plan).
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Set the partition to compute statistics
+    ///
+    /// * `None` means statistics should be computed for the entire plan.
+    /// * `Some(idx)` means statistics should be computed for the specified
+    ///   partition index.
+    ///
+    /// Changing the partition starts a new statistics walk, so the
+    /// memoization cache is reset to avoid reusing entries computed for a
+    /// different partition.
+    pub fn set_partition(&mut self, partition: Option<usize>) {
+        if self.partition != partition {
+            self.partition = partition;
+            // Drop the previous walk's cache: its entries are keyed by raw
+            // plan pointer and the prior partition, so they must not leak
+            // into the new walk.
+            self.cache = Rc::new(RefCell::new(StatsCache::default()));
         }
     }
 
+    /// Builder Style API for [`Self::set_partition`]
+    pub fn with_partition(mut self, partition: Option<usize>) -> Self {
+        self.set_partition(partition);
+        self
+    }
+
+    /// Return the partition to compute statistics
     pub fn partition(&self) -> Option<usize> {
         self.partition
     }
@@ -157,12 +183,47 @@ mod tests {
         let leaf = make_stats_leaf(100);
         let plan: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(leaf));
 
-        let args = StatisticsArgs::new(Some(0));
+        let args = StatisticsArgs::new().with_partition(Some(0));
         let stats = plan.statistics_with_args(&args).unwrap();
         assert_eq!(stats.num_rows, Precision::Exact(100));
 
-        let args_none = StatisticsArgs::new(None);
+        let args_none = StatisticsArgs::new();
         let stats_none = plan.statistics_with_args(&args_none).unwrap();
         assert_eq!(stats_none.num_rows, Precision::Exact(100));
+    }
+
+    #[test]
+    fn changing_partition_resets_cache() {
+        let leaf = make_stats_leaf(100);
+
+        // Populate the memoization cache for an initial walk.
+        let mut args = StatisticsArgs::new();
+        let _ = args
+            .compute_child_statistics(Arc::clone(&leaf), Some(0))
+            .unwrap();
+        assert!(
+            !args.cache.borrow().0.is_empty(),
+            "cache should be populated after a statistics walk"
+        );
+
+        // Changing the partition starts a new walk and must reset the cache
+        // so stale, pointer-keyed entries cannot leak across walks.
+        args.set_partition(Some(1));
+        assert!(
+            args.cache.borrow().0.is_empty(),
+            "cache should be cleared when the partition changes"
+        );
+
+        // Setting the partition to its current value is a no-op and retains
+        // the cache (avoids needlessly discarding work mid-walk).
+        let _ = args
+            .compute_child_statistics(Arc::clone(&leaf), Some(0))
+            .unwrap();
+        assert!(!args.cache.borrow().0.is_empty());
+        args.set_partition(Some(1));
+        assert!(
+            !args.cache.borrow().0.is_empty(),
+            "cache should be retained when the partition is unchanged"
+        );
     }
 }

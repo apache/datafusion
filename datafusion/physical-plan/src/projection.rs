@@ -1378,7 +1378,7 @@ mod tests {
         let projection = ProjectionExec::try_new(exprs, input).unwrap();
 
         let stats = projection
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap();
 
         assert_eq!(stats.num_rows, Precision::Exact(10));

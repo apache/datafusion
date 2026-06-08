@@ -1017,7 +1017,7 @@ fn get_repartition_requirement_status(
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
         let roundrobin_beneficial_stats = match child
-            .statistics_with_args(&StatisticsArgs::new(None))?
+            .statistics_with_args(&StatisticsArgs::new())?
             .num_rows
         {
             Precision::Exact(n_rows) => n_rows > batch_size,

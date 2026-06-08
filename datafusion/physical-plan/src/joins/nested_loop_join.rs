@@ -3353,7 +3353,7 @@ pub(crate) mod tests {
             &JoinType::Left,
             Some(vec![1, 2]),
         )?;
-        let stats = nested_loop_join.statistics_with_args(&StatisticsArgs::new(None))?;
+        let stats = nested_loop_join.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(
             nested_loop_join.schema().fields().len(),
             stats.column_statistics.len(),

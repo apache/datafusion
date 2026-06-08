@@ -66,7 +66,7 @@ fn get_stats(
         reg.compute(plan)
             .map(|s| Arc::<Statistics>::clone(s.base_arc()))
     } else {
-        plan.statistics_with_args(&StatisticsArgs::new(None))
+        plan.statistics_with_args(&StatisticsArgs::new())
     }
 }
 

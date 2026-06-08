@@ -2331,7 +2331,7 @@ mod tests {
 
         // Get statistics for partition 0
         let partition_stats = exec
-            .statistics_with_args(&StatisticsArgs::new(Some(0)))
+            .statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))
             .unwrap();
 
         // Verify that only 2 columns are in the statistics (the projected ones)

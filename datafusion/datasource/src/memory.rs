@@ -986,7 +986,7 @@ mod tests {
         let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
-            *values.statistics_with_args(&StatisticsArgs::new(None))?,
+            *values.statistics_with_args(&StatisticsArgs::new())?,
             Statistics {
                 num_rows: Precision::Exact(rows),
                 total_byte_size: Precision::Exact(8), // not important

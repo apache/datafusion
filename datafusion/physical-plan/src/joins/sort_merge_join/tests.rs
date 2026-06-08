@@ -3402,7 +3402,7 @@ fn test_partition_statistics() -> Result<()> {
 
         // Test aggregate statistics (partition = None)
         // Should return meaningful statistics computed from both inputs
-        let stats = join_exec.statistics_with_args(&StatisticsArgs::new(None))?;
+        let stats = join_exec.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(
             stats.column_statistics.len(),
             expected_cols,
@@ -3420,8 +3420,8 @@ fn test_partition_statistics() -> Result<()> {
         // Since the child TestMemoryExec returns unknown stats for specific partitions,
         // the join output will also have Absent num_rows. This is expected behavior
         // as the statistics depend on what the children can provide.
-        let partition_stats =
-            join_exec.statistics_with_args(&StatisticsArgs::new(Some(0)))?;
+        let partition_stats = join_exec
+            .statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))?;
         assert_eq!(
             partition_stats.column_statistics.len(),
             expected_cols,

@@ -819,7 +819,7 @@ mod tests {
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
         Ok(offset
-            .statistics_with_args(&StatisticsArgs::new(None))?
+            .statistics_with_args(&StatisticsArgs::new())?
             .num_rows)
     }
 
@@ -861,7 +861,7 @@ mod tests {
         );
 
         Ok(offset
-            .statistics_with_args(&StatisticsArgs::new(None))?
+            .statistics_with_args(&StatisticsArgs::new())?
             .num_rows)
     }
 
@@ -876,7 +876,7 @@ mod tests {
         let offset = LocalLimitExec::new(csv, fetch);
 
         Ok(offset
-            .statistics_with_args(&StatisticsArgs::new(None))?
+            .statistics_with_args(&StatisticsArgs::new())?
             .num_rows)
     }
 

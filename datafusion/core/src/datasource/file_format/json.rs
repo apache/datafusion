@@ -119,12 +119,11 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            exec.statistics_with_args(&StatisticsArgs::new(None))?
-                .num_rows,
+            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
             Precision::Absent
         );
         assert_eq!(
-            exec.statistics_with_args(&StatisticsArgs::new(None))?
+            exec.statistics_with_args(&StatisticsArgs::new())?
                 .total_byte_size,
             Precision::Absent
         );

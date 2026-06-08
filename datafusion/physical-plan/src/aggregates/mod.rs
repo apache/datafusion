@@ -2625,8 +2625,7 @@ mod tests {
         )?);
 
         // Verify statistics are preserved proportionally through aggregation
-        let final_stats =
-            merged_aggregate.statistics_with_args(&StatisticsArgs::new(None))?;
+        let final_stats = merged_aggregate.statistics_with_args(&StatisticsArgs::new())?;
         assert!(final_stats.total_byte_size.get_value().is_some());
 
         let task_ctx = if spill {
@@ -4100,7 +4099,7 @@ mod tests {
             PhysicalGroupBy::default(),
             None,
         )?;
-        let stats = agg.statistics_with_args(&StatisticsArgs::new(None))?;
+        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(stats.total_byte_size, Precision::Absent);
 
         let zero_row_stats = Statistics {
@@ -4117,7 +4116,7 @@ mod tests {
             PhysicalGroupBy::default(),
             None,
         )?;
-        let stats_zero = agg_zero.statistics_with_args(&StatisticsArgs::new(None))?;
+        let stats_zero = agg_zero.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(stats_zero.total_byte_size, Precision::Absent);
 
         Ok(())
@@ -4470,7 +4469,7 @@ mod tests {
             let agg =
                 build_test_aggregate(&schema, input_stats, group_by, case.limit_options)?;
 
-            let stats = agg.statistics_with_args(&StatisticsArgs::new(None))?;
+            let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
             assert_eq!(
                 stats.num_rows, case.expected_num_rows,
                 "FAILED: '{}' — expected {:?}, got {:?}",
@@ -4509,7 +4508,7 @@ mod tests {
             None,
         )?;
 
-        let stats = agg.statistics_with_args(&StatisticsArgs::new(None))?;
+        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(
             stats.column_statistics[0].distinct_count,
             Precision::Exact(100),
@@ -4563,7 +4562,7 @@ mod tests {
 
         let agg = build_test_aggregate(&schema, input_stats, grouping_set, None)?;
 
-        let stats = agg.statistics_with_args(&StatisticsArgs::new(None))?;
+        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
         // Per-set NDV: (a,NULL)=100, (NULL,b)=50, (a,b)=100*50=5000
         // Total = 100 + 50 + 5000 = 5150
         assert_eq!(
@@ -4612,7 +4611,7 @@ mod tests {
             PhysicalGroupBy::new_single(vec![(expr_a_plus_b, "a+b".to_string())]);
         let agg = build_test_aggregate(&schema, input_stats, group_by, None)?;
 
-        let stats = agg.statistics_with_args(&StatisticsArgs::new(None))?;
+        let stats = agg.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(
             stats.num_rows,
             Precision::Inexact(1_000_000),

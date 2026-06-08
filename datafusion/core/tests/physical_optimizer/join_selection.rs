@@ -250,7 +250,7 @@ async fn test_join_with_swap() {
     assert_eq!(
         swapped_join
             .left()
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
@@ -258,7 +258,7 @@ async fn test_join_with_swap() {
     assert_eq!(
         swapped_join
             .right()
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -298,7 +298,7 @@ async fn test_left_join_no_swap() {
     assert_eq!(
         swapped_join
             .left()
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
@@ -306,7 +306,7 @@ async fn test_left_join_no_swap() {
     assert_eq!(
         swapped_join
             .right()
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -349,7 +349,7 @@ async fn test_join_with_swap_semi() {
         assert_eq!(
             swapped_join
                 .left()
-                .statistics_with_args(&StatisticsArgs::new(None))
+                .statistics_with_args(&StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(8192)
@@ -357,7 +357,7 @@ async fn test_join_with_swap_semi() {
         assert_eq!(
             swapped_join
                 .right()
-                .statistics_with_args(&StatisticsArgs::new(None))
+                .statistics_with_args(&StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(2097152)
@@ -402,7 +402,7 @@ async fn test_join_with_swap_mark() {
         assert_eq!(
             swapped_join
                 .left()
-                .statistics_with_args(&StatisticsArgs::new(None))
+                .statistics_with_args(&StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(8192)
@@ -410,7 +410,7 @@ async fn test_join_with_swap_mark() {
         assert_eq!(
             swapped_join
                 .right()
-                .statistics_with_args(&StatisticsArgs::new(None))
+                .statistics_with_args(&StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(2097152)
@@ -530,7 +530,7 @@ async fn test_join_no_swap() {
     assert_eq!(
         swapped_join
             .left()
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
@@ -538,7 +538,7 @@ async fn test_join_no_swap() {
     assert_eq!(
         swapped_join
             .right()
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -605,7 +605,7 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     assert_eq!(
         swapped_join
             .left()
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
@@ -613,7 +613,7 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     assert_eq!(
         swapped_join
             .right()
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -678,7 +678,7 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     assert_eq!(
         swapped_join
             .left()
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
@@ -686,7 +686,7 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     assert_eq!(
         swapped_join
             .right()
-            .statistics_with_args(&StatisticsArgs::new(None))
+            .statistics_with_args(&StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)

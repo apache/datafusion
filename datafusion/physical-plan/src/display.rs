@@ -582,7 +582,7 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
         }
         if self.show_statistics {
             let stats = plan
-                .statistics_with_args(&StatisticsArgs::new(None))
+                .statistics_with_args(&StatisticsArgs::default())
                 .map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{stats}]")?;
         }
@@ -680,7 +680,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
 
         let statistics = if self.show_statistics {
             let stats = plan
-                .statistics_with_args(&StatisticsArgs::new(None))
+                .statistics_with_args(&StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             format!("statistics=[{stats}]")
         } else {

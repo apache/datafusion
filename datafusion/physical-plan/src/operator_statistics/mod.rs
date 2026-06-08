@@ -267,7 +267,7 @@ impl StatisticsProvider for DefaultStatisticsProvider {
         plan: &dyn ExecutionPlan,
         _child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        let base = plan.statistics_with_args(&StatisticsArgs::new(None))?;
+        let base = plan.statistics_with_args(&StatisticsArgs::new())?;
         Ok(StatisticsResult::Computed(ExtendedStatistics::new_arc(
             base,
         )))
@@ -359,7 +359,7 @@ impl StatisticsRegistry {
     pub fn compute(&self, plan: &dyn ExecutionPlan) -> Result<ExtendedStatistics> {
         // Fast path: no providers registered, skip the walk entirely
         if self.providers.is_empty() {
-            let base = plan.statistics_with_args(&StatisticsArgs::new(None))?;
+            let base = plan.statistics_with_args(&StatisticsArgs::new())?;
             return Ok(ExtendedStatistics::new_arc(base));
         }
 
@@ -383,7 +383,7 @@ impl StatisticsRegistry {
             }
         }
         // Fallback: use plan's built-in stats
-        let base = plan.statistics_with_args(&StatisticsArgs::new(None))?;
+        let base = plan.statistics_with_args(&StatisticsArgs::new())?;
         Ok(ExtendedStatistics::new_arc(base))
     }
 
@@ -507,7 +507,7 @@ fn computed_with_row_count(
     num_rows: Precision<usize>,
 ) -> Result<StatisticsResult> {
     let mut base =
-        Arc::unwrap_or_clone(plan.statistics_with_args(&StatisticsArgs::new(None))?);
+        Arc::unwrap_or_clone(plan.statistics_with_args(&StatisticsArgs::new())?);
     rescale_byte_size(&mut base, num_rows);
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
 }
