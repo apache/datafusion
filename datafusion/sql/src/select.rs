@@ -122,15 +122,37 @@ fn rebase_and_validate_optional_post_aggregate_expr(
         return Ok(None);
     };
 
-    let mut rebased_exprs = rebase_and_validate_post_aggregate_exprs(
+    let rebased_expr = rebase_and_validate_post_aggregate_exprs(
         std::slice::from_ref(expr),
         aggr_projection_exprs,
         input,
         valid_column_exprs,
         purpose,
-    )?;
+    )?
+    .into_iter()
+    .next()
+    .expect("single input expression returns one rebased expression");
 
-    Ok(rebased_exprs.pop())
+    Ok(Some(rebased_expr))
+}
+
+fn order_by_select_alias_expr(
+    rewritten_expr: &Expr,
+    select_exprs_post_aggr: &[Expr],
+) -> Option<Expr> {
+    select_exprs_post_aggr.iter().find_map(|select_expr| {
+        let Expr::Alias(alias) = select_expr else {
+            return None;
+        };
+
+        let rewritten_unaliased = match rewritten_expr {
+            Expr::Alias(a) => a.expr.as_ref(),
+            other => other,
+        };
+
+        (alias.expr.as_ref() == rewritten_unaliased)
+            .then(|| Expr::Column(Column::new_unqualified(alias.name.clone())))
+    })
 }
 
 fn rebase_and_validate_post_aggregate_sort_exprs(
@@ -146,25 +168,9 @@ fn rebase_and_validate_post_aggregate_sort_exprs(
             let rewritten_expr =
                 rebase_expr(&sort_expr.expr, aggr_projection_exprs, input)?;
 
-            // If this ORDER BY expression matches an aliased SELECT expression,
-            // use the SELECT alias instead of the raw expression.
-            let final_expr = select_exprs_post_aggr
-                .iter()
-                .find_map(|select_expr| {
-                    if let Expr::Alias(alias) = select_expr {
-                        let rewritten_unaliased = match &rewritten_expr {
-                            Expr::Alias(a) => a.expr.as_ref(),
-                            other => other,
-                        };
-                        if alias.expr.as_ref() == rewritten_unaliased {
-                            return Some(Expr::Column(Column::new_unqualified(
-                                alias.name.clone(),
-                            )));
-                        }
-                    }
-                    None
-                })
-                .unwrap_or(rewritten_expr);
+            let final_expr =
+                order_by_select_alias_expr(&rewritten_expr, select_exprs_post_aggr)
+                    .unwrap_or(rewritten_expr);
 
             Ok(sort_expr.with_expr(final_expr))
         })
@@ -1356,17 +1362,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let all_valid_exprs: Vec<Expr> = column_exprs_post_aggr
             .iter()
             .cloned()
-            .chain(select_exprs_post_aggr.iter().filter_map(|e| {
-                if let Expr::Alias(alias) = e {
+            .chain(select_exprs_post_aggr.iter().filter_map(|expr| match expr {
+                Expr::Alias(alias) => {
                     Some(Expr::Column(Column::new_unqualified(alias.name.clone())))
-                } else {
-                    None
                 }
+                _ => None,
             }))
             .collect();
 
-        // Rewrite ORDER BY expressions to use the columns produced by the
-        // aggregation, preserve SELECT-alias remapping, and validate against
+        // Preserve ORDER BY SELECT-alias remapping and validate against
         // aggregate outputs plus SELECT aliases.
         let order_by_post_aggr = rebase_and_validate_post_aggregate_sort_exprs(
             order_by_exprs,
