@@ -133,6 +133,56 @@ fn rebase_and_validate_optional_post_aggregate_expr(
     Ok(rebased_exprs.pop())
 }
 
+fn rebase_and_validate_post_aggregate_sort_exprs(
+    sort_exprs: &[SortExpr],
+    select_exprs_post_aggr: &[Expr],
+    aggr_projection_exprs: &[Expr],
+    input: &LogicalPlan,
+    valid_exprs: &[Expr],
+) -> Result<Vec<SortExpr>> {
+    let order_by_post_aggr = sort_exprs
+        .iter()
+        .map(|sort_expr| {
+            let rewritten_expr =
+                rebase_expr(&sort_expr.expr, aggr_projection_exprs, input)?;
+
+            // If this ORDER BY expression matches an aliased SELECT expression,
+            // use the SELECT alias instead of the raw expression.
+            let final_expr = select_exprs_post_aggr
+                .iter()
+                .find_map(|select_expr| {
+                    if let Expr::Alias(alias) = select_expr {
+                        let rewritten_unaliased = match &rewritten_expr {
+                            Expr::Alias(a) => a.expr.as_ref(),
+                            other => other,
+                        };
+                        if alias.expr.as_ref() == rewritten_unaliased {
+                            return Some(Expr::Column(Column::new_unqualified(
+                                alias.name.clone(),
+                            )));
+                        }
+                    }
+                    None
+                })
+                .unwrap_or(rewritten_expr);
+
+            Ok(sort_expr.with_expr(final_expr))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let order_by_exprs_only: Vec<Expr> =
+        order_by_post_aggr.iter().map(|s| s.expr.clone()).collect();
+    check_columns_satisfy_exprs(
+        valid_exprs,
+        &order_by_exprs_only,
+        CheckColumnsSatisfyExprsPurpose::Aggregate(
+            CheckColumnsMustReferenceAggregatePurpose::OrderBy,
+        ),
+    )?;
+
+    Ok(order_by_post_aggr)
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
@@ -1303,41 +1353,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             CheckColumnsMustReferenceAggregatePurpose::Qualify,
         )?;
 
-        // Rewrite the ORDER BY expressions to use the columns produced by the
-        // aggregation. If an ORDER BY expression matches a SELECT expression
-        // (ignoring aliases), use the SELECT's output column name to avoid
-        // duplication when the SELECT expression has an alias.
-        let order_by_post_aggr = order_by_exprs
-            .iter()
-            .map(|sort_expr| {
-                let rewritten_expr =
-                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, input)?;
-
-                // Check if this ORDER BY expression matches any aliased SELECT expression
-                // If so, use the SELECT's alias instead of the raw expression
-                let final_expr = select_exprs_post_aggr
-                    .iter()
-                    .find_map(|select_expr| {
-                        // Only consider aliased expressions
-                        if let Expr::Alias(alias) = select_expr {
-                            let rewritten_unaliased = match &rewritten_expr {
-                                Expr::Alias(a) => a.expr.as_ref(),
-                                other => other,
-                            };
-                            if alias.expr.as_ref() == rewritten_unaliased {
-                                return Some(Expr::Column(Column::new_unqualified(
-                                    alias.name.clone(),
-                                )));
-                            }
-                        }
-                        None
-                    })
-                    .unwrap_or(rewritten_expr);
-
-                Ok(sort_expr.with_expr(final_expr))
-            })
-            .collect::<Result<Vec<SortExpr>>>()?;
-
         let all_valid_exprs: Vec<Expr> = column_exprs_post_aggr
             .iter()
             .cloned()
@@ -1350,14 +1365,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }))
             .collect();
 
-        let order_by_exprs_only: Vec<Expr> =
-            order_by_post_aggr.iter().map(|s| s.expr.clone()).collect();
-        check_columns_satisfy_exprs(
+        // Rewrite ORDER BY expressions to use the columns produced by the
+        // aggregation, preserve SELECT-alias remapping, and validate against
+        // aggregate outputs plus SELECT aliases.
+        let order_by_post_aggr = rebase_and_validate_post_aggregate_sort_exprs(
+            order_by_exprs,
+            &select_exprs_post_aggr,
+            &aggr_projection_exprs,
+            input,
             &all_valid_exprs,
-            &order_by_exprs_only,
-            CheckColumnsSatisfyExprsPurpose::Aggregate(
-                CheckColumnsMustReferenceAggregatePurpose::OrderBy,
-            ),
         )?;
 
         // Rewrite DISTINCT ON expressions to use the columns produced by the
