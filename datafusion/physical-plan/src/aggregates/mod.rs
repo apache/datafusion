@@ -1032,10 +1032,10 @@ impl AggregateExec {
         }
 
         self.mode == AggregateMode::Partial
-            && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
+            && self.limit_options_supported_by_hash_stream()
     }
 
     fn should_use_final_hash_stream(&self, context: &TaskContext) -> bool {
@@ -1047,10 +1047,15 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.limit_options.is_none()
+        ) && self.limit_options_supported_by_hash_stream()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
+    }
+
+    /// See comments in `PartialHashAggregateStream` limit optimization section
+    fn limit_options_supported_by_hash_stream(&self) -> bool {
+        self.limit_options.is_none() || self.is_unordered_unfiltered_group_by_distinct()
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
@@ -3147,6 +3152,103 @@ mod tests {
             vec![2, 1]
         );
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn limited_distinct_aggregate_uses_migrated_hash_streams() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
+        let input_batches = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt32Array::from(vec![1, 2, 1]))],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt32Array::from(vec![3, 4]))],
+            )?,
+        ];
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
+            ),
+        );
+
+        let partial_input = TestMemoryExec::try_new_exec(
+            std::slice::from_ref(&input_batches),
+            Arc::clone(&schema),
+            None,
+        )?;
+        let partial_aggregate = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by.clone(),
+                vec![],
+                vec![],
+                partial_input,
+                Arc::clone(&schema),
+            )?
+            .with_limit_options(Some(LimitOptions::new(2))),
+        );
+
+        let partial_stream = partial_aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(partial_stream, StreamType::PartialHash(_)));
+        let stream: SendableRecordBatchStream = partial_stream.into();
+        let partial_output = collect(stream).await?;
+        assert_eq!(
+            partial_output
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            2
+        );
+        assert_snapshot!(batches_to_sort_string(&partial_output), @r"
++---+
+| a |
++---+
+| 1 |
+| 2 |
++---+
+");
+
+        let final_input =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        let final_aggregate = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Final,
+                group_by.as_final(),
+                vec![],
+                vec![],
+                final_input,
+                Arc::clone(&schema),
+            )?
+            .with_limit_options(Some(LimitOptions::new(2))),
+        );
+
+        let final_stream = final_aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(final_stream, StreamType::FinalHash(_)));
+        let stream: SendableRecordBatchStream = final_stream.into();
+        let final_output = collect(stream).await?;
+        assert_eq!(
+            final_output
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            2
+        );
+        assert_snapshot!(batches_to_sort_string(&final_output), @r"
++---+
+| a |
++---+
+| 1 |
+| 2 |
++---+
+");
 
         Ok(())
     }
