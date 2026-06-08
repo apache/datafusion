@@ -1,0 +1,200 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# End-to-end glob semantics for `CREATE EXTERNAL TABLE ... LOCATION
+# '<path-with-glob>'`. Match semantics mirror DuckDB's filesystem
+# glob — cross-checked against duckdb v1.5.2 on the same inputs.
+# See `ListingTableUrl::parse` for the spec.
+#
+# Fixture layout (rows per file in parentheses):
+#
+#   test_files/scratch/glob/top1.parquet                    (2)
+#   test_files/scratch/glob/top2.parquet                    (2)
+#   test_files/scratch/glob/nested/a/b/deep.parquet         (3)
+#   test_files/scratch/glob/nested/x/y/deep.parquet         (5)
+#   test_files/scratch/glob/parts/year=2021/d.parquet       (5)
+#   test_files/scratch/glob/parts/year=2022/d.parquet       (7)
+#
+# `SELECT * FROM '<path-with-glob>'` (dynamic-file table) requires
+# `enable_url_table` on the SessionContext (see `dynamic_file.slt`),
+# which the default sqllogictest runner does not enable. URL-parse
+# coverage for `s3://`/`gs://`/`file://` lives in the Rust unit
+# test `mod::tests::test_url_parse_glob_in_scheme_urls`.
+##########
+
+# Fixture setup -------------------------------------------------------
+
+statement ok
+CREATE TABLE seed2(id INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE seed3(id INT) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE seed5(id INT) AS VALUES (1), (2), (3), (4), (5);
+
+statement ok
+CREATE TABLE seed7(id INT) AS VALUES (1), (2), (3), (4), (5), (6), (7);
+
+query I
+COPY (SELECT * FROM seed2) TO 'test_files/scratch/glob/top1.parquet' STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM seed2) TO 'test_files/scratch/glob/top2.parquet' STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM seed3) TO 'test_files/scratch/glob/nested/a/b/deep.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM seed5) TO 'test_files/scratch/glob/nested/x/y/deep.parquet' STORED AS PARQUET;
+----
+5
+
+query I
+COPY (SELECT * FROM seed5) TO 'test_files/scratch/glob/parts/year=2021/d.parquet' STORED AS PARQUET;
+----
+5
+
+query I
+COPY (SELECT * FROM seed7) TO 'test_files/scratch/glob/parts/year=2022/d.parquet' STORED AS PARQUET;
+----
+7
+
+# `*` does NOT cross `/` -----------------------------------------------
+
+statement ok
+CREATE EXTERNAL TABLE g_star
+STORED AS PARQUET
+LOCATION 'test_files/scratch/glob/*.parquet';
+
+# Only the two top-level files; subdir files are excluded.
+query I
+SELECT count(*) FROM g_star;
+----
+4
+
+# `ignore_subdirectory` is NOT consulted when an explicit glob is
+# present (the pattern is authoritative). Both values must agree.
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+query I
+SELECT count(*) FROM g_star;
+----
+4
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+# `**` recurses across zero or more directory levels ------------------
+
+statement ok
+CREATE EXTERNAL TABLE g_recursive
+STORED AS PARQUET
+LOCATION 'test_files/scratch/glob/nested/**/deep.parquet';
+
+query I
+SELECT count(*) FROM g_recursive;
+----
+8
+
+# `*` spans exactly one directory segment -----------------------------
+
+statement ok
+CREATE EXTERNAL TABLE g_single_dir
+STORED AS PARQUET
+LOCATION 'test_files/scratch/glob/parts/*/d.parquet';
+
+query I
+SELECT count(*) FROM g_single_dir;
+----
+12
+
+# Partition-style `key=value` dirs are matched LITERALLY --------------
+
+statement ok
+CREATE EXTERNAL TABLE g_partition_glob
+STORED AS PARQUET
+LOCATION 'test_files/scratch/glob/parts/year=*/d.parquet';
+
+query I
+SELECT count(*) FROM g_partition_glob;
+----
+12
+
+# Character classes ---------------------------------------------------
+
+statement ok
+CREATE EXTERNAL TABLE g_class
+STORED AS PARQUET
+LOCATION 'test_files/scratch/glob/top[12].parquet';
+
+query I
+SELECT count(*) FROM g_class;
+----
+4
+
+# `?` single-character wildcard (filesystem paths only) ---------------
+
+statement ok
+CREATE EXTERNAL TABLE g_question
+STORED AS PARQUET
+LOCATION 'test_files/scratch/glob/top?.parquet';
+
+query I
+SELECT count(*) FROM g_question;
+----
+4
+
+# Cleanup -------------------------------------------------------------
+
+statement ok
+DROP TABLE g_star;
+
+statement ok
+DROP TABLE g_recursive;
+
+statement ok
+DROP TABLE g_single_dir;
+
+statement ok
+DROP TABLE g_partition_glob;
+
+statement ok
+DROP TABLE g_class;
+
+statement ok
+DROP TABLE g_question;
+
+statement ok
+DROP TABLE seed2;
+
+statement ok
+DROP TABLE seed3;
+
+statement ok
+DROP TABLE seed5;
+
+statement ok
+DROP TABLE seed7;

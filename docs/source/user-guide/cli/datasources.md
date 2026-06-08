@@ -100,9 +100,7 @@ additional configuration options.
 # `CREATE EXTERNAL TABLE`
 
 It is also possible to create a table backed by files or remote locations via
-`CREATE EXTERNAL TABLE` as shown below. Note that DataFusion does not support
-wildcards (e.g. `*`) in file paths; instead, specify the directory path directly
-to read all compatible files in that directory.
+`CREATE EXTERNAL TABLE` as shown below.
 
 For example, to create a table `hits` backed by a local parquet file named `hits.parquet`:
 
@@ -132,35 +130,48 @@ select count(*) from hits;
 1 row in set. Query took 0.344 seconds.
 ```
 
-**Why Wildcards Are Not Supported**
+## Glob expressions in paths
 
-Although wildcards (e.g., _.parquet or \*\*/_.parquet) may work for local
-filesystems in some cases, they are not supported by DataFusion CLI. This
-is because wildcards are not universally applicable across all storage backends
-(e.g., S3, GCS). Instead, DataFusion expects the user to specify the directory
-path, and it will automatically read all compatible files within that directory.
+`LOCATION` (and the dynamic `SELECT * FROM '<path>'` form) supports glob
+expressions in both local filesystem paths and scheme URLs (`s3://`,
+`gs://`, `file://`, `https://`, ...). Match semantics follow DuckDB's
+filesystem glob:
 
-For example, the following usage is not supported:
+| Wildcard         | Meaning                                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `*`              | matches any characters within a single path segment; does **not** cross `/`                                                                      |
+| `**`             | matches zero or more directory levels (use this for recursion)                                                                                   |
+| `?`              | matches exactly one non-separator character. Filesystem paths only — in scheme URLs `?` is reserved for the query delimiter; use `[abc]` or `*`. |
+| `[abc]`, `[a-z]` | matches one character from the class                                                                                                             |
+| `key=value` dirs | matched literally, so partition-style globs like `year=*/file.parquet` work                                                                      |
 
-```sql
-CREATE EXTERNAL TABLE test (
-    message TEXT,
-    day DATE
-)
-STORED AS PARQUET
-LOCATION 'gs://bucket/*.parquet';
-```
-
-Instead, you should use:
+Examples:
 
 ```sql
-CREATE EXTERNAL TABLE test (
-    message TEXT,
-    day DATE
-)
-STORED AS PARQUET
-LOCATION 'gs://bucket/my_table/';
+-- Top-level files only (`*` does not cross `/`).
+CREATE EXTERNAL TABLE t1 STORED AS PARQUET
+LOCATION '/data/events/*.parquet';
+
+-- Recursive over any subdirectory depth.
+CREATE EXTERNAL TABLE t2 STORED AS PARQUET
+LOCATION '/data/events/**/*.parquet';
+
+-- Glob over Hive partition directories.
+CREATE EXTERNAL TABLE t3 STORED AS PARQUET
+LOCATION 's3://bucket/events/year=*/month=*/*.parquet';
+
+-- Same forms work for ad-hoc queries:
+SELECT count(*) FROM '/data/events/**/*.parquet';
 ```
+
+When an explicit glob is present, the
+`datafusion.execution.listing_table_ignore_subdirectory` session option
+is **not** consulted — the pattern is authoritative. The option still
+governs bare-directory listings (`LOCATION '/data/events/'`), where
+`true` (the default) restricts to top-level files and `false` recurses.
+
+Brace expansion (`{a,b}`) is not supported, matching DuckDB. To union
+multiple distinct locations, create separate tables or use `UNION ALL`.
 
 When specifying a directory path that has a Hive compliant partition structure, by default, DataFusion CLI will
 automatically parse and incorporate the Hive columns and their values into the table's schema and data. Given the

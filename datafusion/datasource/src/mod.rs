@@ -37,6 +37,8 @@ pub mod file_groups;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
+#[cfg(not(target_arch = "wasm32"))]
+mod listing_glob;
 pub mod memory;
 pub mod morsel;
 pub mod projection;
@@ -843,6 +845,146 @@ mod tests {
 
         // testing an empty path with `ignore_subdirectory` set to false
         assert!(url.contains(&Path::parse("/var/data/mytable/").unwrap(), false));
+    }
+
+    /// Covers the glob arm of [`ListingTableUrl::contains`] end-to-end:
+    /// the path-with-glob string is parsed, then synthetic file paths are
+    /// matched against it. Asserts DuckDB-compatible semantics and that
+    /// `ignore_subdirectory` is ignored once an explicit glob is present.
+    #[test]
+    fn test_url_contains_glob() {
+        let cases: &[(&str, &[(&str, bool)])] = &[
+            // `*` does not cross `/`
+            (
+                "/var/data/mytable/*.parquet",
+                &[
+                    ("/var/data/mytable/file.parquet", true),
+                    ("/var/data/mytable/sub/file.parquet", false),
+                    ("/var/data/mytable/file.csv", false),
+                ],
+            ),
+            // `**` recurses, matching zero or more directory levels
+            (
+                "/var/data/mytable/**/*.parquet",
+                &[
+                    ("/var/data/mytable/file.parquet", true),
+                    ("/var/data/mytable/sub/file.parquet", true),
+                    ("/var/data/mytable/a/b/c/file.parquet", true),
+                    ("/var/data/mytable/file.csv", false),
+                ],
+            ),
+            // partition-style `key=value` dirs are matched literally,
+            // unlike the no-glob arm which skips them
+            (
+                "/var/data/mytable/year=*/file.parquet",
+                &[
+                    ("/var/data/mytable/year=2024/file.parquet", true),
+                    ("/var/data/mytable/year=2025/file.parquet", true),
+                    ("/var/data/mytable/month=01/file.parquet", false),
+                    ("/var/data/mytable/file.parquet", false),
+                ],
+            ),
+            // `*` spans exactly one directory segment
+            (
+                "/var/data/mytable/*/file.parquet",
+                &[
+                    ("/var/data/mytable/sub/file.parquet", true),
+                    ("/var/data/mytable/a/b/file.parquet", false),
+                ],
+            ),
+        ];
+
+        for (pattern, checks) in cases {
+            let url = ListingTableUrl::parse(pattern).unwrap();
+            for (path, expected) in *checks {
+                let p = Path::parse(path).unwrap();
+                // With an explicit glob, `ignore_subdirectory` is not
+                // consulted, so both values must agree with `expected`.
+                for ignore in [true, false] {
+                    assert_eq!(
+                        url.contains(&p, ignore),
+                        *expected,
+                        "pattern={pattern} path={path} ignore_subdirectory={ignore}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Round-trips scheme URLs (s3://, gs://, file://, http(s)://)
+    /// through [`ListingTableUrl::parse`] and asserts the detected
+    /// glob and listing prefix match the user's intent. URL paths
+    /// previously had no glob detection at all.
+    #[test]
+    fn test_url_parse_glob_in_scheme_urls() {
+        // (input, expected scheme, expected prefix (as_ref), expected glob string or None)
+        let cases: &[(&str, &str, &str, Option<&str>)] = &[
+            // s3 + recursive. object_store `Path` strips the trailing
+            // `/`, so the listing prefix is `data` not `data/`.
+            (
+                "s3://bucket/data/**/x.parquet",
+                "s3",
+                "data",
+                Some("**/x.parquet"),
+            ),
+            // s3 + filename glob — prefix is the bucket root (empty
+            // path).
+            ("s3://bucket/*.parquet", "s3", "", Some("*.parquet")),
+            // gs:// with directory-segment wildcard
+            (
+                "gs://bucket/year=*/part-*.parquet",
+                "gs",
+                "",
+                Some("year=*/part-*.parquet"),
+            ),
+            // file:// URL with glob — works the same as a path
+            (
+                "file:///foo/**/x.parquet",
+                "file",
+                "foo",
+                Some("**/x.parquet"),
+            ),
+            // http(s) with IPv6 host
+            (
+                "https://[::1]:8080/data/*.parquet",
+                "https",
+                "data",
+                Some("*.parquet"),
+            ),
+            // No glob in path — preserved verbatim
+            (
+                "s3://bucket/data/file.parquet",
+                "s3",
+                "data/file.parquet",
+                None,
+            ),
+            // `?` is reserved for the URL query delimiter even though
+            // it would be a glob char in a filesystem path. Path
+            // glob is `None`, query is preserved in the URL.
+            ("https://host.example/p?a=b", "https", "p", None),
+            // Percent-encoded `*` is literal, not a glob
+            ("s3://bucket/data/%2A.parquet", "s3", "data/*.parquet", None),
+        ];
+
+        for (input, scheme, prefix, expected_glob) in cases {
+            let url = ListingTableUrl::parse(input)
+                .unwrap_or_else(|e| panic!("failed to parse {input}: {e}"));
+            assert_eq!(url.scheme(), *scheme, "scheme mismatch for {input}");
+            assert_eq!(
+                url.prefix().as_ref(),
+                *prefix,
+                "prefix mismatch for {input}"
+            );
+            match (url.get_glob(), expected_glob) {
+                (Some(g), Some(want)) => {
+                    assert_eq!(g.as_str(), *want, "glob mismatch for {input}",)
+                }
+                (None, None) => {}
+                (got, want) => {
+                    panic!("glob mismatch for {input}: got={got:?} want={want:?}",)
+                }
+            }
+        }
     }
 
     /// Regression test for <https://github.com/apache/datafusion/issues/19605>

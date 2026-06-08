@@ -300,9 +300,27 @@ select count(*) from listing_table;
 statement ok
 set datafusion.execution.listing_table_ignore_subdirectory = false;
 
-# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+# An explicit glob is authoritative under DuckDB-compatible semantics:
+# `*` does not cross `/`, so `*.parquet` matches the three top-level
+# files but NOT `subdir/3.parquet`, regardless of
+# `listing_table_ignore_subdirectory`. To include subdir/3.parquet, use
+# `**/*.parquet` (see `listing_table_recursive` below) or point at the
+# directory without a glob.
+# scan file: 0.parquet 1.parquet 2.parquet
 query I
 select count(*) from listing_table;
+----
+9
+
+# Recursive variant — `**` is required to cross directory levels.
+statement ok
+CREATE EXTERNAL TABLE listing_table_recursive
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_table/**/*.parquet';
+
+# scan file: 0.parquet 1.parquet 2.parquet subdir/3.parquet
+query I
+select count(*) from listing_table_recursive;
 ----
 12
 
