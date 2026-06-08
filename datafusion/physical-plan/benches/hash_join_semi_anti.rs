@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Criterion benchmarks for Hash Join with RightSemi/RightAnti joins with Int32 keys.
+//! Criterion benchmarks for Hash Join with RightSemi/RightAnti/RightMark joins with Int32 keys.
 //!
 //! ## Key Benchmark Axes
 //!
@@ -37,7 +37,7 @@
 //! - **Hit Rate**: The percentage of probe rows that find a match in the build side.
 //!   This controls how often the join produces output rows.
 //!
-//! Semi/anti joins can short-circuit after finding the first match, so these
+//! Semi/anti/mark joins can short-circuit after finding the first match, so these
 //! benchmarks help evaluate optimization strategies for existence checks.
 
 use std::sync::Arc;
@@ -287,6 +287,30 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
                     let left = make_exec(&left_batches, &s);
                     let right = make_exec(&right_batches, &s);
                     do_hash_join(left, right, JoinType::RightSemi, &rt)
+                })
+            },
+        );
+    }
+
+    // =========================================================================
+    // RightMark Join benchmarks
+    // =========================================================================
+
+    // RightMark - 100% Density, ~1% hit rate, fanout ~100
+    // Build keys are duplicated: 100K rows over 1K distinct keys. Matching
+    // probe rows only need a boolean mark, so duplicate build matches can be
+    // skipped.
+    {
+        let fanout_keys = 1_000;
+        let left_batches = build_batches(build_rows, fanout_keys, 0, &s);
+        let right_batches = build_batches(probe_rows, build_rows, 0, &s);
+        group.bench_function(
+            BenchmarkId::new("right_mark_fanout100_h1", probe_rows),
+            |b| {
+                b.iter(|| {
+                    let left = make_exec(&left_batches, &s);
+                    let right = make_exec(&right_batches, &s);
+                    do_hash_join(left, right, JoinType::RightMark, &rt)
                 })
             },
         );
