@@ -28,11 +28,11 @@ use datafusion::execution::TaskContext;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::reader::Length;
 use datafusion::physical_plan::ExecutionPlan;
+use futures::StreamExt;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
-use tonic::codegen::tokio_stream::StreamExt;
 
 /// Demonstrates how to attach a per-file Arrow schema to a [`PartitionedFile`]
 /// via [`PartitionedFile::with_arrow_schema`].
@@ -70,6 +70,9 @@ pub async fn read_partitioned_file() -> Result<()> {
 
     let table_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
+        // Specify another field in the table which is missing from the file schema.
+        // Illustrates that the table schema does not need to match the PartitionedFile schema
+        // for a scan to succeed.
         Field::new("b", DataType::Float64, true),
     ]));
 
@@ -136,5 +139,9 @@ async fn read_file(
 
     let exec = DataSourceExec::from_data_source(config);
     let mut result = exec.execute(0, Arc::new(TaskContext::default()))?;
-    result.next().await.unwrap()
+    result.next().await.ok_or_else(|| {
+        datafusion::error::DataFusionError::Internal(
+            "execution produced no batches".into(),
+        )
+    })?
 }

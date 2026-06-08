@@ -54,6 +54,9 @@
 //! - `parquet_idx`
 //!   (file: parquet_index.rs, desc: Create a secondary index)
 //!
+//! - `partitioned_file_schema`
+//!   (file: partitioned_file_schema.rs, desc: Provide an explicit arrow schema for a PartitionedFile)
+//!
 //! - `query_http_csv`
 //!   (file: query_http_csv.rs, desc: Query CSV files via HTTP)
 //!
