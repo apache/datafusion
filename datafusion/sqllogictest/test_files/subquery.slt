@@ -2437,3 +2437,36 @@ DROP TABLE sq_count_customer;
 
 statement ok
 DROP TABLE sq_count_orders;
+
+# Mark joins must preserve their synthetic mark column when the subquery input
+# is optimized to EmptyRelation.
+statement ok
+CREATE TABLE mark_join_empty_t1(id INT, flag BOOLEAN);
+
+statement ok
+CREATE TABLE mark_join_empty_t2(id INT);
+
+statement ok
+INSERT INTO mark_join_empty_t1 VALUES (1, TRUE);
+
+statement ok
+INSERT INTO mark_join_empty_t2 VALUES (1);
+
+query IB
+SELECT *
+FROM mark_join_empty_t1
+WHERE EXISTS (
+    SELECT 1
+    FROM mark_join_empty_t2
+    WHERE mark_join_empty_t2.id = mark_join_empty_t1.id
+      AND 1 = 0
+)
+OR flag = TRUE;
+----
+1 true
+
+statement ok
+DROP TABLE mark_join_empty_t1;
+
+statement ok
+DROP TABLE mark_join_empty_t2;
