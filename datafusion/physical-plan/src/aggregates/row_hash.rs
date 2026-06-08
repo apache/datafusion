@@ -195,7 +195,7 @@ impl SkipAggregationProbe {
         self.num_groups = num_groups;
         if self.input_rows >= self.probe_rows_threshold {
             self.should_skip = self.num_groups as f64 / self.input_rows as f64
-                >= self.probe_ratio_threshold;
+                > self.probe_ratio_threshold;
             // Set is_locked to true only if we have decided to skip, otherwise we can try to skip
             // during processing the next record_batch.
             self.is_locked = self.should_skip;
@@ -644,14 +644,20 @@ impl GroupedHashAggregateStream {
                 options.skip_partial_aggregation_probe_rows_threshold;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
-            let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Rows)
-                .counter("skipped_aggregation_rows", partition);
-            Some(SkipAggregationProbe::new(
-                probe_rows_threshold,
-                probe_ratio_threshold,
-                skipped_aggregation_rows,
-            ))
+            // A threshold >= 1.0 means the ratio (num_groups / input_rows) can
+            // never exceed it, so the feature is effectively disabled.
+            if probe_ratio_threshold >= 1.0 {
+                None
+            } else {
+                let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
+                    .with_category(MetricCategory::Rows)
+                    .counter("skipped_aggregation_rows", partition);
+                Some(SkipAggregationProbe::new(
+                    probe_rows_threshold,
+                    probe_ratio_threshold,
+                    skipped_aggregation_rows,
+                ))
+            }
         } else {
             None
         };
@@ -1630,11 +1636,11 @@ mod tests {
             ],
         )?;
 
-        // Batch 2: 350 rows with 350 unique NEW groups (starting from group 10)
-        // After batch 2, total: 450 rows, 360 groups
-        // Ratio: 360/450 = 0.8 (80%) >= 0.8 -> SHOULD decide to skip
-        let batch2_rows = 350;
-        let batch2_groups = 350;
+        // Batch 2: 360 rows with 360 unique NEW groups (starting from group 10)
+        // After batch 2, total: 460 rows, 370 groups
+        // Ratio: 370/460 ≈ 0.804 (80.4%) > 0.8 -> SHOULD decide to skip
+        let batch2_rows = 360;
+        let batch2_groups = 360;
         let group_ids_batch2: Vec<i32> = (batch1_groups..(batch1_groups + batch2_groups))
             .map(|x| x as i32)
             .collect();
@@ -1816,5 +1822,26 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_skip_aggregation_probe_equality_does_not_skip() {
+        // When num_groups / input_rows == probe_ratio_threshold, the `>` boundary
+        // means we must NOT skip — equality is not sufficient to trigger skip.
+        let threshold_ratio = 0.5_f64;
+        let threshold_rows = 10_usize;
+        let mut probe = SkipAggregationProbe::new(
+            threshold_rows,
+            threshold_ratio,
+            metrics::Count::new(),
+        );
+
+        // 10 rows, 5 groups → ratio = 5/10 = 0.5 exactly equals threshold
+        probe.update_state(10, 5);
+
+        assert!(
+            !probe.should_skip(),
+            "ratio == threshold should not trigger skip (boundary is exclusive)"
+        );
     }
 }
