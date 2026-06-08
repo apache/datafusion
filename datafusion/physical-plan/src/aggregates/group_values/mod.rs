@@ -230,9 +230,7 @@ pub fn new_group_values(
                     DataType::UInt64 => Ok(Box::new(
                         GroupValuesDictionary::<UInt64Type>::new(value_type),
                     )),
-                    _ => Err(datafusion_common::DataFusionError::NotImplemented(
-                        format!("Unsupported dictionary key type: {key_type:?}"),
-                    )),
+                    _ => Ok(Box::new(GroupValuesRows::try_new(schema)?)),
                 };
             }
             _ => {}

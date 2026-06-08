@@ -38,7 +38,6 @@ use std::sync::Arc;
 /// identifiers), so 16 B/item avoids the realloc-doubling chain in the common
 /// case while keeping over-allocation cheap when values are smaller.
 const AVG_BYTES_PER_DICT_VALUE: usize = 16;
-const INITIAL_PRE_ALLOCATION: usize = 8 * 1024; // avoid re-allocation`s for small-medium groups
 
 macro_rules! decode_list {
     ($raw:expr, $builder:expr) => {{
@@ -119,7 +118,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
     pub fn new(data_type: &DataType) -> Self {
         Self {
             seen_elements: Vec::new(),
-            unique_dict_value_mapping: HashTable::with_capacity(INITIAL_PRE_ALLOCATION),
+            unique_dict_value_mapping: HashTable::new(),
             value_dt: data_type.clone(),
             _phantom: PhantomData,
             random_state: RandomState::with_seed(0),
@@ -291,7 +290,7 @@ fn valid_bounds<K: ArrowDictionaryKeyType>(n: usize) -> bool {
         DataType::UInt64 => usize::MAX,
         _ => return false,
     };
-    n <= max
+    n == 0 || n - 1 <= max
 }
 
 impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> {
@@ -318,7 +317,7 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
                 .values_cache
                 .0
                 .as_ref()
-                .map(|a| a.to_data().get_array_memory_size())
+                .map(|a| a.to_data().get_slice_memory_size().unwrap_or(0))
                 .unwrap_or(0);
 
         size_of::<Self>() + seen_elements_size + unique_mapping_size + values_cache_size
@@ -860,19 +859,36 @@ mod test {
         }
 
         #[test]
-        fn test_exceeds_bounds_errors() {
+        fn test_at_capacity_succeeds() {
+            // UInt8Type keys span 0..=255, so exactly 256 groups should succeed
+            // (largest index = 255 = u8::MAX).
             let mut gv = GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
             let mut groups = Vec::new();
             gv.intern(&[make_n_distinct(256)], &mut groups).unwrap();
-            assert!(gv.emit(EmitTo::All).is_err());
+            assert!(gv.emit(EmitTo::All).is_ok());
         }
 
         #[test]
-        fn test_exact_boundary_succeeds() {
+        fn test_exceeds_bounds_errors() {
+            // fill all 256 slots, then intern one
+            // more new value across a second batch to push the count to 257.
+            // The 257th group would need index 256 which overflows u8::MAX.
             let mut gv = GroupValuesDictionary::<UInt8Type>::new(&DataType::Utf8);
             let mut groups = Vec::new();
-            gv.intern(&[make_n_distinct(255)], &mut groups).unwrap();
-            assert!(gv.emit(EmitTo::All).is_ok());
+            gv.intern(&[make_n_distinct(256)], &mut groups).unwrap();
+
+            // one extra value not present in "v0".."v255"
+            let mut sb = StringBuilder::new();
+            sb.append_value("overflow_value");
+            let values: ArrayRef = Arc::new(sb.finish());
+            let mut kb = PrimitiveBuilder::<UInt8Type>::new();
+            kb.append_value(0u8);
+            let extra = Arc::new(
+                DictionaryArray::<UInt8Type>::try_new(kb.finish(), values).unwrap(),
+            ) as ArrayRef;
+            gv.intern(&[extra], &mut groups).unwrap();
+
+            assert!(gv.emit(EmitTo::All).is_err());
         }
     }
 }
