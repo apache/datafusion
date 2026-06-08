@@ -94,16 +94,16 @@ fn rebase_and_validate_post_aggregate_exprs(
     exprs: &[Expr],
     aggr_projection_exprs: &[Expr],
     input: &LogicalPlan,
-    valid_exprs: &[Expr],
+    valid_column_exprs: &[Expr],
     purpose: CheckColumnsMustReferenceAggregatePurpose,
 ) -> Result<Vec<Expr>> {
     let rebased_exprs = exprs
         .iter()
         .map(|expr| rebase_expr(expr, aggr_projection_exprs, input))
-        .collect::<Result<Vec<Expr>>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     check_columns_satisfy_exprs(
-        valid_exprs,
+        valid_column_exprs,
         &rebased_exprs,
         CheckColumnsSatisfyExprsPurpose::Aggregate(purpose),
     )?;
