@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar,
@@ -274,6 +274,23 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
         }
         _ => internal_err!("Expected a Map type, got {data_type}"),
     }
+}
+
+/// Returns the `(key_field, value_field)` of a `Map` type.
+///
+/// Errors if the type is not a `Map` or its entries struct does not have
+/// exactly two fields.
+pub(crate) fn get_map_key_value_fields(
+    data_type: &DataType,
+) -> Result<(&FieldRef, &FieldRef)> {
+    let fields = get_map_entry_field(data_type)?;
+    if fields.len() != 2 {
+        return internal_err!(
+            "Expected map entries struct with two fields, got {} fields",
+            fields.len()
+        );
+    }
+    Ok((&fields[0], &fields[1]))
 }
 
 /// Shared `coerce_types` impl for array-math UDFs whose kernels expect

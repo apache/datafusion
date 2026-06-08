@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`datafusion_expr::HigherOrderUDF`] definitions for map_transform function.
+//! [`datafusion_expr::HigherOrderUDF`] definitions for transform_values function.
 
 use arrow::{
-    array::{Array, AsArray, MapArray, StructArray},
+    array::{Array, AsArray, MapArray, StructArray, new_null_array},
     buffer::OffsetBuffer,
     compute::take_arrays,
     datatypes::{DataType, Field, FieldRef, Fields},
@@ -35,28 +35,29 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
-use crate::utils::get_map_entry_field;
+use crate::lambda_utils::value_lambda_pair;
+use crate::utils::get_map_key_value_fields;
 
 make_higher_order_function_expr_and_func!(
-    MapTransform,
-    map_transform,
+    TransformValues,
+    transform_values,
     map lambda,
     "transforms the values of a map",
-    map_transform_higher_order_function
+    transform_values_higher_order_function
 );
 
 #[user_doc(
     doc_section(label = "Map Functions"),
     description = "Returns a map that applies the lambda to each entry of the map and \
     transforms the values. The keys are preserved unchanged.",
-    syntax_example = "map_transform(map, (k, v) -> expr)",
+    syntax_example = "transform_values(map, (k, v) -> expr)",
     sql_example = r#"```sql
-> select map_transform(MAP {'a': 1, 'b': 2, 'c': 3}, (k, v) -> v * 10);
-+--------------------------------------------------------------+
-| map_transform(MAP {'a': 1, 'b': 2, 'c': 3}, (k, v) -> v * 10) |
-+--------------------------------------------------------------+
-| {a: 10, b: 20, c: 30}                                        |
-+--------------------------------------------------------------+
+> select transform_values(MAP {'a': 1, 'b': 2, 'c': 3}, (k, v) -> v * 10);
++-----------------------------------------------------------------+
+| transform_values(MAP {'a': 1, 'b': 2, 'c': 3}, (k, v) -> v * 10) |
++-----------------------------------------------------------------+
+| {a: 10, b: 20, c: 30}                                           |
++-----------------------------------------------------------------+
 ```"#,
     argument(
         name = "map",
@@ -68,18 +69,18 @@ make_higher_order_function_expr_and_func!(
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct MapTransform {
+pub struct TransformValues {
     signature: HigherOrderSignature,
     aliases: Vec<String>,
 }
 
-impl Default for MapTransform {
+impl Default for TransformValues {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl MapTransform {
+impl TransformValues {
     pub fn new() -> Self {
         Self {
             signature: HigherOrderSignature::exact(
@@ -91,9 +92,9 @@ impl MapTransform {
     }
 }
 
-impl HigherOrderUDFImpl for MapTransform {
+impl HigherOrderUDFImpl for TransformValues {
     fn name(&self) -> &str {
-        "map_transform"
+        "transform_values"
     }
 
     fn aliases(&self) -> &[String] {
@@ -120,29 +121,13 @@ impl HigherOrderUDFImpl for MapTransform {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let [ValueOrLambda::Value(map), ValueOrLambda::Lambda(_lambda)] =
-            take_function_args(self.name(), fields)?
-        else {
-            return plan_err!("{} expects a map followed by a lambda", self.name());
-        };
+        let (map, _lambda) = value_lambda_pair(self.name(), fields)?;
 
-        let entry_fields = get_map_entry_field(map.data_type())?;
-        let key_field = Arc::clone(entry_fields.first().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(format!(
-                "{} expected map entries to contain a key field",
-                self.name()
-            ))
-        })?);
-        let value_field = Arc::clone(entry_fields.last().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(format!(
-                "{} expected map entries to contain a value field",
-                self.name()
-            ))
-        })?);
+        let (key_field, value_field) = get_map_key_value_fields(map.data_type())?;
 
         Ok(LambdaParametersProgress::Complete(vec![vec![
-            key_field,
-            value_field,
+            Arc::clone(key_field),
+            Arc::clone(value_field),
         ]]))
     }
 
@@ -150,37 +135,15 @@ impl HigherOrderUDFImpl for MapTransform {
         &self,
         args: HigherOrderReturnFieldArgs,
     ) -> Result<Arc<Field>> {
-        let [ValueOrLambda::Value(map), ValueOrLambda::Lambda(lambda)] =
-            take_function_args(self.name(), args.arg_fields)?
-        else {
-            return plan_err!("{} expects a map followed by a lambda", self.name());
-        };
+        let (map, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
 
         let (entries_field, ordered_keys) = match map.data_type() {
             DataType::Map(field, ordered) => (Arc::clone(field), *ordered),
             other => return plan_err!("expected map, got {other}"),
         };
 
-        let entry_fields = match entries_field.data_type() {
-            DataType::Struct(fields) => fields.clone(),
-            other => {
-                return plan_err!("expected map entries to be a struct, got {other}");
-            }
-        };
-
-        let key_field = Arc::clone(entry_fields.first().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(format!(
-                "{} expected map entries to contain a key field",
-                self.name()
-            ))
-        })?);
-
-        let original_value_field = entry_fields.last().ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(format!(
-                "{} expected map entries to contain a value field",
-                self.name()
-            ))
-        })?;
+        let (key_field, original_value_field) =
+            get_map_key_value_fields(map.data_type())?;
 
         let new_value_field = Arc::new(Field::new(
             original_value_field.name(),
@@ -189,7 +152,7 @@ impl HigherOrderUDFImpl for MapTransform {
         ));
 
         let new_entries_struct =
-            DataType::Struct(Fields::from(vec![key_field, new_value_field]));
+            DataType::Struct(Fields::from(vec![Arc::clone(key_field), new_value_field]));
         let new_entries_field = Arc::new(Field::new(
             entries_field.name(),
             new_entries_struct,
@@ -204,11 +167,7 @@ impl HigherOrderUDFImpl for MapTransform {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let [map, lambda] = take_function_args(self.name(), &args.args)?;
-        let (ValueOrLambda::Value(map), ValueOrLambda::Lambda(lambda)) = (map, lambda)
-        else {
-            return plan_err!("{} expects a map followed by a lambda", self.name());
-        };
+        let (map, lambda) = value_lambda_pair(self.name(), &args.args)?;
 
         let map_array_dyn = map.to_array(args.number_rows)?;
         let map_array = match map_array_dyn.data_type() {
@@ -216,17 +175,27 @@ impl HigherOrderUDFImpl for MapTransform {
             other => return exec_err!("{} expected a map, got {other}", self.name()),
         };
 
-        // Fast path: every row is null.
+        // Fast path: every row is null. Return an array of nulls with the
+        // expected return type so the result is shaped like the input.
         if map_array.null_count() == map_array.len() {
-            return Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+            return Ok(ColumnarValue::Array(new_null_array(
                 args.return_type(),
-            )?));
+                map_array.len(),
+            )));
         }
 
         let offsets = map_array.offsets();
         let first = offsets.first().copied().unwrap_or(0) as usize;
         let last = offsets.last().copied().unwrap_or(0) as usize;
         let len = last - first;
+
+        // Fast path: no entries at all and the map has no nulls — return an
+        // empty map mirroring the input row count.
+        if len == 0 && map_array.null_count() == 0 {
+            return Ok(ColumnarValue::Scalar(ScalarValue::new_default(
+                args.return_type(),
+            )?));
+        }
 
         let new_entries_field = match args.return_field.data_type() {
             DataType::Map(field, _) => Arc::clone(field),
@@ -237,17 +206,10 @@ impl HigherOrderUDFImpl for MapTransform {
                 );
             }
         };
-        let (new_key_field, new_value_field) = match new_entries_field.data_type() {
-            DataType::Struct(fields) if fields.len() == 2 => {
-                (Arc::clone(&fields[0]), Arc::clone(&fields[1]))
-            }
-            other => {
-                return exec_err!(
-                    "{} expected map entries struct with two fields, got {other}",
-                    self.name()
-                );
-            }
-        };
+        let (new_key_field, new_value_field) =
+            get_map_key_value_fields(args.return_field.data_type())?;
+        let (new_key_field, new_value_field) =
+            (Arc::clone(new_key_field), Arc::clone(new_value_field));
 
         let flat_keys = if first == 0 && last == map_array.keys().len() {
             Arc::clone(map_array.keys())
@@ -259,14 +221,6 @@ impl HigherOrderUDFImpl for MapTransform {
         } else {
             map_array.values().slice(first, len)
         };
-
-        // Fast path: no entries at all and the map has no nulls — return an empty map
-        // mirroring the input row count.
-        if len == 0 && map_array.null_count() == 0 {
-            return Ok(ColumnarValue::Scalar(ScalarValue::new_default(
-                args.return_type(),
-            )?));
-        }
 
         let keys_param = || Ok(Arc::clone(&flat_keys));
         let values_param = || Ok(Arc::clone(&flat_values));
@@ -328,7 +282,7 @@ mod tests {
     };
     use datafusion_physical_expr::create_physical_expr;
 
-    use crate::map_transform::map_transform_higher_order_function;
+    use crate::transform_values::transform_values_higher_order_function;
 
     fn create_str_int_map(
         keys: Vec<&str>,
@@ -358,7 +312,7 @@ mod tests {
         MapArray::new(entries_field, offsets, entries, nulls, false)
     }
 
-    fn eval_map_transform(
+    fn eval_transform_values(
         map: MapArray,
         lambda_body: Expr,
         param_names: [&str; 2],
@@ -371,7 +325,7 @@ mod tests {
 
         create_physical_expr(
             &Expr::HigherOrderFunction(HigherOrderFunction::new(
-                map_transform_higher_order_function(),
+                transform_values_higher_order_function(),
                 vec![col("m"), lambda(param_names, lambda_body)],
             )),
             &schema,
@@ -392,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn map_transform_doubles_values() {
+    fn transform_values_doubles_values() {
         let map = create_str_int_map(
             vec!["a", "b", "c"],
             vec![Some(1), Some(2), Some(3)],
@@ -401,7 +355,7 @@ mod tests {
         );
 
         let result =
-            eval_map_transform(map, value_var("v") * lit(2i32), ["k", "v"]).unwrap();
+            eval_transform_values(map, value_var("v") * lit(2i32), ["k", "v"]).unwrap();
         let result_map = result.as_any().downcast_ref::<MapArray>().unwrap();
         let result_values = result_map
             .values()
@@ -412,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn map_transform_uses_keys_via_case() {
+    fn transform_values_uses_keys_via_case() {
         let map = create_str_int_map(
             vec!["a", "b"],
             vec![Some(1), Some(2)],
@@ -433,7 +387,7 @@ mod tests {
             )],
             else_expr: Some(Box::new(value_var("v"))),
         });
-        let result = eval_map_transform(map, lambda_body, ["k", "v"]).unwrap();
+        let result = eval_transform_values(map, lambda_body, ["k", "v"]).unwrap();
         let result_map = result.as_any().downcast_ref::<MapArray>().unwrap();
         let result_values = result_map
             .values()
@@ -444,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn map_transform_preserves_null_rows() {
+    fn transform_values_preserves_null_rows() {
         let map = create_str_int_map(
             vec!["a", "b", "c", "d"],
             vec![Some(1), Some(2), Some(3), Some(4)],
@@ -453,10 +407,26 @@ mod tests {
         );
 
         let result =
-            eval_map_transform(map, value_var("v") + lit(10i32), ["k", "v"]).unwrap();
+            eval_transform_values(map, value_var("v") + lit(10i32), ["k", "v"]).unwrap();
         let result_map = result.as_any().downcast_ref::<MapArray>().unwrap();
         assert!(result_map.is_valid(0));
         assert!(!result_map.is_valid(1));
         assert_eq!(result_map.value_length(0), 2);
+    }
+
+    #[test]
+    fn transform_values_all_null_rows_returns_null_array() {
+        let map = create_str_int_map(
+            vec![],
+            vec![],
+            OffsetBuffer::<i32>::from_lengths(vec![0, 0, 0]),
+            Some(NullBuffer::from(vec![false, false, false])),
+        );
+
+        let result =
+            eval_transform_values(map, value_var("v") + lit(1i32), ["k", "v"]).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.null_count(), 3);
+        assert!(matches!(result.data_type(), DataType::Map(_, _)));
     }
 }

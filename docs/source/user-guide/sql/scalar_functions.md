@@ -5211,8 +5211,8 @@ select struct(a as field_a, b) from t;
 - [map_entries](#map_entries)
 - [map_extract](#map_extract)
 - [map_keys](#map_keys)
-- [map_transform](#map_transform)
 - [map_values](#map_values)
+- [transform_values](#transform_values)
 
 ### `element_at`
 
@@ -5353,30 +5353,6 @@ SELECT map_keys(map([100, 5], [42, 43]));
 [100, 5]
 ```
 
-### `map_transform`
-
-Returns a map that applies the lambda to each entry of the map and transforms the values. The keys are preserved unchanged.
-
-```sql
-map_transform(map, (k, v) -> expr)
-```
-
-#### Arguments
-
-- **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
-- **lambda**: Lambda accepting two parameters `(key, value)`. The return value is used as the new value for the entry.
-
-#### Example
-
-```sql
-> select map_transform(MAP {'a': 1, 'b': 2, 'c': 3}, (k, v) -> v * 10);
-+--------------------------------------------------------------+
-| map_transform(MAP {'a': 1, 'b': 2, 'c': 3}, (k, v) -> v * 10) |
-+--------------------------------------------------------------+
-| {a: 10, b: 20, c: 30}                                        |
-+--------------------------------------------------------------+
-```
-
 ### `map_values`
 
 Returns a list of all values in the map.
@@ -5399,6 +5375,30 @@ SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
 SELECT map_values(map([100, 5], [42, 43]));
 ----
 [42, 43]
+```
+
+### `transform_values`
+
+Returns a map that applies the lambda to each entry of the map and transforms the values. The keys are preserved unchanged.
+
+```sql
+transform_values(map, (k, v) -> expr)
+```
+
+#### Arguments
+
+- **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
+- **lambda**: Lambda accepting two parameters `(key, value)`. The return value is used as the new value for the entry.
+
+#### Example
+
+```sql
+> select transform_values(MAP {'a': 1, 'b': 2, 'c': 3}, (k, v) -> v * 10);
++-----------------------------------------------------------------+
+| transform_values(MAP {'a': 1, 'b': 2, 'c': 3}, (k, v) -> v * 10) |
++-----------------------------------------------------------------+
+| {a: 10, b: 20, c: 30}                                           |
++-----------------------------------------------------------------+
 ```
 
 ## Hashing Functions

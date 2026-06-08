@@ -16,7 +16,7 @@
 # under the License.
 
 #############
-## map_transform Tests
+## transform_values Tests
 #############
 
 statement ok
@@ -24,19 +24,19 @@ set datafusion.sql_parser.dialect = databricks;
 
 # basic: double every value, keys untouched
 query ?
-SELECT map_transform(map(['a','b','c'], [1,2,3]), (k, v) -> v * 2);
+SELECT transform_values(map(['a','b','c'], [1,2,3]), (k, v) -> v * 2);
 ----
 {a: 2, b: 4, c: 6}
 
 # lambda may reference the key
 query ?
-SELECT map_transform(map(['a','b','c'], [1,2,3]), (k, v) -> case when k = 'b' then v * 100 else v end);
+SELECT transform_values(map(['a','b','c'], [1,2,3]), (k, v) -> case when k = 'b' then v * 100 else v end);
 ----
 {a: 1, b: 200, c: 3}
 
 # lambda can change the value type
 query ?
-SELECT map_transform(map(['a','b'], [1,2]), (k, v) -> concat(k, cast(v as varchar)));
+SELECT transform_values(map(['a','b'], [1,2]), (k, v) -> concat(k, cast(v as varchar)));
 ----
 {a: a1, b: b2}
 
@@ -48,7 +48,7 @@ AS VALUES
   (['a', 'b'], [3, 4], 100);
 
 query I?
-SELECT n, map_transform(map(m_key, m_val), (k, v) -> v + n) from t order by n;
+SELECT n, transform_values(map(m_key, m_val), (k, v) -> v + n) from t order by n;
 ----
 10 {a: 11, b: 12}
 100 {a: 103, b: 104}
@@ -56,15 +56,34 @@ SELECT n, map_transform(map(m_key, m_val), (k, v) -> v + n) from t order by n;
 statement ok
 drop table t;
 
-# errors
-query error DataFusion error: Error during planning: The function 'map_transform' expected 2 argument\(s\) but received 0
-SELECT map_transform();
+# null map rows are preserved as a per-row null result rather than collapsed
+# into a single null scalar.
+statement ok
+CREATE TABLE t_null (m_key array<string>, m_val array<int>)
+AS VALUES
+  (cast(NULL as array<string>), cast(NULL as array<int>)),
+  (cast(NULL as array<string>), cast(NULL as array<int>)),
+  (cast(NULL as array<string>), cast(NULL as array<int>));
 
-query error DataFusion error: Error during planning: map_transform expected a map as first argument, got Int64
-SELECT map_transform(1, (k, v) -> v);
+query ?
+SELECT transform_values(map(m_key, m_val), (k, v) -> v * 2) FROM t_null;
+----
+NULL
+NULL
+NULL
+
+statement ok
+drop table t_null;
+
+# errors
+query error DataFusion error: Error during planning: The function 'transform_values' expected 2 argument\(s\) but received 0
+SELECT transform_values();
+
+query error DataFusion error: Error during planning: transform_values expected a map as first argument, got Int64
+SELECT transform_values(1, (k, v) -> v);
 
 query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 2
-SELECT map_transform(map(['a'], [1]), (a, b, c) -> b);
+SELECT transform_values(map(['a'], [1]), (a, b, c) -> b);
 
 statement ok
 set datafusion.sql_parser.dialect = generic;
