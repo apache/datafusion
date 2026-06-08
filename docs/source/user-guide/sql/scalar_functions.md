@@ -3292,6 +3292,7 @@ _Alias of [current_date](#current_date)._
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
 - [array_subtract](#array_subtract)
+- [array_sum](#array_sum)
 - [array_to_string](#array_to_string)
 - [array_transform](#array_transform)
 - [array_union](#array_union)
@@ -3351,6 +3352,7 @@ _Alias of [current_date](#current_date)._
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
 - [list_subtract](#list_subtract)
+- [list_sum](#list_sum)
 - [list_to_string](#list_to_string)
 - [list_transform](#list_transform)
 - [list_union](#list_union)
@@ -4572,6 +4574,33 @@ array_subtract(array1, array2)
 
 - list_subtract
 
+### `array_sum`
+
+Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL or every element is NULL. Returns 0.0 for an empty array.
+
+```sql
+array_sum(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_sum([1.0, 2.0, 3.0]);
++----------------------------+
+| array_sum(List([1.0,2.0,3.0])) |
++----------------------------+
+| 6.0                        |
++----------------------------+
+```
+
+#### Aliases
+
+- list_sum
+
 ### `array_to_string`
 
 Converts each element to its text representation.
@@ -5051,6 +5080,10 @@ _Alias of [array_sort](#array_sort)._
 ### `list_subtract`
 
 _Alias of [array_subtract](#array_subtract)._
+
+### `list_sum`
+
+_Alias of [array_sum](#array_sum)._
 
 ### `list_to_string`
 
