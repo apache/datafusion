@@ -41,11 +41,11 @@ select array_sum([1.0, -1.0, 2.0, -2.0]);
 ----
 0
 
-# Empty array returns 0 (additive identity, per SQL SUM convention)
+# Empty array returns NULL (matches PostgreSQL, DuckDB list_sum, SQL Standard SUM-of-empty-set)
 query R
 select array_sum(arrow_cast(make_array(), 'List(Float64)'));
 ----
-0
+NULL
 
 # Bare NULL input returns NULL row
 query R
@@ -118,7 +118,7 @@ select array_sum(column1) from (values
 6
 0
 5
-0
+NULL
 NULL
 
 # Wrong arity (zero args)

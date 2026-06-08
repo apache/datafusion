@@ -149,26 +149,16 @@ fn general_array_sum<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
 
         let start = offsets[row].as_usize();
         let end = offsets[row + 1].as_usize();
-        let len = end - start;
-
-        // Empty array: sum is the additive identity. Matches SQL SUM(<empty>) = 0
-        // and DuckDB's list_sum(([]) = 0 conventions.
-        if len == 0 {
-            builder.append_value(0.0);
-            continue;
-        }
-
-        // `slice` resets the logical offset to 0, so `i` below is 0-based within the slice.
-        let slice = values.slice(start, len);
 
         // Skip NULL elements per SQL aggregate convention (matches PostgreSQL
-        // array_sum, DuckDB list_sum, Spark aggregate). A row with every
-        // element NULL yields NULL — same behavior as SQL SUM over all-NULL.
+        // array_sum, DuckDB list_sum, Spark aggregate). Empty arrays and
+        // all-NULL arrays both yield NULL — same behavior as SQL SUM over
+        // an empty set or all-NULL column.
         let mut sum = 0.0_f64;
         let mut any_valid = false;
-        for i in 0..len {
-            if !slice.is_null(i) {
-                sum += slice.value(i);
+        for i in start..end {
+            if values.is_valid(i) {
+                sum += values.value(i);
                 any_valid = true;
             }
         }
