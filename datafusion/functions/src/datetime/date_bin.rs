@@ -612,16 +612,20 @@ fn date_bin_impl(
         ))
     }
 
+    fn value_to_nanos(value: i64, scale: i64) -> Result<i64> {
+        value
+            .checked_mul(scale)
+            .ok_or_else(|| timestamp_scale_overflow_error(value))
+    }
+
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
             let scale = timestamp_scale::<TimestampNanosecondType>();
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
                 match *v {
                     Some(val) => {
-                        let scaled = val
-                            .checked_mul(scale)
-                            .ok_or_else(|| timestamp_scale_overflow_error(val))?;
-                        match stride_fn(stride, scaled, origin) {
+                        let nanos = value_to_nanos(val, scale)?;
+                        match stride_fn(stride, nanos, origin) {
                             Ok(result) => Some(result / scale),
                             Err(_) => None,
                         }
@@ -636,10 +640,8 @@ fn date_bin_impl(
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
                 match *v {
                     Some(val) => {
-                        let scaled = val
-                            .checked_mul(scale)
-                            .ok_or_else(|| timestamp_scale_overflow_error(val))?;
-                        match stride_fn(stride, scaled, origin) {
+                        let nanos = value_to_nanos(val, scale)?;
+                        match stride_fn(stride, nanos, origin) {
                             Ok(result) => Some(result / scale),
                             Err(_) => None,
                         }
@@ -654,10 +656,8 @@ fn date_bin_impl(
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
                 match *v {
                     Some(val) => {
-                        let scaled = val
-                            .checked_mul(scale)
-                            .ok_or_else(|| timestamp_scale_overflow_error(val))?;
-                        match stride_fn(stride, scaled, origin) {
+                        let nanos = value_to_nanos(val, scale)?;
+                        match stride_fn(stride, nanos, origin) {
                             Ok(result) => Some(result / scale),
                             Err(_) => None,
                         }
@@ -672,10 +672,8 @@ fn date_bin_impl(
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(
                 match *v {
                     Some(val) => {
-                        let scaled = val
-                            .checked_mul(scale)
-                            .ok_or_else(|| timestamp_scale_overflow_error(val))?;
-                        match stride_fn(stride, scaled, origin) {
+                        let nanos = value_to_nanos(val, scale)?;
+                        match stride_fn(stride, nanos, origin) {
                             Ok(result) => Some(result / scale),
                             Err(_) => None,
                         }
@@ -757,10 +755,8 @@ fn date_bin_impl(
                     .iter()
                     .map(|val| match val {
                         Some(val) => {
-                            let scaled = val
-                                .checked_mul(scale)
-                                .ok_or_else(|| timestamp_scale_overflow_error(val))?;
-                            Ok(stride_fn(stride, scaled, origin)
+                            let nanos = value_to_nanos(val, scale)?;
+                            Ok(stride_fn(stride, nanos, origin)
                                 .ok()
                                 .map(|binned| binned / scale))
                         }
