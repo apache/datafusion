@@ -265,15 +265,9 @@ impl<K: CacheKey, V: CacheValue> Cache<K, V> for DefaultCache<K, V> {
         let mut state = self.state.lock().unwrap();
         let to_remove: Vec<K> = state
             .lru_queue
-            .list_entries()
             .keys()
-            .flat_map(|k| {
-                let matches = match (k.table_ref(), Some(table_ref)) {
-                    (Some(a), Some(b)) => a == b,
-                    _ => false,
-                };
-                matches.then(|| (*k).clone())
-            })
+            .filter(|k| k.table_ref() == Some(table_ref))
+            .cloned()
             .collect();
         for k in &to_remove {
             state.remove(k);
