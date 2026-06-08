@@ -1,5 +1,5 @@
-# Run benchmark with prefer_existing_sort configuration
-# This allows DataFusion to optimize away redundant sorts while maintaining parallelism
+-- Run benchmark with prefer_existing_sort configuration
+-- This allows DataFusion to optimize away redundant sorts while maintaining parallelism
 
 set datafusion.optimizer.prefer_existing_sort=true
 
