@@ -90,6 +90,27 @@ fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
     expr_groups.into_iter().flatten().collect()
 }
 
+fn rebase_and_validate_post_aggregate_exprs(
+    exprs: &[Expr],
+    aggr_projection_exprs: &[Expr],
+    input: &LogicalPlan,
+    valid_exprs: &[Expr],
+    purpose: CheckColumnsMustReferenceAggregatePurpose,
+) -> Result<Vec<Expr>> {
+    let rebased_exprs = exprs
+        .iter()
+        .map(|expr| rebase_expr(expr, aggr_projection_exprs, input))
+        .collect::<Result<Vec<Expr>>>()?;
+
+    check_columns_satisfy_exprs(
+        valid_exprs,
+        &rebased_exprs,
+        CheckColumnsSatisfyExprsPurpose::Aggregate(purpose),
+    )?;
+
+    Ok(rebased_exprs)
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
@@ -1230,20 +1251,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|expr| expr_as_column_expr(expr, input))
             .collect::<Result<Vec<Expr>>>()?;
 
-        // next we re-write the projection
-        let select_exprs_post_aggr = select_exprs
-            .iter()
-            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
-            .collect::<Result<Vec<Expr>>>()?;
-
-        // finally, we have some validation that the re-written projection can be resolved
-        // from the aggregate output columns
-        check_columns_satisfy_exprs(
+        // Rewrite the projection to use the columns produced by the
+        // aggregation, and validate that it can be resolved from the
+        // aggregate output columns.
+        let select_exprs_post_aggr = rebase_and_validate_post_aggregate_exprs(
+            select_exprs,
+            &aggr_projection_exprs,
+            input,
             &column_exprs_post_aggr,
-            &select_exprs_post_aggr,
-            CheckColumnsSatisfyExprsPurpose::Aggregate(
-                CheckColumnsMustReferenceAggregatePurpose::Projection,
-            ),
+            CheckColumnsMustReferenceAggregatePurpose::Projection,
         )?;
 
         // Rewrite the HAVING expression to use the columns produced by the
