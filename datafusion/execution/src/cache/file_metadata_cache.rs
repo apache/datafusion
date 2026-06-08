@@ -61,7 +61,9 @@ impl DefaultFilesMetadataCacheState {
             .get(k)
             .map(|sized| sized.entry.clone())
             .inspect(|_| {
-                *self.cache_hits.entry(k.clone()).or_insert(0) += 1;
+                if let Some(hits) = self.cache_hits.get_mut(k) {
+                    *hits += 1;
+                }
             })
     }
 
@@ -110,6 +112,7 @@ impl DefaultFilesMetadataCacheState {
         while self.memory_used > self.memory_limit {
             if let Some(removed) = self.lru_queue.pop() {
                 self.memory_used -= removed.1.size;
+                self.cache_hits.remove(&removed.0);
             } else {
                 // cache is empty while memory_used > memory_limit, cannot happen
                 debug_assert!(
