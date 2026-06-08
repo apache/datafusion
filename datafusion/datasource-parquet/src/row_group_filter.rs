@@ -23,7 +23,7 @@ use super::{ParquetAccessPlan, ParquetFileMetrics};
 // path keeps resolving for in-crate callers (e.g. `opener`).
 pub(crate) use crate::bloom_filter::BloomFilterStatistics;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
@@ -31,7 +31,9 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, IsNullExpr, NotExpr};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprSimplifier};
-use datafusion_pruning::PruningPredicate;
+use datafusion_pruning::{
+    NoopObserver, PruningConjunction, PruningObserver, PruningPredicate,
+};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::file::metadata::RowGroupMetaData;
 use parquet::schema::types::SchemaDescriptor;
@@ -46,6 +48,116 @@ use parquet::schema::types::SchemaDescriptor;
 pub struct RowGroupAccessPlanFilter {
     /// which row groups should be accessed
     access_plan: ParquetAccessPlan,
+}
+
+/// The always-together context for a statistics-based row-group prune.
+/// Bundled so the prune entry points don't carry four loose refs.
+#[derive(Clone, Copy)]
+pub(crate) struct RowGroupPruningContext<'a> {
+    pub arrow_schema: &'a Schema,
+    pub parquet_schema: &'a SchemaDescriptor,
+    pub groups: &'a [RowGroupMetaData],
+    pub metrics: &'a ParquetFileMetrics,
+}
+
+/// A configured-but-not-yet-run statistics prune, produced by
+/// [`RowGroupAccessPlanFilter::prune_row_groups`]. Optionally attach an
+/// observer with [`with_observer`](Self::with_observer), then execute
+/// with [`prune`](Self::prune).
+pub(crate) struct RowGroupStatisticsPrune<'a> {
+    filter: &'a mut RowGroupAccessPlanFilter,
+    ctx: &'a RowGroupPruningContext<'a>,
+    conjunction: &'a PruningConjunction,
+    observer: Option<&'a mut dyn PruningObserver>,
+}
+
+impl<'a> RowGroupStatisticsPrune<'a> {
+    /// Attach a per-leaf observer. Omit this call to prune without
+    /// collecting per-conjunct stats (zero overhead).
+    // Exercised by tests today; the prod consumer (adaptive parquet
+    // scan) lands later in the stack. `expect` only in non-test builds,
+    // where it is genuinely unused.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "tagged row-group consumer lands later in the stack"
+        )
+    )]
+    pub fn with_observer(mut self, observer: &'a mut dyn PruningObserver) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
+    /// Run the prune, updating the underlying access plan in place.
+    pub fn prune(self) {
+        let RowGroupStatisticsPrune {
+            filter,
+            ctx,
+            conjunction,
+            observer,
+        } = self;
+
+        // scoped timer updates on drop
+        let _timer_guard = ctx.metrics.statistics_eval_time.timer();
+
+        assert_eq!(ctx.groups.len(), filter.access_plan.len());
+        // Indexes of row groups still to scan
+        let row_group_indexes = filter.access_plan.row_group_indexes();
+        let row_group_metadatas = row_group_indexes
+            .iter()
+            .map(|&i| &ctx.groups[i])
+            .collect::<Vec<_>>();
+
+        let pruning_stats = RowGroupPruningStatistics {
+            parquet_schema: ctx.parquet_schema,
+            row_group_metadatas,
+            arrow_schema: ctx.arrow_schema,
+            // Preserve the existing row-group pruning behavior. This path only
+            // proves whether matching rows may exist, so it uses the
+            // StatisticsConverter default for older parquet-rs files where a
+            // missing null count can mean there are zero nulls.
+            missing_null_counts_as_zero: true,
+        };
+
+        let mut noop = NoopObserver;
+        let observer: &mut dyn PruningObserver = match observer {
+            Some(o) => o,
+            None => &mut noop,
+        };
+
+        match conjunction.prune_with_observer(&pruning_stats, observer) {
+            Ok(values) => {
+                let mut fully_contained_candidates_original_idx: Vec<usize> = Vec::new();
+                for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
+                    if !value {
+                        filter.access_plan.skip(*idx);
+                        ctx.metrics.row_groups_pruned_statistics.add_pruned(1);
+                    } else {
+                        ctx.metrics.row_groups_pruned_statistics.add_matched(1);
+                        fully_contained_candidates_original_idx.push(*idx);
+                    }
+                }
+
+                // Fully-matched detection inverts the *combined*
+                // expression; the conjunction is the single source of
+                // truth for it. The observer has already fired for the
+                // per-leaf evaluation pass.
+                let combined_orig_expr = conjunction.combined_orig_expr();
+                filter.identify_fully_matched_row_groups(
+                    &fully_contained_candidates_original_idx,
+                    ctx,
+                    &combined_orig_expr,
+                    conjunction.schema(),
+                );
+            }
+            // stats filter array could not be built, so we can't prune
+            Err(e) => {
+                log::debug!("Error evaluating row group predicate values {e}");
+                ctx.metrics.predicate_evaluation_errors.add(1);
+            }
+        }
+    }
 }
 
 impl RowGroupAccessPlanFilter {
@@ -263,57 +375,38 @@ impl RowGroupAccessPlanFilter {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
-        // scoped timer updates on drop
-        let _timer_guard = metrics.statistics_eval_time.timer();
-
-        assert_eq!(groups.len(), self.access_plan.len());
-        // Indexes of row groups still to scan
-        let row_group_indexes = self.access_plan.row_group_indexes();
-        let row_group_metadatas = row_group_indexes
-            .iter()
-            .map(|&i| &groups[i])
-            .collect::<Vec<_>>();
-
-        let pruning_stats = RowGroupPruningStatistics {
-            parquet_schema,
-            row_group_metadatas,
+        // Thin shim over the fluent `prune_row_groups` op (no observer).
+        // Could be `#[deprecated]` in favor of the fluent form once the
+        // adaptive scan migrates.
+        let conjunction = PruningConjunction::single(Arc::new(predicate.clone()));
+        let ctx = RowGroupPruningContext {
             arrow_schema,
-            // Preserve the existing row-group pruning behavior. This path only
-            // proves whether matching rows may exist, so it uses the
-            // StatisticsConverter default for older parquet-rs files where a
-            // missing null count can mean there are zero nulls.
-            missing_null_counts_as_zero: true,
+            parquet_schema,
+            groups,
+            metrics,
         };
+        self.prune_row_groups(&ctx, &conjunction).prune();
+    }
 
-        // try to prune the row groups in a single call
-        match predicate.prune(&pruning_stats) {
-            Ok(values) => {
-                let mut fully_contained_candidates_original_idx: Vec<usize> = Vec::new();
-                for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
-                    if !value {
-                        self.access_plan.skip(*idx);
-                        metrics.row_groups_pruned_statistics.add_pruned(1);
-                    } else {
-                        metrics.row_groups_pruned_statistics.add_matched(1);
-                        fully_contained_candidates_original_idx.push(*idx);
-                    }
-                }
-
-                // Check if any of the matched row groups are fully contained by the predicate
-                self.identify_fully_matched_row_groups(
-                    &fully_contained_candidates_original_idx,
-                    arrow_schema,
-                    parquet_schema,
-                    groups,
-                    predicate,
-                    metrics,
-                );
-            }
-            // stats filter array could not be built, so we can't prune
-            Err(e) => {
-                log::debug!("Error evaluating row group predicate values {e}");
-                metrics.predicate_evaluation_errors.add(1);
-            }
+    /// Begin a statistics-based row-group prune. Returns a
+    /// [`RowGroupStatisticsPrune`] op that can optionally take an
+    /// observer before running:
+    ///
+    /// ```ignore
+    /// filter.prune_row_groups(&ctx, &conjunction)
+    ///     .with_observer(&mut obs)   // optional
+    ///     .prune();
+    /// ```
+    pub(crate) fn prune_row_groups<'a>(
+        &'a mut self,
+        ctx: &'a RowGroupPruningContext<'a>,
+        conjunction: &'a PruningConjunction,
+    ) -> RowGroupStatisticsPrune<'a> {
+        RowGroupStatisticsPrune {
+            filter: self,
+            ctx,
+            conjunction,
+            observer: None,
         }
     }
 
@@ -328,25 +421,29 @@ impl RowGroupAccessPlanFilter {
     fn identify_fully_matched_row_groups(
         &mut self,
         candidate_row_group_indices: &[usize],
-        arrow_schema: &Schema,
-        parquet_schema: &SchemaDescriptor,
-        groups: &[RowGroupMetaData],
-        predicate: &PruningPredicate,
-        metrics: &ParquetFileMetrics,
+        ctx: &RowGroupPruningContext<'_>,
+        combined_orig_expr: &Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
     ) {
         if candidate_row_group_indices.is_empty() {
             return;
         }
+        let RowGroupPruningContext {
+            arrow_schema,
+            parquet_schema,
+            groups,
+            metrics,
+        } = *ctx;
 
         let mut inverted_expr: Arc<dyn PhysicalExpr> =
-            Arc::new(NotExpr::new(Arc::clone(predicate.orig_expr())));
+            Arc::new(NotExpr::new(Arc::clone(combined_orig_expr)));
 
         // Rows where the predicate evaluates to NULL do not pass the filter.
         // Include NULL checks in the inverted expression so a row group is only
         // considered fully matched when every referenced column is known non-null.
         // This is conservative for null-accepting predicates, but fully matched
         // row groups must not have false positives.
-        let mut columns = collect_columns(predicate.orig_expr())
+        let mut columns = collect_columns(combined_orig_expr)
             .into_iter()
             .filter(|column| arrow_schema.field(column.index()).is_nullable())
             .collect::<Vec<_>>();
@@ -372,7 +469,7 @@ impl RowGroupAccessPlanFilter {
         };
 
         let Ok(inverted_predicate) =
-            PruningPredicate::try_new(inverted_expr, Arc::clone(predicate.schema()))
+            PruningPredicate::try_new(inverted_expr, Arc::clone(schema))
         else {
             return;
         };
@@ -640,6 +737,80 @@ mod tests {
             &metrics,
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1]))
+    }
+
+    #[test]
+    fn row_group_observer_captures_per_conjunct_stats() {
+        // c1 > 15 AND c1 < 50, with caller filter ids attached so we
+        // can read per-conjunct stats from the observer. With two
+        // row groups [1,10] and [11,20]:
+        //   - leaf "c1 > 15" prunes rg0 (max=10<=15); keeps rg1
+        //   - leaf "c1 < 50" keeps both
+        use datafusion_expr::{col, lit};
+        use datafusion_physical_expr::PhysicalExpr;
+        use datafusion_pruning::{ConjunctStatsObserver, PruningConjunction};
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let expr_gt15: Arc<dyn PhysicalExpr> =
+            logical2physical(&col("c1").gt(lit(15)), &schema);
+        let expr_lt50: Arc<dyn PhysicalExpr> =
+            logical2physical(&col("c1").lt(lit(50)), &schema);
+
+        let mut builder = PruningConjunction::builder(Arc::clone(&schema));
+        builder.push(101, expr_gt15).push(202, expr_lt50);
+        let conjunction = builder.build().expect("non-trivial");
+
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
+        let schema_descr = get_test_schema_descr(vec![field]);
+        let rgm1 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::int32(
+                Some(1),
+                Some(10),
+                None,
+                Some(0),
+                false,
+            )],
+        );
+        let rgm2 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::int32(
+                Some(11),
+                Some(20),
+                None,
+                Some(0),
+                false,
+            )],
+        );
+
+        let metrics = parquet_file_metrics();
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
+        let mut observer = ConjunctStatsObserver::new();
+        let groups = [rgm1, rgm2];
+        let ctx = RowGroupPruningContext {
+            arrow_schema: &schema,
+            parquet_schema: &schema_descr,
+            groups: &groups,
+            metrics: &metrics,
+        };
+        row_groups
+            .prune_row_groups(&ctx, &conjunction)
+            .with_observer(&mut observer)
+            .prune();
+
+        // Same row-group pruning result as the untagged path.
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![1]));
+
+        // Per-conjunct stats are surfaced by the observer.
+        let stats = observer.take();
+        assert_eq!(stats.len(), 2);
+        let s101 = stats.iter().find(|s| s.tag == 101).unwrap();
+        assert_eq!(s101.containers_seen, 2);
+        assert_eq!(s101.containers_pruned, 1);
+        let s202 = stats.iter().find(|s| s.tag == 202).unwrap();
+        assert_eq!(s202.containers_seen, 2);
+        assert_eq!(s202.containers_pruned, 0);
     }
 
     #[test]

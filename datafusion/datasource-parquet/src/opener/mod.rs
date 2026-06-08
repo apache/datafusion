@@ -25,7 +25,7 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
-use crate::page_filter::PagePruningAccessPlanFilter;
+use crate::page_filter::{PagePruningAccessPlanFilter, PagePruningContext};
 use crate::push_decoder::{DecoderBuilderConfig, PushDecoderStreamState};
 use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
@@ -1287,14 +1287,15 @@ impl RowGroupsPrunedParquetOpen {
             && !access_plan.is_empty()
             && let Some(page_pruning_predicate) = page_pruning_predicate
         {
+            let ctx = PagePruningContext {
+                arrow_schema: &prepared.physical_file_schema,
+                parquet_schema: reader_metadata.parquet_schema(),
+                parquet_metadata: file_metadata.as_ref(),
+                file_metrics: &prepared.file_metrics,
+            };
             let page_pruning_result = page_pruning_predicate
-                .prune_plan_with_page_index_and_metrics(
-                    access_plan,
-                    &prepared.physical_file_schema,
-                    reader_metadata.parquet_schema(),
-                    file_metadata.as_ref(),
-                    &prepared.file_metrics,
-                );
+                .prune_pages(access_plan, &ctx)
+                .prune();
             access_plan = page_pruning_result.access_plan;
             ParquetFileMetrics::add_page_index_pages_skipped_by_fully_matched(
                 &prepared.metrics,
