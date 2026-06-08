@@ -2509,9 +2509,9 @@ impl DataFrame {
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
     /// // Fill NaN in only columns "a" and "c":
-    /// let df = df.fill_nan(ScalarValue::from(0.0), &["a", "c"])?;
+    /// let df = df.fill_nan(&ScalarValue::from(0.0), &["a", "c"])?;
     /// // Fill NaN across all columns:
-    /// let df = df.fill_nan(ScalarValue::from(0.0), &[])?;
+    /// let df = df.fill_nan(&ScalarValue::from(0.0), &[])?;
     /// # Ok(())
     /// # }
     /// ```
