@@ -1429,17 +1429,13 @@ fn map_coercion(
 /// values from the matching variant; rows whose active variant cannot be
 /// cast to `T` become NULL.
 ///
-/// the `Union, Union` arm intentionally requires exact equality. handling
-/// subset / superset cases (e.g. `Union(A, B)` vs `Union(A, B, C)`) is left
-/// for future work because there is no obvious common type without losing
-/// information.
+/// Identical union types are already handled by the `equals_datatype` fast path
+/// in [`comparison_coercion`]; coercing between two different union types is not
+/// supported.
 fn union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
     match (lhs_type, rhs_type) {
-        (Union(_, _), Union(_, _)) => {
-            lhs_type.equals_datatype(rhs_type).then(|| lhs_type.clone())
-        }
         (Union(fields, _), opaque) | (opaque, Union(fields, _)) => fields
             .iter()
             .any(|(_, f)| can_cast_types(f.data_type(), opaque))
