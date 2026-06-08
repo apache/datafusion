@@ -28,6 +28,8 @@ use crate::cache::{
 /// Internal cache value: the entry plus its precomputed memory size, so we
 /// don't have to call [`FileMetadata::memory_size`] (which walks the entire
 /// metadata structure) on every put / remove / eviction.
+///
+/// [`FileMetadata::memory_size`]: https://docs.rs/datafusion/latest/datafusion/execution/cache/cache_manager/trait.FileMetadata.html#tymethod.memory_size
 #[derive(Clone)]
 struct SizedCacheEntry {
     entry: CachedFileMetadataEntry,
