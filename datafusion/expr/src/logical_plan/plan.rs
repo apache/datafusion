@@ -4740,6 +4740,45 @@ mod tests {
     use insta::{assert_debug_snapshot, assert_snapshot};
     use std::hash::DefaultHasher;
 
+    /// `LogicalPlan` is moved/swapped on every step of the planning hot path
+    /// (every `mem::take` in an in-place rewriter, every `Arc<LogicalPlan>`
+    /// write, every owned `map_*` traversal). Its size is set by the largest
+    /// variant, so an oversized variant balloons cost for every other variant.
+    ///
+    /// Today the size-setter should be `Join` (~176 bytes); `DdlStatement` is
+    /// boxed precisely so it does not dominate. If you grow a variant, please
+    /// box the new large fields rather than letting this number creep up —
+    /// see the analogous `test_size_of_expr` in `expr.rs`.
+    #[test]
+    fn test_size_of_logical_plan() {
+        // `LogicalPlan` enum on aarch64 / x86_64. Today this matches
+        // `Join`'s 176 bytes (the enum discriminant fits in `Join`'s
+        // alignment padding); if `Join` grows or another variant overtakes
+        // it, this number will move with the new size-setter.
+        assert_eq!(size_of::<LogicalPlan>(), 176);
+        // `DdlStatement` is `Ddl(DdlStatement)`'s payload; keep it below the
+        // `Join` ceiling so it never re-becomes the size-setter.
+        assert!(
+            size_of::<DdlStatement>() < size_of::<Join>(),
+            "DdlStatement ({} bytes) should stay smaller than Join ({} bytes); \
+             box the new large variant rather than letting it dominate `LogicalPlan`.",
+            size_of::<DdlStatement>(),
+            size_of::<Join>(),
+        );
+        // Sanity check the two boxed variants stay boxed (so the payload
+        // sits on the heap, not in the enum).
+        assert_eq!(
+            size_of::<Box<crate::CreateExternalTable>>(),
+            8,
+            "CreateExternalTable should be Box'd inside DdlStatement"
+        );
+        assert_eq!(
+            size_of::<Box<crate::CreateFunction>>(),
+            8,
+            "CreateFunction should be Box'd inside DdlStatement"
+        );
+    }
+
     fn employee_schema() -> Schema {
         Schema::new(vec![
             Field::new("id", DataType::Int32, false),

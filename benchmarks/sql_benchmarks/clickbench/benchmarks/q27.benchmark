@@ -1,0 +1,16 @@
+name Q27
+group clickbench
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run
+SELECT "CounterID", AVG(length("URL")) AS l, COUNT(*) AS c FROM hits WHERE "URL" <> '' GROUP BY "CounterID" HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
+
+result sql_benchmarks/clickbench/results/${CLICKBENCH_TYPE:-single}/q27.csv

@@ -1,0 +1,20 @@
+subgroup groupby
+
+name Q06
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} groupby ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_groupby_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run
+SELECT id4, id5, MEDIAN(v3) AS median_v3, STDDEV(v3) AS sd_v3
+FROM x
+GROUP BY id4, id5;
+
+result sql_benchmarks/h2o/results/groupby/${H2O_BENCH_SIZE:-small}/q06.csv

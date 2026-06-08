@@ -1,0 +1,20 @@
+subgroup groupby
+
+name Q09
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} groupby ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_groupby_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run
+SELECT id2, id4, POWER(CORR(v1, v2), 2) AS r2
+FROM x
+GROUP BY id2, id4;
+
+result sql_benchmarks/h2o/results/groupby/${H2O_BENCH_SIZE:-small}/q09.csv

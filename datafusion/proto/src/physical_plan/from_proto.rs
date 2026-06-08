@@ -283,7 +283,7 @@ pub fn parse_physical_expr_with_converter(
         // to the right constructor.
         ExprType::Column(_) => Column::try_from_proto(proto, &decode_ctx)?,
         ExprType::UnknownColumn(_) => UnKnownColumn::try_from_proto(proto, &decode_ctx)?,
-        ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
+        ExprType::Literal(_) => Literal::try_from_proto(proto, &decode_ctx)?,
         ExprType::BinaryExpr(_) => BinaryExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::AggregateExpr(_) => {
             return not_impl_err!(
@@ -339,16 +339,7 @@ pub fn parse_physical_expr_with_converter(
                 .transpose()?,
         )?),
         ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,
-        ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
-            parse_required_physical_expr(
-                e.expr.as_deref(),
-                ctx,
-                "expr",
-                input_schema,
-                proto_converter,
-            )?,
-            convert_required!(e.arrow_type)?,
-        )),
+        ExprType::TryCast(_) => TryCastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::ScalarUdf(e) => {
             let udf = match &e.fun_definition {
                 Some(buf) => ctx.codec().try_decode_udf(&e.name, buf)?,
