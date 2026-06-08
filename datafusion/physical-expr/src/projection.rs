@@ -2927,6 +2927,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    #[test]
     fn test_project_statistics_missing_column_stats_are_unknown() -> Result<()> {
         let mut input_stats = get_stats();
         let input_schema = get_schema();
