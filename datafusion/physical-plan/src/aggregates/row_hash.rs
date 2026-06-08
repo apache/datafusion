@@ -1213,10 +1213,22 @@ impl GroupedHashAggregateStream {
             // array" as "all groups have been seen", which would cause SUM to
             // return 0 instead of NULL.
             //
-            // update_batch is used in all modes (Raw and Partial) because it
-            // always takes raw input argument types, which is exactly what
-            // aggregate_arguments provides.  Since every row is filtered out,
-            // the actual data content never matters.
+            // This path always runs in a Raw input mode, so `update_batch` (not
+            // `merge_batch`) is the right entry point:
+            //
+            // - `has_grouping_set()` can only be true for the Partial / Single /
+            //   SinglePartitioned modes, whose `input_mode()` is `Raw`. The final
+            //   modes rebuild their group-by via `PhysicalGroupBy::as_final()`,
+            //   which clears `has_grouping_set`, so this method returns early for
+            //   them and never reaches here.
+            //
+            // Since every row is filtered out, the actual data content never
+            // matters. The assert documents and guards the invariant above.
+            debug_assert_eq!(
+                self.mode.input_mode(),
+                AggregateInputMode::Raw,
+                "init_empty_grouping_sets must only run in a Raw input mode"
+            );
             let total_groups = self.group_values.len();
             let null_args: Vec<Vec<ArrayRef>> = self
                 .aggregate_arguments
