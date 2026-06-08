@@ -111,6 +111,28 @@ fn rebase_and_validate_post_aggregate_exprs(
     Ok(rebased_exprs)
 }
 
+fn rebase_and_validate_optional_post_aggregate_expr(
+    expr: Option<&Expr>,
+    aggr_projection_exprs: &[Expr],
+    input: &LogicalPlan,
+    valid_column_exprs: &[Expr],
+    purpose: CheckColumnsMustReferenceAggregatePurpose,
+) -> Result<Option<Expr>> {
+    let Some(expr) = expr else {
+        return Ok(None);
+    };
+
+    let mut rebased_exprs = rebase_and_validate_post_aggregate_exprs(
+        std::slice::from_ref(expr),
+        aggr_projection_exprs,
+        input,
+        valid_column_exprs,
+        purpose,
+    )?;
+
+    Ok(rebased_exprs.pop())
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
@@ -1262,43 +1284,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             CheckColumnsMustReferenceAggregatePurpose::Projection,
         )?;
 
-        // Rewrite the HAVING expression to use the columns produced by the
-        // aggregation.
-        let having_expr_post_aggr = if let Some(having_expr) = having_expr_opt {
-            let having_expr_post_aggr =
-                rebase_expr(having_expr, &aggr_projection_exprs, input)?;
+        // Rewrite HAVING and QUALIFY to use the columns produced by the
+        // aggregation, and validate that they can be resolved from the
+        // aggregate output columns.
+        let having_expr_post_aggr = rebase_and_validate_optional_post_aggregate_expr(
+            having_expr_opt,
+            &aggr_projection_exprs,
+            input,
+            &column_exprs_post_aggr,
+            CheckColumnsMustReferenceAggregatePurpose::Having,
+        )?;
 
-            check_columns_satisfy_exprs(
-                &column_exprs_post_aggr,
-                std::slice::from_ref(&having_expr_post_aggr),
-                CheckColumnsSatisfyExprsPurpose::Aggregate(
-                    CheckColumnsMustReferenceAggregatePurpose::Having,
-                ),
-            )?;
-
-            Some(having_expr_post_aggr)
-        } else {
-            None
-        };
-
-        // Rewrite the QUALIFY expression to use the columns produced by the
-        // aggregation.
-        let qualify_expr_post_aggr = if let Some(qualify_expr) = qualify_expr_opt {
-            let qualify_expr_post_aggr =
-                rebase_expr(qualify_expr, &aggr_projection_exprs, input)?;
-
-            check_columns_satisfy_exprs(
-                &column_exprs_post_aggr,
-                std::slice::from_ref(&qualify_expr_post_aggr),
-                CheckColumnsSatisfyExprsPurpose::Aggregate(
-                    CheckColumnsMustReferenceAggregatePurpose::Qualify,
-                ),
-            )?;
-
-            Some(qualify_expr_post_aggr)
-        } else {
-            None
-        };
+        let qualify_expr_post_aggr = rebase_and_validate_optional_post_aggregate_expr(
+            qualify_expr_opt,
+            &aggr_projection_exprs,
+            input,
+            &column_exprs_post_aggr,
+            CheckColumnsMustReferenceAggregatePurpose::Qualify,
+        )?;
 
         // Rewrite the ORDER BY expressions to use the columns produced by the
         // aggregation. If an ORDER BY expression matches a SELECT expression
