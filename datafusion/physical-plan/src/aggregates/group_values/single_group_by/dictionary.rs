@@ -860,8 +860,6 @@ mod test {
     mod cross_batch_dedup {
         use super::*;
 
-        // Same string value appearing in two batches with different values buffers
-        // must map to the same group id.
         #[test]
         fn test_same_value_different_values_buffers() {
             let mut gv = GroupValuesDictionary::<Int32Type>::new(&DataType::Utf8);
@@ -931,7 +929,6 @@ mod test {
             let mut groups = Vec::new();
             gv.intern(&[make_n_distinct(256)], &mut groups).unwrap();
 
-            // one extra value not present in "v0".."v255"
             let mut sb = StringBuilder::new();
             sb.append_value("overflow_value");
             let values: ArrayRef = Arc::new(sb.finish());

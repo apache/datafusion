@@ -516,8 +516,6 @@ DROP TABLE dict_hash_10;
 statement ok
 DROP TABLE dict_hash_src;
 
-# GROUP BY on Dictionary(Int32, Utf8View) — end-to-end coverage of the Utf8View value type
-
 query TI
 SELECT
   arrow_cast(tag, 'Dictionary(Int32, Utf8View)') AS tag,
