@@ -867,6 +867,52 @@ FROM t1
 33 4 5
 44 1 2
 
+#correlated_scalar_subquery_multiple_projection_slots
+# Distinct projection slots must each own their scalar subquery rewrite.
+# COUNT gets empty-input compensation; SUM preserves NULL on no match.
+query III rowsort
+SELECT
+  t1_id,
+  (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) AS cnt,
+  (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) AS total
+FROM t1
+----
+11 1 3
+22 0 1
+33 3 NULL
+44 0 3
+
+#correlated_scalar_subquery_multiple_subqueries_one_projection_slot
+# Multiple COUNT subqueries in a single projection expression must all be
+# compensated before the expression is evaluated.
+query II rowsort
+SELECT
+  t1_id,
+  (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int)
+    + (SELECT count(*) FROM t2 WHERE t2.t2_id = t1.t1_id) AS combined
+FROM t1
+----
+11 2
+22 1
+33 3
+44 1
+
+#correlated_scalar_subquery_mixed_repeated_and_non_count_projection_slots
+# Repeated COUNT slots must each be compensated while the SUM slot keeps NULL
+# semantics for unmatched outer rows.
+query IIII rowsort
+SELECT
+  t1_id,
+  (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) + 1 AS a,
+  (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) + 2 AS b,
+  (SELECT sum(t2_int) FROM t2 WHERE t2.t2_int = t1.t1_int) AS c
+FROM t1
+----
+11 2 3 1
+22 1 2 NULL
+33 4 5 9
+44 1 2 NULL
+
 #correlated_scalar_subquery_count_agg2
 query TT
 explain SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
