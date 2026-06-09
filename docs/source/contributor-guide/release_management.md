@@ -84,9 +84,8 @@ fixes only and never introduce new features or breaking changes.
   issues.
 - **Build, CI, and test fixes** required to keep the branch buildable and
   releasable.
-- **Documentation fixes** that correct documentation about behavior already
-  in the release. Documentation for behavior that exists only on `main` does
-  not belong on a release branch.
+- **Documentation fixes** for behavior already in the release. Documentation
+  for behavior that exists only on `main` does not belong on a release branch.
 
 ### Not recommended for backport
 
@@ -109,13 +108,11 @@ downstream users may rely on, plan output, or default configuration values.
 
 Behavior-changing fixes need extra scrutiny on a release branch because
 users upgrading between patch versions do not expect their queries to start
-returning different results. Before opening the backport PR:
-
-1. State on the release tracking issue _why_ the change must ship in this
-   patch release rather than the next major.
-2. Describe the previous and new behavior with example queries and results.
-3. Wait for explicit acknowledgment from the release manager or another
-   committer on the tracking issue.
+returning different results. When proposing one for backport, state on the
+release tracking issue _why_ the change should ship in this patch release
+rather than wait for the next major. The previous and new behavior should
+already be documented on the original issue or PR — link to that rather
+than restating it.
 
 If in doubt, default to "land on `main`, ship in the next major."
 
@@ -130,8 +127,8 @@ inclusion is the release manager's call.
 ### Active release branches
 
 DataFusion does not maintain Long-Term Support branches. In general only the
-most recent `branch-NN` is actively maintained for backports, but if you need fixes in 
-older releases, we are open to discussion.
+most recent `branch-NN` is actively maintained for backports, but if you need
+fixes in older releases, we are open to discussion.
 
 Security fixes are an exception: a maintainer may choose to backport a
 critical security fix to an older branch even after it would otherwise be
