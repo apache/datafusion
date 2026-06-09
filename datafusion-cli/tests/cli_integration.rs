@@ -210,8 +210,7 @@ fn test_cli_read_from_stdin_twice_reuses_buffer() {
         b"a,b\n1,foo\n2,bar\n",
     );
 
-    // Both tables must still see the two buffered rows; before the fix the
-    // first table's store was overwritten with an empty one (t_count = 0).
+    // Both tables must still see the two buffered rows.
     let counts: Vec<&str> = stdout
         .lines()
         .filter(|line| line.trim_start().starts_with("| 2 "))
