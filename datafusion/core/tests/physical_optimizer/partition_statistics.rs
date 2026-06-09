@@ -661,39 +661,36 @@ mod test {
         let full_statistics = nested_loop_join.partition_statistics(None)?;
         // With empty join columns, estimate_join_statistics returns Inexact row count
         // based on the outer side (right side for RightSemi)
-        let mut expected_full_statistics = create_partition_statistics(
+        let expected_full_statistics = create_partition_statistics(
             4,
             32,
             1,
             4,
             Some((DATE_2025_03_01, DATE_2025_03_04)),
-        );
-        expected_full_statistics.num_rows = Precision::Inexact(4);
-        expected_full_statistics.total_byte_size = Precision::Absent;
+        )
+        .to_inexact();
         assert_eq!(*full_statistics, expected_full_statistics);
 
         // Test partition_statistics(Some(idx)) - returns partition-specific statistics
         // Partition 1: ids [3,4], dates [2025-03-01, 2025-03-02]
-        let mut expected_statistic_partition_1 = create_partition_statistics(
+        let expected_statistic_partition_1 = create_partition_statistics(
             2,
             16,
             3,
             4,
             Some((DATE_2025_03_01, DATE_2025_03_02)),
-        );
-        expected_statistic_partition_1.num_rows = Precision::Inexact(2);
-        expected_statistic_partition_1.total_byte_size = Precision::Absent;
+        )
+        .to_inexact();
 
         // Partition 2: ids [1,2], dates [2025-03-03, 2025-03-04]
-        let mut expected_statistic_partition_2 = create_partition_statistics(
+        let expected_statistic_partition_2 = create_partition_statistics(
             2,
             16,
             1,
             2,
             Some((DATE_2025_03_03, DATE_2025_03_04)),
-        );
-        expected_statistic_partition_2.num_rows = Precision::Inexact(2);
-        expected_statistic_partition_2.total_byte_size = Precision::Absent;
+        )
+        .to_inexact();
 
         let statistics = (0..nested_loop_join.output_partitioning().partition_count())
             .map(|idx| nested_loop_join.partition_statistics(Some(idx)))

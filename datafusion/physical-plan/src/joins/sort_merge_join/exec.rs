@@ -582,6 +582,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             left_stats,
             right_stats,
             &self.on,
+            self.null_equality,
             &self.join_type,
             &self.schema,
         )?))

@@ -1861,6 +1861,123 @@ SELECT approx_distinct(c14) AS a, approx_distinct(c15) AS b, approx_distinct(arr
 ----
 18 60 60 60 60
 
+# approx_distinct over Boolean: exact count via flag-pair accumulator (0..=2).
+statement ok
+CREATE TABLE approx_distinct_bool_test (g INT, b BOOLEAN) AS VALUES
+  (1, true), (1, true), (1, NULL),
+  (2, false), (2, false),
+  (3, true), (3, false), (3, NULL), (3, true),
+  (4, NULL), (4, NULL);
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 1;
+----
+1
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 2;
+----
+1
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 3;
+----
+2
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 4;
+----
+0
+
+query II
+SELECT g, approx_distinct(b) FROM approx_distinct_bool_test GROUP BY g ORDER BY g;
+----
+1 1
+2 1
+3 2
+4 0
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test;
+----
+2
+
+statement ok
+DROP TABLE approx_distinct_bool_test;
+
+# Grouped approx_distinct uses a dedicated GroupsAccumulator (adaptive
+# sparse -> dense HyperLogLog per group). Results are deterministic (the HLL uses
+# a fixed hash seed); for these specific small inputs the 16384-register HLL
+# estimates the true distinct count exactly. The key invariant is that the
+# grouped path agrees with the scalar (no GROUP BY) path on the same data, which
+# is checked explicitly below.
+statement ok
+CREATE TABLE approx_distinct_group_test (g INT, s VARCHAR, i INT) AS VALUES
+  (1, 'a', 10), (1, 'a', 10), (1, 'b', 20),
+  (2, 'c', 30), (2, 'd', 30), (2, 'c', 40),
+  (3, NULL, NULL), (3, NULL, NULL),
+  (4, 'e', 50);
+
+# Strings (Utf8): group 1 -> {a,b}=2, group 2 -> {c,d}=2, group 3 -> all null=0, group 4 -> {e}=1
+query II
+SELECT g, approx_distinct(s) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Utf8View takes the inline-view hashing path
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'Utf8View')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Integers (Int32): group 1 -> {10,20}=2, group 2 -> {30,40}=2, group 3 -> 0, group 4 -> {50}=1
+query II
+SELECT g, approx_distinct(i) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Invariant: the scalar (no GROUP BY) path must agree with the grouped path on
+# the same data. The grouped result for g = 2 above is 2, and so is the scalar
+# result over only g = 2's rows.
+query I
+SELECT approx_distinct(s) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query I
+SELECT approx_distinct(i) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+statement ok
+DROP TABLE approx_distinct_group_test;
+
+# Grouped approx_distinct that crosses the sparse -> dense promotion threshold:
+# 2000 distinct values in group 0 and 2000 in group 1. The estimate should be
+# within HyperLogLog's error margin (~0.8%) of the true cardinality.
+statement ok
+CREATE TABLE approx_distinct_dense_test AS
+  SELECT (v % 2) AS g, v AS i FROM generate_series(0, 3999) AS t(v);
+
+query B
+SELECT min(c) > 1900 AND max(c) < 2100 FROM (
+  SELECT g, approx_distinct(i) AS c FROM approx_distinct_dense_test GROUP BY g
+);
+----
+true
+
+statement ok
+DROP TABLE approx_distinct_dense_test;
+
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
 ##
@@ -6221,6 +6338,40 @@ FROM (VALUES (0, 1, CAST(NULL AS INT)), (0, 2, 2)) AS t(g, a, b)
 GROUP BY g
 ----
 0 0
+
+# query_with_untyped_null_filter
+query I
+SELECT count(*) FILTER (WHERE NULL)
+----
+0
+
+query I
+SELECT count(1) FILTER (WHERE NULL)
+----
+0
+
+query I
+SELECT sum(1) FILTER (WHERE NULL)
+----
+NULL
+
+query R
+SELECT avg(1) FILTER (WHERE NULL)
+----
+NULL
+
+# window_aggregate_with_untyped_null_filter
+query I
+SELECT count(*) FILTER (WHERE NULL) OVER ()
+FROM (VALUES (1)) AS t(x)
+----
+0
+
+query I
+SELECT sum(1) FILTER (WHERE NULL) OVER ()
+FROM (VALUES (1)) AS t(x)
+----
+NULL
 
 # query_with_and_without_filter
 query III rowsort

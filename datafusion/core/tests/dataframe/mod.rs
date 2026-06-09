@@ -6539,6 +6539,173 @@ async fn test_fill_null_all_columns() -> Result<()> {
     Ok(())
 }
 
+async fn create_nan_table() -> Result<DataFrame> {
+    // create a DataFrame with a NaN value in a float column "a" and a
+    // non-float column "b" that must stay untouched by fill_nan.
+    //    "+-----+---+",
+    //    "| a   | b |",
+    //    "+-----+---+",
+    //    "| 1.0 | 1 |",
+    //    "| NaN | 2 |",
+    //    "| 3.0 | 3 |",
+    //    "+-----+---+",
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Float64, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+    let a_values = Float64Array::from(vec![Some(1.0), Some(f64::NAN), Some(3.0)]);
+    let b_values = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(a_values), Arc::new(b_values)],
+    )?;
+
+    let ctx = SessionContext::new();
+    let table = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
+    ctx.register_table("t_nan", Arc::new(table))?;
+    let df = ctx.table("t_nan").await?;
+    Ok(df)
+}
+
+#[tokio::test]
+async fn test_fill_nan() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Fill NaNs in the float column "a" with 0.0.
+    let df_filled = df.fill_nan(&ScalarValue::Float64(Some(0.0)), &["a"])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 0.0 | 2 |
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_all_columns() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Fill NaNs across all columns. Only the float column "a" is affected;
+    // the non-float column "b" is left unchanged since NaN only exists for
+    // floating-point types.
+    let df_filled = df.fill_nan(&ScalarValue::Float64(Some(0.0)), &[])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 0.0 | 2 |
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    +-----+---+
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_non_float_column() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Explicitly naming a non-float column is a no-op, not an error: NaN does
+    // not exist for Int32, so column "b" (and the un-targeted "a") are unchanged.
+    let df_filled = df.fill_nan(&ScalarValue::Float64(Some(0.0)), &["b"])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    | NaN | 2 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_unknown_column() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // A column name that is not in the schema is propagated as an error.
+    let err = df
+        .fill_nan(&ScalarValue::Float64(Some(0.0)), &["does_not_exist"])
+        .unwrap_err();
+
+    assert_snapshot!(err.strip_backtrace(), @"Error during planning: Column 'does_not_exist' not found");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_casts_fill_value() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // Int32(0) is not the column's type (Float64) but can be cast to it, so the
+    // NaN is replaced with 0.0. Exercises the cross-type cast path — the other
+    // positive tests pass a Float64 value, which skips the actual cast.
+    let df_filled = df.fill_nan(&ScalarValue::Int32(Some(0)), &["a"])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 0.0 | 2 |
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_nan_uncastable_value() -> Result<()> {
+    let df = create_nan_table().await?;
+
+    // The float column "a" is targeted, but "abc" cannot be cast to Float64, so
+    // the fill is skipped and column "a" keeps its original NaN value.
+    let df_filled = df.fill_nan(&ScalarValue::Utf8(Some("abc".to_string())), &["a"])?;
+
+    let results = df_filled.collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+---+
+    | a   | b |
+    +-----+---+
+    | 1.0 | 1 |
+    | 3.0 | 3 |
+    | NaN | 2 |
+    +-----+---+
+    "
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_insert_into_casting_support() -> Result<()> {
     // Testing case1:

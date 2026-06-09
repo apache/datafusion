@@ -84,7 +84,7 @@ SELECT size(make_array(1, NULL, 3));
 
 # NULL array returns -1 (Spark behavior)
 query I
-SELECT size(NULL::int[]);
+SELECT size(CAST(NULL AS ARRAY<INT>));
 ----
 -1
 
