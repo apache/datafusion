@@ -130,10 +130,8 @@ inclusion is the release manager's call.
 ### Active release branches
 
 DataFusion does not maintain Long-Term Support branches. In general only the
-most recent `branch-NN` is actively maintained for backports. A branch is
-considered closed once the next major release branch has been cut and the
-release manager closes its tracking issue; users who need a fix beyond that
-point should upgrade to the next major.
+most recent `branch-NN` is actively maintained for backports, but if you need fixes in 
+older releases, we are open to discussion.
 
 Security fixes are an exception: a maintainer may choose to backport a
 critical security fix to an older branch even after it would otherwise be
