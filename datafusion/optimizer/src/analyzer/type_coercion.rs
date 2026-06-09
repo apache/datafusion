@@ -715,6 +715,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }) => {
                 let new_expr =
                     coerce_arguments_for_signature(args, self.schema, func.as_ref())?;
+
+                let filter = filter
+                    .map(|filter| filter.cast_to(&DataType::Boolean, self.schema))
+                    .transpose()?
+                    .map(Box::new);
+
                 Ok(Transformed::yes(Expr::AggregateFunction(
                     expr::AggregateFunction::new_udf(
                         func,
@@ -751,6 +757,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         coerce_arguments_for_signature(args, self.schema, udf.as_ref())?
                     }
                 };
+
+                let filter = filter
+                    .map(|filter| filter.cast_to(&DataType::Boolean, self.schema))
+                    .transpose()?
+                    .map(Box::new);
 
                 let new_expr = Expr::from(WindowFunction {
                     fun,
