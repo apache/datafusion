@@ -628,7 +628,7 @@ mod tests {
 
         let hof = HigherOrderFunctionExpr::try_new_with_schema(
             fun,
-            vec![lambda(["a"], Arc::new(Literal::new(expected.clone())), 0).unwrap()],
+            vec![lambda(["a"], Arc::new(Literal::new(expected.clone()))).unwrap()],
             &Schema::empty(),
             Arc::new(ConfigOptions::new()),
         )
@@ -664,12 +664,10 @@ mod tests {
         let hof = HigherOrderFunctionExpr::try_new_with_schema(
             fun,
             vec![
-                not(lambda(
-                    ["a"],
-                    Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
-                    0,
+                not(
+                    lambda(["a"], Arc::new(Literal::new(ScalarValue::Int32(Some(42)))))
+                        .unwrap(),
                 )
-                .unwrap())
                 .unwrap(),
             ],
             &Schema::empty(),
@@ -709,7 +707,7 @@ mod tests {
         .unwrap();
 
         let result = Arc::new(hof)
-            .with_new_children(vec![lambda(["a"], Arc::new(NoOp::new()), 0).unwrap()])
+            .with_new_children(vec![lambda(["a"], Arc::new(NoOp::new())).unwrap()])
             .unwrap_err();
 
         assert_contains!(

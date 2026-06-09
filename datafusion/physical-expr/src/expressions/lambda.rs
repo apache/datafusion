@@ -43,11 +43,6 @@ pub struct LambdaExpr {
     body: Arc<dyn PhysicalExpr>,
     projected_body: Arc<dyn PhysicalExpr>,
     projection: Vec<usize>,
-    /// Number of columns in the outer input schema. Column/LambdaVariable
-    /// indices below this value reference outer captures; indices at or above
-    /// reference lambda parameters (whose position in the merged evaluation
-    /// batch is fixed by the higher-order function, not by the projection).
-    outer_columns_count: usize,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808 [https://github.com/apache/datafusion/issues/13196]
@@ -65,19 +60,8 @@ impl Hash for LambdaExpr {
 }
 
 impl LambdaExpr {
-    /// Create a new lambda expression with the given parameters and body.
-    ///
-    /// `outer_columns_count` is the number of columns in the outer input
-    /// schema this lambda was planned against. Column/LambdaVariable indices
-    /// strictly below `outer_columns_count` reference outer captures and get
-    /// compressed to the front of the evaluation batch; indices at or above
-    /// reference lambda parameters and keep their fixed position relative to
-    /// the captures (so unused lambda parameters do not shift used ones).
-    pub fn try_new(
-        params: Vec<String>,
-        body: Arc<dyn PhysicalExpr>,
-        outer_columns_count: usize,
-    ) -> Result<Self> {
+    /// Create a new lambda expression with the given parameters and body
+    pub fn try_new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Result<Self> {
         if !all_unique(&params) {
             return plan_err!(
                 "lambda params must be unique, got ({})",
@@ -87,14 +71,10 @@ impl LambdaExpr {
 
         check_async_udf(&body)?;
 
-        Ok(Self::new(params, body, outer_columns_count))
+        Ok(Self::new(params, body))
     }
 
-    fn new(
-        params: Vec<String>,
-        body: Arc<dyn PhysicalExpr>,
-        outer_columns_count: usize,
-    ) -> Self {
+    fn new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Self {
         let mut used_column_indices = HashSet::new();
 
         body.apply(|node| {
@@ -112,26 +92,10 @@ impl LambdaExpr {
 
         projection.sort();
 
-        // Captures (outer column refs) get compressed to the front of the
-        // merged batch. Lambda variables (indices >= outer_columns_count)
-        // keep their fixed offset from the start of the lambda parameter
-        // block, because the higher-order function always pushes all
-        // declared parameters into the merged batch in order.
-        let used_captures_count = projection
-            .iter()
-            .filter(|i| **i < outer_columns_count)
-            .count();
         let column_index_map = projection
             .iter()
             .enumerate()
-            .map(|(captures_pos, original)| {
-                let projected = if *original < outer_columns_count {
-                    captures_pos
-                } else {
-                    used_captures_count + (*original - outer_columns_count)
-                };
-                (*original, projected)
-            })
+            .map(|(projected, original)| (*original, projected))
             .collect::<HashMap<_, _>>();
 
         let projected_body = Arc::clone(&body)
@@ -165,7 +129,6 @@ impl LambdaExpr {
             body,
             projected_body,
             projection,
-            outer_columns_count,
         }
     }
 
@@ -224,11 +187,7 @@ impl PhysicalExpr for LambdaExpr {
 
         check_async_udf(body)?;
 
-        Ok(Arc::new(Self::new(
-            self.params.clone(),
-            Arc::clone(body),
-            self.outer_columns_count,
-        )))
+        Ok(Arc::new(Self::new(self.params.clone(), Arc::clone(body))))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -236,19 +195,14 @@ impl PhysicalExpr for LambdaExpr {
     }
 }
 
-/// Create a lambda expression.
-///
-/// `outer_columns_count` is the number of columns in the outer input schema
-/// this lambda was planned against. See [`LambdaExpr::try_new`] for details.
+/// Create a lambda expression
 pub fn lambda(
     params: impl IntoIterator<Item = impl Into<String>>,
     body: Arc<dyn PhysicalExpr>,
-    outer_columns_count: usize,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(LambdaExpr::try_new(
         params.into_iter().map(Into::into).collect(),
         body,
-        outer_columns_count,
     )?))
 }
 
@@ -286,13 +240,13 @@ mod tests {
 
     #[test]
     fn test_lambda_evaluate() {
-        let lambda = lambda(["a"], Arc::new(NoOp::new()), 0).unwrap();
+        let lambda = lambda(["a"], Arc::new(NoOp::new())).unwrap();
         let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
         assert!(lambda.evaluate(&batch).is_err());
     }
 
     #[test]
     fn test_lambda_duplicate_name() {
-        assert!(lambda(["a", "a"], Arc::new(NoOp::new()), 0).is_err());
+        assert!(lambda(["a", "a"], Arc::new(NoOp::new())).is_err());
     }
 }

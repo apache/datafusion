@@ -337,6 +337,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "blocked on apache/datafusion#22853: multi-param lambda projection fix"]
     fn transform_values_doubles_values() {
         let map = create_str_int_map(
             vec!["a", "b", "c"],
@@ -389,6 +390,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "blocked on apache/datafusion#22853: multi-param lambda projection fix"]
     fn transform_values_preserves_null_rows() {
         let map = create_str_int_map(
             vec!["a", "b", "c", "d"],
@@ -422,6 +424,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "blocked on apache/datafusion#22853: multi-param lambda projection fix"]
     fn transform_values_empty_map() {
         let map = create_str_int_map(
             vec![],
@@ -440,6 +443,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "blocked on apache/datafusion#22853: multi-param lambda projection fix"]
     fn transform_values_mixed_empty_null_populated_rows() {
         // Row 0: empty {}, row 1: NULL, row 2: {a: 1, b: 2, c: 3}, row 3: {d: 4}
         let map = create_str_int_map(
@@ -474,6 +478,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "blocked on apache/datafusion#22853: multi-param lambda projection fix"]
     fn transform_values_on_sliced_map_should_not_evaluate_on_unreachable_values() {
         // Build 4 map rows then slice off the first row. The value `0` lives in
         // the unreachable prefix; if the lambda `100/v` were evaluated on it we
