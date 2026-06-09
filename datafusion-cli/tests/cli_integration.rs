@@ -181,42 +181,74 @@ fn cli_quick_test<'a>(
 #[cfg(unix)]
 #[test]
 fn test_cli_read_from_stdin() {
+    let stdout = run_cli_with_stdin(
+        "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin' \
+         OPTIONS ('format.has_header' 'true'); \
+         SELECT b, count(*) AS c FROM t GROUP BY b ORDER BY b;",
+        b"a,b\n1,foo\n2,bar\n3,foo\n",
+    );
+
+    assert!(
+        stdout.contains("| foo | 2 |") && stdout.contains("| bar | 1 |"),
+        "unexpected output:\n{stdout}"
+    );
+}
+
+/// stdin is a one-shot stream, so a second `/dev/stdin` table in the same
+/// session must reuse the buffered input rather than re-reading (now-empty)
+/// stdin and silently emptying the first table.
+#[cfg(unix)]
+#[test]
+fn test_cli_read_from_stdin_twice_reuses_buffer() {
+    let stdout = run_cli_with_stdin(
+        "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin' \
+         OPTIONS ('format.has_header' 'true'); \
+         CREATE EXTERNAL TABLE t2 STORED AS CSV LOCATION '/dev/stdin' \
+         OPTIONS ('format.has_header' 'true'); \
+         SELECT count(*) AS t_count FROM t; \
+         SELECT count(*) AS t2_count FROM t2;",
+        b"a,b\n1,foo\n2,bar\n",
+    );
+
+    // Both tables must still see the two buffered rows; before the fix the
+    // first table's store was overwritten with an empty one (t_count = 0).
+    let counts: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("| 2 "))
+        .collect();
+    assert_eq!(
+        counts.len(),
+        2,
+        "expected both stdin tables to report 2 rows, got:\n{stdout}"
+    );
+}
+
+/// Spawns the real `datafusion-cli` binary, pipes `stdin` into it, and returns
+/// its stdout after asserting a successful exit.
+#[cfg(unix)]
+fn run_cli_with_stdin(command: &str, stdin: &[u8]) -> String {
     use std::io::Write;
     use std::process::Stdio;
 
     let mut child = cli()
-        .args([
-            "-q",
-            "--command",
-            "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin' \
-             OPTIONS ('format.has_header' 'true'); \
-             SELECT b, count(*) AS c FROM t GROUP BY b ORDER BY b;",
-        ])
+        .args(["-q", "--command", command])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn datafusion-cli");
 
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(b"a,b\n1,foo\n2,bar\n3,foo\n")
-        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
 
     let output = child.wait_with_output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(
         output.status.success(),
         "datafusion-cli failed.\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    assert!(
-        stdout.contains("| foo | 2 |") && stdout.contains("| bar | 1 |"),
-        "unexpected output:\n{stdout}"
-    );
+    stdout
 }
 
 #[test]
