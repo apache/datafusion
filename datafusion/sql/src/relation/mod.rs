@@ -188,10 +188,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let table_ref = self.object_name_to_table_reference(name)?;
                     let table_name = table_ref.to_string();
                     let cte_plan_cloned = planner_context.get_cte(&table_name).cloned();
-                    let is_cte = cte_plan_cloned.is_some();
-                    if is_cte {
-                        planner_context.increment_cte_ref_count(&table_name);
-                    }
                     (
                         match (
                             cte_plan_cloned,

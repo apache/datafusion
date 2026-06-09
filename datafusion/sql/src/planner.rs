@@ -282,8 +282,6 @@ pub struct PlannerContext {
     not_materialized_cte_names: HashSet<String>,
     /// CTEs that are recursive
     recursive_cte_names: HashSet<String>,
-    /// Reference counts for CTEs (how many times each CTE is referenced)
-    cte_ref_counts: HashMap<String, usize>,
 }
 
 impl Default for PlannerContext {
@@ -306,7 +304,6 @@ impl PlannerContext {
             materialized_cte_names: HashSet::new(),
             not_materialized_cte_names: HashSet::new(),
             recursive_cte_names: HashSet::new(),
-            cte_ref_counts: HashMap::new(),
         }
     }
 
@@ -471,26 +468,6 @@ impl PlannerContext {
     /// Check if a CTE is recursive
     pub fn is_recursive_cte(&self, name: &str) -> bool {
         self.recursive_cte_names.contains(name)
-    }
-
-    /// Increment the reference count for a CTE
-    pub fn increment_cte_ref_count(&mut self, name: &str) {
-        *self.cte_ref_counts.entry(name.to_string()).or_insert(0) += 1;
-    }
-
-    /// Get the reference count for a CTE
-    pub fn get_cte_ref_count(&self, name: &str) -> usize {
-        self.cte_ref_counts.get(name).copied().unwrap_or(0)
-    }
-
-    /// Get a reference to the materialized CTE names
-    pub fn materialized_cte_names(&self) -> &HashSet<String> {
-        &self.materialized_cte_names
-    }
-
-    /// Get a reference to the CTE reference counts
-    pub fn cte_ref_counts(&self) -> &HashMap<String, usize> {
-        &self.cte_ref_counts
     }
 
     /// Returns an iterator over CTE names

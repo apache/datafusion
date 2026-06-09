@@ -19,8 +19,8 @@ use super::*;
 use arrow::array::StringArray;
 use datafusion::catalog::MemTable;
 use datafusion::physical_plan::ExecutionPlanProperties;
-use datafusion::physical_plan::materialized_cte::{
-    MaterializedCteExec, MaterializedCteReaderExec,
+use datafusion::physical_plan::materialized_subplan::{
+    MaterializedSubplanExec, MaterializedSubplanReaderExec,
 };
 use datafusion::physical_plan::{collect_partitioned, visit_execution_plan};
 use datafusion_common::assert_batches_eq;
@@ -44,8 +44,8 @@ async fn multi_reference_cte_materialization_heuristic() -> Result<()> {
         .await?;
     let physical_plan = reused_scan.create_physical_plan().await?;
     let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_contains!(&plan, "MaterializedCteExec");
-    assert_contains!(&plan, "MaterializedCteReaderExec");
+    assert_contains!(&plan, "MaterializedSubplanExec");
+    assert_contains!(&plan, "MaterializedSubplanReaderExec");
 
     Ok(())
 }
@@ -87,11 +87,11 @@ async fn materialized_cte_reader_preserves_input_partitions() -> Result<()> {
         type Error = std::convert::Infallible;
 
         fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            if plan.is::<MaterializedCteExec>() {
+            if plan.is::<MaterializedSubplanExec>() {
                 self.producer_partitions
                     .push(plan.output_partitioning().partition_count());
             }
-            if plan.is::<MaterializedCteReaderExec>() {
+            if plan.is::<MaterializedSubplanReaderExec>() {
                 self.reader_partitions
                     .push(plan.output_partitioning().partition_count());
             }
@@ -182,7 +182,7 @@ async fn materialized_cte_cache_is_per_physical_plan() -> Result<()> {
         .await?;
     let physical_plan = first.create_physical_plan().await?;
     let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_contains!(&plan, "MaterializedCteExec");
+    assert_contains!(&plan, "MaterializedSubplanExec");
     let results = first.collect().await?;
     let expected = ["+---+", "| a |", "+---+", "| 1 |", "+---+"];
     assert_batches_eq!(expected, &results);
@@ -195,7 +195,7 @@ async fn materialized_cte_cache_is_per_physical_plan() -> Result<()> {
         .await?;
     let physical_plan = second.create_physical_plan().await?;
     let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_contains!(&plan, "MaterializedCteExec");
+    assert_contains!(&plan, "MaterializedSubplanExec");
     let results = second.collect().await?;
     let expected = ["+---+", "| a |", "+---+", "| 2 |", "+---+"];
     assert_batches_eq!(expected, &results);
@@ -232,7 +232,7 @@ async fn materialized_cte_reader_preserves_producer_statistics() -> Result<()> {
         type Error = datafusion::error::DataFusionError;
 
         fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            if plan.is::<MaterializedCteReaderExec>() {
+            if plan.is::<MaterializedSubplanReaderExec>() {
                 self.reader_rows
                     .push(plan.partition_statistics(None)?.num_rows);
             }
@@ -336,6 +336,123 @@ async fn q39_filter_pushdown_regression() -> Result<()> {
     Ok(())
 }
 
+/// Materialization must not change query results: a multiply-referenced CTE
+/// must produce the same answer whether it is materialized (computed once,
+/// shared) or inlined (recomputed per reference). This is the core correctness
+/// invariant of the feature.
+#[tokio::test]
+async fn materialization_does_not_change_results() -> Result<()> {
+    let run = |materialize: bool| async move {
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.enable_materialized_ctes = materialize;
+        let ctx = SessionContext::new_with_config(config);
+        ctx.sql("CREATE TABLE src AS VALUES (1), (2), (3), (4)")
+            .await?
+            .collect()
+            .await?;
+        // `c` is referenced three times (self-join + union arm), so it
+        // materializes when the flag is on and inlines when it is off.
+        ctx.sql(
+            "WITH c AS (SELECT column1 AS a FROM src WHERE column1 <= 3)
+             SELECT x.a + y.a AS s FROM c x JOIN c y ON x.a = y.a
+             UNION ALL
+             SELECT a FROM c
+             ORDER BY s",
+        )
+        .await?
+        .collect()
+        .await
+    };
+
+    let inlined = run(false).await?;
+    let materialized = run(true).await?;
+    assert_eq!(
+        arrow::util::pretty::pretty_format_batches(&inlined)?.to_string(),
+        arrow::util::pretty::pretty_format_batches(&materialized)?.to_string(),
+    );
+    Ok(())
+}
+
+/// Regression test for the name-collision hazard raised in the review of
+/// PR #22675 (two distinct CTEs both named `t` in sibling subqueries). Because
+/// the shared cache is keyed by a unique `SubplanId` rather than by the CTE
+/// name, the two `t`s must materialize independently and produce distinct
+/// results. (A name-keyed cache would let one subquery's readers resolve to the
+/// other's cache, producing wrong results — this guards against regressing the
+/// id-keyed binding, e.g. once a `CommonSubplanEliminate` rule wraps subplans
+/// across non-disjoint scopes.)
+#[tokio::test]
+async fn sibling_same_name_ctes_do_not_collide() -> Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.enable_materialized_ctes = true;
+    let ctx = SessionContext::new_with_config(config);
+    ctx.sql("CREATE TABLE foo AS VALUES (1), (2), (3), (4), (5), (6)")
+        .await?
+        .collect()
+        .await?;
+
+    let df = ctx
+        .sql(
+            "SELECT a.cnt AS acnt, b.cnt AS bcnt
+             FROM
+               (WITH t AS (SELECT column1 AS a FROM foo WHERE column1 <= 2)
+                SELECT count(*) cnt FROM t x JOIN t y ON x.a = y.a) a,
+               (WITH t AS (SELECT column1 AS a FROM foo WHERE column1 >= 4)
+                SELECT count(*) cnt FROM t x JOIN t y ON x.a = y.a) b",
+        )
+        .await?;
+    // Both `t`s are multiply-referenced, so both materialize.
+    let physical_plan = df.create_physical_plan().await?;
+    let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
+    assert_contains!(&plan, "MaterializedSubplanExec");
+    // acnt: t = {1,2} self-join => 2 rows ; bcnt: t = {4,5,6} self-join => 3 rows
+    let results = df.collect().await?;
+    let expected = [
+        "+------+------+",
+        "| acnt | bcnt |",
+        "+------+------+",
+        "| 2    | 3    |",
+        "+------+------+",
+    ];
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
+
+/// Same hazard via a `UNION ALL` of two sibling subqueries each defining their
+/// own `t`. Each `t` is multiply-referenced (self-join) so both materialize;
+/// the id-keyed cache keeps them isolated.
+#[tokio::test]
+async fn sibling_same_name_ctes_in_union_do_not_collide() -> Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.enable_materialized_ctes = true;
+    let ctx = SessionContext::new_with_config(config);
+    ctx.sql("CREATE TABLE foo AS VALUES (1), (2), (3), (4), (5), (6)")
+        .await?
+        .collect()
+        .await?;
+
+    // ORDER BY makes the UNION ALL output deterministic.
+    let df = ctx
+        .sql(
+            "SELECT cnt FROM
+               (WITH t AS (SELECT column1 AS a FROM foo WHERE column1 <= 2)
+                SELECT count(*) cnt FROM t x JOIN t y ON x.a = y.a)
+             UNION ALL
+             SELECT cnt FROM
+               (WITH t AS (SELECT column1 AS a FROM foo WHERE column1 >= 4)
+                SELECT count(*) cnt FROM t x JOIN t y ON x.a = y.a)
+             ORDER BY cnt",
+        )
+        .await?;
+    let results = df.collect().await?;
+    // {1,2} => 2 ; {4,5,6} => 3
+    let expected = [
+        "+-----+", "| cnt |", "+-----+", "| 2   |", "| 3   |", "+-----+",
+    ];
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
+
 #[tokio::test]
 async fn volatile_cte_is_materialized() -> Result<()> {
     // PostgreSQL/DuckDB semantics: volatile CTEs are always materialized
@@ -352,7 +469,7 @@ async fn volatile_cte_is_materialized() -> Result<()> {
         .await?;
     let physical_plan = df.create_physical_plan().await?;
     let plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_contains!(&plan, "MaterializedCteExec");
+    assert_contains!(&plan, "MaterializedSubplanExec");
 
     // Verify the values are actually the same (materialized = one evaluation)
     let results = ctx

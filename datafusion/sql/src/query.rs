@@ -24,7 +24,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Constraints, DFSchema, DFSchemaRef, Result, not_impl_err};
 use datafusion_expr::expr::{Sort, WildcardOptions};
 use datafusion_expr::logical_plan::{
-    Extension, MaterializedCteProducer, MaterializedCteReader,
+    Extension, MaterializedSubplanProducer, MaterializedSubplanReader, SubplanId,
 };
 
 use datafusion_expr::select_expr::SelectExpr;
@@ -116,7 +116,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Apply CTE materialization to the plan.
     ///
-    /// Wraps multi-referenced CTEs in MaterializedCteProducer/Reader nodes so
+    /// Wraps multi-referenced CTEs in MaterializedSubplanProducer/Reader nodes so
     /// they are computed once and shared across all references. Cheap CTEs
     /// (literal projections, empty relations) are left inlined unless they
     /// contain volatile functions (which require single-evaluation semantics).
@@ -187,12 +187,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let mut result_plan = plan;
         for (cte_name, cte_plan, force) in ctes_to_materialize {
+            // Bind this producer to its readers by a unique id, not by the CTE
+            // name (names are not unique under nesting). See
+            // `MaterializedSubplanProducer` for why.
+            let id = SubplanId::next();
             result_plan =
-                replace_cte_with_reader(result_plan, &cte_name, cte_plan.schema())?;
+                replace_cte_with_reader(result_plan, &cte_name, id, cte_plan.schema())?;
 
-            let producer = MaterializedCteProducer {
+            let producer = MaterializedSubplanProducer {
+                id,
                 name: cte_name.clone(),
-                cte_plan: Arc::new(cte_plan),
+                plan: Arc::new(cte_plan),
                 continuation: Arc::new(result_plan.clone()),
                 schema: Arc::clone(result_plan.schema()),
                 force_materialized: force,
@@ -542,17 +547,20 @@ fn count_cte_references(plan: &LogicalPlan, cte_name: &str) -> usize {
     count
 }
 
-/// Replace SubqueryAlias nodes matching a CTE name with a MaterializedCteReader.
+/// Replace `SubqueryAlias` nodes matching a CTE name with a
+/// [`MaterializedSubplanReader`] carrying the given [`SubplanId`].
 fn replace_cte_with_reader(
     plan: LogicalPlan,
     cte_name: &str,
+    id: SubplanId,
     cte_schema: &DFSchemaRef,
 ) -> Result<LogicalPlan> {
     plan.transform_down(|node| {
         if let LogicalPlan::SubqueryAlias(ref alias) = node
             && alias.alias.table() == cte_name
         {
-            let reader = MaterializedCteReader {
+            let reader = MaterializedSubplanReader {
+                id,
                 name: cte_name.to_string(),
                 schema: Arc::clone(cte_schema),
             };

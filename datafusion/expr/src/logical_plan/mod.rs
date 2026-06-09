@@ -22,7 +22,7 @@ pub mod dml;
 mod extension;
 pub(crate) mod invariants;
 pub use invariants::{InvariantLevel, assert_expected_schema, check_subquery_expr};
-pub mod materialized_cte;
+pub mod materialized_subplan;
 mod plan;
 mod statement;
 pub mod tree_node;
@@ -57,4 +57,6 @@ pub use datafusion_common::format::ExplainFormat;
 pub use display::display_schema;
 
 pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
-pub use materialized_cte::{MaterializedCteProducer, MaterializedCteReader};
+pub use materialized_subplan::{
+    MaterializedSubplanProducer, MaterializedSubplanReader, SubplanId,
+};

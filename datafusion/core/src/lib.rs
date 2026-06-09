@@ -773,7 +773,7 @@ pub mod dataframe;
 pub mod datasource;
 pub mod error;
 pub mod execution;
-pub mod materialized_cte_planner;
+pub mod materialized_subplan_planner;
 pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
