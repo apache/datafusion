@@ -1561,20 +1561,7 @@ mod tests {
     use datafusion_expr::type_coercion::binary::type_union_coercion;
     use datafusion_expr_common::operator::Operator;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
-    #[cfg(feature = "proto")]
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
-    #[cfg(feature = "proto")]
-    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
-    #[cfg(feature = "proto")]
-    use datafusion_proto_models::protobuf;
-    #[cfg(feature = "proto")]
-    use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalWhenThen};
     use half::f16;
-
-    #[cfg(feature = "proto")]
-    use crate::proto_test_util::{
-        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
-    };
 
     #[test]
     fn case_with_expr() -> Result<()> {
@@ -3285,8 +3272,21 @@ mod tests {
 
         Ok(())
     }
+}
 
-    #[cfg(feature = "proto")]
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::col;
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf;
+    use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalWhenThen};
+
     fn proto_case_fixture() -> CaseExpr {
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
         CaseExpr::try_new(
@@ -3297,7 +3297,6 @@ mod tests {
         .unwrap()
     }
 
-    #[cfg(feature = "proto")]
     fn proto_when_then(
         when_expr: Option<PhysicalExprNode>,
         then_expr: Option<PhysicalExprNode>,
@@ -3308,7 +3307,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "proto")]
     fn proto_case_node(
         expr: Option<Box<PhysicalExprNode>>,
         when_then_expr: Vec<PhysicalWhenThen>,
@@ -3326,7 +3324,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "proto")]
     #[test]
     fn try_to_proto_encodes_case_expr() {
         let case = proto_case_fixture();
@@ -3350,7 +3347,6 @@ mod tests {
         assert!(case_node.else_expr.is_some());
     }
 
-    #[cfg(feature = "proto")]
     #[test]
     fn try_to_proto_propagates_child_encode_error() {
         let case = proto_case_fixture();
@@ -3362,7 +3358,6 @@ mod tests {
         assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));
     }
 
-    #[cfg(feature = "proto")]
     #[test]
     fn try_from_proto_decodes_case_expr() {
         let node = proto_case_node(
@@ -3387,7 +3382,6 @@ mod tests {
         assert!(case.else_expr().is_some());
     }
 
-    #[cfg(feature = "proto")]
     #[test]
     fn try_from_proto_rejects_non_case_node() {
         let node = column_node("a");
@@ -3401,7 +3395,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "proto")]
     #[test]
     fn try_from_proto_rejects_missing_when_expr() {
         let node = proto_case_node(
@@ -3419,7 +3412,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "proto")]
     #[test]
     fn try_from_proto_rejects_missing_then_expr() {
         let node = proto_case_node(
@@ -3437,7 +3429,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "proto")]
     #[test]
     fn try_from_proto_propagates_child_decode_error() {
         let node = proto_case_node(
