@@ -40,49 +40,12 @@ use datafusion_physical_plan::{
     limit::{GlobalLimitExec, LocalLimitExec},
 };
 
-#[derive(Debug)]
-struct AggregateRuntimeMetric {
-    mode: AggregateMode,
-    limit: Option<usize>,
-    output_rows: usize,
-}
-
 async fn run_plan_and_format(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let cfg = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::new_with_config(cfg);
     let batches = collect(plan, ctx.task_ctx()).await?;
     let actual = format!("{}", pretty_format_batches(&batches)?);
     Ok(actual)
-}
-
-fn collect_aggregate_runtime_metrics(
-    plan: &Arc<dyn ExecutionPlan>,
-    metrics: &mut Vec<AggregateRuntimeMetric>,
-) {
-    if let Some(agg) = plan.downcast_ref::<AggregateExec>() {
-        let output_rows = agg
-            .metrics()
-            .and_then(|metrics| metrics.aggregate_by_name().output_rows())
-            .expect("AggregateExec should record output_rows after execution");
-
-        metrics.push(AggregateRuntimeMetric {
-            mode: *agg.mode(),
-            limit: agg.limit_options().map(|config| config.limit()),
-            output_rows,
-        });
-    }
-
-    for child in plan.children() {
-        collect_aggregate_runtime_metrics(child, metrics);
-    }
-}
-
-fn aggregate_runtime_metrics(
-    plan: &Arc<dyn ExecutionPlan>,
-) -> Vec<AggregateRuntimeMetric> {
-    let mut metrics = vec![];
-    collect_aggregate_runtime_metrics(plan, &mut metrics);
-    metrics
 }
 
 #[tokio::test]
@@ -144,7 +107,58 @@ async fn test_partial_final() -> Result<()> {
 // Ensure operator respect the the soft limit and stops early: `AggregateExec`'s
 // `output_rows` metric should be smaller than then total distinct group count.
 #[tokio::test]
-async fn test_sql_partial_final_soft_limit_runtime_metrics() -> Result<()> {
+async fn limited_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
+    // Snapshot for an aggregate operator node from `EXPLAIN ANALYZE`.
+    //
+    // Example: In an `EXPLAIN ANALYZE` output
+    // ```txt
+    // AggregateExec: mode=partial, limit=10, metrics=[output_rows=100, ...]
+    // ```
+    // we get:
+    // ```txt
+    // AggregateRuntimeMetric {
+    //     mode: Partial,
+    //     limit: Some(10),
+    //     output_rows: 100,
+    // }
+    // ```
+    #[derive(Debug)]
+    struct AggregateRuntimeMetric {
+        mode: AggregateMode,
+        limit: Option<usize>,
+        output_rows: usize,
+    }
+
+    fn collect_aggregate_runtime_metrics(
+        plan: &Arc<dyn ExecutionPlan>,
+        metrics: &mut Vec<AggregateRuntimeMetric>,
+    ) {
+        if let Some(agg) = plan.downcast_ref::<AggregateExec>() {
+            let output_rows = agg
+                .metrics()
+                .and_then(|metrics| metrics.aggregate_by_name().output_rows())
+                .expect("AggregateExec should record output_rows after execution");
+
+            metrics.push(AggregateRuntimeMetric {
+                mode: *agg.mode(),
+                limit: agg.limit_options().map(|config| config.limit()),
+                output_rows,
+            });
+        }
+
+        for child in plan.children() {
+            collect_aggregate_runtime_metrics(child, metrics);
+        }
+    }
+
+    fn aggregate_runtime_metrics(
+        plan: &Arc<dyn ExecutionPlan>,
+    ) -> Vec<AggregateRuntimeMetric> {
+        let mut metrics = vec![];
+        collect_aggregate_runtime_metrics(plan, &mut metrics);
+        metrics
+    }
+
     let cfg = SessionConfig::new()
         .with_target_partitions(2)
         .with_batch_size(10)
