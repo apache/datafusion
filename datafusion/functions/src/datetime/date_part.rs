@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
-use arrow::compute::{DatePart, binary, date_part};
+use arrow::compute::{DatePart, binary, cast, date_part};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
@@ -59,7 +59,9 @@ use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
-    description = "Returns the specified part of the date as an integer.",
+    description = "Returns the specified part of the date as a double precision \
+    floating-point value. Matches PostgreSQL's `date_part` return type \
+    (https://www.postgresql.org/docs/current/functions-datetime.html).",
     syntax_example = "date_part(part, expression)",
     alternative_syntax = "extract(field FROM source)",
     argument(
@@ -93,13 +95,13 @@ use datafusion_macros::user_doc;
 +-----------------------------------------------------+
 | date_part(Utf8("year"),Utf8("2024-05-01T00:00:00")) |
 +-----------------------------------------------------+
-| 2024                                                |
+| 2024.0                                              |
 +-----------------------------------------------------+
 > SELECT extract(day FROM timestamp '2024-05-01T00:00:00');
 +----------------------------------------------------+
 | date_part(Utf8("DAY"),Utf8("2024-05-01T00:00:00")) |
 +----------------------------------------------------+
-| 1                                                  |
+| 1.0                                                |
 +----------------------------------------------------+
 ```"#
 )]
@@ -170,21 +172,14 @@ impl ScalarUDFImpl for DatePartFunc {
         let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
         let nullable = args.arg_fields[1].is_nullable();
 
+        // Always return Float64 to match PostgreSQL's `date_part`, which is
+        // defined to return `double precision` regardless of the part.
         field
             .and_then(|sv| {
                 sv.try_as_str()
                     .flatten()
                     .filter(|s| !s.is_empty())
-                    .map(|part| {
-                        if is_epoch(part) {
-                            Field::new(self.name(), DataType::Float64, nullable)
-                        } else if is_nanosecond(part) {
-                            // See notes on [seconds_ns] for rationale
-                            Field::new(self.name(), DataType::Int64, nullable)
-                        } else {
-                            Field::new(self.name(), DataType::Int32, nullable)
-                        }
-                    })
+                    .map(|_| Field::new(self.name(), DataType::Float64, nullable))
             })
             .map(Arc::new)
             .map_or_else(
@@ -249,6 +244,16 @@ impl ScalarUDFImpl for DatePartFunc {
             }
         };
 
+        // Cast the kernel result to Float64 so this function always returns a
+        // double precision value, matching PostgreSQL's `date_part`. The
+        // underlying arrow kernels still produce Int32/Int64 (or already-
+        // Float64 for `epoch`), so this is a no-op cast in the Float64 case.
+        let arr = if arr.data_type() == &DataType::Float64 {
+            arr
+        } else {
+            cast(arr.as_ref(), &DataType::Float64)?
+        };
+
         Ok(if is_scalar {
             ColumnarValue::Scalar(ScalarValue::try_from_array(arr.as_ref(), 0)?)
         } else {
@@ -286,9 +291,14 @@ impl ScalarUDFImpl for DatePartFunc {
             return Ok(PreimageResult::None);
         };
 
-        // Extract i32 year from Scalar value
+        // Extract the year from the literal scalar. `date_part` now always
+        // returns Float64, so the type-coerced binary expression will compare
+        // against a Float64 literal. We still accept Int32/Int64 for callers
+        // that bypass type coercion.
         let year = match argument_literal {
+            ScalarValue::Float64(Some(y)) if y.fract() == 0.0 => *y as i32,
             ScalarValue::Int32(Some(y)) => *y,
+            ScalarValue::Int64(Some(y)) if i32::try_from(*y).is_ok() => *y as i32,
             _ => return Ok(PreimageResult::None),
         };
 
@@ -328,17 +338,6 @@ impl ScalarUDFImpl for DatePartFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-}
-
-fn is_epoch(part: &str) -> bool {
-    let part = part_normalization(part);
-    matches!(part.to_lowercase().as_str(), "epoch")
-}
-
-fn is_nanosecond(part: &str) -> bool {
-    IntervalUnit::from_str(part_normalization(part))
-        .map(|p| matches!(p, IntervalUnit::Nanosecond))
-        .unwrap_or(false)
 }
 
 fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
