@@ -291,3 +291,19 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# pin to https://github.com/apache/arrow-rs/pull/9755 to run performance tests
+[patch.crates-io]
+arrow = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-array = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-avro = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-buffer = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-cast = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-data = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-ipc = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-schema = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-select = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-string = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-ord = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+arrow-flight = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
+parquet = { git = "https://github.com/ClSlaid/arrow-rs.git", branch = "fix-9143-binaryview-filter-coalescer" }
