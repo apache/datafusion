@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod instrumented;
+pub(crate) mod stdin;
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
@@ -28,7 +29,6 @@ use datafusion::{
         config::ExtensionOptions, config::TableOptions, config::Visit, config_err,
         exec_datafusion_err, exec_err,
     },
-    config::ConfigFileType,
     error::{DataFusionError, Result},
     execution::context::SessionState,
 };
@@ -36,14 +36,11 @@ use log::debug;
 use object_store::{
     ClientOptions, CredentialProvider,
     Error::Generic,
-    ObjectStore, ObjectStoreExt,
+    ObjectStore,
     aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential},
     gcp::GoogleCloudStorageBuilder,
     http::HttpBuilder,
-    memory::InMemory,
-    path::Path as ObjectStorePath,
 };
-use std::io::Read;
 use std::{
     any::Any,
     error::Error,
@@ -568,7 +565,9 @@ pub(crate) async fn get_object_store(
                 .with_url(url.origin().ascii_serialization())
                 .build()?,
         ),
-        STDIN_SCHEME => stdin_object_store(url).await?,
+        _ if scheme == stdin::StdinUtils::SCHEME => {
+            stdin::StdinUtils::object_store(url).await?
+        }
         _ => {
             // For other types, try to get from `object_store_registry`:
             state
@@ -581,75 +580,6 @@ pub(crate) async fn get_object_store(
         }
     };
     Ok(store)
-}
-
-/// The URL scheme used to expose the process's standard input as an object
-/// store, mirroring how `s3`, `gs`, `http`, etc. are addressed.
-const STDIN_SCHEME: &str = "stdin";
-
-/// Filesystem paths that refer to the process's standard input.
-///
-/// These are intentionally limited to the well known pseudo-files exposed by
-/// the operating system so that ordinary files are never accidentally treated
-/// as stdin.
-const STDIN_LOCATIONS: [&str; 3] = ["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
-
-/// Returns `true` if `location` refers to the process's standard input.
-fn is_stdin_location(location: &str) -> bool {
-    STDIN_LOCATIONS.contains(&location)
-}
-
-/// Rewrites the well known stdin pseudo-paths (e.g. `/dev/stdin`) to a canonical
-/// `stdin://` URL so that reading from standard input flows through the same
-/// object-store/listing code path as any other scheme. Non-stdin locations are
-/// returned unchanged.
-///
-/// The listing layer filters candidate files by extension, so the canonical
-/// object is named with the extension matching the declared `STORED AS` format.
-pub(crate) fn rewrite_stdin_location(
-    location: &str,
-    format: Option<&ConfigFileType>,
-) -> String {
-    if !is_stdin_location(location) {
-        return location.to_string();
-    }
-
-    let object_name = match format {
-        Some(ConfigFileType::CSV) => "stdin.csv",
-        Some(ConfigFileType::JSON) => "stdin.json",
-        Some(ConfigFileType::PARQUET) => "stdin.parquet",
-        _ => "stdin",
-    };
-    format!("{STDIN_SCHEME}:///{object_name}")
-}
-
-/// Builds the object store backing the `stdin://` scheme by reading all of
-/// standard input into memory.
-///
-/// A pipe (e.g. `cat data.csv | datafusion-cli`) is not seekable and reports a
-/// size of `0`, so it cannot be read directly by the file based formats (CSV
-/// requires seeking, Parquet needs the footer at the end of the file). Buffering
-/// the whole input up front sidesteps these limitations and lets the data be
-/// read like any other object, including being scanned more than once.
-async fn stdin_object_store(url: &Url) -> Result<Arc<dyn ObjectStore>> {
-    let mut buffer = Vec::new();
-    std::io::stdin()
-        .lock()
-        .read_to_end(&mut buffer)
-        .map_err(|e| exec_datafusion_err!("Failed to read from stdin: {e}"))?;
-    in_memory_object_store(url, buffer).await
-}
-
-/// Stores `data` at the path referenced by `url` in a fresh [`InMemory`] store.
-async fn in_memory_object_store(
-    url: &Url,
-    data: Vec<u8>,
-) -> Result<Arc<dyn ObjectStore>> {
-    let store = InMemory::new();
-    store
-        .put(&ObjectStorePath::from_url_path(url.path())?, data.into())
-        .await?;
-    Ok(Arc::new(store))
 }
 
 #[cfg(test)]
@@ -989,109 +919,6 @@ mod tests {
                 exec_datafusion_err!("aws envs not set, skipping s3 tests")
             })?;
         }
-        Ok(())
-    }
-
-    #[test]
-    fn rewrites_stdin_locations() {
-        // stdin pseudo-paths are rewritten to a `stdin://` URL carrying the
-        // extension that matches the declared format.
-        assert_eq!(
-            rewrite_stdin_location("/dev/stdin", Some(&ConfigFileType::CSV)),
-            "stdin:///stdin.csv"
-        );
-        assert_eq!(
-            rewrite_stdin_location("/dev/fd/0", Some(&ConfigFileType::JSON)),
-            "stdin:///stdin.json"
-        );
-        assert_eq!(
-            rewrite_stdin_location("/proc/self/fd/0", Some(&ConfigFileType::PARQUET)),
-            "stdin:///stdin.parquet"
-        );
-        assert_eq!(rewrite_stdin_location("/dev/stdin", None), "stdin:///stdin");
-
-        // Ordinary locations are left untouched.
-        for location in ["/dev/stdout", "data/stdin.csv", "stdin", "s3://b/f.csv"] {
-            assert_eq!(
-                rewrite_stdin_location(location, Some(&ConfigFileType::CSV)),
-                location
-            );
-        }
-    }
-
-    /// Buffers `data` into the `stdin://` object store and reads it back through
-    /// a `CREATE EXTERNAL TABLE`, returning the number of rows in the table.
-    ///
-    /// This exercises the full path used for `/dev/stdin` short of the actual
-    /// stdin read, which cannot be driven from a unit test.
-    async fn count_stdin_rows(
-        data: Vec<u8>,
-        stored_as: &str,
-        format: Option<ConfigFileType>,
-        options: &str,
-    ) -> Result<usize> {
-        let location = rewrite_stdin_location("/dev/stdin", format.as_ref());
-        let url = Url::parse(&location).unwrap();
-        let store = in_memory_object_store(&url, data).await?;
-
-        let ctx = SessionContext::new();
-        ctx.register_object_store(&url, store);
-        ctx.sql(&format!(
-            "CREATE EXTERNAL TABLE t STORED AS {stored_as} LOCATION '{location}' {options}"
-        ))
-        .await?
-        .collect()
-        .await?;
-
-        ctx.sql("SELECT * FROM t").await?.count().await
-    }
-
-    #[tokio::test]
-    async fn stdin_object_store_reads_csv() -> Result<()> {
-        let data = b"a,b\n1,foo\n2,bar\n".to_vec();
-        let rows = count_stdin_rows(
-            data,
-            "CSV",
-            Some(ConfigFileType::CSV),
-            "OPTIONS ('format.has_header' 'true')",
-        )
-        .await?;
-        assert_eq!(rows, 2);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn stdin_object_store_reads_json() -> Result<()> {
-        let data = b"{\"a\": 1, \"b\": \"foo\"}\n{\"a\": 2, \"b\": \"bar\"}\n".to_vec();
-        let rows = count_stdin_rows(data, "JSON", Some(ConfigFileType::JSON), "").await?;
-        assert_eq!(rows, 2);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn stdin_object_store_reads_parquet() -> Result<()> {
-        use datafusion::arrow::array::Int32Array;
-        use datafusion::arrow::datatypes::{DataType, Field, Schema};
-        use datafusion::arrow::record_batch::RecordBatch;
-        use parquet::arrow::ArrowWriter;
-
-        // Parquet requires random access to the footer, which a real pipe cannot
-        // provide; the in-memory buffer makes this work.
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )
-        .unwrap();
-
-        let mut data = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut data, schema, None).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let rows =
-            count_stdin_rows(data, "PARQUET", Some(ConfigFileType::PARQUET), "").await?;
-        assert_eq!(rows, 3);
         Ok(())
     }
 }

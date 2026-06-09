@@ -23,7 +23,7 @@ use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
     helper::CliHelper,
-    object_storage::{get_object_store, rewrite_stdin_location},
+    object_storage::{get_object_store, stdin::StdinUtils},
     print_options::{MaxRows, PrintOptions},
 };
 use datafusion::common::instant::Instant;
@@ -424,7 +424,7 @@ async fn create_plan(
 
         // Expose stdin (e.g. `cat data.csv | datafusion-cli`) as a `stdin://`
         // object store, registered like any other scheme in `get_object_store`.
-        cmd.location = rewrite_stdin_location(&cmd.location, format.as_ref());
+        cmd.location = StdinUtils::rewrite_location(&cmd.location, format.as_ref());
 
         register_object_store_and_config_extensions(
             ctx,
