@@ -427,8 +427,8 @@ fn to_utc_date_time(nanos: i64) -> Result<DateTime<Utc>> {
     }
 }
 
-fn timestamp_scale(unit: TimeUnit) -> i64 {
-    match unit {
+fn timestamp_scale<T: ArrowTimestampType>() -> i64 {
+    match T::UNIT {
         Nanosecond => 1,
         Microsecond => NANOS_PER_MICRO,
         Millisecond => NANOS_PER_MILLI,
@@ -570,13 +570,11 @@ fn date_bin_impl(
         stride: i64,
         stride_fn: BinFunction,
     ) -> Option<i64> {
-        let scale = timestamp_scale(T::UNIT);
-        value.and_then(|val| {
-            checked_scale_to_nanos(val, scale)
-                .and_then(|scaled| stride_fn(stride, scaled, origin))
-                .map(|binned| binned / scale)
-                .ok()
-        })
+        let scale = timestamp_scale::<T>();
+        value
+            .and_then(|val| val.checked_mul(scale))
+            .and_then(|scaled| stride_fn(stride, scaled, origin).ok())
+            .map(|binned| binned / scale)
     }
 
     Ok(match array {
@@ -616,26 +614,20 @@ fn date_bin_impl(
             if !is_time {
                 return exec_err!("DATE_BIN with Time32 source requires Time32 origin");
             }
-            let result = v.and_then(|x| {
-                checked_scale_to_nanos(x as i64, NANOS_PER_MILLI)
-                    .and_then(|scaled| stride_fn(stride, scaled, origin))
-                    .map(|binned| {
-                        ((binned % NANOSECONDS_IN_DAY) / NANOS_PER_MILLI) as i32
-                    })
-                    .ok()
-            });
+            let result = v
+                .and_then(|x| (x as i64).checked_mul(NANOS_PER_MILLI))
+                .and_then(|scaled| stride_fn(stride, scaled, origin).ok())
+                .map(|binned| ((binned % NANOSECONDS_IN_DAY) / NANOS_PER_MILLI) as i32);
             ColumnarValue::Scalar(ScalarValue::Time32Millisecond(result))
         }
         ColumnarValue::Scalar(ScalarValue::Time32Second(v)) => {
             if !is_time {
                 return exec_err!("DATE_BIN with Time32 source requires Time32 origin");
             }
-            let result = v.and_then(|x| {
-                checked_scale_to_nanos(x as i64, NANOS_PER_SEC)
-                    .and_then(|scaled| stride_fn(stride, scaled, origin))
-                    .map(|binned| ((binned % NANOSECONDS_IN_DAY) / NANOS_PER_SEC) as i32)
-                    .ok()
-            });
+            let result = v
+                .and_then(|x| (x as i64).checked_mul(NANOS_PER_SEC))
+                .and_then(|scaled| stride_fn(stride, scaled, origin).ok())
+                .map(|binned| ((binned % NANOSECONDS_IN_DAY) / NANOS_PER_SEC) as i32);
             ColumnarValue::Scalar(ScalarValue::Time32Second(result))
         }
         ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(v)) => {
@@ -653,12 +645,10 @@ fn date_bin_impl(
             if !is_time {
                 return exec_err!("DATE_BIN with Time64 source requires Time64 origin");
             }
-            let result = v.and_then(|x| {
-                checked_scale_to_nanos(x, NANOS_PER_MICRO)
-                    .and_then(|scaled| stride_fn(stride, scaled, origin))
-                    .map(|binned| (binned % NANOSECONDS_IN_DAY) / NANOS_PER_MICRO)
-                    .ok()
-            });
+            let result = v
+                .and_then(|x| x.checked_mul(NANOS_PER_MICRO))
+                .and_then(|scaled| stride_fn(stride, scaled, origin).ok())
+                .map(|binned| (binned % NANOSECONDS_IN_DAY) / NANOS_PER_MICRO);
             ColumnarValue::Scalar(ScalarValue::Time64Microsecond(result))
         }
         ColumnarValue::Array(array) => {
@@ -673,14 +663,13 @@ fn date_bin_impl(
                 T: ArrowTimestampType,
             {
                 let array = as_primitive_array::<T>(array)?;
-                let scale = timestamp_scale(T::UNIT);
+                let scale = timestamp_scale::<T>();
 
                 // Per-row errors become NULL, matching scalar behavior.
                 let result: PrimitiveArray<T> = array.unary_opt(|val| {
-                    checked_scale_to_nanos(val, scale)
-                        .and_then(|scaled| stride_fn(stride, scaled, origin))
+                    val.checked_mul(scale)
+                        .and_then(|scaled| stride_fn(stride, scaled, origin).ok())
                         .map(|binned| binned / scale)
-                        .ok()
                 });
 
                 let array = result.with_timezone_opt(tz_opt.clone());
@@ -717,13 +706,13 @@ fn date_bin_impl(
                     let array = array.as_primitive::<Time32MillisecondType>();
                     let result: PrimitiveArray<Time32MillisecondType> =
                         array.unary_opt(|x| {
-                            checked_scale_to_nanos(x as i64, NANOS_PER_MILLI)
-                                .and_then(|scaled| stride_fn(stride, scaled, origin))
+                            (x as i64)
+                                .checked_mul(NANOS_PER_MILLI)
+                                .and_then(|scaled| stride_fn(stride, scaled, origin).ok())
                                 .map(|binned| {
                                     ((binned % NANOSECONDS_IN_DAY) / NANOS_PER_MILLI)
                                         as i32
                                 })
-                                .ok()
                         });
                     ColumnarValue::Array(Arc::new(result))
                 }
@@ -735,12 +724,12 @@ fn date_bin_impl(
                     }
                     let array = array.as_primitive::<Time32SecondType>();
                     let result: PrimitiveArray<Time32SecondType> = array.unary_opt(|x| {
-                        checked_scale_to_nanos(x as i64, NANOS_PER_SEC)
-                            .and_then(|scaled| stride_fn(stride, scaled, origin))
+                        (x as i64)
+                            .checked_mul(NANOS_PER_SEC)
+                            .and_then(|scaled| stride_fn(stride, scaled, origin).ok())
                             .map(|binned| {
                                 ((binned % NANOSECONDS_IN_DAY) / NANOS_PER_SEC) as i32
                             })
-                            .ok()
                     });
                     ColumnarValue::Array(Arc::new(result))
                 }
@@ -753,12 +742,11 @@ fn date_bin_impl(
                     let array = array.as_primitive::<Time64MicrosecondType>();
                     let result: PrimitiveArray<Time64MicrosecondType> =
                         array.unary_opt(|x| {
-                            checked_scale_to_nanos(x, NANOS_PER_MICRO)
-                                .and_then(|scaled| stride_fn(stride, scaled, origin))
+                            x.checked_mul(NANOS_PER_MICRO)
+                                .and_then(|scaled| stride_fn(stride, scaled, origin).ok())
                                 .map(|binned| {
                                     (binned % NANOSECONDS_IN_DAY) / NANOS_PER_MICRO
                                 })
-                                .ok()
                         });
                     ColumnarValue::Array(Arc::new(result))
                 }
