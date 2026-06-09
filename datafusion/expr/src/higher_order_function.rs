@@ -718,14 +718,13 @@ pub trait HigherOrderUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         args: HigherOrderReturnFieldArgs,
     ) -> Result<FieldRef>;
 
-    /// Whether List or LargeList arguments should have it's non-empty null
-    /// sublists cleaned with [remove_list_null_values] before invoking this function
+    /// Whether List or LargeList or Map arguments should have it's non-empty null
+    /// sublists/submaps cleaned before invoking this function
     ///
     /// The default implementation always returns true and should only be implemented
-    /// if you want to handle non-empty null sublists yourself
+    /// if you want to handle non-empty null sublists/maps yourself
     ///
-    /// [remove_list_null_values]: datafusion_common::utils::remove_list_null_values
-    // todo: extend this to listview and maps when remove_list_null_values supports it
+    // todo: extend this to listview when remove_list_null_values supports it
     fn clear_null_values(&self) -> bool {
         true
     }
@@ -963,7 +962,7 @@ impl HigherOrderUDF {
         self.inner.return_field_from_args(args)
     }
 
-    /// Whether List or LargeList arguments should have non-empty null sublists
+    /// Whether List or LargeList or Map arguments should have non-empty null sublists/maps
     /// cleaned before invoking this function.
     pub fn clear_null_values(&self) -> bool {
         self.inner.clear_null_values()
