@@ -83,7 +83,7 @@ thread_local! {
 }
 
 /// Stamp the current thread as a query worker. Only stamped threads panic
-/// on overdraft; everything else (poll task, gRPC server, control plane)
+/// on overdraft; everything else (i.e. gRPC server)
 /// is exempt. Intended for `on_thread_start` of a per-query / per-task
 /// tokio runtime.
 ///
@@ -178,7 +178,7 @@ fn track(delta: isize) -> bool {
             if std::thread::panicking() {
                 return false;
             }
-            // Unstamped threads (poll task, control plane) still debit the
+            // Unstamped threads still debit the
             // bank above so its value stays honest, but they're exempt from
             // the kill.
             if !STAMPED.with(|stamped| stamped.get()) {
