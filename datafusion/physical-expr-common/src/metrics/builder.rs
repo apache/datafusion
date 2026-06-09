@@ -189,6 +189,14 @@ impl<'a> MetricBuilder<'a> {
         count
     }
 
+    pub fn max_output_batch_size(self, partition: usize) -> Gauge {
+        let gauge = Gauge::new();
+        self.with_category(MetricCategory::Bytes)
+            .with_partition(partition)
+            .build(MetricValue::MaxOutputBatchSize(gauge.clone()));
+        gauge
+    }
+
     /// Consume self and create a new counter for recording total output batches
     pub fn output_batches(self, partition: usize) -> Count {
         let count = Count::new();

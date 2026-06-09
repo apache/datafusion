@@ -23,7 +23,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, utils::memory::get_record_batch_memory_size};
 
 use super::{
-    Count, ExecutionPlanMetricsSet, Metric, MetricBuilder, MetricsSet, Time, Timestamp,
+    Count, ExecutionPlanMetricsSet, Gauge, Metric, MetricBuilder, MetricsSet, Time,
+    Timestamp,
 };
 
 const OUTPUT_ROWS_SKEW_METRIC_NAME: &str = "output_rows_skew";
@@ -68,6 +69,11 @@ pub struct BaselineMetrics {
     /// Issue: <https://github.com/apache/datafusion/issues/16841>
     output_bytes: Count,
 
+    /// Size of the largest batch output from this operator,
+    /// this can help detect skews in partitions,
+    /// or an exceedingly large batch which caused an error/spill.
+    max_output_batch_size: Gauge,
+
     /// output batches: the total output batch count
     output_batches: Count,
     // Remember to update `docs/source/user-guide/metrics.md` when updating comments
@@ -93,6 +99,9 @@ impl BaselineMetrics {
             output_bytes: MetricBuilder::new(metrics)
                 .with_type(super::MetricType::Summary)
                 .output_bytes(partition),
+            max_output_batch_size: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::Dev)
+                .max_output_batch_size(partition),
             output_batches: MetricBuilder::new(metrics)
                 .with_type(super::MetricType::Dev)
                 .output_batches(partition),
@@ -110,6 +119,7 @@ impl BaselineMetrics {
             elapsed_compute: self.elapsed_compute.clone(),
             output_rows: Default::default(),
             output_bytes: Default::default(),
+            max_output_batch_size: Default::default(),
             output_batches: Default::default(),
         }
     }
@@ -330,10 +340,7 @@ impl RecordOutput for usize {
 
 impl RecordOutput for RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
-        bm.record_output(self.num_rows());
-        let n_bytes = get_record_batch_memory_size(&self);
-        bm.output_bytes.add(n_bytes);
-        bm.output_batches.add(1);
+        (&self).record_output(bm);
         self
     }
 }
@@ -343,6 +350,7 @@ impl RecordOutput for &RecordBatch {
         bm.record_output(self.num_rows());
         let n_bytes = get_record_batch_memory_size(self);
         bm.output_bytes.add(n_bytes);
+        bm.max_output_batch_size.set_max(n_bytes);
         bm.output_batches.add(1);
         self
     }

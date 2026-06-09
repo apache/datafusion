@@ -251,12 +251,14 @@ async fn explain_analyze_level() {
     for (level, needle, should_contain) in [
         (MetricType::Summary, "spill_count", false),
         (MetricType::Summary, "output_batches", false),
+        (MetricType::Summary, "max_output_batch_size", false),
         (MetricType::Summary, "output_rows", true),
         (MetricType::Summary, "output_bytes", true),
         (MetricType::Dev, "spill_count", true),
         (MetricType::Dev, "output_rows", true),
         (MetricType::Dev, "output_bytes", true),
         (MetricType::Dev, "output_batches", true),
+        (MetricType::Dev, "max_output_batch_size", true),
     ] {
         let plan = collect_plan(sql, level).await;
         assert_eq!(

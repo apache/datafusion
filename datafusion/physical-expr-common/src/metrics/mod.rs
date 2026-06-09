@@ -305,6 +305,7 @@ impl MetricsSet {
             MetricValue::SpillCount(_) => false,
             MetricValue::SpilledBytes(_) => false,
             MetricValue::OutputBytes(_) => false,
+            MetricValue::MaxOutputBatchSize(_) => false,
             MetricValue::OutputBatches(_) => false,
             MetricValue::SpilledRows(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
