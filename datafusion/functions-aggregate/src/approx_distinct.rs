@@ -1070,6 +1070,8 @@ mod tests {
         HLL_HASH_STATE.hash_one(v)
     }
 
+    /// Reference count: fold the given distinct hashes straight into a dense
+    /// HyperLogLog. The grouped sketch must agree with this exactly.
     fn reference_count(hashes: &[u64]) -> u64 {
         let mut hll = HyperLogLog::<u8>::new();
         for &hash in hashes {
