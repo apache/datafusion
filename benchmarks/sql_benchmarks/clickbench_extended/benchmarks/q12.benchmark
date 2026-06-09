@@ -1,0 +1,21 @@
+name Q12
+group clickbench_extended
+subgroup ${CLICKBENCH_TYPE:-single}
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run
+SELECT MAX(fv) FROM (
+    SELECT FIRST_VALUE("WatchID" ORDER BY "EventTime") as fv
+    FROM hits
+    GROUP BY "OS"
+);
+
+result sql_benchmarks/clickbench_extended/results/q12.csv
