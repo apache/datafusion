@@ -109,6 +109,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::abort();
     });
 
+    // Install a global panic hook to log `OomGuardPanic` distinctly.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(g) = info.payload().downcast_ref::<oom_guard::OomGuardPanic>() {
+            log::error!(
+                "OomGuard panic on thread {:?}: balance={} bytes",
+                std::thread::current().name().unwrap_or("?"),
+                g.balance,
+            );
+        } else {
+            default_hook(info);
+        }
+    }));
+
     // Manual runtime construction so we can `on_thread_start` to stamp
     // worker threads as eligible for the OomGuard overdraft panic.
     // Unstamped threads (control plane, the poll task itself) still debit

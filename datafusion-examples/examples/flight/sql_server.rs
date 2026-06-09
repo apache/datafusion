@@ -44,10 +44,10 @@ use datafusion::prelude::{DataFrame, ParquetReadOptions, SessionConfig, SessionC
 use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 use log::info;
-use mimalloc::MiMalloc;
 use prost::Message;
 use std::panic::AssertUnwindSafe;
 use std::time::Duration;
+use tikv_jemallocator::Jemalloc;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
@@ -56,7 +56,7 @@ use uuid::Uuid;
 use crate::oom_guard::{self, OomGuard, OomGuardPanic};
 
 #[global_allocator]
-static GLOBAL: OomGuard<MiMalloc> = OomGuard::new(MiMalloc);
+static GLOBAL: OomGuard<Jemalloc> = OomGuard::new(Jemalloc);
 
 macro_rules! status {
     ($desc:expr, $err:expr) => {
@@ -79,22 +79,37 @@ macro_rules! status {
 pub async fn sql_server() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
-    // Arm OomGuard against the process's cgroup limit (if one is set —
-    // e.g. running under `systemd-run --scope -p MemoryMax=…` or inside
-    // a Kubernetes pod). With no cgroup limit, the guard stays disarmed
-    // and the wrapper costs one relaxed atomic load per allocation.
-    if let Some(cgroup_limit) = oom_guard::cgroup_memory_max() {
-        // Trip the guard with 5% headroom — leaves room for the unwind
-        // and Drop chains to actually allocate as they tear down.
-        let threshold = ((cgroup_limit as f64) * 0.95) as usize;
-        info!(
-            "OomGuard: arming for cgroup memory.max={} bytes, threshold={} bytes",
-            cgroup_limit, threshold
-        );
-        oom_guard::spawn_balance_poll(threshold, Duration::from_millis(500));
-        oom_guard::arm();
-    } else {
-        info!("OomGuard: no cgroup memory limit found; staying disarmed");
+    // Arm OomGuard against the process's cgroup limit. Demo flag:
+    //   OOM_GUARD=off  → wrapper stays disarmed (allocator behaves
+    //                    transparently; A/B against the armed run on
+    //                    the same cgroup to see the difference)
+    //   unset or any other value → arm if a cgroup limit is detected
+    //
+    // With no cgroup limit at all (raw shell run), the guard also stays
+    // disarmed — there's nothing meaningful to compare against.
+    let oom_guard_enabled = std::env::var("OOM_GUARD")
+        .map(|v| v.to_ascii_lowercase() != "off")
+        .unwrap_or(true);
+    match (oom_guard_enabled, oom_guard::cgroup_memory_max()) {
+        (true, Some(cgroup_limit)) => {
+            // Headroom: fraction of the cgroup limit reserved between
+            // the threshold and the kernel's hard ceiling.
+            let headroom_fraction = std::env::var("OOM_GUARD_HEADROOM")
+                .ok()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.05)
+                .clamp(0.0, 0.95);
+            let threshold =
+                ((cgroup_limit as f64) * (1.0 - headroom_fraction)) as usize;
+            oom_guard::spawn_balance_poll(threshold, Duration::from_millis(10));
+            oom_guard::arm();
+        }
+        (false, _) => {
+            info!("OomGuard: disabled via OOM_GUARD=off");
+        }
+        (true, None) => {
+            info!("OomGuard: no cgroup memory limit found; staying disarmed");
+        }
     }
 
     let addr = "0.0.0.0:50051".parse()?;

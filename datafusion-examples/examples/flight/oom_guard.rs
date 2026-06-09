@@ -30,9 +30,12 @@
 //! - A single global `AtomicIsize BALANCE` represents bytes of headroom
 //!   remaining before a threshold. Every thread's allocations debit it
 //!   and frees credit it.
-//! - A periodic poll overwrites `BALANCE` with `threshold - resident`,
-//!   resyncing the bank to ground truth (read from `/proc/self/statm`)
-//!   so per-alloc drift can't accumulate forever.
+//! - A dedicated OS thread polls jemalloc's `stats.resident` at a fixed
+//!   interval (see [`spawn_balance_poll`]) and writes
+//!   `BALANCE = threshold - resident`. Per-allocation tracking refines
+//!   the bank between ticks; the poll's job is to inject the
+//!   allocator's slab-overhead delta into the bank before per-alloc
+//!   tracking would discover it.
 //! - When the bank goes negative *on a stamped thread* (typically a
 //!   query worker), `alloc` returns NULL. The `alloc_error_hook` then
 //!   originates a `panic_any(OomGuardPanic)` from a clean safe-Rust
@@ -50,6 +53,8 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::time::Duration;
 
+use tikv_jemalloc_ctl::{epoch, stats};
+
 /// Per-thread drift settles into the global bank when `|drift|` crosses this.
 /// 64 KB keeps per-thread error tight (≤1 MB on a 16-core box) while still
 /// amortizing the atomic op across thousands of allocations.
@@ -61,8 +66,8 @@ const SETTLE_THRESHOLD: isize = 64 * 1024;
 static ARMED: AtomicBool = AtomicBool::new(false);
 
 /// Headroom remaining (bytes) before a stamped thread will panic.
-/// `isize::MAX` until the first poll runs — the guard is effectively off
-/// until then.
+/// `isize::MAX` until [`seed_balance`] runs — the guard is effectively
+/// off until then.
 static BALANCE: AtomicIsize = AtomicIsize::new(isize::MAX);
 
 thread_local! {
@@ -105,9 +110,8 @@ pub fn is_armed() -> bool {
     ARMED.load(Ordering::Relaxed)
 }
 
-/// Overwrite the bank with `value`. The poll task uses this to resync from
-/// real RSS each tick.
-pub fn set_balance(value: isize) {
+/// Overwrite the bank with `value`. Only `seed_balance` calls this.
+fn set_balance(value: isize) {
     BALANCE.store(value, Ordering::Relaxed);
 }
 
@@ -188,35 +192,40 @@ fn track(delta: isize) -> bool {
         .unwrap_or(false)
 }
 
-/// Read the process's resident set size (anon + file pages) in bytes,
-/// straight from `/proc/self/statm`. Avoids any allocator-specific
-/// dependency (jemalloc, mimalloc, etc.) — the cost is a small file
-/// read on each poll tick.
-fn read_resident_bytes() -> Option<u64> {
-    let content = std::fs::read_to_string("/proc/self/statm").ok()?;
-    let mut parts = content.split_ascii_whitespace();
-    // Fields: size resident shared text lib data dt (all in pages)
-    let _size = parts.next()?;
-    let resident_pages: u64 = parts.next()?.parse().ok()?;
-    // Page size — `sysconf(_SC_PAGESIZE)` would be nicer but adds a
-    // libc dep; assume 4 KiB on the platforms this example runs on.
-    Some(resident_pages * 4096)
-}
-
 /// Read the process's cgroup memory limit, if any. Returns `None` for
 /// "no limit set" (cgroup v2 reports `max`; cgroup v1 reports a sentinel
 /// value near `u64::MAX`).
 pub fn cgroup_memory_max() -> Option<u64> {
-    // cgroup v2 (modern Linux distros, k8s nodes).
-    if let Ok(content) = std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
+    fn parse_v2(content: &str) -> Option<u64> {
         let trimmed = content.trim();
-        if trimmed != "max" {
-            if let Ok(value) = trimmed.parse::<u64>() {
-                return Some(value);
+        if trimmed == "max" {
+            None
+        } else {
+            trimmed.parse::<u64>().ok()
+        }
+    }
+
+    // (1) Namespaced cgroup v2 mount.
+    if let Ok(content) = std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
+        if let Some(value) = parse_v2(&content) {
+            return Some(value);
+        }
+    }
+    // (2) Full-hierarchy cgroup v2: discover our own path. `/proc/self/cgroup`
+    //     on v2 looks like `0::/user.slice/.../foo.service`.
+    if let Ok(proc_cgroup) = std::fs::read_to_string("/proc/self/cgroup") {
+        for line in proc_cgroup.lines() {
+            if let Some(rest) = line.strip_prefix("0::") {
+                let path = format!("/sys/fs/cgroup{}/memory.max", rest.trim_end());
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Some(value) = parse_v2(&content) {
+                        return Some(value);
+                    }
+                }
             }
         }
     }
-    // cgroup v1 fallback.
+    // (3) cgroup v1 fallback.
     if let Ok(content) =
         std::fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes")
     {
@@ -230,31 +239,58 @@ pub fn cgroup_memory_max() -> Option<u64> {
     None
 }
 
-/// Spawn a tokio task that periodically resyncs the bank from real RSS.
-/// Between ticks, per-alloc tracking drifts could accumulate; this task
-/// keeps it in line with the kernel's ground truth.
+/// Spawn a dedicated OS thread that periodically resyncs `BALANCE` from
+/// jemalloc's `stats.resident`. Sets `BALANCE = threshold - resident` on
+/// every tick.
+///
+/// Performs an initial synchronous read before returning so the guard
+/// is fully armed by the time the caller continues.
 pub fn spawn_balance_poll(threshold_bytes: usize, interval: Duration) {
+    let resident_mib = match stats::resident::mib() {
+        Ok(m) => m,
+        Err(e) => {
+            log::error!(
+                "OomGuard: cannot resolve jemalloc resident MIB ({e}); guard disarmed"
+            );
+            return;
+        }
+    };
+    let epoch_mib = match epoch::mib() {
+        Ok(m) => m,
+        Err(e) => {
+            log::error!(
+                "OomGuard: cannot resolve jemalloc epoch MIB ({e}); guard disarmed"
+            );
+            return;
+        }
+    };
+
+    // Initial sync so the bank starts in a meaningful state.
+    let _ = epoch_mib.advance();
+    if let Ok(resident) = resident_mib.read() {
+        let initial = (threshold_bytes as isize).saturating_sub(resident as isize);
+        set_balance(initial);
+    }
+
     log::info!(
-        "OomGuard: starting balance poll (threshold={} bytes, interval={:?})",
-        threshold_bytes,
-        interval
+        "OomGuard: starting balance poll (threshold={threshold_bytes} bytes, interval={interval:?}, initial_balance={} bytes)",
+        balance(),
     );
 
-    tokio::spawn(async move {
-        let mut timer =
-            tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
-        // If tokio is busy and we miss a tick, don't hammer /proc with a
-        // backlog — just skip to the next.
-        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            timer.tick().await;
-            if let Some(resident) = read_resident_bytes() {
-                let new_balance =
-                    (threshold_bytes as isize).saturating_sub(resident as isize);
-                set_balance(new_balance);
+    std::thread::Builder::new()
+        .name("oom-guard-poll".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(interval);
+                let _ = epoch_mib.advance();
+                if let Ok(resident) = resident_mib.read() {
+                    let new_balance =
+                        (threshold_bytes as isize).saturating_sub(resident as isize);
+                    BALANCE.store(new_balance, Ordering::Relaxed);
+                }
             }
-        }
-    });
+        })
+        .expect("failed to spawn oom-guard-poll thread");
 }
 
 /// `GlobalAlloc` wrapper. Forwards every op unchanged to `inner`; the

@@ -59,7 +59,8 @@ env_logger = { workspace = true }
 futures = { workspace = true }
 insta = { workspace = true }
 log = { workspace = true }
-mimalloc = { version = "0.1", default-features = false }
+tikv-jemallocator = { version = "0.6", features = ["unprefixed_malloc_on_supported_platforms"] }
+tikv-jemalloc-ctl = { version = "0.6", features = ["stats"] }
 object_store = { workspace = true, features = ["aws", "http"] }
 prost = { workspace = true }
 rand = { workspace = true }
