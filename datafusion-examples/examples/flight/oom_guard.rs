@@ -28,14 +28,25 @@
 //! `OomGuard` solves this at the allocator layer:
 //!
 //! - A single global `AtomicIsize BALANCE` represents bytes of headroom
-//!   remaining before a threshold. Every thread's allocations debit it
-//!   and frees credit it.
-//! - A dedicated OS thread polls jemalloc's `stats.resident` at a fixed
-//!   interval (see [`spawn_balance_poll`]) and writes
-//!   `BALANCE = threshold - resident`. Per-allocation tracking refines
-//!   the bank between ticks; the poll's job is to inject the
-//!   allocator's slab-overhead delta into the bank before per-alloc
-//!   tracking would discover it.
+//!   remaining before the kernel would OOMKill us. Every thread's
+//!   allocations debit it and frees credit it.
+//! - A dedicated OS thread polls the kernel's `memory.current` and
+//!   jemalloc's own counters at a fixed interval (see
+//!   [`spawn_balance_poll`]) and writes
+//!   `BALANCE = memory.max − memory.current − anon_debt − headroom`,
+//!   where `anon_debt = max(0, jemalloc::allocated − jemalloc::resident)`
+//!   is the bytes the application has been handed by the allocator but
+//!   hasn't yet caused the kernel to back with physical pages — i.e.
+//!   pages a `for` loop could turn into `memory.current` growth without
+//!   any further allocator call we'd intercept. The kernel itself kills
+//!   on `memory.current > memory.max`; the poll's formula directly
+//!   predicts whether the *next* tick could face that. Per-allocation
+//!   tracking refines the bank between ticks. (We deliberately use
+//!   jemalloc's `allocated` rather than `VmData − RssAnon` from
+//!   `/proc/self/status`, because jemalloc reserves multi-GiB of
+//!   virtual at startup for its arenas — none of which is reachable by
+//!   application writes without going through an `alloc()` we already
+//!   debit.)
 //! - When the bank goes negative *on a stamped thread* (typically a
 //!   query worker), `alloc` returns NULL. The `alloc_error_hook` then
 //!   originates a `panic_any(OomGuardPanic)` from a clean safe-Rust
@@ -50,10 +61,13 @@
 
 use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;
+use std::fs::File;
+use std::os::unix::fs::FileExt;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::time::Duration;
 
-use tikv_jemalloc_ctl::{epoch, stats};
+use tikv_jemalloc_ctl::{epoch, epoch_mib as EpochMib, stats};
 
 /// Per-thread drift settles into the global bank when `|drift|` crosses this.
 /// 64 KB keeps per-thread error tight (≤1 MB on a 16-core box) while still
@@ -238,58 +252,131 @@ pub fn cgroup_memory_max() -> Option<u64> {
     None
 }
 
-/// Spawn a dedicated OS thread that periodically resyncs `BALANCE` from
-/// jemalloc's `stats.resident`. Sets `BALANCE = threshold - resident` on
-/// every tick.
-///
-/// Performs an initial synchronous read before returning so the guard
-/// is fully armed by the time the caller continues.
-pub fn spawn_balance_poll(threshold_bytes: usize, interval: Duration) {
-    let resident_mib = match stats::resident::mib() {
-        Ok(m) => m,
-        Err(e) => {
-            log::error!(
-                "OomGuard: cannot resolve jemalloc resident MIB ({e}); guard disarmed"
-            );
-            return;
+/// Discover the path to this cgroup's `memory.current` file. Mirror of
+/// [`cgroup_memory_max`] but for the live charge against the limit.
+/// Returns `None` if no memory controller is reachable.
+pub fn cgroup_memory_current_path() -> Option<PathBuf> {
+    // (1) Namespaced cgroup v2 mount.
+    let direct = Path::new("/sys/fs/cgroup/memory.current");
+    if direct.exists() {
+        return Some(direct.to_path_buf());
+    }
+    // (2) Full-hierarchy cgroup v2: derive from `/proc/self/cgroup`.
+    if let Ok(proc_cgroup) = std::fs::read_to_string("/proc/self/cgroup") {
+        for line in proc_cgroup.lines() {
+            if let Some(rest) = line.strip_prefix("0::") {
+                let path = PathBuf::from(format!(
+                    "/sys/fs/cgroup{}/memory.current",
+                    rest.trim_end()
+                ));
+                if path.exists() {
+                    return Some(path);
+                }
+            }
         }
-    };
-    let epoch_mib = match epoch::mib() {
-        Ok(m) => m,
-        Err(e) => {
-            log::error!(
-                "OomGuard: cannot resolve jemalloc epoch MIB ({e}); guard disarmed"
-            );
-            return;
-        }
-    };
+    }
+    // (3) cgroup v1 fallback.
+    let v1 = Path::new("/sys/fs/cgroup/memory/memory.usage_in_bytes");
+    if v1.exists() {
+        return Some(v1.to_path_buf());
+    }
+    None
+}
 
-    // Initial sync so the bank starts in a meaningful state.
+/// `pread` a kernfs/procfs file whose contents are a single integer in
+/// bytes, possibly trailed by whitespace.
+fn read_u64_file(file: &File) -> Option<u64> {
+    let mut buf = [0u8; 32];
+    let n = file.read_at(&mut buf, 0).ok()?;
+    std::str::from_utf8(&buf[..n]).ok()?.trim().parse().ok()
+}
+
+/// Compute the poll-tick balance:
+/// `BALANCE = memory.max − memory.current − anon_debt − headroom`,
+fn compute_balance(
+    memory_max: u64,
+    headroom_bytes: u64,
+    memory_current_file: &File,
+    epoch_mib: &EpochMib,
+    allocated_mib: &stats::allocated_mib,
+    resident_mib: &stats::resident_mib,
+) -> Option<isize> {
     let _ = epoch_mib.advance();
-    if let Ok(resident) = resident_mib.read() {
-        let initial = (threshold_bytes as isize).saturating_sub(resident as isize);
+    let memory_current = read_u64_file(memory_current_file)?;
+    let allocated = allocated_mib.read().ok()? as u64;
+    let resident = resident_mib.read().ok()? as u64;
+    let anon_debt = allocated.saturating_sub(resident);
+    let balance = (memory_max as i128)
+        - (memory_current as i128)
+        - (anon_debt as i128)
+        - (headroom_bytes as i128);
+    Some(balance.clamp(isize::MIN as i128, isize::MAX as i128) as isize)
+}
+
+/// Spawn a dedicated OS thread that periodically resyncs `BALANCE`
+/// against the kernel's `memory.current` (the truth the OOM-killer
+/// uses) and jemalloc's view of allocated-but-not-yet-resident bytes.
+/// Holds open a `pread`-able handle to `/sys/fs/cgroup/.../memory.current`
+/// and pre-resolved jemalloc MIBs so each tick is one syscall + a
+/// jemalloc epoch advance + two stats reads.
+///
+/// `memory_max` is the cgroup hard ceiling; `headroom_bytes` is the
+/// fixed slack carved out below it. The kill threshold is implicit
+/// as `memory_max − headroom_bytes`.
+///
+/// Returns once the poll thread is spawned. Performs an initial sync
+/// best-effort so the bank starts in a meaningful state; if that read
+/// fails, `BALANCE` stays at `isize::MAX` until the first tick lands.
+pub fn spawn_balance_poll(
+    memory_max: u64,
+    headroom_bytes: u64,
+    interval: Duration,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let memory_current_path =
+        cgroup_memory_current_path().ok_or("cannot locate cgroup memory.current")?;
+    let memory_current_file = File::open(&memory_current_path)
+        .map_err(|e| format!("opening {}: {e}", memory_current_path.display()))?;
+    let epoch_mib = epoch::mib().map_err(|e| format!("jemalloc epoch MIB: {e}"))?;
+    let allocated_mib =
+        stats::allocated::mib().map_err(|e| format!("jemalloc allocated MIB: {e}"))?;
+    let resident_mib =
+        stats::resident::mib().map_err(|e| format!("jemalloc resident MIB: {e}"))?;
+
+    if let Some(initial) = compute_balance(
+        memory_max,
+        headroom_bytes,
+        &memory_current_file,
+        &epoch_mib,
+        &allocated_mib,
+        &resident_mib,
+    ) {
         set_balance(initial);
     }
 
     log::info!(
-        "OomGuard: starting balance poll (threshold={threshold_bytes} bytes, interval={interval:?}, initial_balance={} bytes)",
+        "OomGuard: starting balance poll (memory_max={memory_max} bytes, \
+         headroom={headroom_bytes} bytes, interval={interval:?}, \
+         initial_balance={} bytes, source={})",
         balance(),
+        memory_current_path.display(),
     );
 
     std::thread::Builder::new()
         .name("oom-guard-poll".into())
-        .spawn(move || {
-            loop {
-                std::thread::sleep(interval);
-                let _ = epoch_mib.advance();
-                if let Ok(resident) = resident_mib.read() {
-                    let new_balance =
-                        (threshold_bytes as isize).saturating_sub(resident as isize);
-                    BALANCE.store(new_balance, Ordering::Relaxed);
-                }
+        .spawn(move || loop {
+            std::thread::sleep(interval);
+            if let Some(new_balance) = compute_balance(
+                memory_max,
+                headroom_bytes,
+                &memory_current_file,
+                &epoch_mib,
+                &allocated_mib,
+                &resident_mib,
+            ) {
+                BALANCE.store(new_balance, Ordering::Relaxed);
             }
-        })
-        .expect("failed to spawn oom-guard-poll thread");
+        })?;
+    Ok(())
 }
 
 /// `GlobalAlloc` wrapper. Forwards every op unchanged to `inner`; the

@@ -99,10 +99,16 @@ pub async fn sql_server() -> Result<(), Box<dyn std::error::Error>> {
                 .and_then(|s| s.parse::<f64>().ok())
                 .unwrap_or(0.05)
                 .clamp(0.0, 0.95);
-            let threshold =
-                ((cgroup_limit as f64) * (1.0 - headroom_fraction)) as usize;
-            oom_guard::spawn_balance_poll(threshold, Duration::from_millis(10));
-            oom_guard::arm();
+            let headroom_bytes =
+                ((cgroup_limit as f64) * headroom_fraction) as u64;
+            match oom_guard::spawn_balance_poll(
+                cgroup_limit,
+                headroom_bytes,
+                Duration::from_millis(10),
+            ) {
+                Ok(()) => oom_guard::arm(),
+                Err(e) => log::error!("OomGuard: {e}; guard disarmed"),
+            }
         }
         (false, _) => {
             info!("OomGuard: disabled via OOM_GUARD=off");
