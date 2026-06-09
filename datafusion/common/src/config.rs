@@ -496,22 +496,21 @@ impl FromStr for Dialect {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        DIALECT_INFOS
-            .iter()
-            .find(|info| {
-                info.canonical_name.eq_ignore_ascii_case(s)
-                    || info
-                        .aliases
-                        .iter()
-                        .any(|alias| alias.eq_ignore_ascii_case(s))
-            })
-            .map(|info| info.dialect)
-            .ok_or_else(|| {
-                DataFusionError::Configuration(format!(
-                    "Invalid Dialect: {s}. Expected one of: {}",
-                    Self::available()
-                ))
-            })
+        for info in DIALECT_INFOS {
+            if info.canonical_name.eq_ignore_ascii_case(s)
+                || info
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(s))
+            {
+                return Ok(info.dialect);
+            }
+        }
+
+        Err(DataFusionError::Configuration(format!(
+            "Invalid Dialect: {s}. Expected one of: {}",
+            Self::available()
+        )))
     }
 }
 
