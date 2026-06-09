@@ -104,7 +104,7 @@ async fn test_partial_final() -> Result<()> {
     Ok(())
 }
 
-// Ensure operator respect the the soft limit and stops early: `AggregateExec`'s
+// Ensure operator respect the soft limit and stops early: `AggregateExec`'s
 // `output_rows` metric should be smaller than then total distinct group count.
 #[tokio::test]
 async fn limited_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
