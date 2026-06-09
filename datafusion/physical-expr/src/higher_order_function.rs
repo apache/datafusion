@@ -803,10 +803,8 @@ mod tests {
         offsets: OffsetBuffer<i32>,
         nulls: Option<NullBuffer>,
     ) -> MapArray {
-        let keys = keys.into();
-        let values = values.into();
-        let keys = keys.into();
-        let values = values.into();
+        let keys = Arc::new(keys.into()) as ArrayRef;
+        let values = Arc::new(values.into()) as ArrayRef;
 
         let entries = StructArray::new(
             Fields::from(vec![
