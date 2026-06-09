@@ -518,7 +518,7 @@ fn remove_non_empty_null_values(array: &ArrayRef) -> Result<ArrayRef> {
     // todo: handle list view
     let array = match array.data_type() {
         DataType::List(_) | DataType::LargeList(_) => remove_list_null_values(array)? as ArrayRef,
-        DataType::Map(_, _) => Arc::new(remove_map_non_empty_null_values(array)?) as ArrayRef,
+        DataType::Map(_, _) => Arc::new(remove_map_non_empty_null_values(array.as_map())?) as ArrayRef,
         dt => {
             assert!(!support_clear_non_empty_null_values(dt), "data type marked as supported but not implemented");
             return _exec_err!("expected List/LargeList/Map, got {dt}")
