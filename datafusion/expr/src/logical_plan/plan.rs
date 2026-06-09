@@ -705,76 +705,36 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Union(Union { inputs, schema }) => {
-                // Fast path: if all inputs structurally match the cached schema
-                // (field count, types, names, qualifiers, nullability) then no
-                // recomputation is needed and we avoid any allocation.
-                let schemas_match = inputs.iter().all(|input| {
-                    let input_schema = input.schema();
-                    schema.fields().len() == input_schema.fields().len()
-                        && schema.iter().zip(input_schema.iter()).all(
-                            |((q1, f1), (q2, f2))| {
-                                q1 == q2
-                                    && f1.name() == f2.name()
-                                    && f1.data_type() == f2.data_type()
-                                    && f1.is_nullable() == f2.is_nullable()
-                            },
-                        )
-                });
-                if schemas_match {
-                    // Inputs are structurally identical to the cached schema.
+                // Fast path: check structural compatibility against all inputs.
+                //
+                // For position-based Union (try_new), schema names come exclusively
+                // from inputs[0], so we check names/qualifiers only against the first
+                // input. Data types and nullability must match across every input.
+                let first_input_schema = inputs[0].schema();
+                let names_match =
+                    schema.fields().len() == first_input_schema.fields().len()
+                        && schema.iter().zip(first_input_schema.iter()).all(
+                            |((q1, f1), (q2, f2))| q1 == q2 && f1.name() == f2.name(),
+                        );
+
+                let types_match = names_match
+                    && inputs.iter().all(|input| {
+                        let input_schema = input.schema();
+                        schema.fields().len() == input_schema.fields().len()
+                            && schema.iter().zip(input_schema.iter()).all(
+                                |((_, f1), (_, f2))| {
+                                    f1.data_type() == f2.data_type()
+                                        && f1.is_nullable() == f2.is_nullable()
+                                },
+                            )
+                    });
+
+                if types_match {
                     return Ok(LogicalPlan::Union(Union { inputs, schema }));
                 }
 
-                // Slow path: inputs changed — recompute the schema.
-                //
-                // NOTE: A note on `Union`s constructed via `try_new_by_name`:
-                // At this point, the schema for each input should have
-                // the same width. Thus, we do not need to save whether a
-                // `Union` was created `BY NAME`, and can safely rely on the
-                // `try_new` initializer to derive the new schema based on
-                // column positions.
-                let mut recomputed = Union::try_new(inputs)?;
-
-                // Metadata preservation: Union::try_new uses intersection logic
-                // for metadata, but we want "later takes precedence" (extend semantics)
-                // to match coerce_union_schema_with_schema in type_coercion.rs.
-                let mut merged_metadata =
-                    recomputed.inputs[0].schema().metadata().clone();
-                for input in recomputed.inputs.iter().skip(1) {
-                    merged_metadata.extend(input.schema().metadata().clone());
-                }
-
-                let mut merged_field_metadata = recomputed.inputs[0]
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|f| f.metadata().clone())
-                    .collect::<Vec<_>>();
-
-                for input in recomputed.inputs.iter().skip(1) {
-                    for (field_meta, input_field) in merged_field_metadata
-                        .iter_mut()
-                        .zip(input.schema().fields())
-                    {
-                        field_meta.extend(input_field.metadata().clone());
-                    }
-                }
-
-                let new_fields = recomputed
-                    .schema
-                    .iter()
-                    .zip(merged_field_metadata)
-                    .map(|((qualifier, field), meta)| {
-                        let mut field = field.as_ref().clone();
-                        field.set_metadata(meta);
-                        (qualifier.cloned(), Arc::new(field))
-                    })
-                    .collect::<Vec<_>>();
-
-                recomputed.schema =
-                    Arc::new(DFSchema::new_with_metadata(new_fields, merged_metadata)?);
-
-                Ok(LogicalPlan::Union(recomputed))
+                // Slow path: recompute schema with metadata preservation.
+                Ok(LogicalPlan::Union(Union::try_new_with_metadata(inputs)?))
             }
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
@@ -3210,6 +3170,52 @@ impl Union {
         let inputs = Self::rewrite_inputs_from_schema(&schema, inputs)?;
 
         Ok(Union { inputs, schema })
+    }
+
+    /// Constructs a new Union from inputs, deriving the schema by position
+    /// (like `try_new`) but preserving schema-level and field-level metadata
+    /// using "later takes precedence" (extend) semantics — matching the
+    /// behavior of `coerce_union_schema_with_schema`.
+    pub fn try_new_with_metadata(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+        let mut union = Self::try_new(inputs)?;
+
+        // Merge schema-level metadata: later inputs take precedence.
+        let mut merged_schema_meta = union.inputs[0].schema().metadata().clone();
+        for input in union.inputs.iter().skip(1) {
+            merged_schema_meta.extend(input.schema().metadata().clone());
+        }
+
+        // Merge field-level metadata: later inputs take precedence per field.
+        let mut merged_field_meta: Vec<_> = union.inputs[0]
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.metadata().clone())
+            .collect();
+        for input in union.inputs.iter().skip(1) {
+            for (field_meta, input_field) in
+                merged_field_meta.iter_mut().zip(input.schema().fields())
+            {
+                field_meta.extend(input_field.metadata().clone());
+            }
+        }
+
+        // Rebuild schema with merged metadata applied to each field.
+        let new_fields = union
+            .schema
+            .iter()
+            .zip(merged_field_meta)
+            .map(|((qualifier, field), meta)| {
+                let mut field = field.as_ref().clone();
+                field.set_metadata(meta);
+                (qualifier.cloned(), Arc::new(field))
+            })
+            .collect::<Vec<_>>();
+
+        union.schema =
+            Arc::new(DFSchema::new_with_metadata(new_fields, merged_schema_meta)?);
+
+        Ok(union)
     }
 
     /// When constructing a `UNION BY NAME`, we need to wrap inputs
@@ -6513,6 +6519,53 @@ mod tests {
         // Metadata should now be {k1: v2, k2: v2} because meta2 was the last input.
         assert_eq!(recomputed.schema().metadata().get("k1").unwrap(), "v2");
         assert_eq!(recomputed.schema().metadata().get("k2").unwrap(), "v2");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_recompute_schema_union_after_input_rewrite() -> Result<()> {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::tree_node::{Transformed, TreeNode};
+
+        // Build a Union over two Int32 table scans.
+        let schema_i32 = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema_i64 = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+
+        let union_plan = LogicalPlan::Union(Union::try_new(vec![
+            Arc::new(table_scan(Some("t1"), &schema_i32, None)?.build()?),
+            Arc::new(table_scan(Some("t2"), &schema_i32, None)?.build()?),
+        ])?);
+
+        // Sanity check: the Union schema starts as Int32.
+        assert_eq!(union_plan.schema().field(0).data_type(), &DataType::Int32);
+
+        // Simulate what an optimizer pass does: rewrite all leaf nodes
+        // (TableScan) to use Int64, then call recompute_schema() on the way up.
+        // This is the pattern used by type_coercion and optimize_projections.
+        let rewritten = union_plan
+            .transform(|plan| match plan {
+                LogicalPlan::TableScan(ref scan)
+                    if scan.source.schema().field(0).data_type() == &DataType::Int32 =>
+                {
+                    let new_scan =
+                        table_scan(Some(scan.table_name.table()), &schema_i64, None)?
+                            .build()?;
+                    Ok(Transformed::yes(new_scan))
+                }
+                other => Ok(Transformed::no(other)),
+            })?
+            .data;
+
+        // After tree transformation, call recompute_schema() on the Union.
+        // Before this fix, the width-only check would leave the schema as Int32.
+        let fixed = rewritten.recompute_schema()?;
+
+        assert_eq!(
+            fixed.schema().field(0).data_type(),
+            &DataType::Int64,
+            "recompute_schema() must update Union schema after input types change"
+        );
 
         Ok(())
     }
