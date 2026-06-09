@@ -44,10 +44,11 @@ Changes reach a release branch in one of two ways:
 - (Most common) Fix the issue on `main` and then backport the merged change to the release branch
 - Fix the issue on the release branch and then forward-port the change to `main`
 
-Releases are coordinated in a GitHub issue, such as the
-[release issue for 50.3.0]. If you think a fix should be included in a patch
-release, discuss it on the relevant tracking issue first. You can also open the
-backport PR first and then link it from the tracking issue.
+Releases are coordinated using GitHub issues. Each planned release is listed in
+the [DataFusion Releases tracking issue], and each release is coordinated in a
+dedicated issue, such as the [release issue for 50.3.0]. If you think a fix
+should be included in a patch release, discuss it on the relevant tracking issue
+or open a backport PR and link it there.
 
 To prepare for a new release series, maintainers:
 
@@ -117,6 +118,7 @@ This PR:
 [`main` branch]: https://github.com/apache/datafusion/tree/main
 [`branch-50`]: https://github.com/apache/datafusion/tree/branch-50
 [the release process readme in `dev/release`]: https://github.com/apache/datafusion/blob/main/dev/release/README.md
+[datafusion releases tracking issue]: https://github.com/apache/datafusion/issues/19783
 [release issue for 50.3.0]: https://github.com/apache/datafusion/issues/18072
 [example backport pr]: https://github.com/apache/datafusion/pull/18131
 [additional backport pr example]: https://github.com/apache/datafusion/pull/20792

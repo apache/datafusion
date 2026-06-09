@@ -465,10 +465,11 @@ series.</p>
 <li><p>(Most common) Fix the issue on <code class="docutils literal notranslate"><span class="pre">main</span></code> and then backport the merged change to the release branch</p></li>
 <li><p>Fix the issue on the release branch and then forward-port the change to <code class="docutils literal notranslate"><span class="pre">main</span></code></p></li>
 </ul>
-<p>Releases are coordinated in a GitHub issue, such as the
-<a class="reference external" href="https://github.com/apache/datafusion/issues/18072">release issue for 50.3.0</a>. If you think a fix should be included in a patch
-release, discuss it on the relevant tracking issue first. You can also open the
-backport PR first and then link it from the tracking issue.</p>
+<p>Releases are coordinated using GitHub issues. Each planned release is listed in
+the <a class="reference external" href="https://github.com/apache/datafusion/issues/19783">DataFusion Releases tracking issue</a>, and each release is coordinated in a
+dedicated issue, such as the <a class="reference external" href="https://github.com/apache/datafusion/issues/18072">release issue for 50.3.0</a>. If you think a fix
+should be included in a patch release, discuss it on the relevant tracking issue
+or open a backport PR and link it there.</p>
 <p>To prepare for a new release series, maintainers:</p>
 <ul class="simple">
 <li><p>Create a new branch from <code class="docutils literal notranslate"><span class="pre">main</span></code>, such as <code class="docutils literal notranslate"><span class="pre">branch-50</span></code>, in the Apache repository</p></li>
