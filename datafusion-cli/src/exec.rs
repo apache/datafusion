@@ -23,7 +23,7 @@ use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
     helper::CliHelper,
-    object_storage::get_object_store,
+    object_storage::{get_object_store, rewrite_stdin_location},
     print_options::{MaxRows, PrintOptions},
 };
 use datafusion::common::instant::Instant;
@@ -418,9 +418,14 @@ async fn create_plan(
     // Note that cmd is a mutable reference so that create_external_table function can remove all
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
     // will raise Configuration errors.
-    if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+    if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
         // To support custom formats, treat error as None
         let format = config_file_type_from_str(&cmd.file_type);
+
+        // Expose stdin (e.g. `cat data.csv | datafusion-cli`) as a `stdin://`
+        // object store, registered like any other scheme in `get_object_store`.
+        cmd.location = rewrite_stdin_location(&cmd.location, format.as_ref());
+
         register_object_store_and_config_extensions(
             ctx,
             &cmd.location,

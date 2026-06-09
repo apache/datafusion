@@ -173,6 +173,52 @@ fn cli_quick_test<'a>(
     assert_cmd_snapshot!(cmd);
 }
 
+/// Read data piped into the CLI via the `/dev/stdin` pseudo-path.
+///
+/// Unix-only: `/dev/stdin` does not exist on Windows. This drives the real
+/// binary through an actual pipe, exercising the stdin read that the in-process
+/// unit tests cannot.
+#[cfg(unix)]
+#[test]
+fn test_cli_read_from_stdin() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = cli()
+        .args([
+            "-q",
+            "--command",
+            "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin' \
+             OPTIONS ('format.has_header' 'true'); \
+             SELECT b, count(*) AS c FROM t GROUP BY b ORDER BY b;",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn datafusion-cli");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"a,b\n1,foo\n2,bar\n3,foo\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "datafusion-cli failed.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("| foo | 2 |") && stdout.contains("| bar | 1 |"),
+        "unexpected output:\n{stdout}"
+    );
+}
+
 #[test]
 fn cli_explain_environment_overrides() {
     let mut settings = make_settings();
