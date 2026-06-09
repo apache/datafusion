@@ -2196,8 +2196,18 @@ fn eq_dyn_null(
         return Ok(compare_op_for_nested(op, &left, &right)?);
     }
     // Arrow's `eq` / `not_distinct` use IEEE 754 totalOrder semantics for
-    // floats, so `-0.0` and `+0.0` would compare unequal. Normalize the
-    // operands so SQL semantics (`+0.0 == -0.0`) hold; no-op for non-floats.
+    // floats, so `-0.0` and `+0.0` would compare unequal. Normalize float
+    // operands first; non-float types dispatch directly to avoid the
+    // `make_array(to_data())` round-trip.
+    if !matches!(
+        left.data_type(),
+        DataType::Float16 | DataType::Float32 | DataType::Float64
+    ) {
+        return match null_equality {
+            NullEquality::NullEqualsNothing => eq(&left, &right),
+            NullEquality::NullEqualsNull => not_distinct(&left, &right),
+        };
+    }
     let left_arr: ArrayRef = make_array(left.to_data());
     let right_arr: ArrayRef = make_array(right.to_data());
     let left_norm = normalize_float_zero(&left_arr);

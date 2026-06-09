@@ -505,7 +505,8 @@ impl PartialEq for ScalarValue {
             (Boolean(_), _) => false,
             (Float32(v1), Float32(v2)) => match (v1, v2) {
                 (Some(f1), Some(f2)) => {
-                    *f1 == 0.0 && *f2 == 0.0 || f1.to_bits() == f2.to_bits()
+                    let (b1, b2) = (f1.to_bits(), f2.to_bits());
+                    ((b1 << 1) == 0 && (b2 << 1) == 0) || b1 == b2
                 }
                 _ => v1.eq(v2),
             },
@@ -520,7 +521,8 @@ impl PartialEq for ScalarValue {
             (Float16(_), _) => false,
             (Float64(v1), Float64(v2)) => match (v1, v2) {
                 (Some(f1), Some(f2)) => {
-                    *f1 == 0.0 && *f2 == 0.0 || f1.to_bits() == f2.to_bits()
+                    let (b1, b2) = (f1.to_bits(), f2.to_bits());
+                    ((b1 << 1) == 0 && (b2 << 1) == 0) || b1 == b2
                 }
                 _ => v1.eq(v2),
             },
@@ -667,11 +669,13 @@ impl PartialOrd for ScalarValue {
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
             (Boolean(_), _) => None,
             (Float32(v1), Float32(v2)) => match (v1, v2) {
-                (Some(a), Some(b)) => Some(if *a == 0.0 && *b == 0.0 {
-                    Ordering::Equal
-                } else {
-                    a.total_cmp(b)
-                }),
+                (Some(a), Some(b)) => {
+                    Some(if a.to_bits() << 1 == 0 && b.to_bits() << 1 == 0 {
+                        Ordering::Equal
+                    } else {
+                        a.total_cmp(b)
+                    })
+                }
                 _ => v1.partial_cmp(v2),
             },
             (Float16(v1), Float16(v2)) => match (v1, v2) {
@@ -687,11 +691,13 @@ impl PartialOrd for ScalarValue {
             (Float32(_), _) => None,
             (Float16(_), _) => None,
             (Float64(v1), Float64(v2)) => match (v1, v2) {
-                (Some(a), Some(b)) => Some(if *a == 0.0 && *b == 0.0 {
-                    Ordering::Equal
-                } else {
-                    a.total_cmp(b)
-                }),
+                (Some(a), Some(b)) => {
+                    Some(if a.to_bits() << 1 == 0 && b.to_bits() << 1 == 0 {
+                        Ordering::Equal
+                    } else {
+                        a.total_cmp(b)
+                    })
+                }
                 _ => v1.partial_cmp(v2),
             },
             (Float64(_), _) => None,

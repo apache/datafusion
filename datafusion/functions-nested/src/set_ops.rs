@@ -362,16 +362,17 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     // elements between the first and last offset are referenced.
     let l_first = l.offsets()[0].as_usize();
     let l_len = l.offsets()[l.len()].as_usize() - l_first;
-    let rows_l = converter.convert_columns(&[l_values_norm.slice(l_first, l_len)])?;
+    let l_values = l_values_norm.slice(l_first, l_len);
+    let rows_l = converter.convert_columns(&[Arc::clone(&l_values)])?;
 
     let r_first = r.offsets()[0].as_usize();
     let r_len = r.offsets()[r.len()].as_usize() - r_first;
-    let rows_r = converter.convert_columns(&[r_values_norm.slice(r_first, r_len)])?;
-
-    // Combine the *sliced* value arrays so 0-based indices from the row
-    // converter map directly into the concatenated array.
-    let l_values = l_values_norm.slice(l_first, l_len);
     let r_values = r_values_norm.slice(r_first, r_len);
+    let rows_r = converter.convert_columns(&[Arc::clone(&r_values)])?;
+
+    // Indices from the row converter are 0-based in the per-side slice;
+    // concatenating those same slices lets indices map directly into the
+    // combined values array.
     let combined_values = concat(&[l_values.as_ref(), r_values.as_ref()])?;
     let r_offset = l_len;
 

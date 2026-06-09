@@ -76,12 +76,7 @@ macro_rules! hash_float {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
             fn hash(&self, state: &RandomState) -> u64 {
-                let bits = self.to_bits();
-                // +0.0 and -0.0 differ only in the sign bit but compare equal
-                // under IEEE 754; normalize -0.0 → +0.0 so the hash agrees
-                // with the equality check used by `GroupValuesPrimitive`.
-                let bits = if bits << 1 == 0 { 0 } else { bits };
-                state.hash_one(bits)
+                state.hash_one(self.canonicalize().to_bits())
             }
 
             #[cfg(feature = "force_hash_collisions")]
