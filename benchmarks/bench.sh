@@ -775,12 +775,14 @@ data_wide_schema() {
 run_wide_schema() {
     echo "Running wide_schema benchmark (wide subgroup)..."
     debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=wide \
+      DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 
     echo "Running wide_schema benchmark (narrow baseline subgroup)..."
     debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=narrow \
+      DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
