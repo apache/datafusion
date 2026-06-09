@@ -122,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Manual runtime construction so we can `on_thread_start` to stamp
     // worker threads as eligible for the OomGuard overdraft panic.
-    // Unstamped threads (control plane, the poll task itself) still debit
+    // Unstamped threads still debit
     // the bank but are exempt from the kill.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
