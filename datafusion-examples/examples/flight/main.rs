@@ -98,9 +98,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // early allocations on the main thread benefit. When OomGuard returns
     // NULL on overdraft, the Rust runtime invokes this hook from a clean
     // safe-Rust frame *outside* the `unsafe impl GlobalAlloc` block.
-    // Panicking here gives us per-query isolation without the unwind-ABI
-    // corruption we'd hit firing `panic_any` from inside the allocator.
-    // Non-OomGuard nulls (genuine allocator OOM) fall through to `abort`.
     std::alloc::set_alloc_error_hook(|_layout| {
         if oom_guard::take_kill_pending() {
             let balance = oom_guard::balance();
