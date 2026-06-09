@@ -43,7 +43,7 @@ pub use crate::joins::{JoinOn, JoinOnRef};
 use arrow::array::{
     Array, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
     RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder, UInt64Array,
-    builder::UInt64Builder, downcast_array, new_null_array,
+    builder::UInt64Builder, downcast_array, make_array, new_null_array,
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -65,6 +65,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
+use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
     not_impl_err, plan_err,
@@ -2194,6 +2195,15 @@ fn eq_dyn_null(
         };
         return Ok(compare_op_for_nested(op, &left, &right)?);
     }
+    // Arrow's `eq` / `not_distinct` use IEEE 754 totalOrder semantics for
+    // floats, so `-0.0` and `+0.0` would compare unequal. Normalize the
+    // operands so SQL semantics (`+0.0 == -0.0`) hold; no-op for non-floats.
+    let left_arr: ArrayRef = make_array(left.to_data());
+    let right_arr: ArrayRef = make_array(right.to_data());
+    let left_norm = normalize_float_zero(&left_arr);
+    let right_norm = normalize_float_zero(&right_arr);
+    let left = left_norm.as_ref();
+    let right = right_norm.as_ref();
     match null_equality {
         NullEquality::NullEqualsNothing => eq(&left, &right),
         NullEquality::NullEqualsNull => not_distinct(&left, &right),
