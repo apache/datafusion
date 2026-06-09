@@ -24,7 +24,7 @@ use arrow::{
     datatypes::{DataType, Field, FieldRef, Fields},
 };
 use datafusion_common::{
-    Result, ScalarValue, exec_err, plan_err,
+    Result, exec_err, plan_err,
     utils::{list_values_row_number, take_function_args},
 };
 use datafusion_expr::{
@@ -188,14 +188,6 @@ impl HigherOrderUDFImpl for TransformValues {
         let first = offsets.first().copied().unwrap_or(0) as usize;
         let last = offsets.last().copied().unwrap_or(0) as usize;
         let len = last - first;
-
-        // Fast path: no entries at all and the map has no nulls — return an
-        // empty map mirroring the input row count.
-        if len == 0 && map_array.null_count() == 0 {
-            return Ok(ColumnarValue::Scalar(ScalarValue::new_default(
-                args.return_type(),
-            )?));
-        }
 
         let new_entries_field = match args.return_field.data_type() {
             DataType::Map(field, _) => Arc::clone(field),
@@ -428,5 +420,140 @@ mod tests {
         assert_eq!(result.len(), 3);
         assert_eq!(result.null_count(), 3);
         assert!(matches!(result.data_type(), DataType::Map(_, _)));
+    }
+
+    #[test]
+    fn transform_values_empty_map() {
+        let map = create_str_int_map(
+            vec![],
+            vec![],
+            OffsetBuffer::<i32>::from_lengths(vec![0]),
+            None,
+        );
+
+        let result =
+            eval_transform_values(map, value_var("v") * lit(2i32), ["k", "v"]).unwrap();
+        let result_map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(result_map.len(), 1);
+        assert_eq!(result_map.null_count(), 0);
+        assert_eq!(result_map.value_length(0), 0);
+        assert_eq!(result_map.values().len(), 0);
+    }
+
+    #[test]
+    fn transform_values_mixed_empty_null_populated_rows() {
+        // Row 0: empty {}, row 1: NULL, row 2: {a: 1, b: 2, c: 3}, row 3: {d: 4}
+        let map = create_str_int_map(
+            vec!["a", "b", "c", "d"],
+            vec![Some(1), Some(2), Some(3), Some(4)],
+            OffsetBuffer::<i32>::from_lengths(vec![0, 0, 3, 1]),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+
+        let result =
+            eval_transform_values(map, value_var("v") + lit(10i32), ["k", "v"]).unwrap();
+        let result_map = result.as_any().downcast_ref::<MapArray>().unwrap();
+
+        assert_eq!(result_map.len(), 4);
+        assert!(result_map.is_valid(0));
+        assert!(!result_map.is_valid(1));
+        assert!(result_map.is_valid(2));
+        assert!(result_map.is_valid(3));
+
+        assert_eq!(result_map.value_length(0), 0);
+        // null row keeps an entry length recorded in offsets, but is masked out
+        assert_eq!(result_map.value_length(2), 3);
+        assert_eq!(result_map.value_length(3), 1);
+
+        let result_values = result_map
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        // Only reachable rows produce values: rows 2 and 3 -> 1+10, 2+10, 3+10, 4+10
+        assert_eq!(result_values.values(), &[11, 12, 13, 14]);
+    }
+
+    #[test]
+    fn transform_values_on_sliced_map_should_not_evaluate_on_unreachable_values() {
+        // Build 4 map rows then slice off the first row. The value `0` lives in
+        // the unreachable prefix; if the lambda `100/v` were evaluated on it we
+        // would hit a divide-by-zero. Exercises offset adjustment for sliced
+        // map inputs.
+        let map = create_str_int_map(
+            vec!["a", "b", "c", "d", "e", "f", "g", "h", "i"],
+            vec![
+                Some(0),
+                Some(4),
+                Some(100),
+                Some(25),
+                Some(20),
+                Some(5),
+                Some(2),
+                Some(1),
+                Some(10),
+            ],
+            OffsetBuffer::<i32>::from_lengths(vec![1, 3, 4, 1]),
+            None,
+        )
+        .slice(1, 3);
+
+        let result =
+            eval_transform_values(map, lit(100i32) / value_var("v"), ["k", "v"]).unwrap();
+        let result_map = result.as_any().downcast_ref::<MapArray>().unwrap();
+
+        assert_eq!(result_map.len(), 3);
+        assert_eq!(result_map.value_length(0), 3);
+        assert_eq!(result_map.value_length(1), 4);
+        assert_eq!(result_map.value_length(2), 1);
+
+        let result_values = result_map
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        // 100/4, 100/100, 100/25, 100/20, 100/5, 100/2, 100/1, 100/10
+        assert_eq!(result_values.values(), &[25, 1, 4, 5, 20, 50, 100, 10]);
+    }
+
+    #[test]
+    #[ignore = "depends on apache/datafusion#22847: clear_null_values support for MapArray"]
+    fn transform_values_function_should_not_be_evaluated_on_values_underlying_null() {
+        // Row 1 is marked NULL but its underlying values contain `0`. Without
+        // null-clearing the framework would still hand the lambda `100/0` and
+        // fail with divide-by-zero. See apache/datafusion#22847.
+        let map = create_str_int_map(
+            vec!["a", "b", "c", "d", "e", "f", "g", "h", "i"],
+            vec![
+                Some(100),
+                Some(20),
+                Some(10),
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(0),
+                Some(1),
+                Some(50),
+            ],
+            OffsetBuffer::<i32>::from_lengths(vec![3, 4, 2]),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let result =
+            eval_transform_values(map, lit(100i32) / value_var("v"), ["k", "v"]).unwrap();
+        let result_map = result.as_any().downcast_ref::<MapArray>().unwrap();
+
+        assert_eq!(result_map.len(), 3);
+        assert!(result_map.is_valid(0));
+        assert!(!result_map.is_valid(1));
+        assert!(result_map.is_valid(2));
+
+        let result_values = result_map
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        // Only rows 0 and 2 contribute: 100/100, 100/20, 100/10, 100/1, 100/50
+        assert_eq!(result_values.values(), &[1, 5, 10, 100, 2]);
     }
 }
