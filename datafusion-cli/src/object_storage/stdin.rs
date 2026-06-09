@@ -25,6 +25,7 @@ use std::sync::Arc;
 use datafusion::common::exec_datafusion_err;
 use datafusion::config::ConfigFileType;
 use datafusion::error::Result;
+use datafusion::execution::context::SessionState;
 
 use object_store::memory::InMemory;
 use object_store::path::Path as ObjectStorePath;
@@ -81,6 +82,26 @@ impl StdinUtils {
         format!("{}:///{object_name}", Self::SCHEME)
     }
 
+    /// Returns the object store backing the `stdin://` scheme, reading and
+    /// buffering standard input on first use and reusing that buffer for any
+    /// subsequent `stdin://` table created in the same session.
+    ///
+    /// stdin is a one-shot stream: it can only be read once. The object store
+    /// registry keys by scheme/authority, so every `stdin://` URL maps to the
+    /// same store. Without this guard, a second `CREATE EXTERNAL TABLE ...
+    /// LOCATION '/dev/stdin'` would re-read (now-EOF) stdin, build an empty
+    /// store, and overwrite the populated one, silently emptying the earlier
+    /// table. Reusing the already-registered store avoids that.
+    pub(crate) async fn get_or_create(
+        state: &SessionState,
+        url: &Url,
+    ) -> Result<Arc<dyn ObjectStore>> {
+        if let Ok(existing) = state.runtime_env().object_store_registry.get_store(url) {
+            return Ok(existing);
+        }
+        Self::object_store(url).await
+    }
+
     /// Builds the object store backing the `stdin://` scheme by reading all of
     /// standard input into memory.
     ///
@@ -90,7 +111,7 @@ impl StdinUtils {
     /// Buffering the whole input up front sidesteps these limitations and lets
     /// the data be read like any other object, including being scanned more than
     /// once.
-    pub(crate) async fn object_store(url: &Url) -> Result<Arc<dyn ObjectStore>> {
+    async fn object_store(url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let mut buffer = Vec::new();
         std::io::stdin()
             .lock()
@@ -177,6 +198,25 @@ mod tests {
         .await?;
 
         ctx.sql("SELECT * FROM t").await?.count().await
+    }
+
+    #[tokio::test]
+    async fn reuses_buffered_stdin_store() -> Result<()> {
+        // stdin can only be read once, so a second `stdin://` table must reuse
+        // the store buffered by the first instead of re-reading (now-empty)
+        // stdin and overwriting it.
+        let url = Url::parse("stdin:///stdin.csv").unwrap();
+        let store =
+            StdinUtils::in_memory_object_store(&url, b"a\n1\n2\n".to_vec()).await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_object_store(&url, store);
+
+        let reused = StdinUtils::get_or_create(&ctx.state(), &url).await?;
+        let path = ObjectStorePath::from_url_path(url.path())?;
+        let bytes = reused.get(&path).await?.bytes().await?;
+        assert_eq!(bytes.as_ref(), b"a\n1\n2\n");
+        Ok(())
     }
 
     #[tokio::test]

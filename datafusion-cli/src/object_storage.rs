@@ -566,7 +566,7 @@ pub(crate) async fn get_object_store(
                 .build()?,
         ),
         _ if scheme == stdin::StdinUtils::SCHEME => {
-            stdin::StdinUtils::object_store(url).await?
+            stdin::StdinUtils::get_or_create(state, url).await?
         }
         _ => {
             // For other types, try to get from `object_store_registry`:

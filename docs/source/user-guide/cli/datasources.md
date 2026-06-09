@@ -146,8 +146,8 @@ SELECT count(*) FROM hits;"
 This works for CSV, JSON, and Parquet. Because standard input is not seekable
 (and Parquet stores its metadata at the end of the file), the CLI buffers the
 entire input into memory before querying it, so the data must fit in memory.
-Standard input can only be consumed once, so a single session can create at most
-one table backed by `/dev/stdin`.
+Standard input is read only once: the buffered contents are reused for any
+further tables backed by `/dev/stdin` in the same session.
 
 **Why Wildcards Are Not Supported**
 
