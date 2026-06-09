@@ -1396,7 +1396,7 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
 /// (PostgreSQL / IEEE 754 equality) require them to compare equal, so
 /// callers normalize before invoking those kernels.
 ///
-/// The common case — no `-0.0` present — is allocation-free: a single
+/// The common case - no `-0.0` present - is allocation-free: a single
 /// read-only scan of the underlying buffer (auto-vectorizable to an
 /// OR-reduction) decides whether to fall through to the rewriting path.
 /// Only arrays that actually contain `-0.0` pay for a new buffer.
