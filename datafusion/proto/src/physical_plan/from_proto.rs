@@ -283,7 +283,7 @@ pub fn parse_physical_expr_with_converter(
         // to the right constructor.
         ExprType::Column(_) => Column::try_from_proto(proto, &decode_ctx)?,
         ExprType::UnknownColumn(_) => UnKnownColumn::try_from_proto(proto, &decode_ctx)?,
-        ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
+        ExprType::Literal(_) => Literal::try_from_proto(proto, &decode_ctx)?,
         ExprType::BinaryExpr(_) => BinaryExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::AggregateExpr(_) => {
             return not_impl_err!(
@@ -303,41 +303,7 @@ pub fn parse_physical_expr_with_converter(
         ExprType::NotExpr(_) => NotExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Negative(_) => NegativeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::InList(_) => InListExpr::try_from_proto(proto, &decode_ctx)?,
-        ExprType::Case(e) => Arc::new(CaseExpr::try_new(
-            e.expr
-                .as_ref()
-                .map(|e| {
-                    proto_converter.proto_to_physical_expr(e.as_ref(), input_schema, ctx)
-                })
-                .transpose()?,
-            e.when_then_expr
-                .iter()
-                .map(|e| {
-                    Ok((
-                        parse_required_physical_expr(
-                            e.when_expr.as_ref(),
-                            ctx,
-                            "when_expr",
-                            input_schema,
-                            proto_converter,
-                        )?,
-                        parse_required_physical_expr(
-                            e.then_expr.as_ref(),
-                            ctx,
-                            "then_expr",
-                            input_schema,
-                            proto_converter,
-                        )?,
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?,
-            e.else_expr
-                .as_ref()
-                .map(|e| {
-                    proto_converter.proto_to_physical_expr(e.as_ref(), input_schema, ctx)
-                })
-                .transpose()?,
-        )?),
+        ExprType::Case(_) => CaseExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::Cast(_) => CastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::TryCast(_) => TryCastExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::ScalarUdf(e) => {

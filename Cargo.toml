@@ -117,9 +117,9 @@ async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
 bzip2 = "0.6.1"
-chrono = { version = "0.4.44", default-features = false }
+chrono = { version = "0.4.45", default-features = false }
 criterion = "0.8"
-ctor = "1.0.6"
+ctor = "1.0.7"
 dashmap = "6.2.1"
 datafusion = { path = "datafusion/core", version = "53.1.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "53.1.0" }
@@ -174,7 +174,7 @@ itertools = "0.14"
 itoa = "1.0"
 liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
-memchr = "2.8.0"
+memchr = "2.8.1"
 num-traits = { version = "0.2" }
 object_store = { version = "0.13.2", default-features = false }
 parking_lot = "0.12"

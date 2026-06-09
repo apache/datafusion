@@ -219,6 +219,7 @@ impl ParquetOptions {
             dictionary_page_size_limit,
             statistics_enabled,
             max_row_group_size,
+            max_row_group_bytes,
             created_by,
             column_index_truncate_length,
             statistics_truncate_length,
@@ -261,6 +262,7 @@ impl ParquetOptions {
                     .unwrap_or(DEFAULT_STATISTICS_ENABLED),
             )
             .set_max_row_group_row_count(Some(*max_row_group_size))
+            .set_max_row_group_bytes(max_row_group_bytes.as_ref().map(|v| v.get()))
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_statistics_truncate_length(*statistics_truncate_length)
@@ -428,7 +430,8 @@ mod tests {
     #[cfg(feature = "parquet_encryption")]
     use crate::config::ConfigFileEncryptionProperties;
     use crate::config::{
-        ParquetCdcOptions, ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions,
+        MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
+        ParquetEncryptionOptions, ParquetOptions,
     };
     use crate::parquet_config::DFParquetWriterVersion;
     use parquet::basic::Compression;
@@ -473,6 +476,7 @@ mod tests {
             dictionary_page_size_limit: 42,
             statistics_enabled: Some("chunk".into()),
             max_row_group_size: 42,
+            max_row_group_bytes: Some(MaxRowGroupBytes::try_new(42).unwrap()),
             created_by: "wordy".into(),
             column_index_truncate_length: Some(42),
             statistics_truncate_length: Some(42),
@@ -582,6 +586,9 @@ mod tests {
                 max_row_group_size: props
                     .max_row_group_row_count()
                     .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT),
+                max_row_group_bytes: props
+                    .max_row_group_bytes()
+                    .and_then(|v| MaxRowGroupBytes::try_new(v).ok()),
                 created_by: props.created_by().to_string(),
                 column_index_truncate_length: props.column_index_truncate_length(),
                 statistics_truncate_length: props.statistics_truncate_length(),
@@ -893,6 +900,26 @@ mod tests {
         assert_eq!(cdc.min_chunk_size, 64 * 1024);
         assert_eq!(cdc.max_chunk_size, 2 * 1024 * 1024);
         assert_eq!(cdc.norm_level, -1);
+    }
+
+    #[test]
+    fn test_max_row_group_bytes_disabled_by_default() {
+        let mut opts = TableParquetOptions::default();
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+
+        let props = WriterPropertiesBuilder::try_from(&opts).unwrap().build();
+        assert_eq!(props.max_row_group_bytes(), None);
+    }
+
+    #[test]
+    fn test_max_row_group_bytes_propagated_to_writer_props() {
+        let mut opts = TableParquetOptions::default();
+        opts.global.max_row_group_bytes =
+            Some(MaxRowGroupBytes::try_new(64 * 1024 * 1024).unwrap());
+        opts.arrow_schema(&Arc::new(Schema::empty()));
+
+        let props = WriterPropertiesBuilder::try_from(&opts).unwrap().build();
+        assert_eq!(props.max_row_group_bytes(), Some(64 * 1024 * 1024));
     }
 
     #[test]

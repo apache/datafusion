@@ -1,0 +1,161 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query T
+SELECT quote(arrow_cast(127, 'Int8'));
+----
+'127'
+
+query T
+SELECT quote(arrow_cast(-128, 'Int8'));
+----
+'-128'
+
+query T
+SELECT quote(arrow_cast(32767, 'Int16'));
+----
+'32767'
+
+query T
+SELECT quote(arrow_cast(-32768, 'Int16'));
+----
+'-32768'
+
+query T
+SELECT quote(arrow_cast(2147483647, 'Int32'));
+----
+'2147483647'
+
+query T
+SELECT quote(arrow_cast(-2147483648, 'Int32'));
+----
+'-2147483648'
+
+query T
+SELECT quote(arrow_cast(9223372036854775807, 'Int64'));
+----
+'9223372036854775807'
+
+query T
+SELECT quote(arrow_cast(-9223372036854775808, 'Int64'));
+----
+'-9223372036854775808'
+
+query T
+SELECT quote(arrow_cast(3.14, 'Float32'));
+----
+'3.14'
+
+query T
+SELECT quote(arrow_cast(2.718281828459045, 'Float64'));
+----
+'2.718281828459045'
+
+query T
+SELECT quote(arrow_cast(0, 'UInt8'));
+----
+'0'
+
+query T
+SELECT quote(arrow_cast(255, 'UInt8'));
+----
+'255'
+
+query T
+SELECT quote(arrow_cast(65535, 'UInt16'));
+----
+'65535'
+
+query T
+SELECT quote(arrow_cast(4294967295, 'UInt32'));
+----
+'4294967295'
+
+query T
+SELECT quote(arrow_cast(18446744073709551615, 'UInt64'));
+----
+'18446744073709551615'
+
+query T
+SELECT quote('special chars: !@#$%^&*()');
+----
+'special chars: !@#$%^&*()'
+
+query T
+SELECT quote('tab\tseparated');
+----
+'tab\tseparated'
+
+query T
+SELECT quote('carriage\rreturn');
+----
+'carriage\rreturn'
+
+query T
+SELECT quote('backslash\\test');
+----
+'backslash\\test'
+
+query T
+SELECT quote('quote\"inside\"');
+----
+'quote\"inside\"'
+
+query T
+SELECT quote('mixed\nescape\tchars\r\n');
+----
+'mixed\nescape\tchars\r\n'
+
+query T
+SELECT quote('unicode: 你好, 世界');
+----
+'unicode: 你好, 世界'
+
+query T
+SELECT quote('emoji: 😀🎉❤️🚀');
+----
+'emoji: 😀🎉❤️🚀'
+
+query T
+SELECT quote(arrow_cast('2024-01-15', 'Date32'));
+----
+'2024-01-15'
+
+query T
+SELECT quote(arrow_cast('2024-01-15T12:30:45', 'Timestamp(µs)'));
+----
+'2024-01-15T12:30:45'
+
+query T
+SELECT quote('special\n\t\r');
+----
+'special\n\t\r'
+
+query T
+SELECT quote('a''b');
+----
+'a\'b'
+
+query T
+SELECT quote('it''s a ''test''');
+----
+'it\'s a \'test\''
+
+query T
+SELECT quote('''');
+----
+'\''

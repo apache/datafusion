@@ -5959,6 +5959,28 @@ physical_plan
 07)------------DataSourceExec: partitions=2, partition_sizes=[5, 4]
 
 
+# SUM(DISTINCT) over sliding frames must skip NULLs and return NULL
+# for frames containing no non-null values.
+statement ok
+CREATE TABLE table_distinct_sum_nulls(ts INT, v BIGINT) AS VALUES
+  (1, NULL), (2, 3), (3, NULL), (4, NULL), (5, 5);
+
+query II
+SELECT
+  ts,
+  SUM(DISTINCT v) OVER (
+    ORDER BY ts
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ) AS s
+FROM table_distinct_sum_nulls;
+----
+1 NULL
+2 3
+3 3
+4 NULL
+5 5
+
+
 # FILTER clause with window functions
 
 # Verify FILTER clause with non-aggregate window functions fails with a clear message
