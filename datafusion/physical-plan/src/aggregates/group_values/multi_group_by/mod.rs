@@ -914,6 +914,50 @@ macro_rules! instantiate_primitive {
     };
 }
 
+/// Returns true if the specified data type has a specialized
+/// [`GroupColumn`] builder in [`make_group_column`].
+///
+/// This is the allow-list that gates the `GroupValuesRows` fallback in
+/// [`crate::aggregates::group_values::new_group_values`]: it must accept
+/// exactly the set of types that [`make_group_column`] constructs a
+/// builder for. The `group_column_supported_type_matches_make_group_column`
+/// test below pins this biconditional.
+fn group_column_supported_type(data_type: &DataType) -> bool {
+    matches!(
+        *data_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::Date32
+            | DataType::Date64
+            // Only the semantically valid Time variants per the Arrow spec.
+            // The dispatcher in `make_group_column` returns NotImpl for the
+            // other unit combinations, so accepting them here would cause a
+            // schema to be routed into GroupValuesColumn and then fail at
+            // intern. Keep these two arms in lockstep with the dispatcher.
+            | DataType::Time32(TimeUnit::Second)
+            | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond)
+            | DataType::Time64(TimeUnit::Nanosecond)
+            | DataType::Timestamp(_, _)
+            | DataType::Utf8View
+            | DataType::BinaryView
+            | DataType::Boolean
+    )
+}
+
 /// Build a [`GroupColumn`] for a single schema field.
 ///
 /// Extracted from the inline match that used to live in
@@ -926,6 +970,9 @@ macro_rules! instantiate_primitive {
 /// Returns `Err(not_impl_err!(...))` for any type not in the supported set;
 /// callers (`GroupValues::intern`) propagate that error so the
 /// `GroupValuesRows` fallback can take over upstream of this builder.
+///
+/// The allow-list that gates this dispatcher lives in
+/// [`group_column_supported_type`] directly above.
 fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
@@ -955,8 +1002,8 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 instantiate_primitive!(v, nullable, Time32MillisecondType, data_type)
             }
             // Time32 with Microsecond / Nanosecond is not a valid Arrow type
-            // combination; reject explicitly so supported_type and this
-            // dispatcher stay in lockstep (see consistency fuzz below).
+            // combination; reject explicitly so group_column_supported_type
+            // and this dispatcher stay in lockstep (see consistency fuzz below).
             _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
         },
         DataType::Time64(t) => match t {
@@ -1195,53 +1242,7 @@ pub fn supported_schema(schema: &Schema) -> bool {
         .fields()
         .iter()
         .map(|f| f.data_type())
-        .all(supported_type)
-}
-
-/// Returns true if the specified data type is supported by [`GroupValuesColumn`]
-///
-/// In order to be supported, there must be a specialized implementation of
-/// [`GroupColumn`] for the data type, instantiated in
-/// [`make_group_column`]. This function is the allow-list that gates the
-/// `GroupValuesRows` fallback in [`crate::aggregates::group_values::new_group_values`];
-/// it must accept exactly the set of types that [`make_group_column`]
-/// constructs a builder for. The
-/// `supported_type_and_make_group_column_stay_in_sync` test below pins
-/// this biconditional.
-fn supported_type(data_type: &DataType) -> bool {
-    matches!(
-        *data_type,
-        DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal128(_, _)
-            | DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Binary
-            | DataType::LargeBinary
-            | DataType::Date32
-            | DataType::Date64
-            // Only the semantically valid Time variants per the Arrow spec.
-            // The dispatcher in `make_group_column` returns NotImpl for the
-            // other unit combinations, so accepting them here would cause a
-            // schema to be routed into GroupValuesColumn and then fail at
-            // intern. Keep these two arms in lockstep with the dispatcher.
-            | DataType::Time32(TimeUnit::Second)
-            | DataType::Time32(TimeUnit::Millisecond)
-            | DataType::Time64(TimeUnit::Microsecond)
-            | DataType::Time64(TimeUnit::Nanosecond)
-            | DataType::Timestamp(_, _)
-            | DataType::Utf8View
-            | DataType::BinaryView
-            | DataType::Boolean
-    )
+        .all(group_column_supported_type)
 }
 
 ///Shows how many `null`s there are in an array
@@ -1268,15 +1269,17 @@ mod tests {
         GroupValues, multi_group_by::GroupValuesColumn,
     };
 
-    use super::{GroupIndexView, make_group_column, supported_schema, supported_type};
+    use super::{
+        GroupIndexView, group_column_supported_type, make_group_column, supported_schema,
+    };
 
-    /// CRITICAL invariant: if `supported_type(t)` returns true the dispatcher
-    /// must accept that type at intern time, and conversely if
-    /// `supported_type(t)` returns false the planner must NOT route it through
-    /// `GroupValuesColumn`. A divergence here would let the planner select
-    /// `GroupValuesColumn` for a type whose dispatcher arm is missing,
-    /// producing a runtime `not_impl_err` after the field reaches the
-    /// builder factory.
+    /// CRITICAL invariant: if `group_column_supported_type(t)` returns true
+    /// the dispatcher must accept that type at intern time, and conversely
+    /// if `group_column_supported_type(t)` returns false the planner must
+    /// NOT route it through `GroupValuesColumn`. A divergence here would
+    /// let the planner select `GroupValuesColumn` for a type whose
+    /// dispatcher arm is missing, producing a runtime `not_impl_err` after
+    /// the field reaches the builder factory.
     ///
     /// This test fuzzes a representative cross-section of types and asserts
     /// both directions of the biconditional. When a new specialization is
@@ -1284,7 +1287,7 @@ mod tests {
     /// to the supported_cases vector; when a type is intentionally rejected
     /// it should be added to unsupported_cases.
     #[test]
-    fn supported_type_and_make_group_column_stay_in_sync() {
+    fn group_column_supported_type_matches_make_group_column() {
         let supported_cases: Vec<DataType> = vec![
             DataType::Int8,
             DataType::Int64,
@@ -1310,13 +1313,13 @@ mod tests {
 
         for dt in &supported_cases {
             assert!(
-                supported_type(dt),
-                "expected supported_type=true for {dt:?}"
+                group_column_supported_type(dt),
+                "expected group_column_supported_type=true for {dt:?}"
             );
             let field = Field::new("col", dt.clone(), true);
             make_group_column(&field).unwrap_or_else(|e| {
                 panic!(
-                    "supported_type accepted {dt:?} but make_group_column rejected: {e}"
+                    "group_column_supported_type accepted {dt:?} but make_group_column rejected: {e}"
                 )
             });
         }
@@ -1328,8 +1331,8 @@ mod tests {
             // Second / Millisecond and Time64 only for Microsecond /
             // Nanosecond. The TimeUnit enum allows constructing the other
             // combinations programmatically, but they are not valid Arrow
-            // types and must be rejected by both supported_type and the
-            // dispatcher.
+            // types and must be rejected by both group_column_supported_type
+            // and the dispatcher.
             DataType::Time64(arrow::datatypes::TimeUnit::Second),
             DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
@@ -1338,13 +1341,13 @@ mod tests {
 
         for dt in &unsupported_cases {
             assert!(
-                !supported_type(dt),
-                "expected supported_type=false for {dt:?}"
+                !group_column_supported_type(dt),
+                "expected group_column_supported_type=false for {dt:?}"
             );
             let field = Field::new("col", dt.clone(), true);
             assert!(
                 make_group_column(&field).is_err(),
-                "supported_type rejected {dt:?} but make_group_column accepted it"
+                "group_column_supported_type rejected {dt:?} but make_group_column accepted it"
             );
         }
     }
