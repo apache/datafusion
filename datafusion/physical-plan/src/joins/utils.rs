@@ -2262,7 +2262,16 @@ impl JoinKeyComparator {
             .zip(right_arrays.iter())
             .zip(sort_options.iter())
             .map(|((l, r), opts)| {
-                let inner = make_comparator(l.as_ref(), r.as_ref(), *opts)?;
+                // `make_comparator` uses IEEE 754 totalOrder for floats and
+                // treats `-0.0` / `+0.0` as distinct. Normalize float arrays
+                // so SMJ / piecewise-merge equi-keys honor SQL equality;
+                // no-op (Arc::clone) for non-floats and for float arrays
+                // that contain no `-0.0`. `normalize_float_zero` preserves
+                // null positions, so the original null masks below remain
+                // valid.
+                let l_norm = normalize_float_zero(l);
+                let r_norm = normalize_float_zero(r);
+                let inner = make_comparator(l_norm.as_ref(), r_norm.as_ref(), *opts)?;
                 if null_equality == NullEquality::NullEqualsNothing {
                     let ln = l.logical_nulls().filter(|n| n.null_count() > 0);
                     let rn = r.logical_nulls().filter(|n| n.null_count() > 0);

@@ -204,3 +204,28 @@ FROM (SELECT 0.0 AS a) t1
 JOIN (SELECT -0.0 AS b) t2 ON t1.a = t2.b;
 ----
 0 0
+
+# Sort-merge join must also match +0.0 against -0.0. SMJ builds equi-key
+# matchers via `JoinKeyComparator`, which calls Arrow's `make_comparator`
+# (IEEE 754 totalOrder); without normalization, +0.0 and -0.0 produce
+# different orderings and miss the match.
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+query RR
+SELECT t1.a, t2.b
+FROM (SELECT 0.0 AS a) t1
+JOIN (SELECT -0.0 AS b) t2 ON t1.a = t2.b;
+----
+0 0
+
+# Float32 SMJ equi-join.
+query RR
+SELECT t1.a, t2.b
+FROM (SELECT arrow_cast(0.0, 'Float32') AS a) t1
+JOIN (SELECT arrow_cast(-0.0, 'Float32') AS b) t2 ON t1.a = t2.b;
+----
+0 0
+
+statement ok
+reset datafusion.optimizer.prefer_hash_join;
