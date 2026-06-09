@@ -276,17 +276,11 @@ impl AccountingAllocator<System> {
 
 unsafe impl<A: GlobalAlloc> GlobalAlloc for AccountingAllocator<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // Account BEFORE the inner alloc. If we panicked AFTER `inner.alloc`
-        // succeeded, the bytes are physically allocated but no caller ever
-        // sees the pointer → unwind leaks the very bytes that pushed us
-        // over the budget — the opposite of what the kill panic is for.
-        let delta = -(layout.size() as isize);
-        track(delta);
         // SAFETY: layout is forwarded unchanged.
         let ptr = unsafe { self.inner.alloc(layout) };
-        if ptr.is_null() {
-            // Allocator refused — refund so the bank matches reality.
-            track(-delta);
+        if !ptr.is_null() {
+            // Allocation debits the bank.
+            track(-(layout.size() as isize));
         }
         ptr
     }
@@ -294,36 +288,25 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for AccountingAllocator<A> {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // SAFETY: caller upholds GlobalAlloc invariants; we forward unchanged.
         unsafe { self.inner.dealloc(ptr, layout) };
-        // Credit only; `track()` short-circuits on `delta >= 0` and never
-        // panics, so ordering relative to `inner.dealloc` doesn't matter.
+        // Free credits the bank.
         track(layout.size() as isize);
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        // Same panic-then-leak hazard as `alloc`; account first.
-        let delta = -(layout.size() as isize);
-        track(delta);
         // SAFETY: layout is forwarded unchanged.
         let ptr = unsafe { self.inner.alloc_zeroed(layout) };
-        if ptr.is_null() {
-            track(-delta);
+        if !ptr.is_null() {
+            track(-(layout.size() as isize));
         }
         ptr
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // Account BEFORE the inner realloc so a kill panic doesn't strand the
-        // caller with a freed `ptr`. `inner.realloc` frees `ptr` on success;
-        // if we panicked after that, the caller's `Vec`-or-similar would
-        // still hold the old pointer and double-free on unwind (glibc
-        // "double free or corruption (out)" + SIGABRT).
-        let delta = layout.size() as isize - new_size as isize;
-        track(delta);
         // SAFETY: caller upholds GlobalAlloc invariants; we forward unchanged.
         let new_ptr = unsafe { self.inner.realloc(ptr, layout, new_size) };
-        if new_ptr.is_null() {
-            // Allocator refused — refund so the bank matches reality.
-            track(-delta);
+        if !new_ptr.is_null() {
+            // Growth debits, shrink credits.
+            track(layout.size() as isize - new_size as isize);
         }
         new_ptr
     }
