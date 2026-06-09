@@ -165,8 +165,7 @@ fn track(delta: isize) -> bool {
                 .fetch_add(drift, Ordering::Relaxed)
                 .wrapping_add(drift);
             drift_cell.set(0);
-            // Credits never fire the kill — they happen during Drop chains
-            // in unwind, where aborting an alloc inside a Drop invites UB.
+            // Credits never fire the kill
             if delta >= 0 {
                 return false;
             }
