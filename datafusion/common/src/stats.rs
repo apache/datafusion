@@ -320,10 +320,7 @@ impl Precision<ScalarValue> {
 
 impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> From<Option<T>> for Precision<T> {
     fn from(option: Option<T>) -> Self {
-        match option {
-            Some(value) => Precision::Exact(value),
-            None => Precision::Absent,
-        }
+        option.map_or(Precision::Absent, Precision::Exact)
     }
 }
 
