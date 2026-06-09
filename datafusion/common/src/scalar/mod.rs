@@ -469,11 +469,7 @@ pub enum ScalarValue {
 
 impl Hash for Fl<f16> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let bits = self.0.to_bits();
-        // +0.0 and -0.0 differ only in the sign bit but compare equal under
-        // IEEE 754; normalize -0.0 → +0.0 so Hash agrees with Eq.
-        let bits = if bits << 1 == 0 { 0 } else { bits };
-        bits.hash(state);
+        self.0.to_bits().hash(state);
     }
 }
 
@@ -504,26 +500,17 @@ impl PartialEq for ScalarValue {
             (Boolean(v1), Boolean(v2)) => v1.eq(v2),
             (Boolean(_), _) => false,
             (Float32(v1), Float32(v2)) => match (v1, v2) {
-                (Some(f1), Some(f2)) => {
-                    let (b1, b2) = (f1.to_bits(), f2.to_bits());
-                    ((b1 << 1) == 0 && (b2 << 1) == 0) || b1 == b2
-                }
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
                 _ => v1.eq(v2),
             },
             (Float16(v1), Float16(v2)) => match (v1, v2) {
-                (Some(f1), Some(f2)) => {
-                    let (b1, b2) = (f1.to_bits(), f2.to_bits());
-                    ((b1 << 1) == 0 && (b2 << 1) == 0) || b1 == b2
-                }
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
                 _ => v1.eq(v2),
             },
             (Float32(_), _) => false,
             (Float16(_), _) => false,
             (Float64(v1), Float64(v2)) => match (v1, v2) {
-                (Some(f1), Some(f2)) => {
-                    let (b1, b2) = (f1.to_bits(), f2.to_bits());
-                    ((b1 << 1) == 0 && (b2 << 1) == 0) || b1 == b2
-                }
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
                 _ => v1.eq(v2),
             },
             (Float64(_), _) => false,
@@ -669,35 +656,17 @@ impl PartialOrd for ScalarValue {
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
             (Boolean(_), _) => None,
             (Float32(v1), Float32(v2)) => match (v1, v2) {
-                (Some(a), Some(b)) => {
-                    Some(if a.to_bits() << 1 == 0 && b.to_bits() << 1 == 0 {
-                        Ordering::Equal
-                    } else {
-                        a.total_cmp(b)
-                    })
-                }
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
                 _ => v1.partial_cmp(v2),
             },
             (Float16(v1), Float16(v2)) => match (v1, v2) {
-                (Some(a), Some(b)) => {
-                    Some(if a.to_bits() << 1 == 0 && b.to_bits() << 1 == 0 {
-                        Ordering::Equal
-                    } else {
-                        a.total_cmp(b)
-                    })
-                }
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
                 _ => v1.partial_cmp(v2),
             },
             (Float32(_), _) => None,
             (Float16(_), _) => None,
             (Float64(v1), Float64(v2)) => match (v1, v2) {
-                (Some(a), Some(b)) => {
-                    Some(if a.to_bits() << 1 == 0 && b.to_bits() << 1 == 0 {
-                        Ordering::Equal
-                    } else {
-                        a.total_cmp(b)
-                    })
-                }
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
                 _ => v1.partial_cmp(v2),
             },
             (Float64(_), _) => None,
@@ -972,11 +941,7 @@ macro_rules! hash_float_value {
         $(impl std::hash::Hash for Fl<$t> {
             #[inline]
             fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-                let bits = <$i>::from_ne_bytes(self.0.to_ne_bytes());
-                // +0.0 and -0.0 differ only in the sign bit but compare equal
-                // under IEEE 754; normalize -0.0 → +0.0 so Hash agrees with Eq.
-                let bits: $i = if bits << 1 == 0 { 0 } else { bits };
-                state.write(&bits.to_ne_bytes())
+                state.write(&<$i>::from_ne_bytes(self.0.to_ne_bytes()).to_ne_bytes())
             }
         })+
     };
