@@ -153,6 +153,7 @@ datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", versio
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "54.0.0" }
 datafusion-proto = { path = "datafusion/proto", version = "54.0.0" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "54.0.0" }
+datafusion-proto-models = { path = "datafusion/proto-models", version = "54.0.0" }
 datafusion-pruning = { path = "datafusion/pruning", version = "54.0.0" }
 datafusion-session = { path = "datafusion/session", version = "54.0.0" }
 datafusion-spark = { path = "datafusion/spark", version = "54.0.0" }
