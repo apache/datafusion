@@ -345,7 +345,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                         .filter(|i| *i < batch.num_columns())
                         .collect::<Vec<_>>();
 
-                    Ok(ValueOrLambda::Lambda(LambdaArgument::new(
+                    Ok(ValueOrLambda::Lambda(LambdaArgument::new_with_used_params(
                         params,
                         Arc::clone(lambda.projected_body()),
                         if projection.is_empty() {
@@ -353,6 +353,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                         } else {
                             Some(batch.project(&projection)?)
                         },
+                        Some(lambda.used_params().clone()),
                     )))
                 }
                 ArgSlot::Value => {
