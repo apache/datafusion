@@ -18,13 +18,13 @@
 //! [`datafusion_expr::HigherOrderUDF`] definitions for transform_values function.
 
 use arrow::{
-    array::{Array, AsArray, MapArray, StructArray, new_null_array},
+    array::{Array, AsArray, MapArray, StructArray},
     buffer::OffsetBuffer,
     compute::take_arrays,
     datatypes::{DataType, Field, FieldRef, Fields},
 };
 use datafusion_common::{
-    Result, exec_err, plan_err,
+    Result, ScalarValue, exec_err, plan_err,
     utils::{list_values_row_number, take_function_args},
 };
 use datafusion_expr::{
@@ -175,13 +175,12 @@ impl HigherOrderUDFImpl for TransformValues {
             other => return exec_err!("{} expected a map, got {other}", self.name()),
         };
 
-        // Fast path: every row is null. Return an array of nulls with the
-        // expected return type so the result is shaped like the input.
+        // Fast path: every row is null. Return a typed null scalar; the
+        // caller will broadcast it back out to the input row count.
         if map_array.null_count() == map_array.len() {
-            return Ok(ColumnarValue::Array(new_null_array(
+            return Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
                 args.return_type(),
-                map_array.len(),
-            )));
+            )?));
         }
 
         let offsets = map_array.offsets();
