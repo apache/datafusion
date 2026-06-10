@@ -64,7 +64,7 @@ jobs:
           source ci/scripts/utils/tool_versions.sh
           echo "LYCHEE_VERSION=${LYCHEE_VERSION}" >> "$GITHUB_ENV"
       - name: Install lychee
-        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09  # v2.81.3
+        uses: taiki-e/install-action@0631aa6515c7d545823c67cfae7ef4fc7f490154  # v2.81.8
         with:
           tool: lychee@${{ env.LYCHEE_VERSION }}
       - name: Run markdown link check

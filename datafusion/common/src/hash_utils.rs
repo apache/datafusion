@@ -188,10 +188,16 @@ macro_rules! hash_float_value {
     ($(($t:ty, $i:ty)),+) => {
         $(impl HashValue for $t {
             fn hash_one(&self, state: &RandomState) -> u64 {
-                state.hash_one(<$i>::from_ne_bytes(self.to_ne_bytes()))
+                // +0.0 and -0.0 differ only in the sign bit but compare equal
+                // under IEEE 754; normalize -0.0 → +0.0 so Hash agrees with Eq.
+                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
+                let bits = if bits << 1 == 0 { 0 } else { bits };
+                state.hash_one(bits)
             }
             fn hash_write(&self, hasher: &mut impl Hasher) {
-                hasher.write(&self.to_ne_bytes())
+                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
+                let bits: $i = if bits << 1 == 0 { 0 } else { bits };
+                hasher.write(&bits.to_ne_bytes())
             }
         })+
     };

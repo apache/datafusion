@@ -83,50 +83,6 @@ impl DataFusion {
         self
     }
 
-    /// Run a single query through the engine. Under the `memory-accounting`
-    /// feature, allocator-detected overdrafts panic with `OverdraftPanic`;
-    /// catch them here and translate to a clean `Err`.
-    async fn run_one(&self, sql: &str) -> Result<DFOutput> {
-        #[cfg(feature = "memory-accounting")]
-        {
-            use crate::OverdraftPanic;
-            use futures::FutureExt;
-
-            let fut = run_query(&self.ctx, is_spark_path(&self.relative_path), sql);
-
-            return match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
-                Ok(r) => r,
-                Err(payload) => {
-                    if let Some(od) = payload.downcast_ref::<OverdraftPanic>() {
-                        let df_reserved_mb =
-                            (self.ctx.runtime_env().memory_pool.reserved() as u64)
-                                / (1024 * 1024);
-                        warn!(
-                            "[{}] killed by allocator overdraft: \
-                             account balance = {} bytes, df-pool reserved = {df_reserved_mb} MB; \
-                             sql = {sql:?}",
-                            self.relative_path.display(),
-                            od.account_balance,
-                        );
-                        // Restore the bank so the next statement starts clean
-                        crate::reset_account_to_default();
-                        Err(DFSqlLogicTestError::Other(format!(
-                            "allocator overdraft: account balance at panic = {} bytes",
-                            od.account_balance,
-                        )))
-                    } else {
-                        // Not our panic — re-raise so test runner sees it.
-                        std::panic::resume_unwind(payload);
-                    }
-                }
-            };
-        }
-        #[cfg(not(feature = "memory-accounting"))]
-        {
-            run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await
-        }
-    }
-
     fn update_slow_count(&self) {
         let msg = self.pb.message();
         let split: Vec<&str> = msg.split(" ").collect();
@@ -198,7 +154,7 @@ impl sqllogictest::AsyncDB for DataFusion {
         let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
 
         let start = Instant::now();
-        let result = self.run_one(sql).await;
+        let result = run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
         let duration = start.elapsed();
 
         self.currently_executing_sql_tracker.remove_sql(tracked_sql);

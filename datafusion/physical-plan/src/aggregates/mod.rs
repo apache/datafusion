@@ -211,6 +211,12 @@ pub enum AggregateMode {
     ///     /         \      /         \
     ///  Partial   Partial  Partial   Partial
     /// ```
+    ///
+    /// # Motivation
+    ///
+    /// This reduces shuffling traffic in a distributed setting. See
+    /// <https://github.com/datafusion-contrib/datafusion-distributed/issues/360>
+    /// for details.
     PartialReduce,
 }
 
@@ -867,6 +873,7 @@ impl AggregateExec {
             &input,
             Arc::clone(&schema),
             &group_expr_mapping,
+            group_by.is_true_no_grouping(),
             &mode,
             &input_order_mode,
             aggr_expr.as_ref(),
@@ -1032,10 +1039,10 @@ impl AggregateExec {
         }
 
         self.mode == AggregateMode::Partial
-            && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
+            && self.limit_options_supported_by_hash_stream()
     }
 
     fn should_use_final_hash_stream(&self, context: &TaskContext) -> bool {
@@ -1047,10 +1054,15 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.limit_options.is_none()
+        ) && self.limit_options_supported_by_hash_stream()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
+    }
+
+    /// See comments in `PartialHashAggregateStream` limit optimization section
+    fn limit_options_supported_by_hash_stream(&self) -> bool {
+        self.limit_options.is_none() || self.is_unordered_unfiltered_group_by_distinct()
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
@@ -1104,6 +1116,7 @@ impl AggregateExec {
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         group_expr_mapping: &ProjectionMapping,
+        is_true_no_grouping: bool,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
         aggr_exprs: &[Arc<AggregateFunctionExpr>],
@@ -1113,9 +1126,12 @@ impl AggregateExec {
             .equivalence_properties()
             .project(group_expr_mapping, schema);
 
-        // If the group by is empty, then we ensure that the operator will produce
-        // only one row, and mark the generated result as a constant value.
-        if group_expr_mapping.is_empty() {
+        // True no-group aggregates produce only one row in each output
+        // partition, so aggregate outputs are constants within the partition.
+        // Grouping sets with empty grouping expressions are not covered here:
+        // their output schema can include grouping-set columns before the
+        // aggregate columns, so this aggregate-column mapping does not apply.
+        if is_true_no_grouping {
             let new_constants = aggr_exprs.iter().enumerate().map(|(idx, func)| {
                 let column = Arc::new(Column::new(func.name(), idx));
                 ConstExpr::from(column as Arc<dyn PhysicalExpr>)
@@ -1174,6 +1190,11 @@ impl AggregateExec {
 
     /// Estimates output statistics for this aggregate node.
     ///
+    /// For aggregations without group-by expressions, row count follows the
+    /// number of logical aggregate rows and the aggregate output mode. True
+    /// no-group aggregates have one logical row; empty grouping sets have one
+    /// logical row per grouping-set occurrence.
+    ///
     /// For grouped aggregations with known input row count > 1, the output row
     /// count is estimated as:
     ///
@@ -1211,7 +1232,11 @@ impl AggregateExec {
     /// - Per-set products are summed across all grouping sets
     /// - Requires NDV stats for ALL active group-by columns; if any lacks stats,
     ///   falls back to `input_rows` (or `Absent` if that is also unknown)
-    fn statistics_inner(&self, child_statistics: &Statistics) -> Result<Statistics> {
+    fn statistics_inner(
+        &self,
+        child_statistics: &Statistics,
+        partition: Option<usize>,
+    ) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
@@ -1235,20 +1260,18 @@ impl AggregateExec {
 
             column_statistics
         };
-        match self.mode {
-            AggregateMode::Final | AggregateMode::FinalPartitioned
-                if self.group_by.expr.is_empty() =>
-            {
+        match self.exact_output_rows_without_group_exprs(partition) {
+            Some(output_rows) => {
                 let total_byte_size =
-                    Self::calculate_scaled_byte_size(child_statistics, 1);
+                    Self::calculate_scaled_byte_size(child_statistics, output_rows);
 
                 Ok(Statistics {
-                    num_rows: Precision::Exact(1),
+                    num_rows: Precision::Exact(output_rows),
                     column_statistics,
                     total_byte_size,
                 })
             }
-            _ => {
+            None => {
                 let num_rows = self.estimate_num_rows(child_statistics);
 
                 let total_byte_size = num_rows
@@ -1266,6 +1289,51 @@ impl AggregateExec {
                     total_byte_size,
                 })
             }
+        }
+    }
+
+    /// Exact physical output row count for aggregates without group-by
+    /// expressions.
+    ///
+    /// `partition` follows [`ExecutionPlan::partition_statistics`]: `Some(_)`
+    /// requests one output partition, while `None` requests the entire plan.
+    /// Partial-state output contains the logical rows in each output partition;
+    /// final-value output contains the global logical rows once.
+    /// This mirrors execution, where partial aggregation without group-by
+    /// expressions emits its logical rows from every output partition, including
+    /// empty input partitions.
+    ///
+    /// Returns `None` when grouping expressions are present and grouped
+    /// cardinality estimation should be used instead.
+    fn exact_output_rows_without_group_exprs(
+        &self,
+        partition: Option<usize>,
+    ) -> Option<usize> {
+        let logical_rows = self.logical_rows_without_group_exprs()?;
+
+        Some(match (self.mode.output_mode(), partition) {
+            (AggregateOutputMode::Final, _) => logical_rows,
+            (AggregateOutputMode::Partial, Some(_)) => logical_rows,
+            (AggregateOutputMode::Partial, None) => {
+                logical_rows * self.cache.output_partitioning().partition_count()
+            }
+        })
+    }
+
+    /// Exact number of logical aggregate rows for aggregates without group-by
+    /// expressions.
+    ///
+    /// A true no-group aggregate has one logical aggregate row. Empty grouping
+    /// sets have one logical aggregate row per grouping-set occurrence, even
+    /// when there are duplicate empty grouping sets. Returns `None` when there
+    /// are grouping expressions.
+    fn logical_rows_without_group_exprs(&self) -> Option<usize> {
+        if self.group_by.is_true_no_grouping() {
+            Some(1)
+        } else if self.group_by.expr.is_empty() {
+            Some(self.group_by.groups.len())
+        } else {
+            None
         }
     }
 
@@ -1697,7 +1765,9 @@ impl ExecutionPlan for AggregateExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let child_statistics = self.input().partition_statistics(partition)?;
-        Ok(Arc::new(self.statistics_inner(&child_statistics)?))
+        Ok(Arc::new(
+            self.statistics_inner(&child_statistics, partition)?,
+        ))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -3152,6 +3222,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn limited_distinct_aggregate_uses_migrated_hash_streams() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
+        let input_batches = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt32Array::from(vec![1, 2, 1]))],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(UInt32Array::from(vec![3, 4]))],
+            )?,
+        ];
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
+            ),
+        );
+
+        let partial_input = TestMemoryExec::try_new_exec(
+            std::slice::from_ref(&input_batches),
+            Arc::clone(&schema),
+            None,
+        )?;
+        let partial_aggregate = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by.clone(),
+                vec![],
+                vec![],
+                partial_input,
+                Arc::clone(&schema),
+            )?
+            .with_limit_options(Some(LimitOptions::new(2))),
+        );
+
+        let partial_stream = partial_aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(partial_stream, StreamType::PartialHash(_)));
+        let stream: SendableRecordBatchStream = partial_stream.into();
+        let partial_output = collect(stream).await?;
+        assert_eq!(
+            partial_output
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            2
+        );
+        assert_snapshot!(batches_to_sort_string(&partial_output), @r"
++---+
+| a |
++---+
+| 1 |
+| 2 |
++---+
+");
+
+        let final_input =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        let final_aggregate = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Final,
+                group_by.as_final(),
+                vec![],
+                vec![],
+                final_input,
+                Arc::clone(&schema),
+            )?
+            .with_limit_options(Some(LimitOptions::new(2))),
+        );
+
+        let final_stream = final_aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(final_stream, StreamType::FinalHash(_)));
+        let stream: SendableRecordBatchStream = final_stream.into();
+        let final_output = collect(stream).await?;
+        assert_eq!(
+            final_output
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            2
+        );
+        assert_snapshot!(batches_to_sort_string(&final_output), @r"
++---+
+| a |
++---+
+| 1 |
+| 2 |
++---+
+");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_drop_cancel_without_groups() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema =
@@ -4406,6 +4573,26 @@ mod tests {
         let stats_zero = agg_zero.partition_statistics(None)?;
         assert_eq!(stats_zero.total_byte_size, Precision::Absent);
 
+        let single_input =
+            Arc::new(EmptyExec::new(Arc::clone(&schema))) as Arc<dyn ExecutionPlan>;
+        let single_agg_zero = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            vec![count_a_aggregate(&schema)?],
+            vec![None],
+            single_input,
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(
+            single_agg_zero
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            1
+        );
+        let single_stats_zero = single_agg_zero.partition_statistics(None)?;
+        assert_eq!(single_stats_zero.num_rows, Precision::Exact(1));
+
         Ok(())
     }
 
@@ -4415,18 +4602,38 @@ mod tests {
         group_by: PhysicalGroupBy,
         limit: Option<LimitOptions>,
     ) -> Result<AggregateExec> {
+        build_test_aggregate_with_mode(
+            schema,
+            stats,
+            group_by,
+            limit,
+            AggregateMode::Final,
+        )
+    }
+
+    fn count_a_aggregate(schema: &SchemaRef) -> Result<Arc<AggregateFunctionExpr>> {
+        Ok(Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("a", schema)?])
+                .schema(Arc::clone(schema))
+                .alias("COUNT(a)")
+                .build()?,
+        ))
+    }
+
+    fn build_test_aggregate_with_mode(
+        schema: &SchemaRef,
+        stats: Statistics,
+        group_by: PhysicalGroupBy,
+        limit: Option<LimitOptions>,
+        mode: AggregateMode,
+    ) -> Result<AggregateExec> {
         let input = Arc::new(StatisticsExec::new(stats, (**schema).clone()))
             as Arc<dyn ExecutionPlan>;
 
         let mut agg = AggregateExec::try_new(
-            AggregateMode::Final,
+            mode,
             group_by,
-            vec![Arc::new(
-                AggregateExprBuilder::new(count_udaf(), vec![col("a", schema)?])
-                    .schema(Arc::clone(schema))
-                    .alias("COUNT(a)")
-                    .build()?,
-            )],
+            vec![count_a_aggregate(schema)?],
             vec![None],
             input,
             Arc::clone(schema),
@@ -4856,6 +5063,66 @@ mod tests {
             stats.num_rows,
             Precision::Inexact(5_150),
             "grouping sets should sum per-set NDV products"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_stats_duplicate_empty_grouping_sets() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        let duplicate_empty_grouping_sets =
+            PhysicalGroupBy::new(vec![], vec![], vec![vec![], vec![]], true);
+
+        let single_input =
+            Arc::new(EmptyExec::new(Arc::clone(&schema))) as Arc<dyn ExecutionPlan>;
+        let single_agg = AggregateExec::try_new(
+            AggregateMode::Single,
+            duplicate_empty_grouping_sets.clone(),
+            vec![count_a_aggregate(&schema)?],
+            vec![None],
+            single_input,
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(
+            single_agg.partition_statistics(None)?.num_rows,
+            Precision::Exact(2)
+        );
+
+        let partial_input =
+            Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(2))
+                as Arc<dyn ExecutionPlan>;
+        let partial_agg = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            duplicate_empty_grouping_sets,
+            vec![count_a_aggregate(&schema)?],
+            vec![None],
+            partial_input,
+            Arc::clone(&schema),
+        )?);
+
+        assert_eq!(
+            partial_agg
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            2
+        );
+        let task_ctx = Arc::new(TaskContext::default());
+        for partition in 0..2 {
+            assert_eq!(
+                partial_agg.partition_statistics(Some(partition))?.num_rows,
+                Precision::Exact(2)
+            );
+            let result =
+                collect(partial_agg.execute(partition, Arc::clone(&task_ctx))?).await?;
+            assert_eq!(result.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+        }
+
+        assert_eq!(
+            partial_agg.partition_statistics(None)?.num_rows,
+            Precision::Exact(4)
         );
 
         Ok(())
