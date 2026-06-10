@@ -51,9 +51,9 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
-    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
-    visit_expressions_mut,
+    Distinct, Expr as SQLExpr, GroupByExpr, Ident, NamedWindowExpr, OrderBy,
+    ReplaceSelectElement, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions,
+    WindowType, visit_expressions_mut,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -94,7 +94,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
         &self,
-        mut select: Select,
+        select: Select,
         query_order_by: Option<OrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
@@ -117,6 +117,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // into subqueries planned during FROM clause handling.
         let set_expr_left_schema = planner_context.set_set_expr_left_schema(None);
 
+        // `RIGHT`/`FULL` `USING`/`NATURAL` joins register merged keys (see
+        // `plan_using_join`) that are only in scope for this SELECT. Snapshot the
+        // registry so any keys added while planning this query (and its FROM
+        // subqueries) are dropped on the way out and do not leak to sibling queries
+        // (e.g. the other arms of a UNION).
+        let using_merged_keys_snapshot = planner_context.using_merged_keys_len();
+
+        let result = self.select_to_plan_inner(
+            select,
+            query_order_by,
+            set_expr_left_schema,
+            planner_context,
+        );
+
+        planner_context.truncate_using_merged_keys(using_merged_keys_snapshot);
+        result
+    }
+
+    fn select_to_plan_inner(
+        &self,
+        mut select: Select,
+        query_order_by: Option<OrderBy>,
+        set_expr_left_schema: Option<DFSchemaRef>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
         // Process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
@@ -960,6 +985,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         error_builder.error_or(prepared_select_exprs)
     }
 
+    /// If `expr` is a bare unqualified identifier that names a registered
+    /// `RIGHT`/`FULL` `USING`/`NATURAL` merged key in scope for `schema`, return its
+    /// normalized name. Used to preserve the key name as the SELECT output column
+    /// name when the merged key resolves to a `COALESCE(...)` expression.
+    fn bare_using_merged_key_name(
+        &self,
+        expr: &SQLExpr,
+        schema: &DFSchema,
+        planner_context: &PlannerContext,
+    ) -> Option<String> {
+        let SQLExpr::Identifier(ident) = expr else {
+            return None;
+        };
+        let name = self.ident_normalizer.normalize(ident.clone());
+        planner_context
+            .using_merged_key_replacement(&name, schema)
+            .map(|_| name)
+    }
+
     /// Generate a relational expression from a select SQL expression
     fn sql_select_to_rex(
         &self,
@@ -970,12 +1014,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<SelectExpr> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
+                // A bare unqualified reference to a `RIGHT`/`FULL` `USING`/`NATURAL`
+                // merged key resolves to a `COALESCE(...)` / right-key expression
+                // (see `plan_using_join`). Preserve the key name as the output
+                // column name (e.g. `SELECT k` stays `k`, not `coalesce(a.k, b.k)`).
+                let merged_key_name = self.bare_using_merged_key_name(
+                    &expr,
+                    plan.schema(),
+                    planner_context,
+                );
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
                 let col = normalize_col_with_schemas_and_ambiguity_check(
                     expr,
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
+                let col = match merged_key_name {
+                    Some(name) if !matches!(&col, Expr::Column(c) if c.name == name) => {
+                        col.alias(name)
+                    }
+                    _ => col,
+                };
 
                 Ok(SelectExpr::Expression(col))
             }
@@ -1004,11 +1063,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if empty_from {
                     return plan_err!("SELECT * with no tables specified is not valid");
                 }
+                // For a `RIGHT`/`FULL` `USING`/`NATURAL` join, `expand_wildcard`
+                // keeps a single (left) key column; replace it with the coalesced
+                // merged value so `SELECT *` exposes the correct key (SQL:2016
+                // §7.10). Qualified wildcards (`a.*`) are left untouched.
+                let merged_keys =
+                    planner_context.using_merged_keys_in_scope(plan.schema());
                 let planned_options = self.plan_wildcard_options(
                     plan,
                     empty_from,
                     planner_context,
                     options,
+                    &merged_keys,
                 )?;
 
                 Ok(SelectExpr::Wildcard(planned_options))
@@ -1026,11 +1092,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 };
                 let qualifier = self.object_name_to_table_reference(object_name)?;
+                // A qualified wildcard (`a.*`) selects that table's own columns, so
+                // the per-side key (`a.k`) is kept as-is, matching PostgreSQL.
                 let planned_options = self.plan_wildcard_options(
                     plan,
                     empty_from,
                     planner_context,
                     options,
+                    &[],
                 )?;
 
                 Ok(SelectExpr::QualifiedWildcard(qualifier, planned_options))
@@ -1062,12 +1131,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// If there is a REPLACE statement in the projected expression in the form of
     /// "REPLACE (some_column_within_an_expr AS some_column)", we should plan the
     /// replace expressions first.
+    ///
+    /// `merged_keys` are synthetic `(name, replacement)` substitutions for
+    /// `RIGHT`/`FULL` `USING`/`NATURAL` merged keys (see `using_merged_keys_in_scope`):
+    /// the wildcard keeps a single (left) key column per name, which we replace with
+    /// the coalesced value. An explicit user `REPLACE` for the same name wins.
     fn plan_wildcard_options(
         &self,
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
         options: WildcardAdditionalOptions,
+        merged_keys: &[(String, Expr)],
     ) -> Result<WildcardOptions> {
         let planned_option = WildcardOptions {
             ilike: options.opt_ilike,
@@ -1076,33 +1151,57 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             replace: None,
             rename: options.opt_rename,
         };
-        if let Some(replace) = options.opt_replace {
-            let replace_expr = replace
-                .items
-                .iter()
-                .map(|item| {
-                    self.sql_select_to_rex(
-                        SelectItem::UnnamedExpr(item.expr.clone()),
-                        plan,
-                        empty_from,
-                        planner_context,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .filter_map(|expr| match expr {
-                    SelectExpr::Expression(expr) => Some(expr),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
 
-            let planned_replace = PlannedReplaceSelectItem {
-                items: replace.items.into_iter().map(|i| *i).collect(),
-                planned_expressions: replace_expr,
-            };
-            Ok(planned_option.with_replace(planned_replace))
-        } else {
+        // Plan any user-supplied REPLACE items.
+        let (mut items, mut planned_expressions) = match options.opt_replace {
+            Some(replace) => {
+                let planned = replace
+                    .items
+                    .iter()
+                    .map(|item| {
+                        self.sql_select_to_rex(
+                            SelectItem::UnnamedExpr(item.expr.clone()),
+                            plan,
+                            empty_from,
+                            planner_context,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .filter_map(|expr| match expr {
+                        SelectExpr::Expression(expr) => Some(expr),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let items: Vec<ReplaceSelectElement> =
+                    replace.items.into_iter().map(|i| *i).collect();
+                (items, planned)
+            }
+            None => (vec![], vec![]),
+        };
+
+        // Append synthetic replacements for merged keys not already replaced by the
+        // user. `replace_columns` matches on `column_name` and re-aliases to it, so
+        // the coalesced value keeps the key's name in the wildcard output.
+        for (name, replacement) in merged_keys {
+            if items.iter().any(|i| &i.column_name.value == name) {
+                continue;
+            }
+            items.push(ReplaceSelectElement {
+                expr: SQLExpr::Identifier(Ident::new(name.clone())),
+                column_name: Ident::new(name.clone()),
+                as_keyword: true,
+            });
+            planned_expressions.push(replacement.clone());
+        }
+
+        if items.is_empty() {
             Ok(planned_option)
+        } else {
+            Ok(planned_option.with_replace(PlannedReplaceSelectItem {
+                items,
+                planned_expressions,
+            }))
         }
     }
 
