@@ -823,10 +823,10 @@ impl DataFusionErrorBuilder {
 macro_rules! unwrap_or_internal_err {
     ($Value: ident) => {
         $Value.ok_or_else(|| {
-            $crate::DataFusionError::Internal(format!(
+            $crate::error::_internal_datafusion_err!(
                 "{} should not be None",
                 stringify!($Value)
-            ))
+            )
         })?
     };
 }
@@ -844,19 +844,19 @@ macro_rules! unwrap_or_internal_err {
 macro_rules! assert_or_internal_err {
     ($cond:expr) => {
         if !$cond {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {}",
                 stringify!($cond)
-            )));
+            ));
         }
     };
     ($cond:expr, $($arg:tt)+) => {
         if !$cond {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {}: {}",
                 stringify!($cond),
                 format!($($arg)+)
-            )));
+            ));
         }
     };
 }
@@ -876,27 +876,27 @@ macro_rules! assert_eq_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val != right_val {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} == {} (left: {:?}, right: {:?})",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val
-            )));
+            ));
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
         let left_val = &$left;
         let right_val = &$right;
         if left_val != right_val {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} == {} (left: {:?}, right: {:?}): {}",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val,
                 format!($($arg)+)
-            )));
+            ));
         }
     }};
 }
@@ -916,27 +916,27 @@ macro_rules! assert_ne_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val == right_val {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} != {} (left: {:?}, right: {:?})",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val
-            )));
+            ));
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
         let left_val = &$left;
         let right_val = &$right;
         if left_val == right_val {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} != {} (left: {:?}, right: {:?}): {}",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val,
                 format!($($arg)+)
-            )));
+            ));
         }
     }};
 }
@@ -1204,7 +1204,6 @@ mod test {
     use std::sync::Arc;
 
     use arrow::error::ArrowError;
-    use insta::assert_snapshot;
 
     fn ok_result() -> Result<()> {
         Ok(())
@@ -1223,14 +1222,8 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: 1 == 2 (left: 1, right: 2): expected equality.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        let err = check().unwrap_err().strip_backtrace();
+        assert!(err.starts_with("Internal error: Assertion failed: 1 == 2 (left: 1, right: 2): expected equality"));
     }
 
     #[test]
@@ -1246,14 +1239,8 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: 3 != 3 (left: 3, right: 3): values must differ.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        let err = check().unwrap_err().strip_backtrace();
+        assert!(err.starts_with("Internal error: Assertion failed: 3 != 3 (left: 3, right: 3): values must differ"));
     }
 
     #[test]
@@ -1270,14 +1257,8 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: false.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        let err = check().unwrap_err().strip_backtrace();
+        assert!(err.starts_with("Internal error: Assertion failed: false"));
     }
 
     #[test]
@@ -1287,13 +1268,9 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: false: custom message.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
+        let err = check().unwrap_err().strip_backtrace();
+        assert!(
+            err.starts_with("Internal error: Assertion failed: false: custom message")
         );
     }
 
@@ -1304,14 +1281,8 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: false: custom 42.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        let err = check().unwrap_err().strip_backtrace();
+        assert!(err.starts_with("Internal error: Assertion failed: false: custom 42"));
     }
 
     #[test]
@@ -1339,29 +1310,23 @@ mod test {
 
     // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
     #[cfg(feature = "backtrace")]
-    #[test]
-    fn test_enabled_backtrace() {
+    fn ensure_rust_backtrace_enabled() {
         match std::env::var("RUST_BACKTRACE") {
             Ok(val) if val == "1" => {}
             _ => panic!("Environment variable RUST_BACKTRACE must be set to 1"),
         };
+    }
+
+    // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace() {
+        ensure_rust_backtrace_enabled();
 
         let res: Result<(), DataFusionError> = plan_err!("Err");
-        let err = res.unwrap_err().to_string();
-        assert!(err.contains(DataFusionError::BACK_TRACE_SEP));
-        assert_eq!(
-            err.split(DataFusionError::BACK_TRACE_SEP)
-                .collect::<Vec<&str>>()
-                .first()
-                .unwrap(),
-            &"Error during planning: Err"
-        );
-        assert!(
-            !err.split(DataFusionError::BACK_TRACE_SEP)
-                .collect::<Vec<&str>>()
-                .get(1)
-                .unwrap()
-                .is_empty()
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Error during planning: Err",
         );
     }
 
@@ -1369,9 +1334,318 @@ mod test {
     #[test]
     fn test_disabled_backtrace() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
-        let res = res.unwrap_err().to_string();
-        assert!(!res.contains(DataFusionError::BACK_TRACE_SEP));
-        assert_eq!(res, "Error during planning: Err");
+        assert_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Error during planning: Err",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    fn assert_err_without_backtrace_and_equal(
+        err: &DataFusionError,
+        expected_message: &str,
+    ) {
+        let err = err.to_string();
+        assert!(!err.contains(DataFusionError::BACK_TRACE_SEP));
+        assert_eq!(err, expected_message);
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    fn assert_internal_err_without_backtrace_and_equal(
+        err: &DataFusionError,
+        expected_message: &str,
+    ) {
+        let expected_message_before_backtrace = format!(
+            "{expected_message}.\nThis issue was likely caused by a bug in DataFusion's code. \
+                    Please help us to resolve this by filing a bug report in our issue tracker: \
+                    https://github.com/apache/datafusion/issues"
+        );
+        assert_err_without_backtrace_and_equal(
+            err,
+            expected_message_before_backtrace.as_str(),
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    fn assert_error_have_message_and_backtrace(
+        err: &DataFusionError,
+        message_before_backtrace: &str,
+    ) {
+        let err = err.to_string();
+        assert!(err.contains(DataFusionError::BACK_TRACE_SEP));
+        assert!(
+            !err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .get(1)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .first()
+                .copied()
+                .unwrap(),
+            message_before_backtrace,
+            "full error is: {err}"
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_unwrap_or_internal_err() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            let item = None::<()>;
+            unwrap_or_internal_err!(item);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: item should not be None",
+        );
+    }
+
+    // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_unwrap_or_internal_err() {
+        fn get_error() -> Result<(), DataFusionError> {
+            let item = None::<()>;
+            unwrap_or_internal_err!(item);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: item should not be None",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_or_internal_err_without_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            assert_or_internal_err!(false);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: false",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_or_internal_err_with_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            assert_or_internal_err!(false, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: false: my cool context",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_or_internal_err_without_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            assert_or_internal_err!(false);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: false",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_or_internal_err_with_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            assert_or_internal_err!(false, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: false: my cool context",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_eq_or_internal_err_without_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 2;
+            assert_eq_or_internal_err!(arg1, arg2);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2)",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_eq_or_internal_err_with_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 2;
+            assert_eq_or_internal_err!(arg1, arg2, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2): my cool context",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_eq_or_internal_err_without_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 2;
+            assert_eq_or_internal_err!(arg1, arg2);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2)",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_eq_or_internal_err_with_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 2;
+            assert_eq_or_internal_err!(arg1, arg2, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2): my cool context",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_ne_or_internal_err_without_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 1;
+            assert_ne_or_internal_err!(arg1, arg2);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1)",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_ne_or_internal_err_with_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 1;
+            assert_ne_or_internal_err!(arg1, arg2, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1): my cool context",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_ne_or_internal_err_without_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 1;
+            assert_ne_or_internal_err!(arg1, arg2);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1)",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_ne_or_internal_err_with_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 1;
+            assert_ne_or_internal_err!(arg1, arg2, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1): my cool context",
+        );
     }
 
     #[test]

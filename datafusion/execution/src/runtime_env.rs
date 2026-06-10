@@ -409,23 +409,12 @@ impl RuntimeEnvBuilder {
     /// Specify the total memory to use while running the DataFusion
     /// plan to `max_memory * memory_fraction` in bytes.
     ///
-    /// If a memory pool is already configured on this builder, this first
-    /// attempts to resize it in place via [`MemoryPool::try_resize`]. Pools
-    /// that support resize (e.g. [`GreedyMemoryPool`]) keep their identity
-    /// — useful for any wrapper that needs to observe limit changes (e.g.
-    /// to retune external accounting). Pools whose [`MemoryPool::try_resize`]
-    /// returns `Err` (the default) fall back to wholesale replacement
-    /// with a [`TrackConsumersPool`]-wrapped [`GreedyMemoryPool`] (top 5
-    /// consumers), preserving the historical behavior.
+    /// This defaults to using [`GreedyMemoryPool`] wrapped in the
+    /// [`TrackConsumersPool`] with a maximum of 5 consumers.
     ///
     /// Note DataFusion does not yet respect this limit in all cases.
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
         let pool_size = (max_memory as f64 * memory_fraction) as usize;
-        if let Some(existing) = &self.memory_pool
-            && existing.try_resize(pool_size).is_ok()
-        {
-            return self;
-        }
         self.with_memory_pool(Arc::new(TrackConsumersPool::new(
             GreedyMemoryPool::new(pool_size),
             NonZeroUsize::new(5).unwrap(),
@@ -571,50 +560,5 @@ impl RuntimeEnvBuilder {
             );
         }
         docs
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::memory_pool::{GreedyMemoryPool, MemoryLimit, UnboundedMemoryPool};
-
-    #[test]
-    fn with_memory_limit_resizes_in_place_when_pool_supports_it() {
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(100));
-        let pool_ptr = Arc::as_ptr(&pool);
-
-        let env = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::clone(&pool))
-            .with_memory_limit(500, 1.0)
-            .build()
-            .unwrap();
-
-        // Same Arc as before — wrapper-or-other-resize-capable pools survive.
-        assert!(std::ptr::eq(Arc::as_ptr(&env.memory_pool), pool_ptr));
-        assert!(matches!(
-            env.memory_pool.memory_limit(),
-            MemoryLimit::Finite(500)
-        ));
-    }
-
-    #[test]
-    fn with_memory_limit_falls_back_to_replace_when_resize_unsupported() {
-        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-        let pool_ptr = Arc::as_ptr(&pool);
-
-        let env = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::clone(&pool))
-            .with_memory_limit(500, 1.0)
-            .build()
-            .unwrap();
-
-        // Different Arc — wholesale replacement happened because Unbounded's
-        // default `try_resize` returns Err.
-        assert!(!std::ptr::eq(Arc::as_ptr(&env.memory_pool), pool_ptr));
-        assert!(matches!(
-            env.memory_pool.memory_limit(),
-            MemoryLimit::Finite(500)
-        ));
     }
 }

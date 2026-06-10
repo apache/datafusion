@@ -30,7 +30,9 @@ use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow_schema::{DataType, FieldRef};
+#[cfg(feature = "sql")]
+use arrow_schema::DataType;
+use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, InformationSchemaProvider,
@@ -437,9 +439,8 @@ impl SessionState {
     ) -> datafusion_common::Result<Statement> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: \
-                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+                Dialect::available()
             )
         })?;
 
@@ -486,9 +487,8 @@ impl SessionState {
     ) -> datafusion_common::Result<SQLExprWithAlias> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: \
-                         Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+                Dialect::available()
             )
         })?;
 
@@ -2370,6 +2370,18 @@ mod tests {
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    #[test]
+    #[cfg(feature = "sql")]
+    fn test_configured_dialect_names_are_accepted_by_sqlparser() {
+        for info in Dialect::metadata() {
+            assert!(
+                sqlparser::dialect::dialect_from_str(info.canonical_name).is_some(),
+                "sqlparser should accept configured dialect {}",
+                info.canonical_name
+            );
+        }
+    }
 
     #[test]
     #[cfg(feature = "sql")]
