@@ -1,0 +1,44 @@
+-- Bounded memory-shape reproducer for list columns -> unnest expansion ->
+-- GROUP BY row id -> ordered array_agg.
+--
+-- The reported issue used about 20,000 rows and 2,000 list elements
+-- per row (~40M expanded rows). Defaults below are intentionally small
+-- (10K expanded rows) so the benchmark is safe to smoke-test locally;
+-- set env vars to scale up:
+--   UNNEST_ARRAY_AGG_ROWS=20000 UNNEST_ARRAY_AGG_LIST_LEN=2000
+
+name Q01
+
+group unnest_array_agg
+subgroup ordered_array_agg
+
+assert B
+WITH base AS (
+  SELECT
+    value AS row_id,
+    range(0, ${UNNEST_ARRAY_AGG_LIST_LEN:-100}) AS vals,
+    range(0, ${UNNEST_ARRAY_AGG_LIST_LEN:-100}) AS val_idx
+  FROM range(0, ${UNNEST_ARRAY_AGG_ROWS:-100})
+), expanded AS (
+  SELECT row_id, unnest(vals) AS val, unnest(val_idx) AS idx
+  FROM base
+)
+SELECT COUNT(*) = ${UNNEST_ARRAY_AGG_ROWS:-100} * ${UNNEST_ARRAY_AGG_LIST_LEN:-100}
+FROM expanded;
+----
+true
+
+run
+WITH base AS (
+  SELECT
+    value AS row_id,
+    range(0, ${UNNEST_ARRAY_AGG_LIST_LEN:-100}) AS vals,
+    range(0, ${UNNEST_ARRAY_AGG_LIST_LEN:-100}) AS val_idx
+  FROM range(0, ${UNNEST_ARRAY_AGG_ROWS:-100})
+), expanded AS (
+  SELECT row_id, unnest(vals) AS val, unnest(val_idx) AS idx
+  FROM base
+)
+SELECT row_id, array_agg(val ORDER BY idx) AS vals
+FROM expanded
+GROUP BY row_id;
