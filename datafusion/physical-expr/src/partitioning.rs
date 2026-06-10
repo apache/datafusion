@@ -21,10 +21,10 @@ use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
     expressions::UnKnownColumn, physical_exprs_equal,
 };
-use datafusion_common::{Result, ScalarValue, plan_err};
+pub use datafusion_common::SplitPoint;
+use datafusion_common::{Result, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -156,20 +156,7 @@ impl Display for Partitioning {
 /// Comparisons use the lexicographic order defined by `ordering`, including
 /// `ASC`/`DESC` and null ordering. Split points must be strictly ordered
 /// according to that ordering, and each split point must have one value per
-/// ordering expression.
-///
-/// `N` split points define `N + 1` partitions:
-///
-/// ```text
-/// partition 0: key < split_points[0]
-/// partition 1: split_points[0] <= key < split_points[1]
-/// ...
-/// partition N - 1: split_points[N - 2] <= key < split_points[N - 1]
-/// partition N: split_points[N - 1] <= key
-/// ```
-///
-/// Values equal to split point `i` belong to partition `i + 1`, so interior
-/// partitions are lower-inclusive and upper-exclusive.
+/// ordering expression. See [`SplitPoint`] for the shared boundary convention.
 ///
 /// Like other user-specified data properties such as sortedness, if a source
 /// declares range partitioning, it is responsible for placing each row in the
@@ -217,39 +204,6 @@ pub struct RangePartitioning {
     split_points: Vec<SplitPoint>,
 }
 
-/// A boundary between adjacent range partitions.
-///
-/// A split point is a tuple with one [`ScalarValue`] per sort expression in the
-/// parent [`RangePartitioning`] ordering.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SplitPoint {
-    values: Vec<ScalarValue>,
-}
-
-impl SplitPoint {
-    /// Creates a new split point from its tuple values.
-    pub fn new(values: Vec<ScalarValue>) -> Self {
-        Self { values }
-    }
-
-    /// Returns the tuple values for this split point.
-    pub fn values(&self) -> &[ScalarValue] {
-        &self.values
-    }
-}
-
-impl Display for SplitPoint {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let values = self
-            .values
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        write!(f, "({values})")
-    }
-}
-
 impl RangePartitioning {
     /// Creates range partitioning metadata without validating split points.
     ///
@@ -265,7 +219,13 @@ impl RangePartitioning {
     /// Creates range partitioning metadata and validates split point shape and
     /// ordering.
     pub fn try_new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Result<Self> {
-        validate_range_split_points(&ordering, &split_points)?;
+        validate_range_split_points(
+            &split_points,
+            &ordering
+                .iter()
+                .map(|sort_expr| sort_expr.options)
+                .collect::<Vec<_>>(),
+        )?;
         Ok(Self::new(ordering, split_points))
     }
 
@@ -382,86 +342,6 @@ fn format_range_split_points(split_points: &[SplitPoint]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn validate_range_split_points(
-    ordering: &LexOrdering,
-    split_points: &[SplitPoint],
-) -> Result<()> {
-    let width = ordering.len();
-    for (idx, split_point) in split_points.iter().enumerate() {
-        let split_point_width = split_point.values.len();
-        if split_point_width != width {
-            return plan_err!(
-                "Range partitioning split point {idx} has width {split_point_width}, but ordering has width {width}"
-            );
-        }
-    }
-
-    for (idx, split_points) in split_points.windows(2).enumerate() {
-        if compare_split_points(ordering, &split_points[0], &split_points[1])?
-            != Ordering::Less
-        {
-            return plan_err!(
-                "Range partitioning split points must be strictly ordered: split point {idx} ({}) must be less than split point {} ({})",
-                split_points[0],
-                idx + 1,
-                split_points[1]
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn compare_split_points(
-    ordering: &LexOrdering,
-    left: &SplitPoint,
-    right: &SplitPoint,
-) -> Result<Ordering> {
-    for ((left_value, right_value), sort_expr) in
-        left.values.iter().zip(&right.values).zip(ordering.iter())
-    {
-        let value_ordering =
-            compare_scalar_values_for_sort(left_value, right_value, sort_expr)?;
-        if value_ordering != Ordering::Equal {
-            return Ok(value_ordering);
-        }
-    }
-
-    Ok(Ordering::Equal)
-}
-
-fn compare_scalar_values_for_sort(
-    left: &ScalarValue,
-    right: &ScalarValue,
-    sort_expr: &PhysicalSortExpr,
-) -> Result<Ordering> {
-    match (left.is_null(), right.is_null()) {
-        (true, true) => Ok(Ordering::Equal),
-        (true, false) => Ok(if sort_expr.options.nulls_first {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        }),
-        (false, true) => Ok(if sort_expr.options.nulls_first {
-            Ordering::Greater
-        } else {
-            Ordering::Less
-        }),
-        (false, false) => {
-            let Some(ordering) = left.partial_cmp(right) else {
-                return plan_err!(
-                    "Range partitioning split point values are not comparable: {left:?} and {right:?}"
-                );
-            };
-            Ok(if sort_expr.options.descending {
-                ordering.reverse()
-            } else {
-                ordering
-            })
-        }
-    }
 }
 
 fn equivalent_exprs(
@@ -754,7 +634,7 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::Result;
+    use datafusion_common::{Result, ScalarValue};
 
     struct PartitioningTestFixture {
         schema: SchemaRef,
