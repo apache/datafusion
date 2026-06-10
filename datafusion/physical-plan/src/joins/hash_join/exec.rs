@@ -1448,6 +1448,7 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::unwrap_or_clone(left_stats),
                     Arc::unwrap_or_clone(right_stats),
                     &self.on,
+                    self.null_equality,
                     &self.join_type,
                     &self.join_schema,
                 )?
@@ -1463,6 +1464,7 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::unwrap_or_clone(left_stats),
                     Arc::unwrap_or_clone(right_stats),
                     &self.on,
+                    self.null_equality,
                     &self.join_type,
                     &self.join_schema,
                 )?
@@ -1480,6 +1482,7 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::unwrap_or_clone(left_stats),
                     Arc::unwrap_or_clone(right_stats),
                     &self.on,
+                    self.null_equality,
                     &self.join_type,
                     &self.join_schema,
                 )?

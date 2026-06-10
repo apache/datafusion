@@ -1755,6 +1755,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Partitioning::RoundRobinBatch(partition_count) => {
                         PartitionMethod::RoundRobin(*partition_count as u64)
                     }
+                    Partitioning::Range(_) => {
+                        // TODO: Support range repartition protobuf serialization.
+                        // Tracked by https://github.com/apache/datafusion/issues/22787
+                        return not_impl_err!("Range repartition");
+                    }
                     Partitioning::DistributeBy(_) => {
                         return not_impl_err!("DistributeBy");
                     }
