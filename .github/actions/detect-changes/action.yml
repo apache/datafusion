@@ -21,7 +21,7 @@
 # composite action; every existing job downstream then uses
 # `if: needs.detect-changes.outputs.has_code == 'true'`. The caller is
 # responsible for `actions/checkout` with `fetch-depth: 0` before invoking
-# this action — we need full history to compute the PR diff.
+# this action; we need full history to compute the PR diff.
 
 name: 'Detect changes'
 description: >-
@@ -33,7 +33,7 @@ inputs:
   ignore-paths:
     description: |
       Newline-separated glob patterns. If EVERY changed file in the PR
-      matches one of these globs, has_code='false' (code CI is skipped —
+      matches one of these globs, has_code='false' (code CI is skipped,
       only dev.yml / docs*.yaml jobs run).
 
       Glob syntax matches `pull_request: paths-ignore:`:
