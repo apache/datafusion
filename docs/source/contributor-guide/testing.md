@@ -113,18 +113,6 @@ Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusio
 
 DataFusion has integrated [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the [README](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite) file for instructions.
 
-### Allocator-level memory accounting (`--features memory-accounting`)
-
-For tests that need to verify DataFusion's voluntary memory tracking
-matches actual heap usage, the `sqllogictest` runner ships an optional
-`memory-accounting` feature that installs a global allocator wrapper.
-Adding `SET datafusion.runtime.memory_limit = 'N'` at the top of an
-`.slt` file opts that file into allocator-vs-`MemoryPool` reconciliation
-with 10% headroom — any divergence panics the test with an
-`OverdraftPanic` reporting the actual allocator balance. See
-[the sqllogictest README](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-allocator-level-memory-accounting)
-for the runner flag and the full mechanism.
-
 ## Snapshot testing (`cargo insta`)
 
 [Insta](https://github.com/mitsuhiko/insta) is used for snapshot testing. Snapshots are generated
