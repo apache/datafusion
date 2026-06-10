@@ -506,18 +506,6 @@ cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span
 <p><code class="docutils literal notranslate"><span class="pre">sqllogictests</span></code> may be less convenient for new contributors who are familiar with writing <code class="docutils literal notranslate"><span class="pre">.rs</span></code> tests as they require learning another tool. However, <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated.</p>
 <p>Like similar systems such as <a class="reference external" href="https://duckdb.org/dev/testing">DuckDB</a>, DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.</p>
 <p>DataFusion has integrated <a class="reference external" href="https://sqlite.org/sqllogictest/doc/trunk/about.wiki">sqlite’s test suite</a> as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite">README</a> file for instructions.</p>
-<section id="allocator-level-memory-accounting-features-memory-accounting">
-<h3>Allocator-level memory accounting (<code class="docutils literal notranslate"><span class="pre">--features</span> <span class="pre">memory-accounting</span></code>)<a class="headerlink" href="#allocator-level-memory-accounting-features-memory-accounting" title="Link to this heading">#</a></h3>
-<p>For tests that need to verify DataFusion’s voluntary memory tracking
-matches actual heap usage, the <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> runner ships an optional
-<code class="docutils literal notranslate"><span class="pre">memory-accounting</span></code> feature that installs a global allocator wrapper.
-Adding <code class="docutils literal notranslate"><span class="pre">SET</span> <span class="pre">datafusion.runtime.memory_limit</span> <span class="pre">=</span> <span class="pre">'N'</span></code> at the top of an
-<code class="docutils literal notranslate"><span class="pre">.slt</span></code> file opts that file into allocator-vs-<code class="docutils literal notranslate"><span class="pre">MemoryPool</span></code> reconciliation
-with 10% headroom — any divergence panics the test with an
-<code class="docutils literal notranslate"><span class="pre">OverdraftPanic</span></code> reporting the actual allocator balance. See
-<a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-allocator-level-memory-accounting">the sqllogictest README</a>
-for the runner flag and the full mechanism.</p>
-</section>
 </section>
 <section id="snapshot-testing-cargo-insta">
 <h2>Snapshot testing (<code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">insta</span></code>)<a class="headerlink" href="#snapshot-testing-cargo-insta" title="Link to this heading">#</a></h2>
@@ -692,10 +680,7 @@ bash<span class="w"> </span>ci/scripts/markdown_link_check.sh
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#testing-quick-start">Testing Quick Start</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#testing-overview">Testing Overview</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#unit-tests">Unit tests</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sqllogictests-tests">sqllogictests Tests</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#allocator-level-memory-accounting-features-memory-accounting">Allocator-level memory accounting (<code class="docutils literal notranslate"><span class="pre">--features</span> <span class="pre">memory-accounting</span></code>)</a></li>
-</ul>
-</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sqllogictests-tests">sqllogictests Tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#snapshot-testing-cargo-insta">Snapshot testing (<code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">insta</span></code>)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#extended-tests">Extended Tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rust-integration-tests">Rust Integration Tests</a></li>
