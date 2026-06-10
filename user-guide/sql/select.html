@@ -446,65 +446,262 @@
 -->
 <section id="select-syntax">
 <h1>SELECT syntax<a class="headerlink" href="#select-syntax" title="Link to this heading">#</a></h1>
-<p>The queries in DataFusion scan data from tables and return 0 or more rows.
-Please be aware that column names in queries are made lower-case, but not on the inferred schema. Accordingly, if you
-want to query against a capitalized field, make sure to use double quotes. Please see this
-<a class="reference external" href="https://datafusion.apache.org/user-guide/example-usage.html">example</a> for clarification.
-In this documentation we describe the SQL syntax in DataFusion.</p>
-<p>DataFusion supports the following syntax for queries:
-<code class="language-sql hljs"></p>
-<p>[ <a class="reference internal" href="#with-clause">WITH</a> with_query [, …] ] <br/>
-<a class="reference internal" href="#select-clause">SELECT</a> [ ALL | DISTINCT ] select_expr [, …] <br/>
-[ <a class="reference internal" href="#from-clause">FROM</a> from_item [, …] ] <br/>
-[ <a class="reference internal" href="#join-clause">JOIN</a> join_item [, …] ] <br/>
-[ <a class="reference internal" href="#where-clause">WHERE</a> condition ] <br/>
-[ <a class="reference internal" href="#group-by-clause">GROUP BY</a> grouping_element [, …] ] <br/>
-[ <a class="reference internal" href="#having-clause">HAVING</a> condition] <br/>
-[ <a class="reference internal" href="#qualify-clause">QUALIFY</a> condition] <br/>
-[ <a class="reference internal" href="#union-clause">UNION</a> [ ALL | select ] <br/>
-[ <a class="reference internal" href="#order-by-clause">ORDER BY</a> expression [ ASC | DESC ][, …] ] <br/>
-[ <a class="reference internal" href="#limit-clause">LIMIT</a> count ] <br/>
-[ <a class="reference internal" href="#exclude-and-except-clause">EXCLUDE | EXCEPT</a> ] <br/>
-<a class="reference internal" href="#pipe-operators">Pipe operators</a> <br/></p>
-</code>
+<p>Queries in DataFusion scan data from tables, subqueries, table functions, or
+literal values and return zero or more rows. DataFusion supports the following
+general form for <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> queries. Optional clauses can be omitted. The linked
+sections describe each clause in more detail.</p>
+<pre><code>[ <a href="#with-clause">WITH</a> cte [, ...] ]
+<a href="#select-clause">SELECT</a> select_item [, ...]
+[ <a href="#select-into">INTO</a> table_name ]
+[ <a href="#from-clause">FROM</a> from_item [, ...] ]
+[ <a href="#join-clause">JOIN</a> join_item ... ]
+[ <a href="#where-clause">WHERE</a> condition ]
+[ <a href="#group-by-clause">GROUP BY</a> grouping_element [, ...] | GROUP BY ALL ]
+[ <a href="#having-clause">HAVING</a> condition ]
+[ <a href="#window-clause">WINDOW</a> window_name AS (window_definition) [, ...] ]
+[ <a href="#qualify-clause">QUALIFY</a> condition ]
+[ { <a href="#set-operations">UNION</a> | <a href="#set-operations">INTERSECT</a> | <a href="#set-operations">EXCEPT</a> } query ] [...]
+[ <a href="#order-by-clause">ORDER BY</a> order_expression [, ...] ]
+[ <a href="#limit-and-offset-clauses">LIMIT</a> count ] [ <a href="#limit-and-offset-clauses">OFFSET</a> count ]
+[ <a href="#pipe-operators">|&gt;</a> pipe_operator ... ]</code></pre>
+<p>Unquoted identifiers are normalized to lower case in SQL queries, but inferred
+schema field names are not changed. If a field name contains capital letters or
+other characters that require quoting, reference it with double quotes. See this
+<a class="reference external" href="https://datafusion.apache.org/user-guide/example-usage.html">example</a> for
+clarification.</p>
 <section id="with-clause">
 <h2>WITH clause<a class="headerlink" href="#with-clause" title="Link to this heading">#</a></h2>
-<p>A with clause allows to give names for queries and reference them by name.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>WITH [RECURSIVE] cte_name [(column_name [, ...])] AS (query) [, ...]
+</pre></div>
+</div>
+<p>A <code class="docutils literal notranslate"><span class="pre">WITH</span></code> clause defines common table expressions (CTEs) that can be referenced
+by name in the rest of the query.</p>
+<p>Examples:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">WITH</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">)</span>
 <span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>CTEs can also rename their output columns:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">WITH</span><span class="w"> </span><span class="n">x</span><span class="p">(</span><span class="k">key</span><span class="p">,</span><span class="w"> </span><span class="n">total</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span>
+<span class="p">)</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">key</span><span class="p">,</span><span class="w"> </span><span class="n">total</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>DataFusion supports <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">RECURSIVE</span></code> for recursive CTEs. Recursive CTE support
+is controlled by the <code class="docutils literal notranslate"><span class="pre">datafusion.execution.enable_recursive_ctes</span></code> configuration
+setting, which is enabled by default.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">WITH</span><span class="w"> </span><span class="k">RECURSIVE</span><span class="w"> </span><span class="n">numbers</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">n</span>
+<span class="w">  </span><span class="k">UNION</span><span class="w"> </span><span class="k">ALL</span>
+<span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">numbers</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">3</span>
+<span class="p">)</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">numbers</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
 <section id="select-clause">
 <h2>SELECT clause<a class="headerlink" href="#select-clause" title="Link to this heading">#</a></h2>
-<p>Example:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>SELECT [ALL | DISTINCT | DISTINCT ON (expression [, ...])]
+       select_item [, ...]
+       [INTO table_name]
 </pre></div>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">DISTINCT</span></code> quantifier can be added to make the query return all distinct rows.
-By default <code class="docutils literal notranslate"><span class="pre">ALL</span></code> will be used, which returns all the rows.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="n">person</span><span class="p">,</span><span class="w"> </span><span class="n">age</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">employees</span>
+<p>The <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list can contain column references, arbitrary expressions, scalar
+functions, aggregate functions, window functions, scalar subqueries, and
+wildcards.</p>
+<p>Examples:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">sum_ab</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
 </pre></div>
 </div>
+<p>Aliases can be written with or without <code class="docutils literal notranslate"><span class="pre">AS</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">key</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">SELECT</span></code> can be used without a <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause when the selected expressions do
+not need input rows:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">three</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">*</span></code> requires a <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause.</p>
+<section id="distinct">
+<h3>DISTINCT<a class="headerlink" href="#distinct" title="Link to this heading">#</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>SELECT DISTINCT select_item [, ...]
+SELECT DISTINCT ON (expression [, ...]) select_item [, ...]
+</pre></div>
+</div>
+<p>By default, <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> uses <code class="docutils literal notranslate"><span class="pre">ALL</span></code> semantics and returns every row. The <code class="docutils literal notranslate"><span class="pre">DISTINCT</span></code>
+quantifier removes duplicate rows from the query result.</p>
+<p>Examples:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="n">person</span><span class="p">,</span><span class="w"> </span><span class="n">age</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">employees</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>DataFusion also supports PostgreSQL-style <code class="docutils literal notranslate"><span class="pre">DISTINCT</span> <span class="pre">ON</span></code>, which keeps one row for
+each distinct value of the listed expressions. Use <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> to choose which
+row is kept for each group. When <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> is present, the initial <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code>
+expressions must match the <code class="docutils literal notranslate"><span class="pre">DISTINCT</span> <span class="pre">ON</span></code> expressions.</p>
+<p>If multiple rows have the same <code class="docutils literal notranslate"><span class="pre">DISTINCT</span> <span class="pre">ON</span></code> values and the <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> clause
+does not fully order those rows, the row that is kept is not specified. Add
+additional <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> expressions to make the choice deterministic.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="p">(</span><span class="n">customer_id</span><span class="p">)</span><span class="w"> </span><span class="n">customer_id</span><span class="p">,</span><span class="w"> </span><span class="n">order_id</span><span class="p">,</span><span class="w"> </span><span class="n">order_date</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">orders</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">customer_id</span><span class="p">,</span><span class="w"> </span><span class="n">order_date</span><span class="w"> </span><span class="k">DESC</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="wildcards">
+<h3>Wildcards<a class="headerlink" href="#wildcards" title="Link to this heading">#</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>*
+table_alias.*
+* EXCLUDE column_name
+* EXCLUDE (column_name [, ...])
+* EXCEPT column_name
+* EXCEPT (column_name [, ...])
+* REPLACE (expression AS column_name [, ...])
+</pre></div>
+</div>
+<p>Use <code class="docutils literal notranslate"><span class="pre">*</span></code> to select all columns, or <code class="docutils literal notranslate"><span class="pre">table_alias.*</span></code> to select all columns from a
+specific input.</p>
+<p>Examples:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">o</span><span class="p">.</span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">o</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Wildcard projections support <code class="docutils literal notranslate"><span class="pre">EXCLUDE</span></code> and <code class="docutils literal notranslate"><span class="pre">EXCEPT</span></code> to omit columns. Both
+accept either a single column name or a parenthesized list of column names.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">EXCLUDE</span><span class="w"> </span><span class="n">customer_id</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">EXCLUDE</span><span class="w"> </span><span class="p">(</span><span class="n">customer_id</span><span class="p">,</span><span class="w"> </span><span class="n">internal_note</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">EXCEPT</span><span class="w"> </span><span class="n">customer_id</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">EXCEPT</span><span class="w"> </span><span class="p">(</span><span class="n">customer_id</span><span class="p">,</span><span class="w"> </span><span class="n">internal_note</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">o</span><span class="p">.</span><span class="o">*</span><span class="w"> </span><span class="n">EXCLUDE</span><span class="w"> </span><span class="p">(</span><span class="n">internal_note</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">o</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Every name in an <code class="docutils literal notranslate"><span class="pre">EXCLUDE</span></code> or <code class="docutils literal notranslate"><span class="pre">EXCEPT</span></code> list must refer to an existing column.
+The list must not name the same column more than once, and the wildcard must
+not expand to zero columns.</p>
+<p>Wildcard projections also support <code class="docutils literal notranslate"><span class="pre">REPLACE</span></code>, which keeps the original column
+name but substitutes a new expression for that column.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">REPLACE</span><span class="w"> </span><span class="p">(</span><span class="n">price</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">price</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">products</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">p</span><span class="p">.</span><span class="o">*</span><span class="w"> </span><span class="k">REPLACE</span><span class="w"> </span><span class="p">(</span><span class="n">price</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">price</span><span class="p">,</span><span class="w"> </span><span class="n">product_id</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1000</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">product_id</span><span class="p">)</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">products</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">p</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">RENAME</span></code> and wildcard aliases such as <code class="docutils literal notranslate"><span class="pre">*</span> <span class="pre">AS</span> <span class="pre">alias</span></code> are not supported.</p>
+</section>
+<section id="select-into">
+<h3>SELECT INTO<a class="headerlink" href="#select-into" title="Link to this heading">#</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>SELECT select_item [, ...] INTO table_name FROM ...
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">...</span> <span class="pre">INTO</span> <span class="pre">table_name</span></code> creates an in-memory table from the query result.
+It is similar to <a class="reference internal" href="ddl.html#create-table"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span> <span class="pre">...</span> <span class="pre">AS</span> <span class="pre">SELECT</span></code></span></a>.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">customer_id</span><span class="p">,</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="n">amount</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">total</span>
+<span class="k">INTO</span><span class="w"> </span><span class="n">customer_totals</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">orders</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">customer_id</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="from-clause">
 <h2>FROM clause<a class="headerlink" href="#from-clause" title="Link to this heading">#</a></h2>
-<p>Example:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">t</span>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>FROM from_item [, ...]
+
+from_item:
+  table_name [[AS] alias [(column_alias [, ...])]]
+| (query) [[AS] alias [(column_alias [, ...])]]
+| VALUES (expression [, ...]) [, ...] [[AS] alias [(column_alias [, ...])]]
+| table_function(argument [, ...]) [[AS] alias [(column_alias [, ...])]]
+| UNNEST(expression) [[AS] alias [(column_alias [, ...])]]
 </pre></div>
 </div>
+<p>The <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause specifies the input relations for the query. Supported inputs
+include tables, CTEs, derived tables, <code class="docutils literal notranslate"><span class="pre">VALUES</span></code>, table functions, and <code class="docutils literal notranslate"><span class="pre">UNNEST</span></code>.</p>
+<p>Examples:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Table aliases can include column aliases:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">y</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">some_table</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Subqueries can be used in the <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">q</span><span class="p">.</span><span class="n">a</span>
+<span class="k">FROM</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">q</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">VALUES</span></code> can be used as a table expression:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span>
+<span class="k">FROM</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;a&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;b&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">t</span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">label</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Table functions such as <code class="docutils literal notranslate"><span class="pre">range</span></code> and <code class="docutils literal notranslate"><span class="pre">generate_series</span></code> can be used in <code class="docutils literal notranslate"><span class="pre">FROM</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">UNNEST</span></code> expands a list, array, or similar nested value into one row for each
+element. It can be used in the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list to expand a value in each input
+row, or as an input relation in <code class="docutils literal notranslate"><span class="pre">FROM</span></code>. When used in <code class="docutils literal notranslate"><span class="pre">FROM</span></code>, it can be given a
+table alias and column alias.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">UNNEST</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">])</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">u</span><span class="p">(</span><span class="n">value</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>To expand a column for each input row, use <code class="docutils literal notranslate"><span class="pre">UNNEST</span></code> in the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="k">UNNEST</span><span class="p">(</span><span class="n">items</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">UNNEST</span></code> in the <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause cannot yet reference columns from preceding <code class="docutils literal notranslate"><span class="pre">FROM</span></code>
+items (implicit lateral references such as <code class="docutils literal notranslate"><span class="pre">FROM</span> <span class="pre">orders</span> <span class="pre">AS</span> <span class="pre">t,</span> <span class="pre">UNNEST(t.items)</span></code>
+are not currently supported).</p>
 </section>
 <section id="where-clause">
 <h2>WHERE clause<a class="headerlink" href="#where-clause" title="Link to this heading">#</a></h2>
-<p>Example:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>WHERE condition
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause filters input rows before grouping, aggregation, and window
+processing.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
 <section id="join-clause">
 <h2>JOIN clause<a class="headerlink" href="#join-clause" title="Link to this heading">#</a></h2>
-<p>DataFusion supports <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">NATURAL</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LATERAL</span> <span class="pre">JOIN</span></code>, and <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">JOIN</span> <span class="pre">LATERAL</span></code>.</p>
-<p>The following examples are based on this table:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>from_item [join_type] JOIN from_item [join_condition]
+from_item CROSS JOIN from_item
+from_item NATURAL JOIN from_item
+from_item [join_type] JOIN LATERAL (query) AS alias [join_condition]
+from_item, LATERAL (query) AS alias
+
+join_type:
+  INNER
+| LEFT [OUTER]
+| RIGHT [OUTER]
+| FULL [OUTER]
+| LEFT SEMI
+| RIGHT SEMI
+| LEFT ANTI
+| RIGHT ANTI
+
+join_condition:
+  ON condition
+| USING (column_name [, ...])
+</pre></div>
+</div>
+<p>Joins are written inside the <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause between input relations.</p>
+<p>Join conditions can use <code class="docutils literal notranslate"><span class="pre">ON</span></code> or <code class="docutils literal notranslate"><span class="pre">USING</span></code>.</p>
+<p>Examples:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">orders</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">o</span>
+<span class="k">JOIN</span><span class="w"> </span><span class="n">customers</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">o</span><span class="p">.</span><span class="n">customer_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">c</span><span class="p">.</span><span class="n">id</span><span class="p">;</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">orders</span>
+<span class="k">JOIN</span><span class="w"> </span><span class="n">customers</span><span class="w"> </span><span class="k">USING</span><span class="w"> </span><span class="p">(</span><span class="n">customer_id</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The join examples below use this table:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
@@ -516,7 +713,7 @@ By default <code class="docutils literal notranslate"><span class="pre">ALL</spa
 <section id="inner-join">
 <h3>INNER JOIN<a class="headerlink" href="#inner-join" title="Link to this heading">#</a></h3>
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code> define a join that only shows rows where there is a match in both tables.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
@@ -524,12 +721,17 @@ By default <code class="docutils literal notranslate"><span class="pre">ALL</spa
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 </pre></div>
 </div>
+<p>The same behavior can also be written by listing both inputs in the <code class="docutils literal notranslate"><span class="pre">FROM</span></code>
+clause and putting the join condition in the <code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+</pre></div>
+</div>
 </section>
 <section id="left-outer-join">
 <h3>LEFT OUTER JOIN<a class="headerlink" href="#left-outer-join" title="Link to this heading">#</a></h3>
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> define a join that includes all rows from the left table even if there
 is not a match in the right table. When there is no match, null values are produced for the right side of the join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">LEFT</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">LEFT</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
@@ -542,7 +744,7 @@ is not a match in the right table. When there is no match, null values are produ
 <h3>RIGHT OUTER JOIN<a class="headerlink" href="#right-outer-join" title="Link to this heading">#</a></h3>
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> define a join that includes all rows from the right table even if there
 is not a match in the left table. When there is no match, null values are produced for the left side of the join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">RIGHT</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">RIGHT</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
@@ -556,7 +758,7 @@ is not a match in the left table. When there is no match, null values are produc
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> define a join that is effectively a union of a <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> and
 <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>. It will show all rows from the left and right side of the join and will produce null values on
 either side of the join where there is not a match.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">FULL</span><span class="w"> </span><span class="k">OUTER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">FULL</span><span class="w"> </span><span class="k">OUTER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
@@ -570,7 +772,7 @@ either side of the join where there is not a match.</p>
 <h3>NATURAL JOIN<a class="headerlink" href="#natural-join" title="Link to this heading">#</a></h3>
 <p>A <code class="docutils literal notranslate"><span class="pre">NATURAL</span> <span class="pre">JOIN</span></code> defines an inner join based on common column names found between the input tables. When no common
 column names are found, it behaves like a <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code>.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">NATURAL</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">NATURAL</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
@@ -583,7 +785,7 @@ column names are found, it behaves like a <code class="docutils literal notransl
 <h3>CROSS JOIN<a class="headerlink" href="#cross-join" title="Link to this heading">#</a></h3>
 <p>A <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code> produces a cartesian product that matches every row in the left side of the join with every row in the
 right side of the join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">CROSS</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">CROSS</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
@@ -596,7 +798,7 @@ right side of the join.</p>
 <h3>LEFT SEMI JOIN<a class="headerlink" href="#left-semi-join" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code> returns all rows from the left table that have at least one matching row in the right table, and
 projects only the columns from the left table.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">LEFT</span><span class="w"> </span><span class="n">SEMI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">LEFT</span><span class="w"> </span><span class="n">SEMI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
@@ -609,7 +811,7 @@ projects only the columns from the left table.</p>
 <h3>RIGHT SEMI JOIN<a class="headerlink" href="#right-semi-join" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span></code> returns all rows from the right table that have at least one matching row in the left table, and
 only projects the columns from the right table.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">RIGHT</span><span class="w"> </span><span class="n">SEMI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">RIGHT</span><span class="w"> </span><span class="n">SEMI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
@@ -622,7 +824,7 @@ only projects the columns from the right table.</p>
 <h3>LEFT ANTI JOIN<a class="headerlink" href="#left-anti-join" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code> returns all rows from the left table that do not have any matching row in the right table, projecting
 only the left table’s columns.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">LEFT</span><span class="w"> </span><span class="n">ANTI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">LEFT</span><span class="w"> </span><span class="n">ANTI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
@@ -634,7 +836,7 @@ only the left table’s columns.</p>
 <h3>RIGHT ANTI JOIN<a class="headerlink" href="#right-anti-join" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span></code> returns all rows from the right table that do not have any matching row in the left table, projecting
 only the right table’s columns.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">RIGHT</span><span class="w"> </span><span class="n">ANTI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">RIGHT</span><span class="w"> </span><span class="n">ANTI</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
@@ -761,40 +963,116 @@ condition are preserved with NULLs, just like a regular <code class="docutils li
 <ul class="simple">
 <li><p>Outer references in the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list of the lateral subquery (e.g., <code class="docutils literal notranslate"><span class="pre">LATERAL</span> <span class="pre">(SELECT</span> <span class="pre">outer.col</span> <span class="pre">+</span> <span class="pre">1)</span></code>).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">HAVING</span></code> in lateral subqueries.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span> <span class="pre">LATERAL</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">JOIN</span> <span class="pre">LATERAL</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">SEMI</span> <span class="pre">JOIN</span> <span class="pre">LATERAL</span></code>, and <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">ANTI</span> <span class="pre">JOIN</span> <span class="pre">LATERAL</span></code>.</p></li>
 </ul>
 </section>
 </section>
 </section>
 <section id="group-by-clause">
 <h2>GROUP BY clause<a class="headerlink" href="#group-by-clause" title="Link to this heading">#</a></h2>
-<p>Example:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>GROUP BY ALL
+GROUP BY grouping_element [, ...]
+
+grouping_element:
+  expression
+  ordinal_position
+  ROLLUP(expression [, ...])
+  CUBE(expression [, ...])
+  GROUPING SETS ((grouping_element [, ...]) [, ...])
 </pre></div>
 </div>
-<p>Some aggregation functions accept optional ordering requirement, such as <code class="docutils literal notranslate"><span class="pre">ARRAY_AGG</span></code>. If a requirement is given,
-aggregation is calculated in the order of the requirement.</p>
-<p>Example:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">ARRAY_AGG</span><span class="p">(</span><span class="k">c</span><span class="p">,</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">d</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span>
+<p>The <code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code> clause groups rows before aggregate expressions are evaluated.
+Grouping elements can be expressions, output aliases, or ordinal positions in
+the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list.</p>
+<p>Examples:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">key</span><span class="p">,</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">key</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span> <span class="pre">ALL</span></code> groups by every non-aggregate expression in the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">ALL</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Grouping sets allow a single query to compute aggregates for multiple grouping
+levels. <code class="docutils literal notranslate"><span class="pre">ROLLUP(a,</span> <span class="pre">b)</span></code> computes aggregate rows grouped by <code class="docutils literal notranslate"><span class="pre">(a,</span> <span class="pre">b)</span></code>, then by
+<code class="docutils literal notranslate"><span class="pre">a</span></code>, then over all input rows. <code class="docutils literal notranslate"><span class="pre">CUBE(a,</span> <span class="pre">b)</span></code> computes aggregate rows for all
+combinations of <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code>. <code class="docutils literal notranslate"><span class="pre">GROUPING</span> <span class="pre">SETS</span></code> lets you list the grouping levels
+explicitly.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">ROLLUP</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">);</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">CUBE</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">);</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">SUM</span><span class="p">(</span><span class="k">c</span><span class="p">)</span>
+<span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">GROUPING</span><span class="w"> </span><span class="k">SETS</span><span class="w"> </span><span class="p">((</span><span class="n">a</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">),</span><span class="w"> </span><span class="p">());</span>
+</pre></div>
+</div>
+<p>Some aggregate functions accept an optional ordering requirement, such as
+<code class="docutils literal notranslate"><span class="pre">ARRAY_AGG</span></code>. If an ordering requirement is given, aggregation is calculated in
+that order.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">ARRAY_AGG</span><span class="p">(</span><span class="k">c</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">d</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
 <section id="having-clause">
 <h2>HAVING clause<a class="headerlink" href="#having-clause" title="Link to this heading">#</a></h2>
-<p>Example:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">HAVING</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>HAVING condition
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">HAVING</span></code> clause filters groups after aggregation. It can reference grouping
+expressions, aggregate expressions, and aliases from the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">max_c</span>
+<span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span>
+<span class="k">HAVING</span><span class="w"> </span><span class="n">max_c</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="window-clause">
+<h2>WINDOW clause<a class="headerlink" href="#window-clause" title="Link to this heading">#</a></h2>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>WINDOW window_name AS (window_definition) [, ...]
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">WINDOW</span></code> clause defines named window specifications that can be referenced
+from window functions. See <a class="reference internal" href="window_functions.html"><span class="std std-doc">Window Functions</span></a> for the full
+window-function reference.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="n">depname</span><span class="p">,</span>
+<span class="w">  </span><span class="n">empno</span><span class="p">,</span>
+<span class="w">  </span><span class="n">salary</span><span class="p">,</span>
+<span class="w">  </span><span class="k">AVG</span><span class="p">(</span><span class="n">salary</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="n">w</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">avg_salary</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">empsalary</span>
+<span class="n">WINDOW</span><span class="w"> </span><span class="n">w</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">depname</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">salary</span><span class="w"> </span><span class="k">DESC</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 <section id="qualify-clause">
 <h2>QUALIFY clause<a class="headerlink" href="#qualify-clause" title="Link to this heading">#</a></h2>
-<p>Example:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">ROW_NUMBER</span><span class="p">()</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">region</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">rk</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="n">QUALIFY</span><span class="w"> </span><span class="n">rk</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>QUALIFY condition
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">QUALIFY</span></code> clause filters rows after window functions are evaluated. A query
+with <code class="docutils literal notranslate"><span class="pre">QUALIFY</span></code> must contain a window function in either the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list or the
+<code class="docutils literal notranslate"><span class="pre">QUALIFY</span></code> expression. <code class="docutils literal notranslate"><span class="pre">QUALIFY</span></code> can reference aliases from the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">ROW_NUMBER</span><span class="p">()</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">region</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">sales</span><span class="w"> </span><span class="k">DESC</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">rk</span>
+<span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span>
+<span class="n">QUALIFY</span><span class="w"> </span><span class="n">rk</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
-<section id="union-clause">
-<h2>UNION clause<a class="headerlink" href="#union-clause" title="Link to this heading">#</a></h2>
-<p>Example:</p>
+<section id="set-operations">
+<h2>Set operations<a class="headerlink" href="#set-operations" title="Link to this heading">#</a></h2>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>query UNION [ALL | DISTINCT] [BY NAME] query
+query INTERSECT [ALL | DISTINCT] query
+query EXCEPT [ALL | DISTINCT] query
+</pre></div>
+</div>
+<p>Set operations combine the results of two queries into a single result. They
+operate on whole rows rather than on individual columns, and the input queries
+must produce compatible columns. Except for <code class="docutils literal notranslate"><span class="pre">UNION</span> <span class="pre">...</span> <span class="pre">BY</span> <span class="pre">NAME</span></code> variants,
+inputs must have the same number of output columns.</p>
+<p><code class="docutils literal notranslate"><span class="pre">UNION</span></code> returns rows from both inputs and removes duplicates by default.
+<code class="docutils literal notranslate"><span class="pre">UNION</span> <span class="pre">DISTINCT</span></code> is equivalent to <code class="docutils literal notranslate"><span class="pre">UNION</span></code>; <code class="docutils literal notranslate"><span class="pre">UNION</span> <span class="pre">ALL</span></code> preserves duplicates.</p>
+<p>Examples:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
 <span class="w">    </span><span class="n">a</span><span class="p">,</span>
 <span class="w">    </span><span class="n">b</span><span class="p">,</span>
@@ -808,47 +1086,88 @@ aggregation is calculated in the order of the requirement.</p>
 <span class="k">FROM</span><span class="w"> </span><span class="n">table2</span>
 </pre></div>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">INTERSECT</span></code> returns rows that appear in both inputs. <code class="docutils literal notranslate"><span class="pre">EXCEPT</span></code> returns rows from
+the left input that do not appear in the right input. Both support <code class="docutils literal notranslate"><span class="pre">ALL</span></code> and
+<code class="docutils literal notranslate"><span class="pre">DISTINCT</span></code>.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table1</span>
+<span class="k">INTERSECT</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table2</span><span class="p">;</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table1</span>
+<span class="k">EXCEPT</span><span class="w"> </span><span class="k">ALL</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table2</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">UNION</span> <span class="pre">BY</span> <span class="pre">NAME</span></code> matches columns by name instead of by position. <code class="docutils literal notranslate"><span class="pre">UNION</span> <span class="pre">ALL</span> <span class="pre">BY</span> <span class="pre">NAME</span></code> preserves duplicates, and <code class="docutils literal notranslate"><span class="pre">UNION</span> <span class="pre">DISTINCT</span> <span class="pre">BY</span> <span class="pre">NAME</span></code> removes duplicates.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table1</span>
+<span class="k">UNION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">NAME</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">table2</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Set operations can be followed by <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code>, <code class="docutils literal notranslate"><span class="pre">LIMIT</span></code>, and <code class="docutils literal notranslate"><span class="pre">OFFSET</span></code> clauses,
+which apply to the combined result.</p>
 </section>
 <section id="order-by-clause">
 <h2>ORDER BY clause<a class="headerlink" href="#order-by-clause" title="Link to this heading">#</a></h2>
-<p>Orders the results by the referenced expression. By default it uses ascending order (<code class="docutils literal notranslate"><span class="pre">ASC</span></code>).
-This order can be changed to descending by adding <code class="docutils literal notranslate"><span class="pre">DESC</span></code> after the order-by expressions.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>ORDER BY order_expression [ASC | DESC] [NULLS FIRST | NULLS LAST] [, ...]
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> sorts query results. Each <code class="docutils literal notranslate"><span class="pre">order_expression</span></code> can be an expression, a
+<code class="docutils literal notranslate"><span class="pre">SELECT</span></code> alias, or an ordinal position. The default direction is ascending
+(<code class="docutils literal notranslate"><span class="pre">ASC</span></code>).</p>
+<p>If multiple rows have the same values for every <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> expression, their
+relative order is not specified. Add additional <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> expressions to break
+ties when the exact row order matters.</p>
 <p>Examples:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">age</span><span class="p">;</span>
-<span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">age</span><span class="w"> </span><span class="k">DESC</span><span class="p">;</span>
-<span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">DESC</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">age</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">age</span><span class="w"> </span><span class="k">DESC</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">years</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">years</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">DESC</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Use <code class="docutils literal notranslate"><span class="pre">NULLS</span> <span class="pre">FIRST</span></code> or <code class="docutils literal notranslate"><span class="pre">NULLS</span> <span class="pre">LAST</span></code> to control where null values sort:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">age</span><span class="w"> </span><span class="k">DESC</span><span class="w"> </span><span class="n">NULLS</span><span class="w"> </span><span class="k">LAST</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>With the DuckDB dialect, DataFusion supports <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">ALL</span></code>, which orders by
+every column in the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> list from left to right. All selected items must
+be column references; ordering by computed expressions such as <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">+</span> <span class="pre">b</span></code> is not
+supported:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">sql_parser</span><span class="p">.</span><span class="n">dialect</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;DuckDB&#39;</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">address</span><span class="p">,</span><span class="w"> </span><span class="n">zip</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">addresses</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">ALL</span><span class="w"> </span><span class="k">DESC</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
-<section id="limit-clause">
-<h2>LIMIT clause<a class="headerlink" href="#limit-clause" title="Link to this heading">#</a></h2>
-<p>Limits the number of rows to be a maximum of <code class="docutils literal notranslate"><span class="pre">count</span></code> rows. <code class="docutils literal notranslate"><span class="pre">count</span></code> should be a non-negative integer.</p>
-<p>Example:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span>
-<span class="k">LIMIT</span><span class="w"> </span><span class="mi">10</span>
+<section id="limit-and-offset-clauses">
+<h2>LIMIT and OFFSET clauses<a class="headerlink" href="#limit-and-offset-clauses" title="Link to this heading">#</a></h2>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>[LIMIT count]
+[OFFSET count]
 </pre></div>
 </div>
-</section>
-<section id="exclude-and-except-clause">
-<h2>EXCLUDE and EXCEPT clause<a class="headerlink" href="#exclude-and-except-clause" title="Link to this heading">#</a></h2>
-<p>Excluded named columns from query results.</p>
-<p>Example selecting all columns except for <code class="docutils literal notranslate"><span class="pre">age</span></code> and <code class="docutils literal notranslate"><span class="pre">person</span></code>:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">EXCEPT</span><span class="p">(</span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="p">)</span>
-<span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="p">;</span>
+<p><code class="docutils literal notranslate"><span class="pre">LIMIT</span></code> restricts the number of rows returned. <code class="docutils literal notranslate"><span class="pre">OFFSET</span></code> skips rows before
+returning results. The count expressions must be constant expressions that
+evaluate to non-negative integers or <code class="docutils literal notranslate"><span class="pre">NULL</span></code>; column references are not allowed.
+<code class="docutils literal notranslate"><span class="pre">NULL</span></code> has no effect.</p>
+<p>Without an <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> clause, <code class="docutils literal notranslate"><span class="pre">LIMIT</span></code> and <code class="docutils literal notranslate"><span class="pre">OFFSET</span></code> operate on an unspecified row
+order, so the returned rows are not guaranteed to be deterministic.</p>
+<p>Examples:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">LIMIT</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">OFFSET</span><span class="w"> </span><span class="mi">20</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">LIMIT</span><span class="w"> </span><span class="mi">10</span><span class="w"> </span><span class="k">OFFSET</span><span class="w"> </span><span class="mi">20</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">OFFSET</span><span class="w"> </span><span class="mi">20</span><span class="w"> </span><span class="k">LIMIT</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
 </pre></div>
 </div>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">EXCLUDE</span><span class="p">(</span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="p">)</span>
-<span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="p">;</span>
+<p>DataFusion also accepts MySQL-style <code class="docutils literal notranslate"><span class="pre">LIMIT</span> <span class="pre">offset,</span> <span class="pre">count</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="k">LIMIT</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
 <section id="pipe-operators">
 <h2>Pipe operators<a class="headerlink" href="#pipe-operators" title="Link to this heading">#</a></h2>
-<p>Some SQL dialects (e.g. BigQuery) support the pipe operator <code class="docutils literal notranslate"><span class="pre">|&gt;</span></code>.
-The SQL dialect can be set like this:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">set</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">sql_parser</span><span class="p">.</span><span class="n">dialect</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;BigQuery&#39;</span><span class="p">;</span>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>query |&gt; pipe_operator [|&gt; pipe_operator ...]
 </pre></div>
 </div>
+<p>DataFusion supports BigQuery-style pipe operators (<code class="docutils literal notranslate"><span class="pre">|&gt;</span></code>).</p>
 <p>DataFusion currently supports the following pipe operators:</p>
 <ul class="simple">
 <li><p><a class="reference internal" href="#pipe-where">WHERE</a></p></li>
@@ -1081,7 +1400,12 @@ The SQL dialect can be set like this:</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#with-clause">WITH clause</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#select-clause">SELECT clause</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#select-clause">SELECT clause</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#distinct">DISTINCT</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#wildcards">Wildcards</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#select-into">SELECT INTO</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#from-clause">FROM clause</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#where-clause">WHERE clause</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#join-clause">JOIN clause</a><ul class="nav section-nav flex-column">
@@ -1107,11 +1431,11 @@ The SQL dialect can be set like this:</p>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#group-by-clause">GROUP BY clause</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#having-clause">HAVING clause</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#window-clause">WINDOW clause</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#qualify-clause">QUALIFY clause</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#union-clause">UNION clause</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#set-operations">Set operations</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#order-by-clause">ORDER BY clause</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#limit-clause">LIMIT clause</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#exclude-and-except-clause">EXCLUDE and EXCEPT clause</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#limit-and-offset-clauses">LIMIT and OFFSET clauses</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-operators">Pipe operators</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#where">WHERE</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#order-by">ORDER BY</a></li>
