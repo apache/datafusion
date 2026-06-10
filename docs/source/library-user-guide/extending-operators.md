@@ -37,7 +37,8 @@ CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT)
 SELECT customer_id, revenue FROM sales ORDER BY revenue DESC LIMIT 3;
 ```
 
-Out of the box, DataFusion plans this as a `Sort` feeding a `Limit`:
+Out of the box, DataFusion already contains an optimized TopK implementation and our example here
+is just for demonstration purposes. If we disable the LimitPushdown optimization, we see the original plan is a `Sort` feeding a `Limit`:
 
 ```text
 > EXPLAIN SELECT customer_id, revenue FROM sales ORDER BY revenue DESC LIMIT 3;
@@ -410,7 +411,19 @@ let ctx = SessionContext::new_with_state(state);
 let df = ctx
     .sql("SELECT customer_id, revenue FROM sales ORDER BY revenue DESC LIMIT 3")
     .await?;
-df.show().await?;
+let batches = df.collect().await?;
+assert_batches_eq!(
+    &[
+        "+-------------+---------+",
+        "| customer_id | revenue |",
+        "+-------------+---------+",
+        "| paul        | 300     |",
+        "| jorge       | 200     |",
+        "| andy        | 150     |",
+        "+-------------+---------+",
+    ],
+    &batches
+);
 ```
 
 `EXPLAIN` on the same query now shows the custom node in place of the `Sort` + `Limit`:
