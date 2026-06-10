@@ -23,7 +23,7 @@ use tokio::sync::watch;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{
-    Result,
+    Result, internal_datafusion_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::ColumnarValue;
@@ -585,6 +585,73 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
                 },
             ))),
         }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl DynamicFilterPhysicalExpr {
+    /// Reconstruct a [`DynamicFilterPhysicalExpr`] from a proto node.
+    ///
+    /// Called by the `ExprType::DynamicFilter` arm in `datafusion-proto`'s
+    /// `parse_physical_expr_with_converter`. Follows the same
+    /// `PhysicalExprDecodeCtx`-based pattern used by `Column`, `BinaryExpr`, etc.
+    pub fn try_from_proto(
+        proto: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
+
+        let ExprType::DynamicFilter(df) = proto.expr_type.as_ref().ok_or_else(|| {
+            internal_datafusion_err!("Missing expr_type in PhysicalExprNode")
+        })?
+        else {
+            return Err(internal_datafusion_err!("Expected DynamicFilter expr_type"));
+        };
+
+        // Decode original children
+        let children = df
+            .children
+            .iter()
+            .map(|c| ctx.decode(c))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Decode remapped children (empty vec means None)
+        let remapped_children = if df.remapped_children.is_empty() {
+            None
+        } else {
+            Some(
+                df.remapped_children
+                    .iter()
+                    .map(|c| ctx.decode(c))
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        };
+
+        // Decode the inner expression
+        let inner_expr_proto = df.inner_expr.as_ref().ok_or_else(|| {
+            internal_datafusion_err!("Missing inner_expr in PhysicalDynamicFilterNode")
+        })?;
+        let inner_expr = ctx.decode(inner_expr_proto)?;
+
+        // Restore the expression_id from the outer PhysicalExprNode
+        let expression_id = proto.expr_id.ok_or_else(|| {
+            internal_datafusion_err!(
+                "Missing expr_id in PhysicalExprNode for DynamicFilter"
+            )
+        })?;
+
+        let inner = Inner {
+            expression_id,
+            generation: df.generation,
+            expr: inner_expr,
+            is_complete: df.is_complete,
+        };
+
+        Ok(Arc::new(Self::from_parts(
+            children,
+            remapped_children,
+            inner,
+        )))
     }
 }
 
