@@ -32,7 +32,7 @@ use datafusion_expr::{
     WindowUDF, WindowUDFImpl,
 };
 use datafusion_physical_expr::PhysicalExpr;
-use expression_args::{FFI_ExpressionArgs, ForeignExpressionArgs};
+use expression_args::{FFI_ExpressionArgs, OwnedExpressionArgs};
 use partition_evaluator::FFI_PartitionEvaluator;
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
@@ -109,6 +109,8 @@ pub struct FFI_WindowUDF {
     pub sort_options: FFI_Option<FFI_SortOptions>,
 
     pub has_simplify: bool,
+
+    pub logical_codec: crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec,
 
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
@@ -198,7 +200,7 @@ unsafe extern "C" fn expressions_fn_wrapper(
 ) -> SVec<FFI_PhysicalExpr> {
     unsafe {
         let inner = udwf.inner();
-        let args = match ForeignExpressionArgs::try_from(args) {
+        let args = match OwnedExpressionArgs::try_from(args) {
             Ok(args) => args,
             Err(_) => return SVec::new(),
         };
@@ -325,6 +327,7 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
             partition_evaluator: partition_evaluator_fn_wrapper,
             sort_options: udwf.sort_options.clone(),
             has_simplify: udwf.has_simplify,
+            logical_codec: udwf.logical_codec.clone(),
             coerce_types: coerce_types_fn_wrapper,
             field: field_fn_wrapper,
             documentation: documentation_fn_wrapper,
@@ -345,8 +348,11 @@ impl Clone for FFI_WindowUDF {
     }
 }
 
-impl From<Arc<WindowUDF>> for FFI_WindowUDF {
-    fn from(udf: Arc<WindowUDF>) -> Self {
+impl FFI_WindowUDF {
+    pub fn new_with_ffi_codec(
+        udf: Arc<WindowUDF>,
+        logical_codec: crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec,
+    ) -> Self {
         if let Some(udwf) = udf.inner().downcast_ref::<ForeignWindowUDF>() {
             return udwf.udf.clone();
         }
@@ -366,6 +372,7 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
             partition_evaluator: partition_evaluator_fn_wrapper,
             sort_options,
             has_simplify,
+            logical_codec,
             coerce_types: coerce_types_fn_wrapper,
             field: field_fn_wrapper,
             documentation: documentation_fn_wrapper,
@@ -377,6 +384,27 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
         }
+    }
+}
+
+impl From<Arc<WindowUDF>> for FFI_WindowUDF {
+    fn from(udf: Arc<WindowUDF>) -> Self {
+        struct DummyProvider;
+        impl datafusion_execution::TaskContextProvider for DummyProvider {
+            fn task_ctx(&self) -> Arc<datafusion_execution::TaskContext> {
+                Arc::new(datafusion_execution::TaskContext::default())
+            }
+        }
+        let ctx: Arc<dyn datafusion_execution::TaskContextProvider> =
+            Arc::new(DummyProvider);
+        let task_ctx_provider = crate::execution::FFI_TaskContextProvider::from(&ctx);
+        let logical_codec =
+            crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec::new(
+                Arc::new(datafusion_proto::logical_plan::DefaultLogicalExtensionCodec {}),
+                None,
+                task_ctx_provider,
+            );
+        Self::new_with_ffi_codec(udf, logical_codec)
     }
 }
 
@@ -519,12 +547,15 @@ impl WindowUDFImpl for ForeignWindowUDF {
 
         let udf = self.udf.clone();
         Some(Box::new(move |wf, info| {
-            let codec = datafusion_proto::logical_plan::DefaultLogicalExtensionCodec {};
+            let codec_arc: Arc<
+                dyn datafusion_proto::logical_plan::LogicalExtensionCodec,
+            > = (&udf.logical_codec).into();
 
             // To serialize the window function
             let expr = Expr::WindowFunction(Box::new(wf));
             let protobuf = datafusion_proto::logical_plan::to_proto::serialize_expr(
-                &expr, &codec,
+                &expr,
+                codec_arc.as_ref(),
             )
             .map_err(|e| datafusion_common::DataFusionError::Plan(e.to_string()))?;
 
@@ -549,10 +580,13 @@ impl WindowUDFImpl for ForeignWindowUDF {
                     .map_err(|e| {
                         datafusion_common::DataFusionError::Plan(e.to_string())
                     })?;
-                    let ctx = datafusion_execution::TaskContext::default();
+                    let ctx: Arc<datafusion_execution::TaskContext> =
+                        (&udf.logical_codec.task_ctx_provider).try_into()?;
                     let simplified_expr =
                         datafusion_proto::logical_plan::from_proto::parse_expr(
-                            &protobuf, &ctx, &codec,
+                            &protobuf,
+                            ctx.as_ref(),
+                            codec_arc.as_ref(),
                         )?;
                     Ok(simplified_expr)
                 }
@@ -873,7 +907,15 @@ mod tests {
         let original_udwf = Arc::new(WindowUDF::from(MockUDWFSimplify {
             signature: Signature::any(0, Volatility::Immutable),
         }));
-        let mut ffi_udwf = FFI_WindowUDF::from(Arc::clone(&original_udwf));
+
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let codec = crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec::new(
+            Arc::new(datafusion_proto::logical_plan::DefaultLogicalExtensionCodec {}),
+            None,
+            task_ctx_provider,
+        );
+        let mut ffi_udwf =
+            FFI_WindowUDF::new_with_ffi_codec(Arc::clone(&original_udwf), codec);
         ffi_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();

@@ -62,12 +62,12 @@ impl TryFrom<ExpressionArgs<'_>> for FFI_ExpressionArgs {
     }
 }
 
-pub struct ForeignExpressionArgs {
+pub struct OwnedExpressionArgs {
     input_exprs: Vec<Arc<dyn PhysicalExpr>>,
     input_fields: Vec<FieldRef>,
 }
 
-impl TryFrom<FFI_ExpressionArgs> for ForeignExpressionArgs {
+impl TryFrom<FFI_ExpressionArgs> for OwnedExpressionArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_ExpressionArgs) -> Result<Self> {
@@ -82,8 +82,8 @@ impl TryFrom<FFI_ExpressionArgs> for ForeignExpressionArgs {
     }
 }
 
-impl<'a> From<&'a ForeignExpressionArgs> for ExpressionArgs<'a> {
-    fn from(value: &'a ForeignExpressionArgs) -> Self {
+impl<'a> From<&'a OwnedExpressionArgs> for ExpressionArgs<'a> {
+    fn from(value: &'a OwnedExpressionArgs) -> Self {
         ExpressionArgs::new(&value.input_exprs, &value.input_fields)
     }
 }
