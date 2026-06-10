@@ -15,17 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::array::timezone::Tz;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
 use chrono::{Datelike, NaiveDate, TimeZone};
 
-use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -38,7 +37,24 @@ The `current_date()` return value is determined at query time and will return th
 "#,
     syntax_example = r#"current_date()
     (optional) SET datafusion.execution.time_zone = '+00:00';
-    SELECT current_date();"#
+    SELECT current_date();"#,
+    sql_example = r#"```sql
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-23     |
++----------------+
+
+-- The current date is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-24     |
++----------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentDateFunc {
@@ -68,10 +84,6 @@ impl CurrentDateFunc {
 /// wherever it appears within a single statement. This value is
 /// chosen during planning time.
 impl ScalarUDFImpl for CurrentDateFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "current_date"
     }
@@ -84,10 +96,7 @@ impl ScalarUDFImpl for CurrentDateFunc {
         Ok(Date32)
     }
 
-    fn invoke_with_args(
-        &self,
-        _args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!(
             "invoke should not be called on a simplified current_date() function"
         )
@@ -99,23 +108,20 @@ impl ScalarUDFImpl for CurrentDateFunc {
 
     fn simplify(
         &self,
-        _args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        args: Vec<Expr>,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let now_ts = info.execution_props().query_execution_start_time;
+        let Some(now_ts) = info.query_execution_start_time() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
 
         // Get timezone from config and convert to local time
         let days = info
-            .execution_props()
             .config_options()
-            .and_then(|config| {
-                config
-                    .execution
-                    .time_zone
-                    .as_ref()
-                    .map(|tz| tz.parse::<Tz>().ok())
-            })
-            .flatten()
+            .execution
+            .time_zone
+            .as_ref()
+            .and_then(|tz| tz.parse::<Tz>().ok())
             .map_or_else(
                 || datetime_to_days(&now_ts),
                 |tz| {

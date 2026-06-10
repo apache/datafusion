@@ -28,7 +28,7 @@ use std::hash::{Hash, Hasher};
 ///
 /// Note: This trait should not be implemented directly. Implement `Eq` and `Any` and use
 /// the blanket implementation.
-#[allow(private_bounds)]
+#[expect(private_bounds)]
 pub trait DynEq: private::EqSealed {
     fn dyn_eq(&self, other: &dyn Any) -> bool;
 }
@@ -45,7 +45,7 @@ impl<T: Eq + Any> DynEq for T {
 ///
 /// Note: This trait should not be implemented directly. Implement `Hash` and `Any` and use
 /// the blanket implementation.
-#[allow(private_bounds)]
+#[expect(private_bounds)]
 pub trait DynHash: private::HashSealed {
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 }

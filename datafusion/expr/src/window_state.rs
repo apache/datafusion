@@ -23,14 +23,13 @@ use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 use arrow::{
     array::ArrayRef,
-    compute::{concat, concat_batches, SortOptions},
+    compute::{SortOptions, concat, concat_batches},
     datatypes::{DataType, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    internal_datafusion_err, internal_err,
+    Result, ScalarValue, internal_datafusion_err, internal_err,
     utils::{compare_rows, get_row_at_idx, search_in_slice},
-    Result, ScalarValue,
 };
 
 /// Holds the state of evaluating a window function
@@ -170,7 +169,7 @@ impl WindowFrameContext {
             // comparison of rows.
             WindowFrameContext::Range {
                 window_frame,
-                ref mut state,
+                state,
             } => state.calculate_range(
                 window_frame,
                 last_range,
@@ -183,7 +182,7 @@ impl WindowFrameContext {
             // or position of NULLs do not impact inequality.
             WindowFrameContext::Groups {
                 window_frame,
-                ref mut state,
+                state,
             } => state.calculate_range(window_frame, range_columns, length, idx),
         }
     }
@@ -205,14 +204,14 @@ impl WindowFrameContext {
             WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
                 return internal_err!(
                     "Frame start cannot be UNBOUNDED FOLLOWING '{window_frame:?}'"
-                )
+                );
             }
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
                 std::cmp::min(idx + n as usize, length)
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return internal_err!("Rows should be UInt64")
+                return internal_err!("Rows should be UInt64");
             }
         };
         let end = match window_frame.end_bound {
@@ -220,7 +219,7 @@ impl WindowFrameContext {
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
                 return internal_err!(
                     "Frame end cannot be UNBOUNDED PRECEDING '{window_frame:?}'"
-                )
+                );
             }
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
                 if idx >= n as usize {
@@ -237,7 +236,7 @@ impl WindowFrameContext {
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return internal_err!("Rows should be UInt64")
+                return internal_err!("Rows should be UInt64");
             }
         };
         Ok(Range { start, end })
@@ -397,6 +396,11 @@ impl WindowFrameStateRange {
         length: usize,
     ) -> Result<usize> {
         let current_row_values = get_row_at_idx(range_columns, idx)?;
+        let search_start = if SIDE {
+            last_range.start
+        } else {
+            last_range.end
+        };
         let end_range = if let Some(delta) = delta {
             let is_descending: bool = self
                 .sort_options
@@ -408,33 +412,39 @@ impl WindowFrameStateRange {
                 })?
                 .descending;
 
-            current_row_values
-                .iter()
-                .map(|value| {
-                    if value.is_null() {
-                        return Ok(value.clone());
+            // On overflow the boundary exceeds the type's range and is
+            // effectively unbounded within the partition. Collapse to the
+            // partition edge rather than feeding `search_in_slice` a
+            // wrapped-around target: PRECEDING searches reach `search_start`,
+            // FOLLOWING searches reach `length`.
+            let unbounded_edge = if SEARCH_SIDE { search_start } else { length };
+            let mut targets = Vec::with_capacity(current_row_values.len());
+            for value in &current_row_values {
+                if value.is_null() {
+                    targets.push(value.clone());
+                    continue;
+                }
+                let target = if SEARCH_SIDE == is_descending {
+                    match value.add_checked(delta) {
+                        Ok(v) => v,
+                        Err(_) => return Ok(unbounded_edge),
                     }
-                    if SEARCH_SIDE == is_descending {
-                        // TODO: Handle positive overflows.
-                        value.add(delta)
-                    } else if value.is_unsigned() && value < delta {
-                        // NOTE: This gets a polymorphic zero without having long coercion code for ScalarValue.
-                        //       If we decide to implement a "default" construction mechanism for ScalarValue,
-                        //       change the following statement to use that.
-                        value.sub(value)
-                    } else {
-                        // TODO: Handle negative overflows.
-                        value.sub(delta)
+                } else if value.is_unsigned() && value < delta {
+                    // NOTE: This gets a polymorphic zero without having long coercion code for ScalarValue.
+                    //       If we decide to implement a "default" construction mechanism for ScalarValue,
+                    //       change the following statement to use that.
+                    value.sub(value)?
+                } else {
+                    match value.sub_checked(delta) {
+                        Ok(v) => v,
+                        Err(_) => return Ok(unbounded_edge),
                     }
-                })
-                .collect::<Result<Vec<ScalarValue>>>()?
+                };
+                targets.push(target);
+            }
+            targets
         } else {
             current_row_values
-        };
-        let search_start = if SIDE {
-            last_range.start
-        } else {
-            last_range.end
         };
         let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
             let cmp = compare_rows(current, target, &self.sort_options)?;

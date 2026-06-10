@@ -23,10 +23,10 @@ use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
 };
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
-    TypeSignature::Uniform, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature::Exact, TypeSignature::Uniform, Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::izip;
@@ -109,10 +109,6 @@ impl RegexpInstrFunc {
 }
 
 impl ScalarUDFImpl for RegexpInstrFunc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "regexp_instr"
     }
@@ -125,10 +121,7 @@ impl ScalarUDFImpl for RegexpInstrFunc {
         Ok(Int64)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
 
         let len = args
@@ -163,7 +156,9 @@ impl ScalarUDFImpl for RegexpInstrFunc {
 pub fn regexp_instr_func(args: &[ArrayRef]) -> Result<ArrayRef> {
     let args_len = args.len();
     if !(2..=6).contains(&args_len) {
-        return exec_err!("regexp_instr was called with {args_len} arguments. It requires at least 2 and at most 6.");
+        return exec_err!(
+            "regexp_instr was called with {args_len} arguments. It requires at least 2 and at most 6."
+        );
     }
 
     let values = &args[0];
@@ -286,7 +281,6 @@ fn regexp_instr(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn regexp_instr_inner<'a, S>(
     values: &S,
     regex_array: &S,
@@ -357,14 +351,14 @@ fn handle_subexp(
     value: &str,
     byte_start_offset: usize,
 ) -> Result<Option<i64>, ArrowError> {
-    if let Some(captures) = pattern.captures(search_slice) {
-        if let Some(matched) = captures.get(subexpr as usize) {
-            // Convert byte offset relative to search_slice back to 1-based character offset
-            // relative to the original `value` string.
-            let start_char_offset =
-                value[..byte_start_offset + matched.start()].chars().count() as i64 + 1;
-            return Ok(Some(start_char_offset));
-        }
+    if let Some(captures) = pattern.captures(search_slice)
+        && let Some(matched) = captures.get(subexpr as usize)
+    {
+        // Convert byte offset relative to search_slice back to 1-based character offset
+        // relative to the original `value` string.
+        let start_char_offset =
+            value[..byte_start_offset + matched.start()].chars().count() as i64 + 1;
+        return Ok(Some(start_char_offset));
     }
     Ok(Some(0)) // Return 0 if the subexpression was not found
 }
@@ -448,11 +442,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int64Array;
     use arrow::array::{GenericStringArray, StringViewArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::ScalarFunctionArgs;
     #[test]
     fn test_regexp_instr() {
         test_case_sensitive_regexp_instr_nulls();

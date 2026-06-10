@@ -16,10 +16,10 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::{
-    binary::try_type_union_resolution, simplify::ExprSimplifyResult, when, ColumnarValue,
-    Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    binary::try_type_union_resolution, simplify::ExprSimplifyResult, when,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -42,10 +42,6 @@ impl SparkIf {
 }
 
 impl ScalarUDFImpl for SparkIf {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "if"
     }
@@ -86,7 +82,7 @@ impl ScalarUDFImpl for SparkIf {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn datafusion_expr::simplify::SimplifyInfo,
+        _info: &datafusion_expr::simplify::SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let condition = args[0].clone();
         let then_expr = args[1].clone();

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -27,7 +28,7 @@ use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{HashMap, JoinType, Result, ScalarValue};
+use datafusion_common::{JoinType, Result, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
@@ -153,7 +154,7 @@ impl From<Arc<dyn PhysicalExpr>> for ConstExpr {
         // By default, assume constant expressions are not same across partitions.
         // However, if we have a literal, it will have a single value that is the
         // same across all partitions.
-        let across = if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+        let across = if let Some(lit) = expr.downcast_ref::<Literal>() {
             AcrossPartitions::Uniform(Some(lit.value().clone()))
         } else {
             AcrossPartitions::Heterogeneous
@@ -201,7 +202,7 @@ impl EquivalenceClass {
     /// Insert the expression into this class, meaning it is known to be equal to
     /// all other expressions in this class.
     pub fn push(&mut self, expr: Arc<dyn PhysicalExpr>) {
-        if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(lit) = expr.downcast_ref::<Literal>() {
             let expr_across = AcrossPartitions::Uniform(Some(lit.value().clone()));
             if let Some(across) = self.constant.as_mut() {
                 // TODO: Return an error if constant values do not agree.
@@ -303,7 +304,7 @@ type AugmentedMapping<'a> = IndexMap<
 #[derive(Clone, Debug, Default)]
 pub struct EquivalenceGroup {
     /// A mapping from expressions to their equivalence class key.
-    map: HashMap<Arc<dyn PhysicalExpr>, usize>,
+    map: IndexMap<Arc<dyn PhysicalExpr>, usize>,
     /// The equivalence classes in this group.
     classes: Vec<EquivalenceClass>,
 }
@@ -436,7 +437,7 @@ impl EquivalenceGroup {
         let cls = self.classes.swap_remove(idx);
         // Remove its entries from the lookup table:
         for expr in cls.iter() {
-            self.map.remove(expr);
+            self.map.swap_remove(expr);
         }
         // Update the lookup table for the moved class:
         if idx < self.classes.len() {
@@ -448,7 +449,7 @@ impl EquivalenceGroup {
     /// Updates the entry in lookup table for the given equivalence class with
     /// the given index.
     fn update_lookup_table(
-        map: &mut HashMap<Arc<dyn PhysicalExpr>, usize>,
+        map: &mut IndexMap<Arc<dyn PhysicalExpr>, usize>,
         cls: &EquivalenceClass,
         idx: usize,
     ) {
@@ -591,7 +592,7 @@ impl EquivalenceGroup {
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
         // Literals don't need to be projected
-        if expr.as_any().downcast_ref::<Literal>().is_some() {
+        if expr.downcast_ref::<Literal>().is_some() {
             return Some(Arc::clone(expr));
         }
 
@@ -734,13 +735,13 @@ impl EquivalenceGroup {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<AcrossPartitions> {
-        if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(lit) = expr.downcast_ref::<Literal>() {
             return Some(AcrossPartitions::Uniform(Some(lit.value().clone())));
         }
-        if let Some(cls) = self.get_equivalence_class(expr) {
-            if cls.constant.is_some() {
-                return cls.constant.clone();
-            }
+        if let Some(cls) = self.get_equivalence_class(expr)
+            && cls.constant.is_some()
+        {
+            return cls.constant.clone();
         }
         // TODO: This function should be able to return values of non-literal
         //       complex constants as well; e.g. it should return `8` for the
@@ -819,15 +820,15 @@ impl EquivalenceGroup {
 
         // Check if expressions are equivalent through equivalence classes
         // We need to check both directions since expressions might be in different classes
-        if let Some(left_class) = self.get_equivalence_class(left) {
-            if left_class.contains(right) {
-                return true;
-            }
+        if let Some(left_class) = self.get_equivalence_class(left)
+            && left_class.contains(right)
+        {
+            return true;
         }
-        if let Some(right_class) = self.get_equivalence_class(right) {
-            if right_class.contains(left) {
-                return true;
-            }
+        if let Some(right_class) = self.get_equivalence_class(right)
+            && right_class.contains(left)
+        {
+            return true;
         }
 
         // For non-leaf nodes, check structural equality
@@ -841,7 +842,7 @@ impl EquivalenceGroup {
         }
 
         // Type equality check through reflection
-        if left.as_any().type_id() != right.as_any().type_id() {
+        if (left as &dyn Any).type_id() != (right as &dyn Any).type_id() {
             return false;
         }
 
@@ -910,10 +911,9 @@ impl From<Vec<EquivalenceClass>> for EquivalenceGroup {
 mod tests {
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::{binary, col, lit, BinaryExpr, Column, Literal};
+    use crate::expressions::{BinaryExpr, Column, binary, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
 
-    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Operator;
 
     #[test]
@@ -1082,8 +1082,7 @@ mod tests {
                 left: Arc::clone(&col_a),
                 right: Arc::clone(&col_b),
                 expected: false,
-                description:
-                    "Columns in different equivalence classes should not be equal",
+                description: "Columns in different equivalence classes should not be equal",
             },
             // Literal tests
             TestCase {
@@ -1111,8 +1110,7 @@ mod tests {
                     Arc::clone(&col_y),
                 )) as _,
                 expected: true,
-                description:
-                    "Binary expressions with equivalent operands should be equal",
+                description: "Binary expressions with equivalent operands should be equal",
             },
             TestCase {
                 left: Arc::new(BinaryExpr::new(
@@ -1126,8 +1124,7 @@ mod tests {
                     Arc::clone(&col_a),
                 )) as _,
                 expected: false,
-                description:
-                    "Binary expressions with non-equivalent operands should not be equal",
+                description: "Binary expressions with non-equivalent operands should not be equal",
             },
             TestCase {
                 left: Arc::new(BinaryExpr::new(

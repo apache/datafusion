@@ -16,14 +16,17 @@
 // under the License.
 
 use crate::aggregates::group_values::multi_group_by::{
-    nulls_equal_to, GroupColumn, Nulls,
+    GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{make_view, Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, ByteView, GenericByteViewArray,
+    make_view,
+};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
-use itertools::izip;
+use datafusion_common::utils::split_vec_min_alloc;
 use std::marker::PhantomData;
 use std::mem::{replace, size_of};
 use std::sync::Arc;
@@ -99,7 +102,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
     fn equal_to_inner(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         let array = array.as_byte_view::<B>();
-        self.do_equal_to_inner(lhs_row, array, rhs_row)
+        // since this is a single row comparison, don't bother specializing for nulls/buffers
+        self.do_equal_to_inner::<true, true>(lhs_row, array, rhs_row)
     }
 
     fn append_val_inner(&mut self, array: &ArrayRef, row: usize) {
@@ -117,28 +121,27 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         self.do_append_val_inner(arr, row);
     }
 
-    fn vectorized_equal_to_inner(
+    // Don't inline to keep the code small and give LLVM the best chance of
+    // vectorizing the inner loop
+    #[inline(never)]
+    fn vectorized_equal_to_inner<const HAS_NULLS: bool, const HAS_BUFFERS: bool>(
         &self,
         lhs_rows: &[usize],
-        array: &ArrayRef,
+        array: &GenericByteViewArray<B>,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
-        let array = array.as_byte_view::<B>();
-
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
-
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to, don't need to check
-            if !*equal_to_result {
+        for (idx, (&lhs_row, &rhs_row)) in
+            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+        {
+            if !equal_to_results.get_bit(idx) {
                 continue;
             }
 
-            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+            if !self.do_equal_to_inner::<HAS_NULLS, HAS_BUFFERS>(lhs_row, array, rhs_row)
+            {
+                equal_to_results.set_bit(idx, false);
+            }
         }
     }
 
@@ -216,25 +219,41 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
     }
 
-    fn do_equal_to_inner(
+    /// Compare the value at `lhs_row` in this builder with
+    /// the value at `rhs_row` in input `array`
+    ///
+    /// Templated so that the inner compare loop can be
+    /// specialized based on the input array
+    #[inline(always)]
+    fn do_equal_to_inner<const HAS_NULLS: bool, const HAS_BUFFERS: bool>(
         &self,
         lhs_row: usize,
         array: &GenericByteViewArray<B>,
         rhs_row: usize,
     ) -> bool {
         // Check if nulls equal firstly
-        let exist_null = self.nulls.is_null(lhs_row);
-        let input_null = array.is_null(rhs_row);
-        if let Some(result) = nulls_equal_to(exist_null, input_null) {
-            return result;
+        if HAS_NULLS {
+            let exist_null = self.nulls.is_null(lhs_row);
+            let input_null = array.is_null(rhs_row);
+            if let Some(result) = nulls_equal_to(exist_null, input_null) {
+                return result;
+            }
         }
 
         // Otherwise, we need to check their values
-        let exist_view = self.views[lhs_row];
+
+        // SAFETY: the `lhs_row` and rhs_row` are valid
+        let exist_view = unsafe { *self.views.get_unchecked(lhs_row) };
         let exist_view_len = exist_view as u32;
 
-        let input_view = array.views()[rhs_row];
+        let input_view = unsafe { *array.views().get_unchecked(rhs_row) };
         let input_view_len = input_view as u32;
+
+        // fast path, if we know there are no buffers, then the view must be inlined
+        // so we can simply compare the u128 views
+        if !HAS_BUFFERS {
+            return exist_view == input_view;
+        }
 
         // The check logic
         //   - Check len equality
@@ -246,19 +265,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
 
         if exist_view_len <= 12 {
-            let exist_inline = unsafe {
-                GenericByteViewArray::<B>::inline_value(
-                    &exist_view,
-                    exist_view_len as usize,
-                )
-            };
-            let input_inline = unsafe {
-                GenericByteViewArray::<B>::inline_value(
-                    &input_view,
-                    input_view_len as usize,
-                )
-            };
-            exist_inline == input_inline
+            // both inlined, so compare inlined value
+            exist_view == input_view
         } else {
             let exist_prefix =
                 unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
@@ -269,27 +277,25 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                 return false;
             }
 
+            // get the full values and compare
             let exist_full = {
                 let byte_view = ByteView::from(exist_view);
-                self.value(
-                    byte_view.buffer_index as usize,
-                    byte_view.offset as usize,
-                    byte_view.length as usize,
-                )
+                let buffer_index = byte_view.buffer_index as usize;
+                let offset = byte_view.offset as usize;
+                let length = byte_view.length as usize;
+                debug_assert!(buffer_index <= self.completed.len());
+
+                unsafe {
+                    if buffer_index < self.completed.len() {
+                        let block = self.completed.get_unchecked(buffer_index);
+                        block.as_slice().get_unchecked(offset..offset + length)
+                    } else {
+                        self.in_progress.get_unchecked(offset..offset + length)
+                    }
+                }
             };
             let input_full: &[u8] = unsafe { array.value_unchecked(rhs_row).as_ref() };
             exist_full == input_full
-        }
-    }
-
-    fn value(&self, buffer_index: usize, offset: usize, length: usize) -> &[u8] {
-        debug_assert!(buffer_index <= self.completed.len());
-
-        if buffer_index < self.completed.len() {
-            let block = &self.completed[buffer_index];
-            &block[offset..offset + length]
-        } else {
-            &self.in_progress[offset..offset + length]
         }
     }
 
@@ -358,7 +364,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         //
         //   - Shift the `buffer index` of remaining non-inlined `views`
         //
-        let first_n_views = self.views.drain(0..n).collect::<Vec<_>>();
+        let first_n_views = split_vec_min_alloc(&mut self.views, n);
 
         let last_non_inlined_view = first_n_views
             .iter()
@@ -451,21 +457,23 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         last_take_len: usize,
     ) -> Vec<Buffer> {
         let mut take_buffers = Vec::with_capacity(last_remaining_buffer_index + 1);
+        debug_assert!(last_remaining_buffer_index <= self.completed.len());
 
-        // Take `0 ~ last_remaining_buffer_index - 1` buffers
-        if !self.completed.is_empty() || last_remaining_buffer_index == 0 {
-            take_buffers.extend(self.completed.drain(0..last_remaining_buffer_index));
-        }
-
-        // Process the `last_remaining_buffer_index` buffers
+        // Process the `last_remaining_buffer_index` buffer before draining so the index is valid.
         let last_buffer = if last_remaining_buffer_index < self.completed.len() {
             // If it is in `completed`, simply clone
             self.completed[last_remaining_buffer_index].clone()
         } else {
             // If it is `in_progress`, copied `0 ~ offset` part
+            debug_assert!(last_take_len <= self.in_progress.len());
             let taken_last_buffer = self.in_progress[0..last_take_len].to_vec();
             Buffer::from_vec(taken_last_buffer)
         };
+
+        // Take `0 ~ last_remaining_buffer_index - 1` buffers
+        if last_remaining_buffer_index > 0 {
+            take_buffers.extend(self.completed.drain(0..last_remaining_buffer_index));
+        }
         take_buffers.push(last_buffer);
 
         take_buffers
@@ -505,9 +513,38 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         group_indices: &[usize],
         array: &ArrayRef,
         rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     ) {
-        self.vectorized_equal_to_inner(group_indices, array, rows, equal_to_results);
+        let has_nulls = array.null_count() != 0;
+        let array = array.as_byte_view::<B>();
+        let has_buffers = !array.data_buffers().is_empty();
+        // call specialized version based on nulls and buffers presence
+        match (has_nulls, has_buffers) {
+            (true, true) => self.vectorized_equal_to_inner::<true, true>(
+                group_indices,
+                array,
+                rows,
+                equal_to_results,
+            ),
+            (true, false) => self.vectorized_equal_to_inner::<true, false>(
+                group_indices,
+                array,
+                rows,
+                equal_to_results,
+            ),
+            (false, true) => self.vectorized_equal_to_inner::<false, true>(
+                group_indices,
+                array,
+                rows,
+                equal_to_results,
+            ),
+            (false, false) => self.vectorized_equal_to_inner::<false, false>(
+                group_indices,
+                array,
+                rows,
+                equal_to_results,
+            ),
+        }
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
@@ -547,10 +584,22 @@ mod tests {
     use std::sync::Arc;
 
     use crate::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
-    use arrow::array::{ArrayRef, AsArray, NullBufferBuilder, StringViewArray};
+    use arrow::array::{
+        ArrayRef, AsArray, BooleanBufferBuilder, NullBufferBuilder, StringViewArray,
+    };
     use arrow::datatypes::StringViewType;
 
     use super::GroupColumn;
+
+    fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
+        let mut buf = BooleanBufferBuilder::new(n);
+        buf.append_n(n, true);
+        buf
+    }
+
+    fn to_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
+        (0..buf.len()).map(|i| buf.get_bit(i)).collect()
+    }
 
     #[test]
     fn test_byte_view_append_val() {
@@ -586,16 +635,18 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &ByteViewGroupValueBuilder<StringViewType>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            let iter = lhs_rows.iter().zip(rhs_rows.iter());
-            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
-            }
-        };
+        let equal_to =
+            |builder: &ByteViewGroupValueBuilder<StringViewType>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut BooleanBufferBuilder| {
+                let iter = lhs_rows.iter().zip(rhs_rows.iter());
+                for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                    equal_to_results
+                        .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                }
+            };
 
         test_byte_view_equal_to_internal(append, equal_to);
     }
@@ -610,18 +661,19 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &ByteViewGroupValueBuilder<StringViewType>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            builder.vectorized_equal_to(
-                lhs_rows,
-                input_array,
-                rhs_rows,
-                equal_to_results,
-            );
-        };
+        let equal_to =
+            |builder: &ByteViewGroupValueBuilder<StringViewType>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut BooleanBufferBuilder| {
+                builder.vectorized_equal_to(
+                    lhs_rows,
+                    input_array,
+                    rhs_rows,
+                    equal_to_results,
+                );
+            };
 
         test_byte_view_equal_to_internal(append, equal_to);
     }
@@ -646,19 +698,20 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        let mut equal_to_results = make_true_buffer(all_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(results[4]);
 
         // All not nulls input array
         let all_not_nulls_input_array = Arc::new(StringViewArray::from(vec![
@@ -672,19 +725,20 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        let mut equal_to_results = make_true_buffer(all_not_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(equal_to_results[3]);
-        assert!(equal_to_results[4]);
+        assert!(results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(results[3]);
+        assert!(results[4]);
     }
 
     fn test_byte_view_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
@@ -695,7 +749,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut BooleanBufferBuilder,
         ),
     {
         // Will cover such cases:
@@ -742,7 +796,7 @@ mod tests {
         // Define input array
         let (views, buffer, _nulls) = StringViewArray::from(vec![
             Some("foo"),
-            Some("bar"), // set to null
+            Some("bar"),
             None,
             None,
             Some("baz"),
@@ -756,10 +810,10 @@ mod tests {
         ])
         .into_parts();
 
-        // explicitly build a boolean buffer where one of the null values also happens to match
+        // explicitly build a null buffer where one of the null values also happens to match
         let mut nulls = NullBufferBuilder::new(9);
         nulls.append_non_null();
-        nulls.append_null(); // this sets Some("bar") to null above
+        nulls.append_null();
         nulls.append_null();
         nulls.append_null();
         nulls.append_non_null();
@@ -774,7 +828,7 @@ mod tests {
             Arc::new(StringViewArray::new(views, buffer, nulls.finish())) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; input_array.len()];
+        let mut equal_to_results = make_true_buffer(input_array.len());
         equal_to(
             &builder,
             &[0, 1, 2, 3, 4, 5, 6, 7, 7, 7, 8, 8],
@@ -782,19 +836,20 @@ mod tests {
             &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
             &mut equal_to_results,
         );
+        let results = to_vec(&equal_to_results);
 
-        assert!(!equal_to_results[0]);
-        assert!(equal_to_results[1]);
-        assert!(equal_to_results[2]);
-        assert!(!equal_to_results[3]);
-        assert!(!equal_to_results[4]);
-        assert!(!equal_to_results[5]);
-        assert!(equal_to_results[6]);
-        assert!(!equal_to_results[7]);
-        assert!(!equal_to_results[8]);
-        assert!(equal_to_results[9]);
-        assert!(!equal_to_results[10]);
-        assert!(equal_to_results[11]);
+        assert!(!results[0]);
+        assert!(results[1]);
+        assert!(results[2]);
+        assert!(!results[3]);
+        assert!(!results[4]);
+        assert!(!results[5]);
+        assert!(results[6]);
+        assert!(!results[7]);
+        assert!(!results[8]);
+        assert!(results[9]);
+        assert!(!results[10]);
+        assert!(results[11]);
     }
 
     #[test]
@@ -912,5 +967,29 @@ mod tests {
 
         let taken_array = builder.take_n(final_ones_to_append);
         assert_eq!(&taken_array, &input_array);
+    }
+
+    #[test]
+    fn test_byte_view_take_n_partial_completed_nonzero_index() {
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(30);
+        let input_array = StringViewArray::from(vec![
+            Some("aaaaaaaaaaaaaa"),
+            Some("bbbbbbbbbbbbbb"),
+            Some("cccccccccccccc"),
+            Some("dddddddddddddd"),
+            Some("eeeeeeeeeeeeee"),
+        ]);
+        let input_array: ArrayRef = Arc::new(input_array);
+
+        for row in 0..input_array.len() {
+            builder.append_val(&input_array, row).unwrap();
+        }
+
+        assert_eq!(builder.completed.len(), 2);
+        assert_eq!(builder.in_progress.len(), 14);
+
+        let taken_array = builder.take_n(3);
+        assert_eq!(&taken_array, &input_array.slice(0, 3));
     }
 }

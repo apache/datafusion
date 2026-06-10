@@ -22,17 +22,17 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::{StandardWindowFunctionExpr, WindowExpr};
-use crate::window::window_expr::{get_orderby_values, WindowFn};
+use crate::window::window_expr::{WindowFn, get_orderby_values};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{EquivalenceProperties, PhysicalExpr};
 
-use arrow::array::{new_empty_array, ArrayRef};
+use arrow::array::{ArrayRef, new_empty_array};
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
+use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 /// A window expr that takes the form of a [`StandardWindowFunctionExpr`].
@@ -242,7 +242,7 @@ impl WindowExpr for StandardWindowExpr {
                 // fast path when the result only has a single row
                 row_wise_results[0].to_array()?
             } else {
-                ScalarValue::iter_to_array(row_wise_results.into_iter())?
+                ScalarValue::iter_to_array(row_wise_results)?
             };
 
             state.update(&out_col, partition_batch_state)?;

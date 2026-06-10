@@ -15,21 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
-use arrow::array::{
-    make_array, new_null_array, Array, ArrayData, ArrayRef, Capacities, GenericListArray,
-    MutableArrayData, NullArray, OffsetSizeTrait,
-};
-use arrow::buffer::OffsetBuffer;
+use arrow::array::{Array, ArrayRef, new_null_array};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{internal_err, plan_datafusion_err, plan_err, Result};
-use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    Volatility,
 };
+use datafusion_functions_nested::make_array::{array_array, coerce_types_inner};
 
 use crate::function::functions_nested_utils::make_scalar_function;
 
@@ -38,7 +34,6 @@ const ARRAY_FIELD_DEFAULT_NAME: &str = "element";
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArray {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for SparkArray {
@@ -50,20 +45,12 @@ impl Default for SparkArray {
 impl SparkArray {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![TypeSignature::UserDefined, TypeSignature::Nullary],
-                Volatility::Immutable,
-            ),
-            aliases: vec![String::from("spark_make_array")],
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
 
 impl ScalarUDFImpl for SparkArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array"
     }
@@ -92,10 +79,6 @@ impl ScalarUDFImpl for SparkArray {
             }
         }
 
-        if expr_type.is_null() {
-            expr_type = DataType::Int32;
-        }
-
         let return_type = DataType::List(Arc::new(Field::new(
             ARRAY_FIELD_DEFAULT_NAME,
             expr_type,
@@ -114,31 +97,12 @@ impl ScalarUDFImpl for SparkArray {
         make_scalar_function(make_array_inner)(args.as_slice())
     }
 
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let first_type = arg_types.first().ok_or_else(|| {
-            plan_datafusion_err!("Spark array function requires at least one argument")
-        })?;
-        let new_type =
-            arg_types
-                .iter()
-                .skip(1)
-                .try_fold(first_type.clone(), |acc, x| {
-                    // The coerced types found by `comparison_coercion` are not guaranteed to be
-                    // coercible for the arguments. `comparison_coercion` returns more loose
-                    // types that can be coerced to both `acc` and `x` for comparison purpose.
-                    // See `maybe_data_types` for the actual coercion.
-                    let coerced_type = comparison_coercion(&acc, x);
-                    if let Some(coerced_type) = coerced_type {
-                        Ok(coerced_type)
-                    } else {
-                        plan_err!("Coercion from {acc} to {x} failed.")
-                    }
-                })?;
-        Ok(vec![new_type; arg_types.len()])
+        if arg_types.is_empty() {
+            Ok(vec![])
+        } else {
+            coerce_types_inner(arg_types, self.name())
+        }
     }
 }
 
@@ -160,7 +124,7 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Null => {
             let length = arrays.iter().map(|a| a.len()).sum();
             // By default Int32
-            let array = new_null_array(&DataType::Int32, length);
+            let array = new_null_array(&DataType::Null, length);
             Ok(Arc::new(
                 SingleRowListArrayBuilder::new(array)
                     .with_nullable(true)
@@ -168,98 +132,6 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
                     .build_list_array(),
             ))
         }
-        _ => array_array::<i32>(arrays, data_type),
+        _ => array_array::<i32>(arrays, data_type, ARRAY_FIELD_DEFAULT_NAME),
     }
-}
-
-/// Convert one or more [`ArrayRef`] of the same type into a
-/// `ListArray` or 'LargeListArray' depending on the offset size.
-///
-/// # Example (non nested)
-///
-/// Calling `array(col1, col2)` where col1 and col2 are non nested
-/// would return a single new `ListArray`, where each row was a list
-/// of 2 elements:
-///
-/// ```text
-/// ┌─────────┐   ┌─────────┐           ┌──────────────┐
-/// │ ┌─────┐ │   │ ┌─────┐ │           │ ┌──────────┐ │
-/// │ │  A  │ │   │ │  X  │ │           │ │  [A, X]  │ │
-/// │ ├─────┤ │   │ ├─────┤ │           │ ├──────────┤ │
-/// │ │NULL │ │   │ │  Y  │ │──────────▶│ │[NULL, Y] │ │
-/// │ ├─────┤ │   │ ├─────┤ │           │ ├──────────┤ │
-/// │ │  C  │ │   │ │  Z  │ │           │ │  [C, Z]  │ │
-/// │ └─────┘ │   │ └─────┘ │           │ └──────────┘ │
-/// └─────────┘   └─────────┘           └──────────────┘
-///   col1           col2                    output
-/// ```
-///
-/// # Example (nested)
-///
-/// Calling `array(col1, col2)` where col1 and col2 are lists
-/// would return a single new `ListArray`, where each row was a list
-/// of the corresponding elements of col1 and col2.
-///
-/// ``` text
-/// ┌──────────────┐   ┌──────────────┐        ┌─────────────────────────────┐
-/// │ ┌──────────┐ │   │ ┌──────────┐ │        │ ┌────────────────────────┐  │
-/// │ │  [A, X]  │ │   │ │    []    │ │        │ │    [[A, X], []]        │  │
-/// │ ├──────────┤ │   │ ├──────────┤ │        │ ├────────────────────────┤  │
-/// │ │[NULL, Y] │ │   │ │[Q, R, S] │ │───────▶│ │ [[NULL, Y], [Q, R, S]] │  │
-/// │ ├──────────┤ │   │ ├──────────┤ │        │ ├────────────────────────│  │
-/// │ │  [C, Z]  │ │   │ │   NULL   │ │        │ │    [[C, Z], NULL]      │  │
-/// │ └──────────┘ │   │ └──────────┘ │        │ └────────────────────────┘  │
-/// └──────────────┘   └──────────────┘        └─────────────────────────────┘
-///      col1               col2                         output
-/// ```
-fn array_array<O: OffsetSizeTrait>(
-    args: &[ArrayRef],
-    data_type: DataType,
-) -> Result<ArrayRef> {
-    // do not accept 0 arguments.
-    if args.is_empty() {
-        return plan_err!("Array requires at least one argument");
-    }
-
-    let mut data = vec![];
-    let mut total_len = 0;
-    for arg in args {
-        let arg_data = if arg.as_any().is::<NullArray>() {
-            ArrayData::new_empty(&data_type)
-        } else {
-            arg.to_data()
-        };
-        total_len += arg_data.len();
-        data.push(arg_data);
-    }
-
-    let mut offsets: Vec<O> = Vec::with_capacity(total_len);
-    offsets.push(O::usize_as(0));
-
-    let capacity = Capacities::Array(total_len);
-    let data_ref = data.iter().collect::<Vec<_>>();
-    let mut mutable = MutableArrayData::with_capacities(data_ref, true, capacity);
-
-    let num_rows = args[0].len();
-    for row_idx in 0..num_rows {
-        for (arr_idx, arg) in args.iter().enumerate() {
-            if !arg.as_any().is::<NullArray>()
-                && !arg.is_null(row_idx)
-                && arg.is_valid(row_idx)
-            {
-                mutable.extend(arr_idx, row_idx, row_idx + 1);
-            } else {
-                mutable.extend_nulls(1);
-            }
-        }
-        offsets.push(O::usize_as(mutable.len()));
-    }
-    let data = mutable.freeze();
-
-    Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new(ARRAY_FIELD_DEFAULT_NAME, data_type, true)),
-        OffsetBuffer::new(offsets.into()),
-        make_array(data),
-        None,
-    )?))
 }

@@ -122,51 +122,51 @@ fn test_type_coercion() -> Result<()> {
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Time32(TimeUnit::Second),
+        DataType::Time32(Second),
         Operator::Eq,
-        DataType::Time32(TimeUnit::Second)
+        DataType::Time32(Second)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Time32(TimeUnit::Millisecond),
+        DataType::Time32(Millisecond),
         Operator::Eq,
-        DataType::Time32(TimeUnit::Millisecond)
+        DataType::Time32(Millisecond)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Time64(TimeUnit::Microsecond),
+        DataType::Time64(Microsecond),
         Operator::Eq,
-        DataType::Time64(TimeUnit::Microsecond)
+        DataType::Time64(Microsecond)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Time64(TimeUnit::Nanosecond),
+        DataType::Time64(Nanosecond),
         Operator::Eq,
-        DataType::Time64(TimeUnit::Nanosecond)
+        DataType::Time64(Nanosecond)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Timestamp(TimeUnit::Second, None),
+        DataType::Timestamp(Second, None),
         Operator::Lt,
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
+        DataType::Timestamp(Nanosecond, None)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Timestamp(TimeUnit::Millisecond, None),
+        DataType::Timestamp(Millisecond, None),
         Operator::Lt,
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
+        DataType::Timestamp(Nanosecond, None)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Timestamp(TimeUnit::Microsecond, None),
+        DataType::Timestamp(Microsecond, None),
         Operator::Lt,
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
+        DataType::Timestamp(Nanosecond, None)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        DataType::Timestamp(Nanosecond, None),
         Operator::Lt,
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
+        DataType::Timestamp(Nanosecond, None)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
@@ -552,28 +552,46 @@ fn test_type_coercion_compare() -> Result<()> {
     // Timestamps
     let utc: Option<Arc<str>> = Some("UTC".into());
     test_coercion_binary_rule!(
-        DataType::Timestamp(TimeUnit::Second, utc.clone()),
-        DataType::Timestamp(TimeUnit::Second, utc.clone()),
+        DataType::Timestamp(Second, utc.clone()),
+        DataType::Timestamp(Second, utc.clone()),
         Operator::Eq,
-        DataType::Timestamp(TimeUnit::Second, utc.clone())
+        DataType::Timestamp(Second, utc.clone())
     );
     test_coercion_binary_rule!(
-        DataType::Timestamp(TimeUnit::Second, utc.clone()),
-        DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
+        DataType::Timestamp(Second, utc.clone()),
+        DataType::Timestamp(Second, Some("Europe/Brussels".into())),
         Operator::Eq,
-        DataType::Timestamp(TimeUnit::Second, utc.clone())
+        DataType::Timestamp(Second, utc.clone())
     );
     test_coercion_binary_rule!(
-        DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into())),
-        DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
+        DataType::Timestamp(Second, Some("America/New_York".into())),
+        DataType::Timestamp(Second, Some("Europe/Brussels".into())),
         Operator::Eq,
-        DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()))
+        DataType::Timestamp(Second, Some("America/New_York".into()))
     );
     test_coercion_binary_rule!(
-        DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
-        DataType::Timestamp(TimeUnit::Second, utc),
+        DataType::Timestamp(Second, Some("Europe/Brussels".into())),
+        DataType::Timestamp(Second, utc),
         Operator::Eq,
-        DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into()))
+        DataType::Timestamp(Second, Some("Europe/Brussels".into()))
+    );
+    test_coercion_binary_rule!(
+        DataType::Timestamp(Second, None),
+        DataType::Timestamp(Millisecond, None),
+        Operator::Eq,
+        DataType::Timestamp(Millisecond, None)
+    );
+    test_coercion_binary_rule!(
+        DataType::Timestamp(Second, Some("America/New_York".into())),
+        DataType::Timestamp(Nanosecond, Some("Europe/Brussels".into())),
+        Operator::Lt,
+        DataType::Timestamp(Nanosecond, Some("America/New_York".into()))
+    );
+    test_coercion_binary_rule!(
+        DataType::Timestamp(Microsecond, None),
+        DataType::Timestamp(Nanosecond, None),
+        Operator::GtEq,
+        DataType::Timestamp(Nanosecond, None)
     );
 
     // list
@@ -634,7 +652,7 @@ fn test_type_coercion_compare() -> Result<()> {
     );
 
     let inner_timestamp_field = Arc::new(Field::new_list_field(
-        DataType::Timestamp(TimeUnit::Microsecond, None),
+        DataType::Timestamp(Microsecond, None),
         true,
     ));
     let result_type = BinaryTypeCoercer::new(
@@ -654,7 +672,7 @@ fn test_list_coercion() {
 
     let rhs_type = DataType::List(Arc::new(Field::new("rhs", DataType::Int64, true)));
 
-    let coerced_type = list_coercion(&lhs_type, &rhs_type).unwrap();
+    let coerced_type = list_coercion(&lhs_type, &rhs_type, comparison_coercion).unwrap();
     assert_eq!(
         coerced_type,
         DataType::List(Arc::new(Field::new("lhs", DataType::Int64, true)))
@@ -778,10 +796,246 @@ fn test_decimal_cross_variant_comparison_coercion() -> Result<()> {
         for op in comparison_op_types {
             let (lhs, rhs) =
                 BinaryTypeCoercer::new(&lhs_type, &op, &rhs_type).get_input_types()?;
-            assert_eq!(expected_type, lhs, "Coercion of type {lhs_type:?} with {rhs_type:?} resulted in unexpected type: {lhs:?}");
-            assert_eq!(expected_type, rhs, "Coercion of type {rhs_type:?} with {lhs_type:?} resulted in unexpected type: {rhs:?}");
+            assert_eq!(
+                expected_type, lhs,
+                "Coercion of type {lhs_type:?} with {rhs_type:?} resulted in unexpected type: {lhs:?}"
+            );
+            assert_eq!(
+                expected_type, rhs,
+                "Coercion of type {rhs_type:?} with {lhs_type:?} resulted in unexpected type: {rhs:?}"
+            );
         }
     }
+
+    Ok(())
+}
+
+/// Tests that `comparison_coercion` prefers the numeric type when one side is
+/// numeric and the other is a string (e.g., `numeric_col < '123'`).
+#[test]
+fn test_comparison_coercion_prefers_numeric() {
+    assert_eq!(
+        comparison_coercion(&DataType::Int32, &DataType::Utf8),
+        Some(DataType::Int32)
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Utf8, &DataType::Int32),
+        Some(DataType::Int32)
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Utf8, &DataType::Float64),
+        Some(DataType::Float64)
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Float64, &DataType::Utf8),
+        Some(DataType::Float64)
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Int64, &DataType::LargeUtf8),
+        Some(DataType::Int64)
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Utf8View, &DataType::Int16),
+        Some(DataType::Int16)
+    );
+    // String-string stays string
+    assert_eq!(
+        comparison_coercion(&DataType::Utf8, &DataType::Utf8),
+        Some(DataType::Utf8)
+    );
+    // Numeric-numeric stays numeric
+    assert_eq!(
+        comparison_coercion(&DataType::Int32, &DataType::Int64),
+        Some(DataType::Int64)
+    );
+}
+
+/// Tests that `type_union_coercion` prefers the string type when unifying
+/// numeric and string types (for UNION, CASE THEN/ELSE, etc.).
+#[test]
+fn test_type_union_coercion_prefers_string() {
+    assert_eq!(
+        type_union_coercion(&DataType::Int32, &DataType::Utf8),
+        Some(DataType::Utf8)
+    );
+    assert_eq!(
+        type_union_coercion(&DataType::Utf8, &DataType::Int32),
+        Some(DataType::Utf8)
+    );
+    assert_eq!(
+        type_union_coercion(&DataType::Float64, &DataType::Utf8),
+        Some(DataType::Utf8)
+    );
+    assert_eq!(
+        type_union_coercion(&DataType::Utf8, &DataType::Float64),
+        Some(DataType::Utf8)
+    );
+    assert_eq!(
+        type_union_coercion(&DataType::Int64, &DataType::LargeUtf8),
+        Some(DataType::LargeUtf8)
+    );
+    assert_eq!(
+        type_union_coercion(&DataType::Utf8View, &DataType::Int16),
+        Some(DataType::Utf8View)
+    );
+    // String-string stays string
+    assert_eq!(
+        type_union_coercion(&DataType::Utf8, &DataType::Utf8),
+        Some(DataType::Utf8)
+    );
+    // Numeric-numeric stays numeric
+    assert_eq!(
+        type_union_coercion(&DataType::Int32, &DataType::Int64),
+        Some(DataType::Int64)
+    );
+}
+
+#[test]
+fn test_type_union_coercion_prefers_finer_timestamp_unit() {
+    assert_eq!(
+        type_union_coercion(
+            &DataType::Timestamp(Second, None),
+            &DataType::Timestamp(Millisecond, None),
+        ),
+        Some(DataType::Timestamp(Millisecond, None))
+    );
+    assert_eq!(
+        type_union_resolution(&[
+            DataType::Timestamp(Second, None),
+            DataType::Timestamp(Nanosecond, None),
+        ]),
+        Some(DataType::Timestamp(Nanosecond, None))
+    );
+}
+
+/// Tests that comparison operators coerce to numeric when comparing
+/// numeric and string types.
+#[test]
+fn test_binary_comparison_string_numeric_coercion() -> Result<()> {
+    let comparison_ops = [
+        Operator::Eq,
+        Operator::NotEq,
+        Operator::Lt,
+        Operator::LtEq,
+        Operator::Gt,
+        Operator::GtEq,
+    ];
+    for op in &comparison_ops {
+        let (lhs, rhs) = BinaryTypeCoercer::new(&DataType::Int64, op, &DataType::Utf8)
+            .get_input_types()?;
+        assert_eq!(lhs, DataType::Int64, "Op {op}: Int64 vs Utf8 -> lhs");
+        assert_eq!(rhs, DataType::Int64, "Op {op}: Int64 vs Utf8 -> rhs");
+
+        let (lhs, rhs) = BinaryTypeCoercer::new(&DataType::Utf8, op, &DataType::Float64)
+            .get_input_types()?;
+        assert_eq!(lhs, DataType::Float64, "Op {op}: Utf8 vs Float64 -> lhs");
+        assert_eq!(rhs, DataType::Float64, "Op {op}: Utf8 vs Float64 -> rhs");
+    }
+    Ok(())
+}
+
+#[test]
+fn test_string_concat_coercion() -> Result<()> {
+    // Binary
+    test_coercion_binary_rule!(
+        DataType::Binary,
+        DataType::Binary,
+        Operator::StringConcat,
+        DataType::Binary
+    );
+    test_coercion_binary_rule!(
+        DataType::LargeBinary,
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::BinaryView,
+        DataType::BinaryView,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
+    test_coercion_binary_rule!(
+        DataType::Binary,
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::BinaryView,
+        DataType::Binary,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::FixedSizeBinary(16),
+        Operator::StringConcat,
+        DataType::Binary
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::LargeBinary,
+        Operator::StringConcat,
+        DataType::LargeBinary
+    );
+    test_coercion_binary_rule!(
+        DataType::FixedSizeBinary(4),
+        DataType::BinaryView,
+        Operator::StringConcat,
+        DataType::BinaryView
+    );
+
+    // String
+    test_coercion_binary_rule!(
+        DataType::Utf8,
+        DataType::Utf8,
+        Operator::StringConcat,
+        DataType::Utf8
+    );
+    test_coercion_binary_rule!(
+        DataType::LargeUtf8,
+        DataType::LargeUtf8,
+        Operator::StringConcat,
+        DataType::LargeUtf8
+    );
+    test_coercion_binary_rule!(
+        DataType::Utf8View,
+        DataType::Utf8View,
+        Operator::StringConcat,
+        DataType::Utf8View
+    );
+
+    // Mixed string-binary
+    for string_dt in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        for binary_dt in [
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+            DataType::FixedSizeBinary(8),
+        ] {
+            assert!(
+                BinaryTypeCoercer::new(&binary_dt, &Operator::StringConcat, &string_dt,)
+                    .get_input_types()
+                    .is_err(),
+                "{binary_dt} || {string_dt}"
+            );
+            assert!(
+                BinaryTypeCoercer::new(&string_dt, &Operator::StringConcat, &binary_dt,)
+                    .get_input_types()
+                    .is_err(),
+                "{string_dt} || {binary_dt}"
+            );
+        }
+    }
+
+    // Mixed string-other
+    test_coercion_binary_rule!(
+        DataType::Utf8,
+        DataType::Timestamp(Second, None),
+        Operator::StringConcat,
+        DataType::Utf8
+    );
 
     Ok(())
 }

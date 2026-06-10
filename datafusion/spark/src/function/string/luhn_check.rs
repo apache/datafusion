@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::{Array, AsArray, BooleanArray};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Boolean;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -56,10 +56,6 @@ impl SparkLuhnCheck {
 }
 
 impl ScalarUDFImpl for SparkLuhnCheck {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "luhn_check"
     }

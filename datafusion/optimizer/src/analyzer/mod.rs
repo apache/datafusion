@@ -22,9 +22,9 @@ use std::sync::Arc;
 
 use log::debug;
 
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::Result;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{InvariantLevel, LogicalPlan};
 

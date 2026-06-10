@@ -32,13 +32,13 @@ use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_large_list_view_array,
     as_list_array, as_list_view_array,
 };
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -88,10 +88,6 @@ impl ArrayReverse {
 }
 
 impl ScalarUDFImpl for ArrayReverse {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_reverse"
     }
@@ -104,10 +100,7 @@ impl ScalarUDFImpl for ArrayReverse {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_reverse_inner)(&args.args)
     }
 

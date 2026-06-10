@@ -19,9 +19,9 @@
 
 use datafusion_common::Result;
 use datafusion_expr::{
+    Expr,
     expr::ScalarFunction,
     planner::{ExprPlanner, PlannerResult},
-    Expr,
 };
 
 #[deprecated(

@@ -135,7 +135,7 @@ mod tests {
     use super::*;
 
     use datafusion_physical_plan::{DefaultDisplay, VerboseDisplay};
-    use object_store::{path::Path, ObjectMeta};
+    use object_store::{ObjectMeta, path::Path};
 
     use crate::PartitionedFile;
     use chrono::Utc;
@@ -287,13 +287,6 @@ mod tests {
             version: None,
         };
 
-        PartitionedFile {
-            object_meta,
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        }
+        PartitionedFile::new_from_meta(object_meta)
     }
 }

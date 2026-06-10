@@ -16,7 +16,7 @@
 // under the License.
 
 use super::EquivalenceProperties;
-use crate::{equivalence::OrderingEquivalenceClass, PhysicalExprRef};
+use crate::{PhysicalExprRef, equivalence::OrderingEquivalenceClass};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{JoinSide, JoinType, Result};
@@ -140,7 +140,6 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Fields, Schema};
-    use datafusion_common::Result;
 
     #[test]
     fn test_join_equivalence_properties() -> Result<()> {

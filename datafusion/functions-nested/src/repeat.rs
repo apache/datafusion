@@ -19,25 +19,30 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    new_null_array, Array, ArrayRef, Capacities, GenericListArray, ListArray,
-    MutableArrayData, OffsetSizeTrait, UInt64Array,
+    Array, ArrayRef, BooleanBufferBuilder, GenericListArray, Int64Array, OffsetSizeTrait,
+    UInt64Array,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute;
-use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{
     DataType::{LargeList, List},
     Field,
 };
-use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
+use datafusion_common::types::{NativeType, logical_int64};
+use datafusion_common::{Result, exec_datafusion_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
-use std::any::Any;
+use std::mem::size_of;
 use std::sync::Arc;
+
+const ARRAY_REPEAT_LENGTH_EXCEEDED: &str =
+    "array_repeat: requested length exceeds maximum array size";
 
 make_udf_expr_and_func!(
     ArrayRepeat,
@@ -89,17 +94,23 @@ impl Default for ArrayRepeat {
 impl ArrayRepeat {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Any),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![TypeSignatureClass::Integer],
+                        NativeType::Int64,
+                    ),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("list_repeat")],
         }
     }
 }
 
 impl ScalarUDFImpl for ArrayRepeat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_repeat"
     }
@@ -109,38 +120,25 @@ impl ScalarUDFImpl for ArrayRepeat {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(List(Arc::new(Field::new_list_field(
-            arg_types[0].clone(),
-            true,
-        ))))
+        let element_type = &arg_types[0];
+        match element_type {
+            LargeList(_) => Ok(LargeList(Arc::new(Field::new_list_field(
+                element_type.clone(),
+                true,
+            )))),
+            _ => Ok(List(Arc::new(Field::new_list_field(
+                element_type.clone(),
+                true,
+            )))),
+        }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_repeat_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [first_type, second_type] = take_function_args(self.name(), arg_types)?;
-
-        // Coerce the second argument to Int64/UInt64 if it's a numeric type
-        let second = match second_type {
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-                DataType::Int64
-            }
-            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-                DataType::UInt64
-            }
-            _ => return exec_err!("count must be an integer type"),
-        };
-
-        Ok(vec![first_type.clone(), second])
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -150,15 +148,7 @@ impl ScalarUDFImpl for ArrayRepeat {
 
 fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[0];
-    let count_array = &args[1];
-
-    let count_array = match count_array.data_type() {
-        DataType::Int64 => &cast(count_array, &DataType::UInt64)?,
-        DataType::UInt64 => count_array,
-        _ => return exec_err!("count must be an integer type"),
-    };
-
-    let count_array = as_uint64_array(count_array)?;
+    let count_array = as_int64_array(&args[1])?;
 
     match element.data_type() {
         List(_) => {
@@ -187,45 +177,43 @@ fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// ```
 fn general_repeat<O: OffsetSizeTrait>(
     array: &ArrayRef,
-    count_array: &UInt64Array,
+    count_array: &Int64Array,
 ) -> Result<ArrayRef> {
-    let data_type = array.data_type();
-    let mut new_values = vec![];
+    let total_repeated_values =
+        (0..count_array.len()).try_fold(0usize, |total, idx| {
+            total
+                .checked_add(repeat_count(count_array, idx).unwrap_or_default())
+                .ok_or_else(|| {
+                    exec_datafusion_err!(
+                        "array_repeat: total repeated values overflowed usize"
+                    )
+                })
+        })?;
+    ensure_repeated_values_fit::<O>(total_repeated_values)?;
+    let (offsets, _) = build_repeat_offsets::<O>(count_array)?;
 
-    let count_vec = count_array
-        .values()
-        .to_vec()
-        .iter()
-        .map(|x| *x as usize)
-        .collect::<Vec<_>>();
+    let mut take_indices = Vec::with_capacity(total_repeated_values);
 
-    for (row_index, &count) in count_vec.iter().enumerate() {
-        let repeated_array = if array.is_null(row_index) {
-            new_null_array(data_type, count)
-        } else {
-            let original_data = array.to_data();
-            let capacity = Capacities::Array(count);
-            let mut mutable =
-                MutableArrayData::with_capacities(vec![&original_data], false, capacity);
-
-            for _ in 0..count {
-                mutable.extend(0, row_index, row_index + 1);
-            }
-
-            let data = mutable.freeze();
-            arrow::array::make_array(data)
+    for idx in 0..count_array.len() {
+        let Some(count) = repeat_count(count_array, idx) else {
+            continue;
         };
-        new_values.push(repeated_array);
+        take_indices.extend(std::iter::repeat_n(idx as u64, count));
     }
 
-    let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
-    let values = compute::concat(&new_values)?;
-
-    Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
-        OffsetBuffer::from_lengths(count_vec),
-        values,
+    // Build the flattened values
+    let repeated_values = compute::take(
+        array.as_ref(),
+        &UInt64Array::from_iter_values(take_indices),
         None,
+    )?;
+
+    // Construct final ListArray
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        Arc::new(Field::new_list_field(array.data_type().to_owned(), true)),
+        OffsetBuffer::new(offsets.into()),
+        repeated_values,
+        count_array.nulls().cloned(),
     )?))
 }
 
@@ -241,58 +229,247 @@ fn general_repeat<O: OffsetSizeTrait>(
 /// ```
 fn general_list_repeat<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
-    count_array: &UInt64Array,
+    count_array: &Int64Array,
 ) -> Result<ArrayRef> {
-    let data_type = list_array.data_type();
-    let value_type = list_array.value_type();
-    let mut new_values = vec![];
+    let list_offsets = list_array.value_offsets();
+    let (outer_offsets, outer_total) = build_repeat_offsets::<O>(count_array)?;
 
-    let count_vec = count_array
-        .values()
-        .to_vec()
-        .iter()
-        .map(|x| *x as usize)
-        .collect::<Vec<_>>();
-
-    for (list_array_row, &count) in list_array.iter().zip(count_vec.iter()) {
-        let list_arr = match list_array_row {
-            Some(list_array_row) => {
-                let original_data = list_array_row.to_data();
-                let capacity = Capacities::Array(original_data.len() * count);
-                let mut mutable = MutableArrayData::with_capacities(
-                    vec![&original_data],
-                    false,
-                    capacity,
-                );
-
-                for _ in 0..count {
-                    mutable.extend(0, 0, original_data.len());
-                }
-
-                let data = mutable.freeze();
-                let repeated_array = arrow::array::make_array(data);
-
-                let list_arr = GenericListArray::<O>::try_new(
-                    Arc::new(Field::new_list_field(value_type.clone(), true)),
-                    OffsetBuffer::<O>::from_lengths(vec![original_data.len(); count]),
-                    repeated_array,
-                    None,
-                )?;
-                Arc::new(list_arr) as ArrayRef
-            }
-            None => new_null_array(data_type, count),
+    // calculate capacities for pre-allocation
+    let mut inner_total = 0usize;
+    for i in 0..count_array.len() {
+        let Some(count) = repeat_count(count_array, i) else {
+            continue;
         };
-        new_values.push(list_arr);
+        if count > 0 && list_array.is_valid(i) {
+            let len = list_offsets[i + 1].to_usize().unwrap()
+                - list_offsets[i].to_usize().unwrap();
+            inner_total =
+                checked_repeat_len_add(inner_total, checked_repeat_len_mul(len, count)?)?;
+            ensure_repeated_values_fit::<O>(inner_total)?;
+        }
     }
 
-    let lengths = new_values.iter().map(|a| a.len()).collect::<Vec<_>>();
-    let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
-    let values = compute::concat(&new_values)?;
+    // Build inner structures
+    let inner_offsets_capacity = checked_offset_slots_capacity::<O>(outer_total)?;
+    let mut inner_offsets = Vec::with_capacity(inner_offsets_capacity);
+    let mut take_indices = Vec::with_capacity(inner_total);
+    let mut inner_nulls = BooleanBufferBuilder::new(outer_total);
+    let mut inner_running = 0usize;
+    inner_offsets.push(O::zero());
 
-    Ok(Arc::new(ListArray::try_new(
-        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
-        OffsetBuffer::<i32>::from_lengths(lengths),
-        values,
+    for row_idx in 0..count_array.len() {
+        let Some(count) = repeat_count(count_array, row_idx) else {
+            continue;
+        };
+        let list_is_valid = list_array.is_valid(row_idx);
+        let start = list_offsets[row_idx].to_usize().unwrap();
+        let end = list_offsets[row_idx + 1].to_usize().unwrap();
+        let row_len = end - start;
+
+        for _ in 0..count {
+            inner_running = checked_repeat_len_add(inner_running, row_len)?;
+            ensure_repeated_values_fit::<O>(inner_running)?;
+            let offset = checked_repeat_offset::<O>(inner_running)?;
+            inner_offsets.push(offset);
+            inner_nulls.append(list_is_valid);
+            if list_is_valid {
+                take_indices.extend(start as u64..end as u64);
+            }
+        }
+    }
+
+    // Build inner ListArray
+    let inner_values = compute::take(
+        list_array.values().as_ref(),
+        &UInt64Array::from_iter_values(take_indices),
         None,
+    )?;
+    let inner_list = GenericListArray::<O>::try_new(
+        Arc::new(Field::new_list_field(list_array.value_type().clone(), true)),
+        OffsetBuffer::new(inner_offsets.into()),
+        inner_values,
+        Some(NullBuffer::new(inner_nulls.finish())),
+    )?;
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        Arc::new(Field::new_list_field(
+            list_array.data_type().to_owned(),
+            true,
+        )),
+        OffsetBuffer::new(outer_offsets.into()),
+        Arc::new(inner_list),
+        count_array.nulls().cloned(),
     )?))
+}
+
+fn build_repeat_offsets<O: OffsetSizeTrait>(
+    count_array: &Int64Array,
+) -> Result<(Vec<O>, usize)> {
+    let offsets_capacity = checked_offset_slots_capacity::<O>(count_array.len())?;
+    let mut offsets = Vec::with_capacity(offsets_capacity);
+    offsets.push(O::zero());
+    let mut running_offset = 0usize;
+
+    for idx in 0..count_array.len() {
+        let Some(count) = repeat_count(count_array, idx) else {
+            offsets.push(*offsets.last().unwrap());
+            continue;
+        };
+        running_offset = checked_repeat_len_add(running_offset, count)?;
+        ensure_repeated_values_fit::<O>(running_offset)?;
+        let offset = checked_repeat_offset::<O>(running_offset)?;
+        offsets.push(offset);
+    }
+
+    Ok((offsets, running_offset))
+}
+
+fn checked_repeat_len_add(lhs: usize, rhs: usize) -> Result<usize> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| exec_datafusion_err!("{}", ARRAY_REPEAT_LENGTH_EXCEEDED))
+}
+
+fn checked_repeat_len_mul(lhs: usize, rhs: usize) -> Result<usize> {
+    lhs.checked_mul(rhs)
+        .ok_or_else(|| exec_datafusion_err!("{}", ARRAY_REPEAT_LENGTH_EXCEEDED))
+}
+
+fn ensure_repeated_values_fit<O: OffsetSizeTrait>(len: usize) -> Result<()> {
+    ensure_vec_capacity::<u64>(len)?;
+    checked_repeat_offset::<O>(len)?;
+
+    Ok(())
+}
+
+fn ensure_vec_capacity<T>(len: usize) -> Result<()> {
+    if len > max_vec_elements::<T>() {
+        return Err(exec_datafusion_err!("{}", ARRAY_REPEAT_LENGTH_EXCEEDED));
+    }
+
+    Ok(())
+}
+
+fn checked_offset_slots_capacity<O>(len: usize) -> Result<usize> {
+    let capacity = checked_repeat_len_add(len, 1)?;
+    ensure_vec_capacity::<O>(capacity)?;
+
+    Ok(capacity)
+}
+
+fn checked_repeat_offset<O: OffsetSizeTrait>(offset: usize) -> Result<O> {
+    O::from_usize(offset).ok_or_else(|| {
+        exec_datafusion_err!(
+            "array_repeat: offset {offset} exceeds the maximum value for offset type"
+        )
+    })
+}
+
+fn max_vec_elements<T>() -> usize {
+    let element_size = size_of::<T>();
+    (isize::MAX as usize)
+        .checked_div(element_size)
+        .unwrap_or(usize::MAX)
+}
+
+/// Helper function to get count from count_array at given index.
+/// Returns `None` for NULL values and `Some(0)` for non-positive counts.
+#[inline]
+fn repeat_count(count_array: &Int64Array, idx: usize) -> Option<usize> {
+    if count_array.is_null(idx) {
+        None
+    } else {
+        let c = count_array.value(idx);
+        Some(if c > 0 { c as usize } else { 0 })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{array_repeat_inner, general_list_repeat, general_repeat};
+    use arrow::array::{Array, ArrayRef, AsArray, Int32Array, Int64Array, ListArray};
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::{Field, Int32Type};
+    use datafusion_common::Result;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_array_repeat_null_count_stays_null() -> Result<()> {
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let counts = Int64Array::new(
+            ScalarBuffer::from(vec![2, 1, 1]),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let result = general_repeat::<i32>(&array, &counts)?;
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(1)]),
+            None,
+            Some(vec![Some(3)]),
+        ]);
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_repeat_nested_null_count_stays_null() -> Result<()> {
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4)]),
+            Some(vec![Some(5)]),
+        ]);
+        let counts = Int64Array::new(
+            ScalarBuffer::from(vec![2, 1, 1]),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let result = general_list_repeat::<i32>(&list_array, &counts)?;
+        let repeated_values = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(5)]),
+        ]);
+        let expected = ListArray::new(
+            Arc::new(Field::new_list_field(
+                repeated_values.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 2, 3])),
+            Arc::new(repeated_values),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_count_exceeding_max_array_size_returns_error() {
+        let element: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        let count: ArrayRef = Arc::new(Int64Array::from(vec![i64::MAX]));
+
+        let err = array_repeat_inner(&[element, count]).unwrap_err();
+        assert!(
+            err.to_string().starts_with(
+                "Execution error: array_repeat: requested length exceeds maximum array size"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn scalar_count_exceeding_list_offset_limit_returns_error() {
+        let element: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        let count: ArrayRef = Arc::new(Int64Array::from(vec![i32::MAX as i64 + 1]));
+
+        let err = array_repeat_inner(&[element, count]).unwrap_err();
+        assert!(
+            err.to_string().starts_with(
+                "Execution error: array_repeat: offset 2147483648 exceeds the maximum value for offset type"
+            ),
+            "unexpected error: {err}"
+        );
+    }
 }

@@ -24,15 +24,38 @@
 use std::cmp::Ordering;
 
 use arrow::datatypes::{
-    DataType, TimeUnit, MAX_DECIMAL128_FOR_EACH_PRECISION,
-    MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
-    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
-    MIN_DECIMAL64_FOR_EACH_PRECISION,
+    DataType, MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
+    MAX_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
+    MIN_DECIMAL64_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION, TimeUnit,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::ScalarValue;
 
-/// Convert a literal value from one data type to another
+/// Convert a literal [`ScalarValue`] to `target_type`, preserving the exact value.
+///
+/// Returns `None` if the value cannot be represented in `target_type`
+/// *exactly*.
+///
+/// This is a restricted, value-preserving cast used to rewrite comparison
+/// predicates of the form `CAST(col AS target_type) <op> literal` into
+/// `col <op> try_cast_literal_to_type(literal, col_type)`. That rewrite is
+/// only valid when the cast cannot change the comparison result.
+///
+/// # Supported Casts
+/// * numeric → numeric, including integers, decimals, `Date32`/`Date64` and
+///   `Timestamp`s, rejecting values outside the target's range or that would
+///   lose decimal digits
+/// * string → string between `Utf8`, `LargeUtf8` and `Utf8View`
+/// * wrapping a value into, or unwrapping it out of, a `Dictionary` whose value
+///   type matches the literal's type
+/// * `Binary` → `FixedSizeBinary` of the matching length
+/// * `Timestamp` → `Timestamp` cast between different time units is allowed even
+///   though it can truncate (for example nanoseconds → seconds), and a unit
+///   conversion that overflows yields a `NULL` literal rather than `None`.
+///
+/// # See Also
+/// - [`ScalarValue::cast_to`]: a general-purpose cast that can lose information
+///   or change a value's meaning.
 pub fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
@@ -59,7 +82,28 @@ pub fn is_supported_type(data_type: &DataType) -> bool {
         || is_supported_binary_type(data_type)
 }
 
-/// Returns true if unwrap_cast_in_comparison support this numeric type
+fn is_date_type(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Date32 | DataType::Date64)
+}
+
+/// Returns true when unwrapping a date/timestamp cast could change comparison
+/// semantics.
+///
+/// A `Date` stores only a calendar day, while a `Timestamp` stores a specific
+/// instant or wall-clock time. `Timestamp -> Date` is lossy because it drops the
+/// time-of-day. `Date -> Timestamp` is also lossy in this optimizer context
+/// because there is no unique inverse: converting a date to a timestamp has to
+/// invent a time component such as midnight.
+///
+/// For example, `CAST(ts AS DATE) = DATE '2024-01-01'` means "any timestamp
+/// during that day", but unwrapping it to `ts = TIMESTAMP '2024-01-01
+/// 00:00:00'` matches only midnight.
+fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
+    (is_date_type(from_type) && to_type.is_temporal())
+        || (is_date_type(to_type) && from_type.is_temporal())
+}
+
+/// Returns true if unwrap_cast_in_comparison supports this numeric type
 fn is_supported_numeric_type(data_type: &DataType) -> bool {
     matches!(
         data_type,
@@ -71,6 +115,8 @@ fn is_supported_numeric_type(data_type: &DataType) -> bool {
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
+            | DataType::Date32
+            | DataType::Date64
             | DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
@@ -108,6 +154,10 @@ fn try_cast_numeric_literal(
         return None;
     }
 
+    if is_lossy_temporal_cast(&lit_data_type, target_type) {
+        return None;
+    }
+
     let mul = match target_type {
         DataType::UInt8
         | DataType::UInt16
@@ -116,7 +166,9 @@ fn try_cast_numeric_literal(
         | DataType::Int8
         | DataType::Int16
         | DataType::Int32
-        | DataType::Int64 => 1_i128,
+        | DataType::Int64
+        | DataType::Date32
+        | DataType::Date64 => 1_i128,
         DataType::Timestamp(_, _) => 1_i128,
         DataType::Decimal32(_, scale) => 10_i128.pow(*scale as u32),
         DataType::Decimal64(_, scale) => 10_i128.pow(*scale as u32),
@@ -130,8 +182,8 @@ fn try_cast_numeric_literal(
         DataType::UInt64 => (u64::MIN as i128, u64::MAX as i128),
         DataType::Int8 => (i8::MIN as i128, i8::MAX as i128),
         DataType::Int16 => (i16::MIN as i128, i16::MAX as i128),
-        DataType::Int32 => (i32::MIN as i128, i32::MAX as i128),
-        DataType::Int64 => (i64::MIN as i128, i64::MAX as i128),
+        DataType::Int32 | DataType::Date32 => (i32::MIN as i128, i32::MAX as i128),
+        DataType::Int64 | DataType::Date64 => (i64::MIN as i128, i64::MAX as i128),
         DataType::Timestamp(_, _) => (i64::MIN as i128, i64::MAX as i128),
         DataType::Decimal32(precision, _) => (
             // Different precision for decimal32 can store different range of value.
@@ -165,6 +217,8 @@ fn try_cast_numeric_literal(
         ScalarValue::UInt16(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::UInt32(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::UInt64(Some(v)) => (*v as i128).checked_mul(mul),
+        ScalarValue::Date32(Some(v)) => (*v as i128).checked_mul(mul),
+        ScalarValue::Date64(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampSecond(Some(v), _) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampMillisecond(Some(v), _) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampMicrosecond(Some(v), _) => (*v as i128).checked_mul(mul),
@@ -242,6 +296,8 @@ fn try_cast_numeric_literal(
                     DataType::Int16 => ScalarValue::Int16(Some(value as i16)),
                     DataType::Int32 => ScalarValue::Int32(Some(value as i32)),
                     DataType::Int64 => ScalarValue::Int64(Some(value as i64)),
+                    DataType::Date32 => ScalarValue::Date32(Some(value as i32)),
+                    DataType::Date64 => ScalarValue::Date64(Some(value as i64)),
                     DataType::UInt8 => ScalarValue::UInt8(Some(value as u8)),
                     DataType::UInt16 => ScalarValue::UInt16(Some(value as u16)),
                     DataType::UInt32 => ScalarValue::UInt32(Some(value as u32)),
@@ -382,8 +438,8 @@ fn try_cast_binary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::compute::{cast_with_options, CastOptions};
-    use arrow::datatypes::{Field, Fields, TimeUnit};
+    use arrow::compute::{CastOptions, cast_with_options};
+    use arrow::datatypes::{Field, Fields};
     use std::sync::Arc;
 
     #[derive(Debug, Clone)]
@@ -699,6 +755,33 @@ mod tests {
                 ExpectedCast::NoValue,
             );
         }
+    }
+
+    #[test]
+    fn test_try_cast_to_type_date_timestamp_lossy_not_allowed() {
+        expect_cast(
+            ScalarValue::Date32(Some(1)),
+            DataType::Timestamp(TimeUnit::Second, None),
+            ExpectedCast::NoValue,
+        );
+
+        expect_cast(
+            ScalarValue::Date64(Some(86_400_000)),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            ExpectedCast::NoValue,
+        );
+
+        expect_cast(
+            ScalarValue::TimestampSecond(Some(86_400), None),
+            DataType::Date32,
+            ExpectedCast::NoValue,
+        );
+
+        expect_cast(
+            ScalarValue::TimestampMillisecond(Some(86_400_000), None),
+            DataType::Date64,
+            ExpectedCast::NoValue,
+        );
     }
 
     #[test]

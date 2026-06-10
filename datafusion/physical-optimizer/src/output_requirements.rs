@@ -34,7 +34,7 @@ use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::projection::{
-    make_with_child, update_expr, update_ordering_requirement, ProjectionExec,
+    ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -61,7 +61,9 @@ impl OutputRequirements {
     /// Create a new rule which works in `Add` mode; i.e. it simply adds a
     /// top-level [`OutputRequirementExec`] into the physical plan to keep track
     /// of global ordering and distribution requirements if there are any.
-    /// Note that this rule should run at the beginning.
+    /// Note that this rule should run at the beginning. It is idempotent: when
+    /// invoked on a plan that is already topped by an `OutputRequirementExec`,
+    /// it returns the plan unchanged.
     pub fn new_add_mode() -> Self {
         Self {
             mode: RuleMode::Add,
@@ -98,7 +100,7 @@ pub struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
     order_requirement: Option<OrderingRequirements>,
     dist_requirement: Distribution,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     fetch: Option<usize>,
 }
 
@@ -114,7 +116,7 @@ impl OutputRequirementExec {
             input,
             order_requirement: requirements,
             dist_requirement,
-            cache,
+            cache: Arc::new(cache),
             fetch,
         }
     }
@@ -196,11 +198,7 @@ impl ExecutionPlan for OutputRequirementExec {
         "OutputRequirementExec"
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -244,11 +242,7 @@ impl ExecutionPlan for OutputRequirementExec {
         unreachable!();
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 
@@ -312,9 +306,7 @@ impl PhysicalOptimizerRule for OutputRequirements {
             RuleMode::Add => require_top_ordering(plan),
             RuleMode::Remove => plan
                 .transform_up(|plan| {
-                    if let Some(sort_req) =
-                        plan.as_any().downcast_ref::<OutputRequirementExec>()
-                    {
+                    if let Some(sort_req) = plan.downcast_ref::<OutputRequirementExec>() {
                         Ok(Transformed::yes(sort_req.input()))
                     } else {
                         Ok(Transformed::no(plan))
@@ -335,7 +327,15 @@ impl PhysicalOptimizerRule for OutputRequirements {
 
 /// This functions adds ancillary `OutputRequirementExec` to the physical plan, so that
 /// global requirements are not lost during optimization.
+///
+/// Idempotent: if the plan is already topped by an `OutputRequirementExec`, it
+/// is returned unchanged so that re-running this rule (as adaptive execution
+/// in datafusion-ballista AQE does after every completed stage, see
+/// datafusion-ballista#1359) does not stack wrappers.
 fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    if plan.downcast_ref::<OutputRequirementExec>().is_some() {
+        return Ok(plan);
+    }
     let (new_plan, is_changed) = require_top_ordering_helper(plan)?;
     if is_changed {
         Ok(new_plan)
@@ -361,7 +361,7 @@ fn require_top_ordering_helper(
     // Global ordering defines desired ordering in the final result.
     if children.len() != 1 {
         Ok((plan, false))
-    } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+    } else if let Some(sort_exec) = plan.downcast_ref::<SortExec>() {
         // In case of constant columns, output ordering of the `SortExec` would
         // be an empty set. Therefore; we check the sort expression field to
         // assign the requirements.
@@ -379,7 +379,7 @@ fn require_top_ordering_helper(
             )) as _,
             true,
         ))
-    } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
+    } else if let Some(spm) = plan.downcast_ref::<SortPreservingMergeExec>() {
         let reqs = OrderingRequirements::from(spm.expr().clone());
         let fetch = spm.fetch();
         Ok((
@@ -402,7 +402,14 @@ fn require_top_ordering_helper(
         // be responsible for (i.e. the originator of) the global ordering.
         let (new_child, is_changed) =
             require_top_ordering_helper(Arc::clone(children.swap_remove(0)))?;
-        Ok((plan.with_new_children(vec![new_child])?, is_changed))
+
+        let plan = if is_changed {
+            plan.with_new_children(vec![new_child])?
+        } else {
+            plan
+        };
+
+        Ok((plan, is_changed))
     } else {
         // Stop searching, there is no global ordering desired for the query.
         Ok((plan, false))

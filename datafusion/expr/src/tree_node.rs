@@ -17,17 +17,21 @@
 
 //! Tree node implementation for Logical Expressions
 
-use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Cast,
-    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, TryCast, Unnest,
-    WindowFunction, WindowFunctionParams,
+use crate::{
+    Expr,
+    expr::{
+        AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case,
+        Cast, GroupingSet, HigherOrderFunction, InList, InSubquery, Lambda, Like,
+        Placeholder, ScalarFunction, SetComparison, TryCast, Unnest, WindowFunction,
+        WindowFunctionParams,
+    },
 };
-use crate::Expr;
-
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRefContainer,
+use datafusion_common::{
+    Result,
+    tree_node::{
+        Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRefContainer,
+    },
 };
-use datafusion_common::Result;
 
 /// Implementation of the [`TreeNode`] trait
 ///
@@ -58,7 +62,8 @@ impl TreeNode for Expr {
             | Expr::Negative(expr)
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
-            | Expr::InSubquery(InSubquery { expr, .. }) => expr.apply_elements(f),
+            | Expr::InSubquery(InSubquery { expr, .. })
+            | Expr::SetComparison(SetComparison { expr, .. }) => expr.apply_elements(f),
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.apply_elements(f),
             Expr::ScalarFunction(ScalarFunction { args, .. }) => {
@@ -77,7 +82,8 @@ impl TreeNode for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard { .. }
-            | Expr::Placeholder(_) => Ok(TreeNodeRecursion::Continue),
+            | Expr::Placeholder(_)
+            | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 (left, right).apply_ref_elements(f)
             }
@@ -106,6 +112,8 @@ impl TreeNode for Expr {
             Expr::InList(InList { expr, list, .. }) => {
                 (expr, list).apply_ref_elements(f)
             }
+            Expr::HigherOrderFunction(HigherOrderFunction { func: _, args}) => args.apply_elements(f),
+            Expr::Lambda (Lambda{ params: _, body}) => body.apply_elements(f)
         }
     }
 
@@ -115,7 +123,7 @@ impl TreeNode for Expr {
     /// indicating whether the expression was transformed or left unchanged.
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        mut f: F,
+        f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
             // TODO: remove the next line after `Expr::Wildcard` is removed
@@ -127,7 +135,21 @@ impl TreeNode for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_, _) => Transformed::no(self),
+            | Expr::Literal(_, _)
+            | Expr::LambdaVariable(_) => Transformed::no(self),
+            Expr::SetComparison(SetComparison {
+                expr,
+                subquery,
+                op,
+                quantifier,
+            }) => expr.map_elements(f)?.update_data(|expr| {
+                Expr::SetComparison(SetComparison {
+                    expr,
+                    subquery,
+                    op,
+                    quantifier,
+                })
+            }),
             Expr::Unnest(Unnest { expr, .. }) => expr
                 .map_elements(f)?
                 .update_data(|expr| Expr::Unnest(Unnest { expr })),
@@ -136,8 +158,13 @@ impl TreeNode for Expr {
                 relation,
                 name,
                 metadata,
-            }) => f(*expr)?.update_data(|e| {
-                e.alias_qualified_with_metadata(relation, name, metadata)
+            }) => expr.map_elements(f)?.update_data(|expr| {
+                Expr::Alias(Alias {
+                    expr,
+                    relation,
+                    name,
+                    metadata,
+                })
             }),
             Expr::InSubquery(InSubquery {
                 expr,
@@ -220,12 +247,12 @@ impl TreeNode for Expr {
                 .update_data(|(new_expr, new_when_then_expr, new_else_expr)| {
                     Expr::Case(Case::new(new_expr, new_when_then_expr, new_else_expr))
                 }),
-            Expr::Cast(Cast { expr, data_type }) => expr
+            Expr::Cast(Cast { expr, field }) => expr
                 .map_elements(f)?
-                .update_data(|be| Expr::Cast(Cast::new(be, data_type))),
-            Expr::TryCast(TryCast { expr, data_type }) => expr
+                .update_data(|be| Expr::Cast(Cast::new_from_field(be, field))),
+            Expr::TryCast(TryCast { expr, field }) => expr
                 .map_elements(f)?
-                .update_data(|be| Expr::TryCast(TryCast::new(be, data_type))),
+                .update_data(|be| Expr::TryCast(TryCast::new_from_field(be, field))),
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 args.map_elements(f)?.map_data(|new_args| {
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
@@ -311,6 +338,14 @@ impl TreeNode for Expr {
                 .update_data(|(new_expr, new_list)| {
                     Expr::InList(InList::new(new_expr, new_list, negated))
                 }),
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+                args.map_elements(f)?.update_data(|args| {
+                    Expr::HigherOrderFunction(HigherOrderFunction { func, args })
+                })
+            }
+            Expr::Lambda(Lambda { params, body }) => body
+                .map_elements(f)?
+                .update_data(|body| Expr::Lambda(Lambda { params, body })),
         })
     }
 }

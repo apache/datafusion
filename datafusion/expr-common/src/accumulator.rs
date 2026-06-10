@@ -18,7 +18,7 @@
 //! Accumulator module contains the trait definition for aggregation function's accumulators.
 
 use arrow::array::ArrayRef;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use std::fmt::Debug;
 
 /// Tracks an aggregate function's state.
@@ -48,7 +48,7 @@ use std::fmt::Debug;
 /// [`evaluate`]: Self::evaluate
 /// [`merge_batch`]: Self::merge_batch
 /// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
-pub trait Accumulator: Send + Sync + Debug {
+pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// Updates the accumulator's state from its input.
     ///
     /// `values` contains the arguments to this aggregate function.
@@ -58,17 +58,30 @@ pub trait Accumulator: Send + Sync + Debug {
     /// running sum.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
-    /// Returns the final aggregate value, consuming the internal state.
+    /// Returns the final aggregate value.
     ///
     /// For example, the `SUM` accumulator maintains a running sum,
     /// and `evaluate` will produce that running sum as its output.
     ///
-    /// This function should not be called twice, otherwise it will
-    /// result in potentially non-deterministic behavior.
-    ///
     /// This function gets `&mut self` to allow for the accumulator to build
     /// arrow-compatible internal state that can be returned without copying
-    /// when possible (for example distinct strings)
+    /// when possible (for example distinct strings).
+    ///
+    /// ## Correctness
+    ///
+    /// This function must not consume the internal state, as it is also used in window
+    /// aggregate functions where it can be executed multiple times depending on the
+    /// current window frame. Consuming the internal state can cause the next invocation
+    /// to have incorrect results.
+    ///
+    /// - Even if this accumulator doesn't implement [`retract_batch`] it may still be used
+    ///   in window aggregate functions where the window frame is
+    ///   `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`
+    ///
+    /// It is fine to modify the state (e.g. re-order elements within internal state vec) so long
+    /// as this doesn't cause an incorrect computation on the next call of evaluate.
+    ///
+    /// [`retract_batch`]: Self::retract_batch
     fn evaluate(&mut self) -> Result<ScalarValue>;
 
     /// Returns the allocated size required for this accumulator, in

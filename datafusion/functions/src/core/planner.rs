@@ -20,7 +20,7 @@ use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawDictionaryExpr};
-use datafusion_expr::{lit, Expr};
+use datafusion_expr::{Expr, lit};
 
 use super::named_struct;
 
@@ -34,7 +34,7 @@ impl ExprPlanner for CoreFunctionPlanner {
         _schema: &DFSchema,
     ) -> Result<PlannerResult<RawDictionaryExpr>> {
         let mut args = vec![];
-        for (k, v) in expr.keys.into_iter().zip(expr.values.into_iter()) {
+        for (k, v) in expr.keys.into_iter().zip(expr.values) {
             args.push(k);
             args.push(v);
         }

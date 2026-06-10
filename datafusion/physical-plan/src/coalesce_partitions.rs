@@ -18,7 +18,6 @@
 //! Defines the merge plan for executing partitions in parallel and then merging the results
 //! into a single partition
 
-use std::any::Any;
 use std::sync::Arc;
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -29,11 +28,13 @@ use super::{
 };
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
-use crate::projection::{make_with_child, ProjectionExec};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::projection::{ProjectionExec, make_with_child};
+use crate::sort_pushdown::SortOrderPushdownResult;
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_properties};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{assert_eq_or_internal_err, internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -45,7 +46,7 @@ pub struct CoalescePartitionsExec {
     input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     pub(crate) fetch: Option<usize>,
 }
@@ -57,7 +58,7 @@ impl CoalescePartitionsExec {
         CoalescePartitionsExec {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            cache: Arc::new(cache),
             fetch: None,
         }
     }
@@ -98,6 +99,17 @@ impl CoalescePartitionsExec {
         .with_evaluation_type(drive)
         .with_scheduling_type(scheduling)
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for CoalescePartitionsExec {
@@ -129,11 +141,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -147,9 +155,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut plan = CoalescePartitionsExec::new(Arc::clone(&children[0]));
+        check_if_same_properties!(self, children);
+        let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
         plan.fetch = self.fetch;
         Ok(Arc::new(plan))
     }
@@ -222,14 +231,9 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(None)?
-            .with_fetch(self.fetch, 0, 1)
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -272,8 +276,21 @@ impl ExecutionPlan for CoalescePartitionsExec {
             input: Arc::clone(&self.input),
             fetch: limit,
             metrics: self.metrics.clone(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
         }))
+    }
+
+    fn with_preserve_order(
+        &self,
+        preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.input
+            .with_preserve_order(preserve_order)
+            .and_then(|new_input| {
+                Arc::new(self.clone())
+                    .with_new_children(vec![new_input])
+                    .ok()
+            })
     }
 
     fn gather_filters_for_pushdown(
@@ -284,17 +301,56 @@ impl ExecutionPlan for CoalescePartitionsExec {
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
     }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // CoalescePartitionsExec merges multiple partitions into one, which loses
+        // global ordering. However, we can still push the sort requirement down
+        // to optimize individual partitions - the Sort operator above will handle
+        // the global ordering.
+        //
+        // Note: The result will always be at most Inexact (never Exact) when there
+        // are multiple partitions, because merging destroys global ordering.
+        let result = self.input.try_pushdown_sort(order)?;
+
+        // If we have multiple partitions, we can't return Exact even if the
+        // underlying source claims Exact - merging destroys global ordering
+        let has_multiple_partitions =
+            self.input.output_partitioning().partition_count() > 1;
+
+        result
+            .try_map(|new_input| {
+                Ok(
+                    Arc::new(
+                        CoalescePartitionsExec::new(new_input).with_fetch(self.fetch),
+                    ) as Arc<dyn ExecutionPlan>,
+                )
+            })
+            .map(|r| {
+                if has_multiple_partitions {
+                    // Downgrade Exact to Inexact when merging multiple partitions
+                    r.into_inexact()
+                } else {
+                    r
+                }
+            })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test::exec::{
-        assert_strong_count_converges_to_zero, BlockingExec, PanicExec,
+        BarrierExec, BlockingExec, PanicExec, assert_strong_count_converges_to_zero,
     };
     use crate::test::{self, assert_is_pending};
     use crate::{collect, common};
 
+    use std::time::Duration;
+
+    use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema};
 
     use futures::FutureExt;
@@ -325,6 +381,45 @@ mod tests {
         // there should be a total of 400 rows (100 per each partition)
         let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
         assert_eq!(row_count, 400);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drops_input_plan_after_input_streams_start() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+        let input_partitions = 2;
+        let batch = RecordBatch::new_empty(Arc::clone(&schema));
+        let input = Arc::new(
+            BarrierExec::new(vec![vec![batch]; input_partitions], schema)
+                .without_start_barrier()
+                .with_finish_barrier()
+                .with_log(false),
+        );
+        let refs = Arc::downgrade(&input);
+
+        let input_plan: Arc<BarrierExec> = Arc::clone(&input);
+        let coalesce = CoalescePartitionsExec::new(input_plan);
+        let stream = coalesce.execute(0, task_ctx)?;
+        drop(coalesce);
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            // Why not `wait_finish` here: that releases the barrier which lets the input tasks
+            // finish, which drops the input Arcs and hides the bug.
+            while !input.is_finish_barrier_reached() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("input streams should reach pending");
+
+        drop(input);
+
+        assert_strong_count_converges_to_zero(refs).await;
+
+        drop(stream);
 
         Ok(())
     }

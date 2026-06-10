@@ -25,36 +25,37 @@
 //! This plan uses the [`OneSideHashJoiner`] object to facilitate join calculations
 //! for both its children.
 
-use std::any::Any;
 use std::fmt::{self, Debug};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
+use crate::check_if_same_properties;
 use crate::common::SharedMemoryReservation;
 use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::stream_join_utils::{
+    PruningJoinHashMap, SortedFilterExpr, StreamJoinMetrics,
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, prepare_sorted_exprs, record_visited_indices,
-    PruningJoinHashMap, SortedFilterExpr, StreamJoinMetrics,
 };
 use crate::joins::utils::{
-    apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_join_is_valid, equal_rows_arr, symmetric_join_output_partitioning, update_hash,
     BatchSplitter, BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn,
-    JoinOnRef, NoopBatchTransformer, StatefulStreamResult,
+    JoinOnRef, NoopBatchTransformer, StatefulStreamResult, apply_join_filter_to_indices,
+    build_batch_from_indices, build_join_schema, check_join_is_valid, equal_rows_arr,
+    symmetric_join_output_partitioning, update_hash,
 };
 use crate::projection::{
-    join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, update_join_filter, update_join_on, ProjectionExec,
+    ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs, update_join_filter, update_join_on,
 };
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{
@@ -67,21 +68,20 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
-    assert_eq_or_internal_err, plan_err, HashSet, JoinSide, JoinType, NullEquality,
-    Result,
+    HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
+    plan_err,
 };
-use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
-use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
+use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
-use ahash::RandomState;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::{ready, Stream, StreamExt};
-use parking_lot::Mutex;
+use futures::{Stream, StreamExt, ready};
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
@@ -197,7 +197,7 @@ pub struct SymmetricHashJoinExec {
     /// Partition Mode
     mode: StreamJoinPartitionMode,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl SymmetricHashJoinExec {
@@ -207,7 +207,7 @@ impl SymmetricHashJoinExec {
     /// - It is not possible to join the left and right sides on keys `on`, or
     /// - It fails to construct `SortedFilterExpr`s, or
     /// - It fails to create the [ExprIntervalGraph].
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -237,7 +237,7 @@ impl SymmetricHashJoinExec {
             build_join_schema(&left_schema, &right_schema, join_type);
 
         // Initialize the random state for the join operation:
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::with_seed(0);
         let schema = Arc::new(schema);
         let cache = Self::compute_properties(&left, &right, schema, *join_type, &on)?;
         Ok(SymmetricHashJoinExec {
@@ -253,7 +253,7 @@ impl SymmetricHashJoinExec {
             left_sort_exprs,
             right_sort_exprs,
             mode,
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -360,6 +360,20 @@ impl SymmetricHashJoinExec {
         }
         Ok(false)
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+        Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for SymmetricHashJoinExec {
@@ -407,11 +421,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         "SymmetricHashJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -453,6 +463,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(SymmetricHashJoinExec::try_new(
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
@@ -468,11 +479,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // TODO stats: it is not possible in general to know the output size of joins
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 
     fn execute(
@@ -525,12 +531,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let reservation = Arc::new(Mutex::new(
+        let reservation = Arc::new(
             MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))
                 .register(context.memory_pool()),
-        ));
+        );
         if let Some(g) = graph.as_ref() {
-            reservation.lock().try_grow(g.size())?;
+            reservation.try_grow(g.size())?;
         }
 
         if enforce_batch_size_in_joins {
@@ -930,6 +936,7 @@ pub(crate) fn build_side_determined_results(
             &probe_indices,
             column_indices,
             build_hash_joiner.build_side,
+            join_type,
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     } else {
@@ -957,7 +964,7 @@ pub(crate) fn build_side_determined_results(
 ///
 /// A [Result] containing an optional record batch if the join type is not one of `LeftAnti`, `RightAnti`, `LeftSemi` or `RightSemi`.
 /// If the join type is one of the above four, the function will return [None].
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn join_with_probe_batch(
     build_hash_joiner: &mut OneSideHashJoiner,
     probe_hash_joiner: &mut OneSideHashJoiner,
@@ -993,6 +1000,7 @@ pub(crate) fn join_with_probe_batch(
             filter,
             build_hash_joiner.build_side,
             None,
+            join_type,
         )?
     } else {
         (build_indices, probe_indices)
@@ -1031,6 +1039,7 @@ pub(crate) fn join_with_probe_batch(
             &probe_indices,
             column_indices,
             build_hash_joiner.build_side,
+            join_type,
         )
         .map(|batch| (batch.num_rows() > 0).then_some(batch))
     }
@@ -1055,7 +1064,7 @@ pub(crate) fn join_with_probe_batch(
 ///
 /// A [Result] containing a tuple with two equal length arrays, representing indices of rows from build and probe side,
 /// matched by join key columns.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn lookup_join_hashmap(
     build_hashmap: &PruningJoinHashMap,
     build_batch: &RecordBatch,
@@ -1380,6 +1389,19 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
         }
     }
+
+    /// Release the right input pipeline's resources.
+    fn cleanup_depleted_right_stream(&mut self) {
+        let right_schema = self.right_stream.schema();
+        self.right_stream = Box::pin(EmptyRecordBatchStream::new(right_schema));
+    }
+
+    /// Release the left input pipeline's resources.
+    fn cleanup_depleted_left_stream(&mut self) {
+        let left_schema = self.left_stream.schema();
+        self.left_stream = Box::pin(EmptyRecordBatchStream::new(left_schema));
+    }
+
     /// Asynchronously pulls the next batch from the right stream.
     ///
     /// This default implementation checks for the next value in the right stream.
@@ -1403,6 +1425,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_right_stream();
                 self.set_state(SHJStreamState::RightExhausted);
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -1432,6 +1455,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_left_stream();
                 self.set_state(SHJStreamState::LeftExhausted);
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -1461,6 +1485,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_left_stream();
                 self.set_state(SHJStreamState::BothExhausted {
                     final_result: false,
                 });
@@ -1492,6 +1517,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
+                self.cleanup_depleted_right_stream();
                 self.set_state(SHJStreamState::BothExhausted {
                     final_result: false,
                 });
@@ -1718,7 +1744,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         let result = combine_two_batches(&self.schema, equal_result, anti_result)?;
         let capacity = self.size();
         self.metrics.stream_memory_usage.set(capacity);
-        self.reservation.lock().try_resize(capacity)?;
+        self.reservation.try_resize(capacity)?;
         Ok(result)
     }
 }
@@ -1769,7 +1795,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{binary, col, lit, Column};
+    use datafusion_physical_expr::expressions::{Column, binary, col, lit};
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     use rstest::*;

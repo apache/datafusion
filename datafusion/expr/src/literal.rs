@@ -18,7 +18,7 @@
 //! Literal module contains foundational types that are used to represent literals in DataFusion.
 
 use crate::Expr;
-use datafusion_common::{metadata::FieldMetadata, ScalarValue};
+use datafusion_common::{ScalarValue, metadata::FieldMetadata};
 
 /// Create a literal expression
 #[expect(clippy::needless_pass_by_value)]

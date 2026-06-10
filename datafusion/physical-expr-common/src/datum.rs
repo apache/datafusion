@@ -16,16 +16,16 @@
 // under the License.
 
 use arrow::array::BooleanArray;
-use arrow::array::{make_comparator, ArrayRef, Datum};
-use arrow::buffer::NullBuffer;
+use arrow::array::{ArrayRef, Datum, make_comparator};
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::{
     distinct, eq, gt, gt_eq, lt, lt_eq, neq, not_distinct,
 };
-use arrow::compute::{ilike, like, nilike, nlike, SortOptions};
+use arrow::compute::{SortOptions, ilike, like, nilike, nlike};
 use arrow::error::ArrowError;
-use datafusion_common::DataFusionError;
-use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
+use datafusion_common::utils::{normalize_float_zero, normalize_float_zero_scalar};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::operator::Operator;
 use std::sync::Arc;
@@ -85,7 +85,22 @@ pub fn apply_cmp(
             }
         };
 
-        apply(lhs, rhs, |l, r| Ok(Arc::new(f(l, r)?)))
+        // Arrow's comparison kernels use IEEE 754 totalOrder semantics for
+        // floats, which treats `-0.0` and `+0.0` as distinct. Normalize float
+        // operands so SQL semantics (`+0.0 == -0.0`) hold. No-op for
+        // non-float types.
+        let lhs = normalize_cmp_input(lhs);
+        let rhs = normalize_cmp_input(rhs);
+        apply(&lhs, &rhs, |l, r| Ok(Arc::new(f(l, r)?)))
+    }
+}
+
+fn normalize_cmp_input(cv: &ColumnarValue) -> ColumnarValue {
+    match cv {
+        ColumnarValue::Array(a) => ColumnarValue::Array(normalize_float_zero(a)),
+        ColumnarValue::Scalar(s) => {
+            ColumnarValue::Scalar(normalize_float_zero_scalar(s.clone()))
+        }
     }
 }
 
@@ -172,9 +187,9 @@ pub fn compare_op_for_nested(
     };
 
     let values = match (is_l_scalar, is_r_scalar) {
-        (false, false) => (0..len).map(|i| cmp_with_op(i, i)).collect(),
-        (true, false) => (0..len).map(|i| cmp_with_op(0, i)).collect(),
-        (false, true) => (0..len).map(|i| cmp_with_op(i, 0)).collect(),
+        (false, false) => BooleanBuffer::collect_bool(len, |i| cmp_with_op(i, i)),
+        (true, false) => BooleanBuffer::collect_bool(len, |i| cmp_with_op(0, i)),
+        (false, true) => BooleanBuffer::collect_bool(len, |i| cmp_with_op(i, 0)),
         (true, true) => std::iter::once(cmp_with_op(0, 0)).collect(),
     };
 
@@ -190,14 +205,14 @@ pub fn compare_op_for_nested(
             (false, false) | (true, true) => NullBuffer::union(l.nulls(), r.nulls()),
             (true, false) => {
                 // When left is null-scalar and right is array, expand left nulls to match result length
-                match l.nulls().filter(|nulls| !nulls.is_valid(0)) {
+                match l.nulls().filter(|nulls| nulls.is_null(0)) {
                     Some(_) => Some(NullBuffer::new_null(len)), // Left scalar is null
                     None => r.nulls().cloned(),                 // Left scalar is non-null
                 }
             }
             (false, true) => {
                 // When right is null-scalar and left is array, expand right nulls to match result length
-                match r.nulls().filter(|nulls| !nulls.is_valid(0)) {
+                match r.nulls().filter(|nulls| nulls.is_null(0)) {
                     Some(_) => Some(NullBuffer::new_null(len)), // Right scalar is null
                     None => l.nulls().cloned(), // Right scalar is non-null
                 }

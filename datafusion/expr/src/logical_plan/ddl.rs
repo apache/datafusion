@@ -24,9 +24,9 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-#[cfg(not(feature = "sql"))]
-use crate::expr::Ident;
 use crate::expr::Sort;
+#[cfg(not(feature = "sql"))]
+use crate::sql::Ident;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
@@ -38,8 +38,10 @@ use sqlparser::ast::Ident;
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum DdlStatement {
-    /// Creates an external table.
-    CreateExternalTable(CreateExternalTable),
+    /// Creates an external table. Boxed to keep `LogicalPlan` enum size down
+    /// — `CreateExternalTable` is ~312 bytes, dwarfing every other variant
+    /// in the plan tree and forcing the whole enum to that width.
+    CreateExternalTable(Box<CreateExternalTable>),
     /// Creates an in memory table.
     CreateMemoryTable(CreateMemoryTable),
     /// Creates a new view.
@@ -56,8 +58,9 @@ pub enum DdlStatement {
     DropView(DropView),
     /// Drops a catalog schema
     DropCatalogSchema(DropCatalogSchema),
-    /// Create function statement
-    CreateFunction(CreateFunction),
+    /// Create function statement. Boxed for the same reason as
+    /// [`Self::CreateExternalTable`] (~288 bytes).
+    CreateFunction(Box<CreateFunction>),
     /// Drop function statement
     DropFunction(DropFunction),
 }
@@ -66,9 +69,7 @@ impl DdlStatement {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
-            DdlStatement::CreateExternalTable(CreateExternalTable { schema, .. }) => {
-                schema
-            }
+            DdlStatement::CreateExternalTable(ce) => &ce.schema,
             DdlStatement::CreateMemoryTable(CreateMemoryTable { input, .. })
             | DdlStatement::CreateView(CreateView { input, .. }) => input.schema(),
             DdlStatement::CreateCatalogSchema(CreateCatalogSchema { schema, .. }) => {
@@ -79,7 +80,7 @@ impl DdlStatement {
             DdlStatement::DropTable(DropTable { schema, .. }) => schema,
             DdlStatement::DropView(DropView { schema, .. }) => schema,
             DdlStatement::DropCatalogSchema(DropCatalogSchema { schema, .. }) => schema,
-            DdlStatement::CreateFunction(CreateFunction { schema, .. }) => schema,
+            DdlStatement::CreateFunction(cf) => &cf.schema,
             DdlStatement::DropFunction(DropFunction { schema, .. }) => schema,
         }
     }
@@ -131,11 +132,9 @@ impl DdlStatement {
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
-                    DdlStatement::CreateExternalTable(CreateExternalTable {
-                        ref name,
-                        constraints,
-                        ..
-                    }) => {
+                    DdlStatement::CreateExternalTable(ce) => {
+                        let name = &ce.name;
+                        let constraints = &ce.constraints;
                         if constraints.is_empty() {
                             write!(f, "CreateExternalTable: {name:?}")
                         } else {
@@ -186,9 +185,13 @@ impl DdlStatement {
                         cascade,
                         ..
                     }) => {
-                        write!(f, "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}")
+                        write!(
+                            f,
+                            "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}"
+                        )
                     }
-                    DdlStatement::CreateFunction(CreateFunction { name, .. }) => {
+                    DdlStatement::CreateFunction(cf) => {
+                        let name = &cf.name;
                         write!(f, "CreateFunction: name {name:?}")
                     }
                     DdlStatement::DropFunction(DropFunction { name, .. }) => {
@@ -232,6 +235,158 @@ pub struct CreateExternalTable {
     pub constraints: Constraints,
     /// Default values for columns
     pub column_defaults: HashMap<String, Expr>,
+}
+
+impl CreateExternalTable {
+    /// Creates a builder for [`CreateExternalTable`] with required fields.
+    ///
+    /// # Arguments
+    /// * `name` - The table name
+    /// * `location` - The physical location of the table files
+    /// * `file_type` - The file type (e.g., "parquet", "csv", "json")
+    /// * `schema` - The table schema
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::CreateExternalTable;
+    /// # use datafusion_common::{DFSchema, TableReference};
+    /// # use std::sync::Arc;
+    /// let table = CreateExternalTable::builder(
+    ///     TableReference::bare("my_table"),
+    ///     "/path/to/data",
+    ///     "parquet",
+    ///     Arc::new(DFSchema::empty())
+    /// ).build();
+    /// ```
+    pub fn builder(
+        name: impl Into<TableReference>,
+        location: impl Into<String>,
+        file_type: impl Into<String>,
+        schema: DFSchemaRef,
+    ) -> CreateExternalTableBuilder {
+        CreateExternalTableBuilder {
+            name: name.into(),
+            location: location.into(),
+            file_type: file_type.into(),
+            schema,
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            or_replace: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Default::default(),
+            column_defaults: HashMap::new(),
+        }
+    }
+}
+
+/// Builder for [`CreateExternalTable`] that provides a fluent API for construction.
+///
+/// Created via [`CreateExternalTable::builder`].
+#[derive(Debug, Clone)]
+pub struct CreateExternalTableBuilder {
+    name: TableReference,
+    location: String,
+    file_type: String,
+    schema: DFSchemaRef,
+    table_partition_cols: Vec<String>,
+    if_not_exists: bool,
+    or_replace: bool,
+    temporary: bool,
+    definition: Option<String>,
+    order_exprs: Vec<Vec<Sort>>,
+    unbounded: bool,
+    options: HashMap<String, String>,
+    constraints: Constraints,
+    column_defaults: HashMap<String, Expr>,
+}
+
+impl CreateExternalTableBuilder {
+    /// Set the partition columns
+    pub fn with_partition_cols(mut self, cols: Vec<String>) -> Self {
+        self.table_partition_cols = cols;
+        self
+    }
+
+    /// Set the if_not_exists flag
+    pub fn with_if_not_exists(mut self, if_not_exists: bool) -> Self {
+        self.if_not_exists = if_not_exists;
+        self
+    }
+
+    /// Set the or_replace flag
+    pub fn with_or_replace(mut self, or_replace: bool) -> Self {
+        self.or_replace = or_replace;
+        self
+    }
+
+    /// Set the temporary flag
+    pub fn with_temporary(mut self, temporary: bool) -> Self {
+        self.temporary = temporary;
+        self
+    }
+
+    /// Set the SQL definition
+    pub fn with_definition(mut self, definition: Option<String>) -> Self {
+        self.definition = definition;
+        self
+    }
+
+    /// Set the order expressions
+    pub fn with_order_exprs(mut self, order_exprs: Vec<Vec<Sort>>) -> Self {
+        self.order_exprs = order_exprs;
+        self
+    }
+
+    /// Set the unbounded flag
+    pub fn with_unbounded(mut self, unbounded: bool) -> Self {
+        self.unbounded = unbounded;
+        self
+    }
+
+    /// Set the table options
+    pub fn with_options(mut self, options: HashMap<String, String>) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Set the table constraints
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
+    }
+
+    /// Set the column defaults
+    pub fn with_column_defaults(
+        mut self,
+        column_defaults: HashMap<String, Expr>,
+    ) -> Self {
+        self.column_defaults = column_defaults;
+        self
+    }
+
+    /// Build the [`CreateExternalTable`]
+    pub fn build(self) -> CreateExternalTable {
+        CreateExternalTable {
+            schema: self.schema,
+            name: self.name,
+            location: self.location,
+            file_type: self.file_type,
+            table_partition_cols: self.table_partition_cols,
+            if_not_exists: self.if_not_exists,
+            or_replace: self.or_replace,
+            temporary: self.temporary,
+            definition: self.definition,
+            order_exprs: self.order_exprs,
+            unbounded: self.unbounded,
+            options: self.options,
+            constraints: self.constraints,
+            column_defaults: self.column_defaults,
+        }
+    }
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.

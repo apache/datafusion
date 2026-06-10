@@ -17,7 +17,6 @@
 
 //! Literal expressions for physical operations
 
-use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -33,6 +32,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Expr;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 
 /// Represents a literal value
@@ -91,11 +91,6 @@ impl std::fmt::Display for Literal {
 }
 
 impl PhysicalExpr for Literal {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.value.data_type())
     }
@@ -134,6 +129,45 @@ impl PhysicalExpr for Literal {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
     }
+
+    fn placement(&self) -> ExpressionPlacement {
+        ExpressionPlacement::Literal
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
+                (&self.value).try_into()?,
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl Literal {
+    /// Reconstruct a [`Literal`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let scalar_proto = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::Literal,
+            "Literal",
+        );
+        let value = ScalarValue::try_from(scalar_proto)?;
+        Ok(Arc::new(Literal::new(value)))
+    }
 }
 
 /// Create a literal expression
@@ -150,7 +184,6 @@ mod tests {
     use super::*;
 
     use arrow::array::Int32Array;
-    use arrow::datatypes::Field;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
@@ -190,5 +223,105 @@ mod tests {
         assert_eq!(sql_string, "42");
 
         Ok(())
+    }
+}
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::proto_test_util::{StubEncoder, UnreachableDecoder, column_node};
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::physical_expr_node;
+
+    fn i32_literal() -> Literal {
+        Literal::new(ScalarValue::Int32(Some(42)))
+    }
+
+    // ── try_to_proto ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn try_to_proto_encodes_literal() {
+        let literal = i32_literal();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = literal
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("Literal should encode to Some(node)");
+
+        // Literal nodes never set expr_id.
+        assert!(node.expr_id.is_none());
+        // Variant must be Literal, not any other expr type.
+        assert!(matches!(
+            node.expr_type,
+            Some(physical_expr_node::ExprType::Literal(_))
+        ));
+    }
+
+    #[test]
+    fn try_to_proto_null_literal() {
+        let literal = Literal::new(ScalarValue::Int32(None));
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = literal
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("null Literal should encode to Some(node)");
+
+        assert!(matches!(
+            node.expr_type,
+            Some(physical_expr_node::ExprType::Literal(_))
+        ));
+
+        // Decode and verify the null payload round-trips correctly.
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let decoded = Literal::try_from_proto(&node, &dec_ctx).unwrap();
+        let lit = decoded
+            .downcast_ref::<Literal>()
+            .expect("decoded expr should be a Literal");
+        assert_eq!(lit.value(), &ScalarValue::Int32(None));
+    }
+
+    // ── try_from_proto ───────────────────────────────────────────────────────
+
+    #[test]
+    fn try_from_proto_roundtrip() {
+        let original = i32_literal();
+        let encoder = StubEncoder::ok();
+        let enc_ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = original
+            .try_to_proto(&enc_ctx)
+            .unwrap()
+            .expect("should encode");
+
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = Literal::try_from_proto(&node, &dec_ctx).unwrap();
+        let lit = decoded
+            .downcast_ref::<Literal>()
+            .expect("decoded expr should be a Literal");
+        assert_eq!(lit.value(), &ScalarValue::Int32(Some(42)));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_literal_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = Literal::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(ref msg) if msg.contains("PhysicalExprNode is not a Literal"))
+        );
     }
 }

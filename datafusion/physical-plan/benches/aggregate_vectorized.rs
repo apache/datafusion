@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, BooleanBufferBuilder};
 use arrow::datatypes::{Int32Type, StringViewType};
 use arrow::util::bench_util::{
     create_primitive_array, create_string_view_array_with_len,
@@ -25,11 +25,11 @@ use arrow::util::test_util::seedable_rng;
 use arrow_schema::DataType;
 use criterion::measurement::WallTime;
 use criterion::{
-    criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion,
+    BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
+use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupColumn;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
-use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupColumn;
 use rand::distr::{Bernoulli, Distribution};
 use std::hint::black_box;
 use std::sync::Arc;
@@ -271,6 +271,7 @@ fn bench_single_primitive<const NULLABLE: bool>(
 }
 
 /// Test `vectorized_equal_to` with different number of true in the initial results
+#[expect(clippy::needless_pass_by_value)]
 fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
     group: &mut BenchmarkGroup<WallTime>,
     mut builder: GroupColumnBuilder,
@@ -288,13 +289,17 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
         builder.vectorized_append(input, rows).unwrap();
 
         b.iter(|| {
-            // Cloning is a must as `vectorized_equal_to` will modify the input vec
-            // and without cloning all benchmarks after the first one won't be meaningful
-            let mut equal_to_results = equal_to_results.clone();
-            builder.vectorized_equal_to(rows, input, rows, &mut equal_to_results);
+            // Rebuild the buffer each iteration as `vectorized_equal_to` mutates
+            // it, and without a fresh buffer all iterations after the first one
+            // would not be meaningful.
+            let mut equal_to_buffer = BooleanBufferBuilder::new(equal_to_results.len());
+            for &v in &equal_to_results {
+                equal_to_buffer.append(v);
+            }
+            builder.vectorized_equal_to(rows, input, rows, &mut equal_to_buffer);
 
             // Make sure that the compiler does not optimize away the call
-            black_box(equal_to_results);
+            black_box(equal_to_buffer);
         });
     });
 }

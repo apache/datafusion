@@ -1941,6 +1941,7 @@ version = "51.0.0"
 dependencies = [
  "arrow",
  "async-trait",
+ "chrono",
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-datasource",
@@ -2147,15 +2148,19 @@ name = "datafusion-datasource-parquet"
 version = "51.0.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "async-trait",
  "bytes",
  "chrono",
+ "criterion",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-functions",
  "datafusion-functions-aggregate-common",
+ "datafusion-functions-nested",
  "datafusion-physical-expr",
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
@@ -2168,6 +2173,7 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
+ "tempfile",
  "tokio",
 ]
 

@@ -18,13 +18,13 @@
 use std::sync::Arc;
 
 use crate::expressions::{self, Column};
-use crate::{create_physical_expr, LexOrdering, PhysicalSortExpr};
+use crate::{LexOrdering, PhysicalSortExpr, create_physical_expr};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_err, Result};
 use datafusion_common::{DFSchema, HashMap};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, SortExpr};
 
@@ -38,7 +38,7 @@ pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: isize,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+    expr.transform_down(|e| match e.downcast_ref::<Column>() {
         Some(col) => {
             let Some(idx) = col.index().checked_add_signed(offset) else {
                 return plan_err!("Column index overflow");
@@ -233,18 +233,17 @@ pub fn add_offset_to_physical_sort_exprs(
 mod tests {
     use super::*;
 
-    use crate::expressions::{BinaryExpr, Column, Literal};
+    use crate::expressions::{BinaryExpr, Literal};
     use crate::physical_expr::{
         physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
     use datafusion_physical_expr_common::physical_expr::is_volatile;
 
-    use arrow::datatypes::{DataType, Schema};
+    use arrow::datatypes::DataType;
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::ColumnarValue;
     use datafusion_expr::Operator;
-    use std::any::Any;
     use std::fmt;
 
     #[test]
@@ -394,10 +393,6 @@ mod tests {
     }
 
     impl PhysicalExpr for MockVolatileExpr {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
             Ok(DataType::Boolean)
         }

@@ -22,24 +22,26 @@ use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
+use crate::joins::MapOffset;
 use crate::joins::join_hash_map::{
-    get_matched_indices, get_matched_indices_with_limit_offset, update_from_iter,
-    JoinHashMapOffset,
+    contain_hashes, get_matched_indices, get_matched_indices_with_limit_offset,
+    update_from_iter,
 };
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::{metrics, ExecutionPlan};
+use crate::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+};
+use crate::{ExecutionPlan, metrics};
 
 use arrow::array::{
-    ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch,
+    ArrowPrimitiveType, BooleanArray, BooleanBufferBuilder, NativeAdapter,
+    PrimitiveArray, RecordBatch,
 };
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::memory::estimate_memory_size;
-use datafusion_common::{
-    arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,
-};
+use datafusion_common::{HashSet, JoinSide, Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
@@ -79,8 +81,10 @@ impl JoinHashMapType for PruningJoinHashMap {
         &self,
         hash_values: &[u64],
         limit: usize,
-        offset: JoinHashMapOffset,
-    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
+        offset: MapOffset,
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<MapOffset> {
         // Flatten the deque
         let next: Vec<u64> = self.next.iter().copied().collect();
         get_matched_indices_with_limit_offset::<u64>(
@@ -89,11 +93,21 @@ impl JoinHashMapType for PruningJoinHashMap {
             hash_values,
             limit,
             offset,
+            input_indices,
+            match_indices,
         )
+    }
+
+    fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
+        contain_hashes(&self.map, hash_values)
     }
 
     fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
     }
 }
 
@@ -363,7 +377,7 @@ fn convert_filter_columns(
     column_map: &HashMap<Column, Column>,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Attempt to downcast the input expression to a Column type.
-    Ok(if let Some(col) = input.as_any().downcast_ref::<Column>() {
+    Ok(if let Some(col) = input.downcast_ref::<Column>() {
         // If the downcast is successful, retrieve the corresponding filter column.
         column_map.get(col).map(|c| Arc::new(c.clone()) as _)
     } else {
@@ -688,24 +702,31 @@ pub struct StreamJoinMetrics {
 
 impl StreamJoinMetrics {
     pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+        let input_batches = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("left_input_batches", partition);
+        let input_rows = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("left_input_rows", partition);
         let left = StreamJoinSideMetrics {
             input_batches,
             input_rows,
         };
 
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+        let input_batches = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("right_input_batches", partition);
+        let input_rows = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("right_input_rows", partition);
         let right = StreamJoinSideMetrics {
             input_batches,
             input_rows,
         };
 
-        let stream_memory_usage =
-            MetricBuilder::new(metrics).gauge("stream_memory_usage", partition);
+        let stream_memory_usage = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Bytes)
+            .gauge("stream_memory_usage", partition);
 
         Self {
             left,
@@ -1014,46 +1035,54 @@ pub mod tests {
         let left_schema = Arc::new(left_schema);
         let right_schema = Arc::new(right_schema);
 
-        assert!(build_filter_input_order(
-            JoinSide::Left,
-            &filter,
-            &left_schema,
-            &PhysicalSortExpr {
-                expr: col("la1", left_schema.as_ref())?,
-                options: SortOptions::default(),
-            }
-        )?
-        .is_some());
-        assert!(build_filter_input_order(
-            JoinSide::Left,
-            &filter,
-            &left_schema,
-            &PhysicalSortExpr {
-                expr: col("lt1", left_schema.as_ref())?,
-                options: SortOptions::default(),
-            }
-        )?
-        .is_none());
-        assert!(build_filter_input_order(
-            JoinSide::Right,
-            &filter,
-            &right_schema,
-            &PhysicalSortExpr {
-                expr: col("ra1", right_schema.as_ref())?,
-                options: SortOptions::default(),
-            }
-        )?
-        .is_some());
-        assert!(build_filter_input_order(
-            JoinSide::Right,
-            &filter,
-            &right_schema,
-            &PhysicalSortExpr {
-                expr: col("rb1", right_schema.as_ref())?,
-                options: SortOptions::default(),
-            }
-        )?
-        .is_none());
+        assert!(
+            build_filter_input_order(
+                JoinSide::Left,
+                &filter,
+                &left_schema,
+                &PhysicalSortExpr {
+                    expr: col("la1", left_schema.as_ref())?,
+                    options: SortOptions::default(),
+                }
+            )?
+            .is_some()
+        );
+        assert!(
+            build_filter_input_order(
+                JoinSide::Left,
+                &filter,
+                &left_schema,
+                &PhysicalSortExpr {
+                    expr: col("lt1", left_schema.as_ref())?,
+                    options: SortOptions::default(),
+                }
+            )?
+            .is_none()
+        );
+        assert!(
+            build_filter_input_order(
+                JoinSide::Right,
+                &filter,
+                &right_schema,
+                &PhysicalSortExpr {
+                    expr: col("ra1", right_schema.as_ref())?,
+                    options: SortOptions::default(),
+                }
+            )?
+            .is_some()
+        );
+        assert!(
+            build_filter_input_order(
+                JoinSide::Right,
+                &filter,
+                &right_schema,
+                &PhysicalSortExpr {
+                    expr: col("rb1", right_schema.as_ref())?,
+                    options: SortOptions::default(),
+                }
+            )?
+            .is_none()
+        );
 
         Ok(())
     }

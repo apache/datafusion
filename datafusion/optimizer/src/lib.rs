@@ -23,8 +23,6 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! # DataFusion Optimizer
@@ -59,6 +57,7 @@ pub mod eliminate_nested_union {
 }
 pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
+pub mod extract_leaf_expressions;
 pub mod filter_null_join_keys;
 pub mod optimize_projections;
 pub mod optimize_unions;
@@ -67,9 +66,11 @@ pub mod propagate_empty_relation;
 pub mod push_down_filter;
 pub mod push_down_limit;
 pub mod replace_distinct_aggregate;
+pub mod rewrite_set_comparison;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
+pub mod unions_to_filter;
 pub mod utils;
 
 #[cfg(test)]
@@ -84,7 +85,7 @@ pub(crate) mod join_key_set;
 mod plan_signature;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();

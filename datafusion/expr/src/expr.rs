@@ -26,23 +26,35 @@ use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
+use crate::higher_order_function::{HigherOrderUDF, resolve_lambda_variables};
 use crate::logical_plan::Subquery;
-use crate::{AggregateUDF, Volatility};
+use crate::type_coercion::functions::value_fields_with_higher_order_udf;
+use crate::{AggregateUDF, LambdaParametersProgress, ValueOrLambda, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
+use datafusion_common::datatype::DataTypeExt;
+use datafusion_common::metadata::format_type_and_metadata;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
+    Column, DFSchema, ExprSchema, HashMap, Result, ScalarValue, Spans, TableReference,
+    plan_err,
 };
+use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 #[cfg(feature = "sql")]
-use sqlparser::ast::{
-    display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
-    RenameSelectItem, ReplaceSelectElement,
+pub use sqlparser::ast::{
+    ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
+    ReplaceSelectElement,
+};
+// Use shims for sqlparser types when the sql feature is disabled.
+#[cfg(not(feature = "sql"))]
+pub use crate::sql::{
+    ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
+    ReplaceSelectElement,
 };
 
 // Moved in 51.0.0 to datafusion_common
@@ -80,7 +92,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 ///
 /// For example the expression `A + 1` will be represented as
 ///
-///```text
+/// ```text
 ///  BinaryExpr {
 ///    left: Expr::Column("A"),
 ///    op: Operator::Plus,
@@ -253,7 +265,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 ///
 /// [`ExplainFormat::Tree`]: crate::logical_plan::ExplainFormat::Tree
 ///
-///```
+/// ```
 /// # use datafusion_expr::{lit, col};
 /// let expr = col("c1") + lit(42);
 /// assert_eq!(format!("{}", expr.human_display()), "c1 + 42");
@@ -289,7 +301,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// Rewrite an expression, replacing references to column "a" in an
 /// to the literal `42`:
 ///
-///  ```
+/// ```
 /// # use datafusion_common::tree_node::{Transformed, TreeNode};
 /// # use datafusion_expr::{col, Expr, lit};
 /// // expression a = 5 AND b = 6
@@ -309,6 +321,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// assert!(rewritten.transformed);
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
+/// ```
 #[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
@@ -316,7 +329,7 @@ pub enum Expr {
     /// A named reference to a qualified field in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
-    ScalarVariable(DataType, Vec<String>),
+    ScalarVariable(FieldRef, Vec<String>),
     /// A constant value along with associated [`FieldMetadata`].
     Literal(ScalarValue, Option<FieldMetadata>),
     /// A binary expression such as "age > 21"
@@ -372,6 +385,8 @@ pub enum Expr {
     Exists(Exists),
     /// IN subquery
     InSubquery(InSubquery),
+    /// Set comparison subquery (e.g. `= ANY`, `> ALL`)
+    SetComparison(SetComparison),
     /// Scalar subquery
     ScalarSubquery(Subquery),
     /// Represents a reference to all available fields in a specific schema,
@@ -398,6 +413,133 @@ pub enum Expr {
     OuterReferenceColumn(FieldRef, Column),
     /// Unnest expression
     Unnest(Unnest),
+    /// Call a higher order function with a set of arguments.
+    ///
+    /// For example, `array_transform([1,2,3], v -> v+1)` would be equivalent to:
+    ///
+    /// ```text
+    /// HigherOrderFunction(array_transform)
+    /// ├── args[0]: Literal([1,2,3])
+    /// └── args[1]: Lambda
+    ///     ├── params: ["v"]
+    ///     └── body: BinaryExpr(+)
+    ///         ├── LambdaVariable("v")
+    ///         └── Literal(1)
+    /// ```
+    HigherOrderFunction(HigherOrderFunction),
+    /// A Lambda expression with a set of parameters names and a body
+    Lambda(Lambda),
+    /// A named reference to a lambda parameter
+    LambdaVariable(LambdaVariable),
+}
+
+/// Invoke a [`HigherOrderUDF`] with a set of arguments
+#[derive(Clone, Eq, PartialOrd, Debug)]
+pub struct HigherOrderFunction {
+    /// The function
+    pub func: Arc<HigherOrderUDF>,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+}
+
+impl HigherOrderFunction {
+    /// Create a new `HigherOrderFunction` from a [`HigherOrderUDF`]
+    pub fn new(func: Arc<HigherOrderUDF>, args: Vec<Expr>) -> Self {
+        Self { func, args }
+    }
+
+    pub fn name(&self) -> &str {
+        self.func.name()
+    }
+
+    /// Invokes the inner function [`crate::HigherOrderUDFImpl::lambda_parameters`]
+    /// using the arguments of this invocation. This expression lambda
+    /// variables must be already resolved either by coming from the
+    /// default sql planner or by calling [Expr::resolve_lambda_variables]
+    /// or [LogicalPlan::resolve_lambda_variables]
+    ///
+    /// [LogicalPlan::resolve_lambda_variables]: crate::LogicalPlan::resolve_lambda_variables
+    pub fn lambda_parameters(
+        &self,
+        schema: &dyn ExprSchema,
+    ) -> Result<Vec<Vec<FieldRef>>> {
+        let args = self
+            .args
+            .iter()
+            .map(|e| match e {
+                Expr::Lambda(lambda) => {
+                    Ok(ValueOrLambda::Lambda(Some(lambda.body.to_field(schema)?.1)))
+                }
+                _ => Ok(ValueOrLambda::Value(e.to_field(schema)?.1)),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let coerced_fields =
+            value_fields_with_higher_order_udf(&args, self.func.as_ref())?;
+
+        match self.func.lambda_parameters(0, &coerced_fields)? {
+            LambdaParametersProgress::Partial(_) => plan_err!(
+                "{} lambda_parameters returned a partial result when the return type of all it's lambdas were provided",
+                self.name()
+            ),
+            LambdaParametersProgress::Complete(items) => Ok(items),
+        }
+    }
+}
+
+impl Hash for HigherOrderFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.func.hash(state);
+        self.args.hash(state);
+    }
+}
+
+impl PartialEq for HigherOrderFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.func.as_ref() == other.func.as_ref() && self.args == other.args
+    }
+}
+
+/// A named reference to a lambda parameter which includes it's own [`FieldRef`],
+/// which is used to implement [`ExprSchemable`], for example. It is an option only to make
+/// easier for `expr_api` users to construct lambda variables, but any expression
+/// tree or [`LogicalPlan`] containing unresolved variables must be resolved before
+/// usage with either [`Expr::resolve_lambda_variables`] or
+/// [`LogicalPlan::resolve_lambda_variables`]. The default SQL planner produces
+/// already resolved variables and no further resolving is required.
+///
+/// After resolving, if any argument from the lambda function which this
+/// variables originates from have it's field changed (type, nullability,
+/// metadata, etc), the resolved variable may became outdated and must be
+/// resolved again.
+///
+/// [`LogicalPlan`]: crate::LogicalPlan
+/// [`LogicalPlan::resolve_lambda_variables`]: crate::LogicalPlan::resolve_lambda_variables
+#[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
+pub struct LambdaVariable {
+    pub name: String,
+    pub field: Option<FieldRef>,
+    pub spans: Spans,
+}
+
+impl LambdaVariable {
+    /// Create a lambda variable from a name and an optional field.
+    /// If the field is none, the expression tree or LogicalPlan which
+    /// owns this variable must be resolved before usage with either
+    /// [`Expr::resolve_lambda_variables`] or [`LogicalPlan::resolve_lambda_variables`].
+    ///
+    /// [`LogicalPlan::resolve_lambda_variables`]: crate::LogicalPlan::resolve_lambda_variables
+    pub fn new(name: String, field: Option<FieldRef>) -> Self {
+        Self {
+            name,
+            field,
+            spans: Spans::new(),
+        }
+    }
+
+    pub fn spans_mut(&mut self) -> &mut Spans {
+        &mut self.spans
+    }
 }
 
 impl Default for Expr {
@@ -479,7 +621,7 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
 /// that may be missing in the physical data but present in the logical schema.
 /// See the [default_column_values.rs] example implementation.
 ///
-/// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs
+/// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs
 pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
 
 /// Intersects multiple metadata instances for UNION operations.
@@ -506,17 +648,26 @@ pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
 pub fn intersect_metadata_for_union<'a>(
     metadatas: impl IntoIterator<Item = &'a SchemaFieldMetadata>,
 ) -> SchemaFieldMetadata {
-    let mut metadatas = metadatas.into_iter();
-    let Some(mut intersected) = metadatas.next().cloned() else {
-        return Default::default();
-    };
+    let mut intersected: Option<SchemaFieldMetadata> = None;
 
     for metadata in metadatas {
-        // Only keep keys that exist in both with the same value
-        intersected.retain(|k, v| metadata.get(k) == Some(v));
+        // Skip empty metadata (e.g. from NULL literals or computed expressions)
+        // to avoid dropping metadata from branches that have it.
+        if metadata.is_empty() {
+            continue;
+        }
+        match &mut intersected {
+            None => {
+                intersected = Some(metadata.clone());
+            }
+            Some(current) => {
+                // Only keep keys that exist in both with the same value
+                current.retain(|k, v| metadata.get(k) == Some(&*v));
+            }
+        }
     }
 
-    intersected
+    intersected.unwrap_or_default()
 }
 
 /// UNNEST expression.
@@ -592,9 +743,31 @@ impl Alias {
         self.metadata = metadata;
         self
     }
+
+    #[doc(hidden)]
+    pub fn with_expr(mut self, expr: Expr) -> Self {
+        self.expr = Box::new(expr);
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn try_map_expr(self, f: impl FnOnce(Expr) -> Result<Expr>) -> Result<Expr> {
+        let Alias {
+            expr,
+            relation,
+            name,
+            metadata,
+        } = self;
+        Ok(Expr::Alias(Alias {
+            expr: Box::new(f(*expr)?),
+            relation,
+            name,
+            metadata,
+        }))
+    }
 }
 
-/// Binary expression
+/// Binary expression for [`Expr::BinaryExpr`]
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct BinaryExpr {
     /// Left-hand side of the expression
@@ -796,13 +969,20 @@ pub struct Cast {
     /// The expression being cast
     pub expr: Box<Expr>,
     /// The `DataType` the expression will yield
-    pub data_type: DataType,
+    pub field: FieldRef,
 }
 
 impl Cast {
     /// Create a new Cast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
-        Self { expr, data_type }
+        Self {
+            expr,
+            field: data_type.into_nullable_field_ref(),
+        }
+    }
+
+    pub fn new_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
+        Self { expr, field }
     }
 }
 
@@ -812,13 +992,20 @@ pub struct TryCast {
     /// The expression being cast
     pub expr: Box<Expr>,
     /// The `DataType` the expression will yield
-    pub data_type: DataType,
+    pub field: FieldRef,
 }
 
 impl TryCast {
     /// Create a new TryCast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
-        Self { expr, data_type }
+        Self {
+            expr,
+            field: data_type.into_nullable_field_ref(),
+        }
+    }
+
+    pub fn new_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
+        Self { expr, field }
     }
 }
 
@@ -953,7 +1140,7 @@ impl AggregateFunction {
 pub enum WindowFunctionDefinition {
     /// A user defined aggregate function
     AggregateUDF(Arc<AggregateUDF>),
-    /// A user defined aggregate function
+    /// A user defined window function
     WindowUDF(Arc<WindowUDF>),
 }
 
@@ -990,7 +1177,7 @@ impl WindowFunctionDefinition {
         }
     }
 
-    /// Return the inner window simplification function, if any
+    /// Returns this window function's simplification hook, if any.
     ///
     /// See [`WindowFunctionSimplification`] for more information
     pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
@@ -1077,7 +1264,7 @@ impl WindowFunction {
         }
     }
 
-    /// Return the inner window simplification function, if any
+    /// Returns this window function's simplification hook, if any.
     ///
     /// See [`WindowFunctionSimplification`] for more information
     pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
@@ -1098,6 +1285,54 @@ impl Exists {
     // Create a new Exists expression.
     pub fn new(subquery: Subquery, negated: bool) -> Self {
         Self { subquery, negated }
+    }
+}
+
+/// Whether the set comparison uses `ANY`/`SOME` or `ALL`
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub enum SetQuantifier {
+    /// `ANY` (or `SOME`)
+    Any,
+    /// `ALL`
+    All,
+}
+
+impl Display for SetQuantifier {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            SetQuantifier::Any => write!(f, "ANY"),
+            SetQuantifier::All => write!(f, "ALL"),
+        }
+    }
+}
+
+/// Set comparison subquery (e.g. `= ANY`, `> ALL`)
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct SetComparison {
+    /// The expression to compare
+    pub expr: Box<Expr>,
+    /// Subquery that will produce a single column of data to compare against
+    pub subquery: Subquery,
+    /// Comparison operator (e.g. `=`, `>`, `<`)
+    pub op: Operator,
+    /// Quantifier (`ANY`/`ALL`)
+    pub quantifier: SetQuantifier,
+}
+
+impl SetComparison {
+    /// Create a new set comparison expression
+    pub fn new(
+        expr: Box<Expr>,
+        subquery: Subquery,
+        op: Operator,
+        quantifier: SetQuantifier,
+    ) -> Self {
+        Self {
+            expr,
+            subquery,
+            op,
+            quantifier,
+        }
     }
 }
 
@@ -1211,128 +1446,31 @@ impl GroupingSet {
     }
 }
 
+/// A Lambda expression with a set of parameters names and a body
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
-#[cfg(not(feature = "sql"))]
-pub struct IlikeSelectItem {
-    pub pattern: String,
+pub struct Lambda {
+    /// The parameters names
+    pub params: Vec<String>,
+    /// The body expression
+    pub body: Box<Expr>,
 }
-#[cfg(not(feature = "sql"))]
-impl Display for IlikeSelectItem {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "ILIKE '{}'", &self.pattern)?;
-        Ok(())
-    }
-}
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
-#[cfg(not(feature = "sql"))]
-pub enum ExcludeSelectItem {
-    Single(Ident),
-    Multiple(Vec<Ident>),
-}
-#[cfg(not(feature = "sql"))]
-impl Display for ExcludeSelectItem {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "EXCLUDE")?;
-        match self {
-            Self::Single(column) => {
-                write!(f, " {column}")?;
-            }
-            Self::Multiple(columns) => {
-                write!(f, " ({})", display_comma_separated(columns))?;
-            }
+
+impl Lambda {
+    /// Create a new lambda expression
+    pub fn new(params: Vec<String>, body: Expr) -> Self {
+        Self {
+            params,
+            body: Box::new(body),
         }
-        Ok(())
-    }
-}
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
-#[cfg(not(feature = "sql"))]
-pub struct ExceptSelectItem {
-    pub first_element: Ident,
-    pub additional_elements: Vec<Ident>,
-}
-#[cfg(not(feature = "sql"))]
-impl Display for ExceptSelectItem {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "EXCEPT ")?;
-        if self.additional_elements.is_empty() {
-            write!(f, "({})", self.first_element)?;
-        } else {
-            write!(
-                f,
-                "({}, {})",
-                self.first_element,
-                display_comma_separated(&self.additional_elements)
-            )?;
-        }
-        Ok(())
     }
 }
 
-#[cfg(not(feature = "sql"))]
 pub fn display_comma_separated<T>(slice: &[T]) -> String
 where
     T: Display,
 {
     use itertools::Itertools;
     slice.iter().map(|v| format!("{v}")).join(", ")
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
-#[cfg(not(feature = "sql"))]
-pub enum RenameSelectItem {
-    Single(String),
-    Multiple(Vec<String>),
-}
-#[cfg(not(feature = "sql"))]
-impl Display for RenameSelectItem {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "RENAME")?;
-        match self {
-            Self::Single(column) => {
-                write!(f, " {column}")?;
-            }
-            Self::Multiple(columns) => {
-                write!(f, " ({})", display_comma_separated(columns))?;
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
-#[cfg(not(feature = "sql"))]
-pub struct Ident {
-    /// The value of the identifier without quotes.
-    pub value: String,
-    /// The starting quote if any. Valid quote characters are the single quote,
-    /// double quote, backtick, and opening square bracket.
-    pub quote_style: Option<char>,
-    /// The span of the identifier in the original SQL string.
-    pub span: String,
-}
-#[cfg(not(feature = "sql"))]
-impl Display for Ident {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "[{}]", self.value)
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
-#[cfg(not(feature = "sql"))]
-pub struct ReplaceSelectElement {
-    pub expr: String,
-    pub column_name: Ident,
-    pub as_keyword: bool,
-}
-#[cfg(not(feature = "sql"))]
-impl Display for ReplaceSelectElement {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if self.as_keyword {
-            write!(f, "{} AS {}", self.expr, self.column_name)
-        } else {
-            write!(f, "{} {}", self.expr, self.column_name)
-        }
-    }
 }
 
 /// Additional options for wildcards, e.g. Snowflake `EXCLUDE`/`RENAME` and Bigquery `EXCEPT`.
@@ -1487,6 +1625,24 @@ impl Expr {
         }
     }
 
+    /// Returns placement information for this expression.
+    ///
+    /// This is used by optimizers to make decisions about expression placement,
+    /// such as whether to push expressions down through projections.
+    pub fn placement(&self) -> ExpressionPlacement {
+        match self {
+            Expr::Column(_) => ExpressionPlacement::Column,
+            Expr::Literal(_, _) => ExpressionPlacement::Literal,
+            Expr::Alias(inner) => inner.expr.placement(),
+            Expr::ScalarFunction(func) => {
+                let arg_placements: Vec<_> =
+                    func.args.iter().map(|arg| arg.placement()).collect();
+                func.func.placement(&arg_placements)
+            }
+            _ => ExpressionPlacement::KeepInPlace,
+        }
+    }
+
     /// Return String representation of the variant represented by `self`
     /// Useful for non-rust based bindings
     pub fn variant_name(&self) -> &str {
@@ -1503,6 +1659,7 @@ impl Expr {
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
             Expr::InSubquery(..) => "InSubquery",
+            Expr::SetComparison(..) => "SetComparison",
             Expr::IsNotNull(..) => "IsNotNull",
             Expr::IsNull(..) => "IsNull",
             Expr::Like { .. } => "Like",
@@ -1525,6 +1682,9 @@ impl Expr {
             #[expect(deprecated)]
             Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
+            Expr::HigherOrderFunction { .. } => "HigherOrderFunction",
+            Expr::Lambda { .. } => "Lambda",
+            Expr::LambdaVariable { .. } => "LambdaVariable",
         }
     }
 
@@ -1964,6 +2124,12 @@ impl Expr {
             .expect("exists closure is infallible")
     }
 
+    /// Returns true if the expression contains a scalar subquery.
+    pub fn contains_scalar_subquery(&self) -> bool {
+        self.exists(|expr| Ok(matches!(expr, Expr::ScalarSubquery(_))))
+            .expect("exists closure is infallible")
+    }
+
     /// Returns true if the expression node is volatile, i.e. whether it can return
     /// different results when evaluated multiple times with the same input.
     /// Note: unlike [`Self::is_volatile`], this function does not consider inputs:
@@ -2020,6 +2186,32 @@ impl Expr {
                         rewrite_placeholder(item, expr.as_ref(), schema)?;
                     }
                 }
+                Expr::InSubquery(InSubquery {
+                    expr,
+                    subquery,
+                    negated: _,
+                }) => {
+                    let subquery_schema = subquery.subquery.schema();
+                      match &subquery_schema.fields()[..] {
+                          [subquery_field] => {
+                              let column = Expr::Column(Column::new_unqualified(
+                                  subquery_field.name().clone(),
+                              ));
+                              rewrite_placeholder(
+                                  expr.as_mut(),
+                                  &column,
+                                  subquery_schema,
+                              )?;
+                          }
+                          _ => {
+                              return plan_err!(
+                                  "InSubquery should only return one column, but found {}: {}",
+                                  subquery_schema.fields().len(),
+                                  subquery_schema.field_names().join(", ")
+                              );
+                          }
+                      }
+                }
                 Expr::Like(Like { expr, pattern, .. })
                 | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                     rewrite_placeholder(pattern.as_mut(), expr.as_ref(), schema)?;
@@ -2040,6 +2232,9 @@ impl Expr {
     pub fn short_circuits(&self) -> bool {
         match self {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => func.short_circuits(),
+            Expr::HigherOrderFunction(HigherOrderFunction { func, .. }) => {
+                func.short_circuits()
+            }
             Expr::BinaryExpr(BinaryExpr { op, .. }) => {
                 matches!(op, Operator::And | Operator::Or)
             }
@@ -2058,6 +2253,7 @@ impl Expr {
             | Expr::GroupingSet(..)
             | Expr::InList(..)
             | Expr::InSubquery(..)
+            | Expr::SetComparison(..)
             | Expr::IsFalse(..)
             | Expr::IsNotFalse(..)
             | Expr::IsNotNull(..)
@@ -2078,7 +2274,9 @@ impl Expr {
             | Expr::Wildcard { .. }
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
-            | Expr::Placeholder(..) => false,
+            | Expr::Placeholder(..)
+            | Expr::Lambda(..)
+            | Expr::LambdaVariable(..) => false,
         }
     }
 
@@ -2100,11 +2298,21 @@ impl Expr {
             None
         }
     }
+
+    /// Return a `Expr` with all [`LambdaVariable`] resolved only if all of them
+    /// are contained in the subtree of the [`HigherOrderFunction`] it originates from,
+    /// otherwise returns an error
+    pub fn resolve_lambda_variables(
+        self,
+        schema: &DFSchema,
+    ) -> Result<Transformed<Expr>> {
+        resolve_lambda_variables(self, schema, &mut HashMap::new())
+    }
 }
 
 impl Normalizeable for Expr {
     fn can_normalize(&self) -> bool {
-        #[allow(clippy::match_like_matches_macro)]
+        #[expect(clippy::match_like_matches_macro)]
         match self {
             Expr::BinaryExpr(BinaryExpr {
                 op:
@@ -2252,23 +2460,23 @@ impl NormalizeEq for Expr {
             (
                 Expr::Cast(Cast {
                     expr: self_expr,
-                    data_type: self_data_type,
+                    field: self_field,
                 }),
                 Expr::Cast(Cast {
                     expr: other_expr,
-                    data_type: other_data_type,
+                    field: other_field,
                 }),
             )
             | (
                 Expr::TryCast(TryCast {
                     expr: self_expr,
-                    data_type: self_data_type,
+                    field: self_field,
                 }),
                 Expr::TryCast(TryCast {
                     expr: other_expr,
-                    data_type: other_data_type,
+                    field: other_field,
                 }),
-            ) => self_data_type == other_data_type && self_expr.normalize_eq(other_expr),
+            ) => self_field == other_field && self_expr.normalize_eq(other_expr),
             (
                 Expr::ScalarFunction(ScalarFunction {
                     func: self_func,
@@ -2529,8 +2737,8 @@ impl HashNode for Expr {
             Expr::Column(column) => {
                 column.hash(state);
             }
-            Expr::ScalarVariable(data_type, name) => {
-                data_type.hash(state);
+            Expr::ScalarVariable(field, name) => {
+                field.hash(state);
                 name.hash(state);
             }
             Expr::Literal(scalar_value, _) => {
@@ -2584,15 +2792,9 @@ impl HashNode for Expr {
                 when_then_expr: _when_then_expr,
                 else_expr: _else_expr,
             }) => {}
-            Expr::Cast(Cast {
-                expr: _expr,
-                data_type,
-            })
-            | Expr::TryCast(TryCast {
-                expr: _expr,
-                data_type,
-            }) => {
-                data_type.hash(state);
+            Expr::Cast(Cast { expr: _expr, field })
+            | Expr::TryCast(TryCast { expr: _expr, field }) => {
+                field.hash(state);
             }
             Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
                 func.hash(state);
@@ -2651,6 +2853,16 @@ impl HashNode for Expr {
                 subquery.hash(state);
                 negated.hash(state);
             }
+            Expr::SetComparison(SetComparison {
+                expr: _,
+                subquery,
+                op,
+                quantifier,
+            }) => {
+                subquery.hash(state);
+                op.hash(state);
+                quantifier.hash(state);
+            }
             Expr::ScalarSubquery(subquery) => {
                 subquery.hash(state);
             }
@@ -2674,6 +2886,20 @@ impl HashNode for Expr {
                 column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args: _args }) => {
+                func.hash(state);
+            }
+            Expr::Lambda(Lambda { params, body: _ }) => {
+                params.hash(state);
+            }
+            Expr::LambdaVariable(LambdaVariable {
+                name,
+                field,
+                spans: _,
+            }) => {
+                name.hash(state);
+                field.hash(state);
+            }
         };
     }
 }
@@ -2681,24 +2907,23 @@ impl HashNode for Expr {
 // Modifies expr to match the DataType, metadata, and nullability of other if it is
 // a placeholder with previously unspecified type information (i.e., most placeholders)
 fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
-    if let Expr::Placeholder(Placeholder { id: _, field }) = expr {
-        if field.is_none() {
-            let other_field = other.to_field(schema);
-            match other_field {
-                Err(e) => {
-                    Err(e.context(format!(
-                        "Can not find type of {other} needed to infer type of {expr}"
-                    )))?;
-                }
-                Ok((_, other_field)) => {
-                    // We can't infer the nullability of the future parameter that might
-                    // be bound, so ensure this is set to true
-                    *field =
-                        Some(other_field.as_ref().clone().with_nullable(true).into());
-                }
+    if let Expr::Placeholder(Placeholder { id: _, field }) = expr
+        && field.is_none()
+    {
+        let other_field = other.to_field(schema);
+        match other_field {
+            Err(e) => {
+                Err(e.context(format!(
+                    "Can not find type of {other} needed to infer type of {expr}"
+                )))?;
             }
-        };
-    }
+            Ok((_, other_field)) => {
+                // We can't infer the nullability of the future parameter that might
+                // be bound, so ensure this is set to true
+                *field = Some(other_field.as_ref().clone().with_nullable(true).into());
+            }
+        }
+    };
     Ok(())
 }
 
@@ -2842,6 +3067,12 @@ impl Display for SchemaDisplay<'_> {
                 write!(f, "NOT IN")
             }
             Expr::InSubquery(InSubquery { negated: false, .. }) => write!(f, "IN"),
+            Expr::SetComparison(SetComparison {
+                expr,
+                op,
+                quantifier,
+                ..
+            }) => write!(f, "{} {op} {quantifier}", SchemaDisplay(expr.as_ref())),
             Expr::IsTrue(expr) => write!(f, "{} IS TRUE", SchemaDisplay(expr)),
             Expr::IsFalse(expr) => write!(f, "{} IS FALSE", SchemaDisplay(expr)),
             Expr::IsNotTrue(expr) => {
@@ -2987,6 +3218,25 @@ impl Display for SchemaDisplay<'_> {
                     }
                 }
             }
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+                match func.schema_name(args) {
+                    Ok(name) => {
+                        write!(f, "{name}")
+                    }
+                    Err(e) => {
+                        write!(f, "got error from schema_name {e}")
+                    }
+                }
+            }
+            Expr::Lambda(Lambda { params, body }) => {
+                write!(
+                    f,
+                    "({}) -> {}",
+                    display_comma_separated(params),
+                    SchemaDisplay(body)
+                )
+            }
+            Expr::LambdaVariable(c) => f.write_str(&c.name),
         }
     }
 }
@@ -3167,6 +3417,9 @@ impl Display for SqlDisplay<'_> {
                     }
                 }
             }
+            Expr::Lambda(Lambda { params, body }) => {
+                write!(f, "({}) -> {}", params.join(", "), SchemaDisplay(body))
+            }
             _ => write!(f, "{}", self.0),
         }
     }
@@ -3283,11 +3536,15 @@ impl Display for Expr {
                 }
                 write!(f, "END")
             }
-            Expr::Cast(Cast { expr, data_type }) => {
-                write!(f, "CAST({expr} AS {data_type})")
+            Expr::Cast(Cast { expr, field }) => {
+                let formatted =
+                    format_type_and_metadata(field.data_type(), Some(field.metadata()));
+                write!(f, "CAST({expr} AS {formatted})")
             }
-            Expr::TryCast(TryCast { expr, data_type }) => {
-                write!(f, "TRY_CAST({expr} AS {data_type})")
+            Expr::TryCast(TryCast { expr, field }) => {
+                let formatted =
+                    format_type_and_metadata(field.data_type(), Some(field.metadata()));
+                write!(f, "TRY_CAST({expr} AS {formatted})")
             }
             Expr::Not(expr) => write!(f, "NOT {expr}"),
             Expr::Negative(expr) => write!(f, "(- {expr})"),
@@ -3317,6 +3574,12 @@ impl Display for Expr {
                 subquery,
                 negated: false,
             }) => write!(f, "{expr} IN ({subquery:?})"),
+            Expr::SetComparison(SetComparison {
+                expr,
+                subquery,
+                op,
+                quantifier,
+            }) => write!(f, "{expr} {op} {quantifier} ({subquery:?})"),
             Expr::ScalarSubquery(subquery) => write!(f, "({subquery:?})"),
             Expr::BinaryExpr(expr) => write!(f, "{expr}"),
             Expr::ScalarFunction(fun) => {
@@ -3474,6 +3737,13 @@ impl Display for Expr {
             Expr::Unnest(Unnest { expr }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
+            Expr::HigherOrderFunction(fun) => {
+                fmt_function(f, fun.name(), false, &fun.args, true)
+            }
+            Expr::Lambda(Lambda { params, body }) => {
+                write!(f, "({}) -> {body}", params.join(", "))
+            }
+            Expr::LambdaVariable(c) => f.write_str(&c.name),
         }
     }
 }
@@ -3511,13 +3781,12 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 mod test {
     use crate::expr_fn::col;
     use crate::{
-        case, lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
+        lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
     };
     use arrow::datatypes::{Field, Schema};
     use sqlparser::ast;
     use sqlparser::ast::{Ident, IdentWithAlias};
-    use std::any::Any;
 
     #[test]
     fn infer_placeholder_in_clause() {
@@ -3575,6 +3844,108 @@ mod test {
     }
 
     #[test]
+    fn infer_placeholder_in_subquery() {
+        // WHERE $1 IN (SELECT a FROM t)
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let in_subquery = Expr::InSubquery(InSubquery {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            negated: false,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) =
+            in_subquery.infer_placeholder_types(&outer_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::InSubquery(in_subquery) => match *in_subquery.expr {
+                Expr::Placeholder(placeholder) => {
+                    let inferred = placeholder.field.expect("placeholder field");
+                    assert_eq!(inferred.data_type(), &DataType::Int32);
+                    assert!(inferred.is_nullable());
+                }
+                _ => panic!("Expected Placeholder expression in InSubquery"),
+            },
+            _ => panic!("Expected InSubquery expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_not_in_subquery() {
+        // WHERE $1 NOT IN (SELECT a FROM t)
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let not_in_subquery = Expr::InSubquery(InSubquery {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            negated: true,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) = not_in_subquery
+            .infer_placeholder_types(&outer_schema)
+            .unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::InSubquery(in_subquery) => {
+                assert!(in_subquery.negated, "negated flag must be preserved");
+                match *in_subquery.expr {
+                    Expr::Placeholder(placeholder) => {
+                        let inferred = placeholder.field.expect("placeholder field");
+                        assert_eq!(inferred.data_type(), &DataType::Int32);
+                        assert!(inferred.is_nullable());
+                    }
+                    _ => {
+                        panic!("Expected Placeholder expression in InSubquery")
+                    }
+                }
+            }
+            _ => panic!("Expected InSubquery expression"),
+        }
+    }
+
+    #[test]
     fn infer_placeholder_like_and_similar_to() {
         // name LIKE $1
         let schema =
@@ -3628,11 +3999,11 @@ mod test {
     #[test]
     fn infer_placeholder_with_metadata() {
         // name == $1, where name is a non-nullable string
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, false)
-                .with_metadata(
-                    [("some_key".to_string(), "some_value".to_string())].into(),
-                )]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, false).with_metadata(
+                [("some_key".to_string(), "some_value".to_string())].into(),
+            ),
+        ]));
         let df_schema = DFSchema::try_from(schema).unwrap();
 
         let expr = binary_expr(col("name"), Operator::Eq, placeholder("$1"));
@@ -3673,7 +4044,7 @@ mod test {
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
-            data_type: DataType::Utf8,
+            field: DataType::Utf8.into_nullable_field_ref(),
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, format!("{expr}"));
@@ -3681,6 +4052,24 @@ mod test {
         // representation. CAST does not change the name of expressions.
         assert_eq!("Float32(1.23)", expr.schema_name().to_string());
         Ok(())
+    }
+
+    #[test]
+    fn format_decimal_literal() {
+        let expr = lit(ScalarValue::Decimal128(Some(1), 1, 1));
+        assert_eq!("Decimal128(0.1,1,1)", format!("{expr}"));
+        assert_eq!("Decimal128(0.1,1,1)", expr.schema_name().to_string());
+        assert_eq!("0.1", expr.human_display().to_string());
+
+        let expr = lit(ScalarValue::Decimal128(Some(120), 3, 2));
+        assert_eq!("Decimal128(1.20,3,2)", format!("{expr}"));
+        assert_eq!("Decimal128(1.20,3,2)", expr.schema_name().to_string());
+        assert_eq!("1.20", expr.human_display().to_string());
+
+        let null_expr = lit(ScalarValue::Decimal128(None, 10, 2));
+        assert_eq!("Decimal128(NULL,10,2)", format!("{null_expr}"));
+        assert_eq!("Decimal128(NULL,10,2)", null_expr.schema_name().to_string());
+        assert_eq!("NULL", null_expr.human_display().to_string());
     }
 
     #[test]
@@ -3762,9 +4151,6 @@ mod test {
             signature: Signature,
         }
         impl ScalarUDFImpl for TestScalarUDF {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
             fn name(&self) -> &str {
                 "TestScalarUDF"
             }
@@ -3800,6 +4186,7 @@ mod test {
     }
 
     use super::*;
+    use crate::logical_plan::{EmptyRelation, LogicalPlan};
 
     #[test]
     fn test_display_wildcard() {
@@ -3826,8 +4213,8 @@ mod test {
                 wildcard_with_options(wildcard_options(
                     None,
                     Some(ExcludeSelectItem::Multiple(vec![
-                        Ident::from("c1"),
-                        Ident::from("c2")
+                        Ident::from("c1").into(),
+                        Ident::from("c2").into()
                     ])),
                     None,
                     None,
@@ -3891,6 +4278,28 @@ mod test {
     }
 
     #[test]
+    fn test_display_set_comparison() {
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(DFSchema::empty()),
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let expr = Expr::SetComparison(SetComparison::new(
+            Box::new(Expr::Column(Column::from_name("a"))),
+            subquery,
+            Operator::Gt,
+            SetQuantifier::Any,
+        ));
+
+        assert_eq!(format!("{expr}"), "a > ANY (<subquery>)");
+        assert_eq!(format!("{}", expr.human_display()), "a > ANY (<subquery>)");
+    }
+
+    #[test]
     fn test_schema_display_alias_with_relation() {
         assert_eq!(
             format!(
@@ -3912,6 +4321,36 @@ mod test {
             ),
             "column_name"
         );
+    }
+
+    #[test]
+    fn test_unalias_nested_respects_user_metadata() {
+        use std::collections::HashMap;
+
+        let base_expr = col("id");
+
+        let no_metadata = base_expr.clone().alias("alias");
+        assert_eq!(no_metadata.unalias_nested().data, base_expr);
+
+        let Expr::Alias(empty_metadata_alias) = base_expr.clone().alias("alias") else {
+            unreachable!();
+        };
+        let empty_metadata_alias = Expr::Alias(
+            empty_metadata_alias.with_metadata(Some(FieldMetadata::default())),
+        );
+        assert_eq!(empty_metadata_alias.unalias_nested().data, base_expr);
+
+        let user_metadata = FieldMetadata::from(HashMap::from([(
+            "some_key".to_string(),
+            "some_value".to_string(),
+        )]));
+
+        let Expr::Alias(user_alias) = base_expr.clone().alias("alias") else {
+            unreachable!();
+        };
+        let user_alias =
+            Expr::Alias(user_alias.with_metadata(Some(user_metadata.clone())));
+        assert_eq!(user_alias.clone().unalias_nested().data, user_alias);
     }
 
     fn wildcard_options(
@@ -3974,10 +4413,6 @@ mod test {
         #[derive(Debug, PartialEq, Eq, Hash)]
         struct TestUDF {}
         impl ScalarUDFImpl for TestUDF {
-            fn as_any(&self) -> &dyn Any {
-                unimplemented!()
-            }
-
             fn name(&self) -> &str {
                 unimplemented!()
             }
@@ -3996,6 +4431,69 @@ mod test {
             ) -> Result<ColumnarValue> {
                 unimplemented!()
             }
+        }
+    }
+
+    mod intersect_metadata_tests {
+        use super::super::intersect_metadata_for_union;
+        use std::collections::HashMap;
+
+        #[test]
+        fn all_branches_same_metadata() {
+            let m1 = HashMap::from([("key".into(), "val".into())]);
+            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+        }
+
+        #[test]
+        fn conflicting_metadata_dropped() {
+            let m1 = HashMap::from([("key".into(), "a".into())]);
+            let m2 = HashMap::from([("key".into(), "b".into())]);
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn empty_metadata_branch_skipped() {
+            let m1 = HashMap::from([("key".into(), "val".into())]);
+            let m2 = HashMap::new(); // e.g. NULL literal
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+        }
+
+        #[test]
+        fn empty_metadata_first_branch_skipped() {
+            let m1 = HashMap::new();
+            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+        }
+
+        #[test]
+        fn all_branches_empty_metadata() {
+            let m1: HashMap<String, String> = HashMap::new();
+            let m2: HashMap<String, String> = HashMap::new();
+            let result = intersect_metadata_for_union([&m1, &m2]);
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn mixed_empty_and_conflicting() {
+            let m1 = HashMap::from([("key".into(), "a".into())]);
+            let m2 = HashMap::new();
+            let m3 = HashMap::from([("key".into(), "b".into())]);
+            let result = intersect_metadata_for_union([&m1, &m2, &m3]);
+            // m2 is skipped; m1 and m3 conflict → dropped
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn no_inputs() {
+            let result = intersect_metadata_for_union(std::iter::empty::<
+                &HashMap<String, String>,
+            >());
+            assert!(result.is_empty());
         }
     }
 }

@@ -16,13 +16,13 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{internal_err, utils::take_function_args, Result};
+use datafusion_common::{Result, internal_err, utils::take_function_args};
 use datafusion_expr::{
-    conditional_expressions::CaseBuilder,
-    simplify::{ExprSimplifyResult, SimplifyInfo},
-    type_coercion::binary::comparison_coercion,
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, Volatility,
+    conditional_expressions::CaseBuilder,
+    simplify::{ExprSimplifyResult, SimplifyContext},
+    type_coercion::binary::type_union_coercion,
 };
 use datafusion_macros::user_doc;
 
@@ -78,10 +78,6 @@ impl NVL2Func {
 }
 
 impl ScalarUDFImpl for NVL2Func {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "nvl2"
     }
@@ -108,7 +104,7 @@ impl ScalarUDFImpl for NVL2Func {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [test, if_non_null, if_null] = take_function_args(self.name(), args)?;
 
@@ -133,11 +129,9 @@ impl ScalarUDFImpl for NVL2Func {
             [if_non_null, if_null]
                 .iter()
                 .try_fold(tested.clone(), |acc, x| {
-                    // The coerced types found by `comparison_coercion` are not guaranteed to be
-                    // coercible for the arguments. `comparison_coercion` returns more loose
-                    // types that can be coerced to both `acc` and `x` for comparison purpose.
-                    // See `maybe_data_types` for the actual coercion.
-                    let coerced_type = comparison_coercion(&acc, x);
+                    // `type_union_coercion` finds a loose common type; the actual
+                    // coercion is done by `maybe_data_types`.
+                    let coerced_type = type_union_coercion(&acc, x);
                     if let Some(coerced_type) = coerced_type {
                         Ok(coerced_type)
                     } else {

@@ -39,38 +39,57 @@ workspace = true
 
 [features]
 force_hash_collisions = []
+test_utils = ["arrow/test_utils"]
 tokio_coop = []
 tokio_coop_fallback = []
+# Enables `PhysicalExpr::try_to_proto` / `try_from_proto` hooks on the
+# physical expressions defined in this crate (e.g. `HashExpr`). Off by
+# default so consumers that never serialize plans pay nothing.
+proto = [
+    "dep:datafusion-proto-models",
+    "dep:datafusion-proto-common",
+    "datafusion-physical-expr/proto",
+    "datafusion-physical-expr-common/proto",
+]
 
 [lib]
 name = "datafusion_physical_plan"
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
+arrow-data = { workspace = true }
+# Spill IPC writes require lz4 and zstd codec support. Keep these features in
+# sync with the SpillCompression variants in datafusion-common so codec
+# availability is explicit in the crate that owns spill handling.
+arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
-chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
 datafusion-physical-expr-common = { workspace = true }
+datafusion-proto-common = { workspace = true, optional = true }
+datafusion-proto-models = { workspace = true, optional = true }
 futures = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
+num-traits = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
+serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true }
 
 [dev-dependencies]
+arrow-data = { workspace = true }
 criterion = { workspace = true, features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
@@ -98,4 +117,23 @@ name = "sort_preserving_merge"
 
 [[bench]]
 harness = false
+name = "sort_merge_join"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "aggregate_vectorized"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
+name = "hash_join_semi_anti"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
+name = "dictionary_group_values"
+
+[[bench]]
+harness = false
+name = "multi_group_by"

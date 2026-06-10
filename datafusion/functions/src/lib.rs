@@ -23,8 +23,6 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Function packages for [DataFusion].
@@ -195,7 +193,7 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
 }
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();

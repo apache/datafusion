@@ -21,13 +21,13 @@ use arrow::datatypes::DataType::Time64;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use chrono::TimeZone;
 use chrono::Timelike;
-use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
@@ -40,7 +40,24 @@ The session time zone can be set using the statement 'SET datafusion.execution.t
 "#,
     syntax_example = r#"current_time()
     (optional) SET datafusion.execution.time_zone = '+00:00';
-    SELECT current_time();"#
+    SELECT current_time();"#,
+    sql_example = r#"```sql
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 06:30:00.123456789 |
++--------------------+
+
+-- The current time is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 15:30:00.123456789 |
++--------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentTimeFunc {
@@ -68,10 +85,6 @@ impl CurrentTimeFunc {
 /// wherever it appears within a single statement. This value is
 /// chosen during planning time.
 impl ScalarUDFImpl for CurrentTimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "current_time"
     }
@@ -84,10 +97,7 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         Ok(Time64(Nanosecond))
     }
 
-    fn invoke_with_args(
-        &self,
-        _args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!(
             "invoke should not be called on a simplified current_time() function"
         )
@@ -95,23 +105,20 @@ impl ScalarUDFImpl for CurrentTimeFunc {
 
     fn simplify(
         &self,
-        _args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        args: Vec<Expr>,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let now_ts = info.execution_props().query_execution_start_time;
+        let Some(now_ts) = info.query_execution_start_time() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
 
         // Try to get timezone from config and convert to local time
         let nano = info
-            .execution_props()
             .config_options()
-            .and_then(|config| {
-                config
-                    .execution
-                    .time_zone
-                    .as_ref()
-                    .map(|tz| tz.parse::<Tz>().ok())
-            })
-            .flatten()
+            .execution
+            .time_zone
+            .as_ref()
+            .and_then(|tz| tz.parse::<Tz>().ok())
             .map_or_else(
                 || datetime_to_time_nanos(&now_ts),
                 |tz| {
@@ -143,46 +150,24 @@ fn datetime_to_time_nanos<Tz: TimeZone>(dt: &chrono::DateTime<Tz>) -> Option<i64
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, TimeUnit::Nanosecond};
     use chrono::{DateTime, Utc};
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::execution_props::ExecutionProps;
-    use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+    use datafusion_common::DFSchema;
+    use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
 
-    struct MockSimplifyInfo {
-        execution_props: ExecutionProps,
-    }
-
-    impl SimplifyInfo for MockSimplifyInfo {
-        fn is_boolean_type(&self, _expr: &Expr) -> Result<bool> {
-            Ok(false)
-        }
-
-        fn nullable(&self, _expr: &Expr) -> Result<bool> {
-            Ok(true)
-        }
-
-        fn execution_props(&self) -> &ExecutionProps {
-            &self.execution_props
-        }
-
-        fn get_data_type(&self, _expr: &Expr) -> Result<DataType> {
-            Ok(Time64(Nanosecond))
-        }
-    }
-
-    fn set_session_timezone_env(tz: &str, start_time: DateTime<Utc>) -> MockSimplifyInfo {
-        let mut config = datafusion_common::config::ConfigOptions::default();
+    fn set_session_timezone_env(tz: &str, start_time: DateTime<Utc>) -> SimplifyContext {
+        let mut config = ConfigOptions::default();
         config.execution.time_zone = if tz.is_empty() {
             None
         } else {
             Some(tz.to_string())
         };
-        let mut execution_props =
-            ExecutionProps::new().with_query_execution_start_time(start_time);
-        execution_props.config_options = Some(Arc::new(config));
-        MockSimplifyInfo { execution_props }
+        let schema = Arc::new(DFSchema::empty());
+        SimplifyContext::builder()
+            .with_schema(schema)
+            .with_config_options(Arc::new(config))
+            .with_query_execution_start_time(Some(start_time))
+            .build()
     }
 
     #[test]
@@ -225,6 +210,9 @@ mod tests {
         // 10 hours in nanoseconds
         let expected_offset = 10i64 * 3600 * 1_000_000_000;
 
-        assert_eq!(difference, expected_offset, "Expected 10-hour offset difference in nanoseconds between UTC+05:00 and UTC-05:00");
+        assert_eq!(
+            difference, expected_offset,
+            "Expected 10-hour offset difference in nanoseconds between UTC+05:00 and UTC-05:00"
+        );
     }
 }

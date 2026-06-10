@@ -148,19 +148,19 @@ use std::sync::Arc;
 use super::utils::{
     convert_duration_type_to_interval, convert_interval_type_to_duration, get_inverse_op,
 };
-use crate::expressions::{BinaryExpr, Literal};
-use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
+use crate::expressions::{BinaryExpr, Literal};
+use crate::utils::{ExprTreeNode, build_dag};
 
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
+use datafusion_common::{Result, internal_err, not_impl_err};
 use datafusion_expr::Operator;
+use datafusion_expr::interval_arithmetic::{Interval, apply_operator, satisfy_greater};
 
+use petgraph::Outgoing;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
-use petgraph::Outgoing;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.
@@ -220,7 +220,7 @@ impl ExprIntervalGraphNode {
     /// any other expression starts with an indefinite interval (`[-∞, ∞]`).
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
         let expr = Arc::clone(&node.expr);
-        if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(literal) = expr.downcast_ref::<Literal>() {
             let value = literal.value();
             Interval::try_new(value.clone(), value.clone())
                 .map(|interval| Self::new_with_interval(expr, interval))
@@ -646,7 +646,6 @@ impl ExprIntervalGraph {
             if node_interval == &Interval::TRUE
                 && self.graph[node]
                     .expr
-                    .as_any()
                     .downcast_ref::<BinaryExpr>()
                     .is_some_and(|expr| expr.op() == &Operator::Or)
             {
@@ -768,7 +767,7 @@ fn reverse_tuple<T, U>((first, second): (T, U)) -> (U, T) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{BinaryExpr, Column};
+    use crate::expressions::Column;
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
 
     use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
@@ -780,7 +779,7 @@ mod tests {
     use rand::{Rng, SeedableRng};
     use rstest::*;
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn experiment(
         expr: Arc<dyn PhysicalExpr>,
         exprs_with_interval: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
@@ -892,12 +891,12 @@ mod tests {
                     PropagationResult::Success,
                     &Schema::new(vec![
                         Field::new(
-                            left_col.as_any().downcast_ref::<Column>().unwrap().name(),
+                            left_col.downcast_ref::<Column>().unwrap().name(),
                             DataType::$SCALAR,
                             true,
                         ),
                         Field::new(
-                            right_col.as_any().downcast_ref::<Column>().unwrap().name(),
+                            right_col.downcast_ref::<Column>().unwrap().name(),
                             DataType::$SCALAR,
                             true,
                         ),
@@ -939,16 +938,8 @@ mod tests {
             Interval::make(Some(100), None)?,
             PropagationResult::Infeasible,
             &Schema::new(vec![
-                Field::new(
-                    left_col.as_any().downcast_ref::<Column>().unwrap().name(),
-                    DataType::Int32,
-                    true,
-                ),
-                Field::new(
-                    right_col.as_any().downcast_ref::<Column>().unwrap().name(),
-                    DataType::Int32,
-                    true,
-                ),
+                Field::new(left_col.name(), DataType::Int32, true),
+                Field::new(right_col.name(), DataType::Int32, true),
             ]),
         )
     }

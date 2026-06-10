@@ -22,7 +22,7 @@ use arrow::array::types::{
     Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::array::{downcast_primitive, ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
 
@@ -31,10 +31,10 @@ use datafusion_expr::EmitTo;
 pub mod multi_group_by;
 
 mod row;
+pub use row::GroupValuesRows;
 mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
 use multi_group_by::GroupValuesColumn;
-use row::GroupValuesRows;
 
 pub(crate) use single_group_by::primitive::HashValue;
 
@@ -112,7 +112,7 @@ pub trait GroupValues: Send {
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
-    fn clear_shrink(&mut self, batch: &RecordBatch);
+    fn clear_shrink(&mut self, num_rows: usize);
 }
 
 /// Return a specialized implementation of [`GroupValues`] for the given schema.
@@ -130,7 +130,7 @@ pub trait GroupValues: Send {
 ///
 /// `GroupColumn`:  crate::aggregates::group_values::multi_group_by::GroupColumn
 /// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
-/// `GroupValuesRows`: crate::aggregates::group_values::row::GroupValuesRows
+/// `GroupValuesRows`: crate::aggregates::group_values::GroupValuesRows
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,

@@ -22,39 +22,46 @@ use crate::filter_pushdown::{
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 
+use arrow_schema::Schema;
 pub use datafusion_common::hash_utils;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, Distribution, Partitioning, PhysicalExpr,
+    Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
 use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
+use crate::repartition::RepartitionExec;
+use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    assert_eq_or_internal_err, assert_or_internal_err, exec_err, Constraints,
-    DataFusionError, Result,
+    Constraints, DataFusionError, Result, assert_eq_or_internal_err,
+    assert_or_internal_err, exec_err,
 };
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, OrderingRequirements, PhysicalSortExpr,
+};
 
 use futures::stream::{StreamExt, TryStreamExt};
 
@@ -85,8 +92,8 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// `ExecutionPlan` with memory tracking and spilling support.
 ///
 /// [`datafusion-examples`]: https://github.com/apache/datafusion/tree/main/datafusion-examples
-/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
-pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
+/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_execution_plan.rs
+pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
     /// Implementation note: this method can just proxy to
@@ -110,9 +117,29 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         }
     }
 
-    /// Returns the execution plan as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
+    /// Returns the plan that provides this plan's public
+    /// [`ExecutionPlan`] downcast identity.
+    ///
+    /// This hook is for wrapper nodes that delegate their public downcast
+    /// identity to another plan while adding cross-cutting behavior such as
+    /// instrumentation. The default implementation returns `None`, meaning this
+    /// plan's concrete type is used for type introspection.
+    ///
+    /// Most `ExecutionPlan` implementations should use the default `None`;
+    /// override this only for wrapper plans that intentionally delegate their
+    /// public downcast identity to another plan.
+    ///
+    /// The `is` and `downcast_ref` helpers follow the returned delegate instead
+    /// of checking the current concrete type, making intermediate delegating
+    /// wrappers invisible to normal downcast-based inspection.
+    ///
+    /// Implementations that opt in should return the delegate plan, not `self`.
+    ///
+    /// This is independent from [`Self::children`] and should not be used for
+    /// plan traversal or optimizer rewrites.
+    fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+        None
+    }
 
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
@@ -124,7 +151,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// This information is available via methods on [`ExecutionPlanProperties`]
     /// trait, which is implemented for all `ExecutionPlan`s.
-    fn properties(&self) -> &PlanProperties;
+    fn properties(&self) -> &Arc<PlanProperties>;
 
     /// Returns an error if this individual node does not conform to its invariants.
     /// These invariants are typically only checked in debug mode.
@@ -468,22 +495,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         None
     }
 
-    /// Returns statistics for this `ExecutionPlan` node. If statistics are not
-    /// available, should return [`Statistics::new_unknown`] (the default), not
-    /// an error.
-    ///
-    /// For TableScan executors, which supports filter pushdown, special attention
-    /// needs to be paid to whether the stats returned by this method are exact or not
-    #[deprecated(since = "48.0.0", note = "Use `partition_statistics` method instead")]
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
-    }
-
     /// Returns statistics for a specific partition of this `ExecutionPlan` node.
     /// If statistics are not available, should return [`Statistics::new_unknown`]
     /// (the default), not an error.
     /// If `partition` is `None`, it returns statistics for the entire plan.
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(idx) = partition {
             // Validate partition index
             let partition_count = self.properties().partitioning.partition_count();
@@ -494,7 +510,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
                 partition_count
             );
         }
-        Ok(Statistics::new_unknown(&self.schema()))
+        Ok(Arc::new(Statistics::new_unknown(&self.schema())))
     }
 
     /// Returns `true` if a limit can be safely pushed down through this
@@ -509,6 +525,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
     /// Returns a fetching variant of this `ExecutionPlan` node, if it supports
     /// fetch limits. Returns `None` otherwise.
+    ///
+    /// See physical optimizer rule [`limit_pushdown`] for details.
+    ///
+    /// [`limit_pushdown`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/limit_pushdown/index.html
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
@@ -573,6 +593,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 
     /// Handle the result of a child pushdown.
+    ///
     /// This method is called as we recurse back up the plan tree after pushing
     /// filters down to child nodes via [`ExecutionPlan::gather_filters_for_pushdown`].
     /// It allows the current node to process the results of filter pushdown from
@@ -681,6 +702,74 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         _state: Arc<dyn Any + Send + Sync>,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
+    }
+
+    /// Try to push down sort ordering requirements to this node.
+    ///
+    /// This method is called during sort pushdown optimization to determine if this
+    /// node can optimize for a requested sort ordering. Implementations should:
+    ///
+    /// - Return [`SortOrderPushdownResult::Exact`] if the node can guarantee the exact
+    ///   ordering (allowing the Sort operator to be removed)
+    /// - Return [`SortOrderPushdownResult::Inexact`] if the node can optimize for the
+    ///   ordering but cannot guarantee perfect sorting (Sort operator is kept)
+    /// - Return [`SortOrderPushdownResult::Unsupported`] if the node cannot optimize
+    ///   for the ordering
+    ///
+    /// For transparent nodes (that preserve ordering), implement this to delegate to
+    /// children and wrap the result with a new instance of this node.
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
+    }
+
+    /// Returns a variant of this `ExecutionPlan` that is aware of order-sensitivity.
+    ///
+    /// This is used to signal to data sources that the output ordering must be
+    /// preserved, even if it might be more efficient to ignore it (e.g. by
+    /// skipping some row groups in Parquet).
+    ///
+    fn with_preserve_order(
+        &self,
+        _preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
+}
+
+impl dyn ExecutionPlan {
+    /// Returns `true` if the plan is of type `T`.
+    ///
+    /// If this plan provides a [`ExecutionPlan::downcast_delegate`], delegates
+    /// to it.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn ExecutionPlan>` via auto-deref.
+    pub fn is<T: ExecutionPlan>(&self) -> bool {
+        match self.downcast_delegate() {
+            Some(delegate) => delegate.is::<T>(),
+            None => (self as &dyn Any).is::<T>(),
+        }
+    }
+
+    /// Attempts to downcast this plan to a concrete type `T`, returning `None`
+    /// if the plan is not of that type.
+    ///
+    /// If this plan provides a [`ExecutionPlan::downcast_delegate`], delegates
+    /// to it.
+    ///
+    /// Works correctly when called on `Arc<dyn ExecutionPlan>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: ExecutionPlan>(&self) -> Option<&T> {
+        match self.downcast_delegate() {
+            Some(delegate) => delegate.downcast_ref::<T>(),
+            None => (self as &dyn Any).downcast_ref(),
+        }
     }
 }
 
@@ -875,25 +964,36 @@ pub enum SchedulingType {
     Cooperative,
 }
 
-/// Represents how an operator's `Stream` implementation generates `RecordBatch`es.
+/// Represents how an operator's stream drives [`RecordBatch`] production
+/// relative to downstream demand.
 ///
-/// Most operators in DataFusion generate `RecordBatch`es when asked to do so by a call to
-/// `Stream::poll_next`. This is known as demand-driven or lazy evaluation.
-///
-/// Some operators like `Repartition` need to drive `RecordBatch` generation themselves though. This
-/// is known as data-driven or eager evaluation.
+/// This is execution-topology metadata for optimizers. It distinguishes streams
+/// whose batch production is driven directly by downstream calls to
+/// `Stream::poll_next` from streams that may also drive input or output
+/// production independently, such as by spawning tasks or buffering batches
+/// ahead of demand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvaluationType {
-    /// The stream generated by [`execute`](ExecutionPlan::execute) only generates `RecordBatch`
-    /// instances when it is demanded by invoking `Stream::poll_next`.
-    /// Filter, projection, and join are examples of such lazy operators.
+    /// The stream generated by [`execute`](ExecutionPlan::execute) is
+    /// demand-driven: it produces [`RecordBatch`]es in response to downstream
+    /// calls to `Stream::poll_next`.
+    ///
+    /// Filter, projection, and join operators are examples of lazy operators.
     ///
     /// Lazy operators are also known as demand-driven operators.
     Lazy,
-    /// The stream generated by [`execute`](ExecutionPlan::execute) eagerly generates `RecordBatch`
-    /// in one or more spawned Tokio tasks. Eager evaluation is only started the first time
-    /// `Stream::poll_next` is called.
-    /// Examples of eager operators are repartition, coalesce partitions, and sort preserving merge.
+    /// The stream generated by [`execute`](ExecutionPlan::execute) may drive
+    /// input or output [`RecordBatch`] production ahead of, or independently
+    /// from, downstream calls to `Stream::poll_next`.
+    ///
+    /// Eager operators commonly poll input streams from spawned Tokio tasks,
+    /// buffer batches ahead of demand, or otherwise create an independent
+    /// child-polling pipeline. Eager work may start when `execute` creates the
+    /// stream or when the returned stream is first polled; that timing is an
+    /// implementation detail.
+    ///
+    /// Repartition, coalesce partitions, sort-preserving merge, buffer, and
+    /// analyze operators are examples of eager operators.
     ///
     /// Eager operators are also known as a data-driven operators.
     Eager,
@@ -921,7 +1021,7 @@ pub(crate) fn boundedness_from_children<'a>(
             } => {
                 return Boundedness::Unbounded {
                     requires_infinite_memory: true,
-                }
+                };
             }
             Boundedness::Unbounded {
                 requires_infinite_memory: false,
@@ -1020,12 +1120,17 @@ impl PlanProperties {
         self
     }
 
-    /// Overwrite equivalence properties with its new value.
-    pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+    /// Set equivalence properties having mut reference.
+    pub fn set_eq_properties(&mut self, eq_properties: EquivalenceProperties) {
         // Changing equivalence properties also changes output ordering, so
         // make sure to overwrite it:
         self.output_ordering = eq_properties.output_ordering();
         self.eq_properties = eq_properties;
+    }
+
+    /// Overwrite equivalence properties with its new value.
+    pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+        self.set_eq_properties(eq_properties);
         self
     }
 
@@ -1057,9 +1162,14 @@ impl PlanProperties {
         self
     }
 
+    /// Set constraints having mut reference.
+    pub fn set_constraints(&mut self, constraints: Constraints) {
+        self.eq_properties.set_constraints(constraints);
+    }
+
     /// Overwrite constraints with its new value.
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.eq_properties = self.eq_properties.with_constraints(constraints);
+        self.set_constraints(constraints);
         self
     }
 
@@ -1112,15 +1222,31 @@ pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
     Ok(())
 }
 
-/// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
-/// especially for the distributed engine to judge whether need to deal with shuffling.
-/// Currently, there are 3 kinds of execution plan which needs data exchange
-///     1. RepartitionExec for changing the partition number between two `ExecutionPlan`s
-///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
-///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
+/// Indicate whether a data exchange is needed for the input of `plan`.
+///
+/// This identifies physical operators that redistribute child partitions or
+/// gather multiple child partitions into one output partition:
+///
+/// 1. RepartitionExec for non-round-robin repartitioning
+/// 2. CoalescePartitionsExec for collapsing multiple partitions into one without ordering guarantee
+/// 3. SortPreservingMergeExec for collapsing multiple sorted partitions into one with ordering guarantee
 #[expect(clippy::needless_pass_by_value)]
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
-    plan.properties().evaluation_type == EvaluationType::Eager
+    if let Some(repartition) = plan.downcast_ref::<RepartitionExec>() {
+        !matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_))
+    } else if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
+        coalesce.input().output_partitioning().partition_count() > 1
+    } else if let Some(sort_preserving_merge) =
+        plan.downcast_ref::<SortPreservingMergeExec>()
+    {
+        sort_preserving_merge
+            .input()
+            .output_partitioning()
+            .partition_count()
+            > 1
+    } else {
+        false
+    }
 }
 
 /// Returns a copy of this plan if we change any child according to the pointer comparison.
@@ -1358,6 +1484,68 @@ pub fn check_not_null_constraints(
     Ok(batch)
 }
 
+/// Make plan ready to be re-executed returning its clone with state reset for all nodes.
+///
+/// Some plans will change their internal states after execution, making them unable to be executed again.
+/// This function uses [`ExecutionPlan::reset_state`] to reset any internal state within the plan.
+///
+/// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
+/// However, if the data of the left table is derived from the work table, it will become outdated
+/// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
+///
+/// # Limitations
+///
+/// While this function enables plan reuse, it does not allow the same plan to be executed if it (OR):
+///
+/// * uses dynamic filters,
+/// * represents a recursive query.
+///
+pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(|plan| {
+        let new_plan = Arc::clone(&plan).reset_state()?;
+        Ok(Transformed::yes(new_plan))
+    })
+    .data()
+}
+
+/// Check if the `plan` children has the same properties as passed `children`.
+/// In this case plan can avoid self properties re-computation when its children
+/// replace is requested.
+/// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
+pub fn has_same_children_properties(
+    plan: &impl ExecutionPlan,
+    children: &[Arc<dyn ExecutionPlan>],
+) -> Result<bool> {
+    let old_children = plan.children();
+    assert_eq_or_internal_err!(
+        children.len(),
+        old_children.len(),
+        "Wrong number of children"
+    );
+    for (lhs, rhs) in old_children.iter().zip(children.iter()) {
+        if !Arc::ptr_eq(lhs.properties(), rhs.properties()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Helper macro to avoid properties re-computation if passed children properties
+/// the same as plan already has. Could be used to implement fast-path for method
+/// [`ExecutionPlan::with_new_children`].
+#[macro_export]
+macro_rules! check_if_same_properties {
+    ($plan: expr, $children: expr) => {
+        if $crate::execution_plan::has_same_children_properties(
+            $plan.as_ref(),
+            &$children,
+        )? {
+            let plan = $plan.with_new_children_and_same_properties($children);
+            return Ok(::std::sync::Arc::new(plan));
+        }
+    };
+}
+
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].
 pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
@@ -1379,18 +1567,30 @@ pub enum CardinalityEffect {
     GreaterEqual,
 }
 
+/// Can be used in contexts where properties have not yet been initialized properly.
+pub(crate) fn stub_properties() -> Arc<PlanProperties> {
+    static STUB_PROPERTIES: LazyLock<Arc<PlanProperties>> = LazyLock::new(|| {
+        Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::new(Schema::empty())),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ))
+    });
+
+    Arc::clone(&STUB_PROPERTIES)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-    use std::sync::Arc;
 
     use super::*;
+    use crate::buffer::BufferExec;
+    use crate::test::exec::MockExec;
     use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
     use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{Result, Statistics};
-    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    use arrow::datatypes::{DataType, Field, Schema};
 
     #[derive(Debug)]
     pub struct EmptyExec;
@@ -1416,11 +1616,7 @@ mod tests {
             Self::static_name()
         }
 
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 
@@ -1443,11 +1639,10 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics(&self) -> Result<Statistics> {
-            unimplemented!()
-        }
-
-        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            _partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }
     }
@@ -1483,11 +1678,7 @@ mod tests {
             "MyRenamedEmptyExec"
         }
 
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 
@@ -1510,15 +1701,66 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics(&self) -> Result<Statistics> {
-            unimplemented!()
-        }
-
-        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(
+            &self,
+            _partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }
     }
 
+    #[derive(Debug)]
+    struct DowncastDelegatingExec(Arc<dyn ExecutionPlan>);
+
+    impl DisplayAs for DowncastDelegatingExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for DowncastDelegatingExec {
+        fn name(&self) -> &'static str {
+            Self::static_name()
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            unimplemented!()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+            Some(self.0.as_ref())
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+
+        fn partition_statistics(
+            &self,
+            _partition: Option<usize>,
+        ) -> Result<Arc<Statistics>> {
+            unimplemented!()
+        }
+    }
     #[test]
     fn test_execution_plan_name() {
         let schema1 = Arc::new(Schema::empty());
@@ -1531,12 +1773,39 @@ mod tests {
         assert_eq!(RenamedEmptyExec::static_name(), "MyRenamedEmptyExec");
     }
 
+    #[test]
+    fn test_execution_plan_downcast_delegates_to_downcast_delegate() {
+        let schema = Arc::new(Schema::empty());
+        let inner: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let wrapped: Arc<dyn ExecutionPlan> = Arc::new(DowncastDelegatingExec(inner));
+        let nested: Arc<dyn ExecutionPlan> =
+            Arc::new(DowncastDelegatingExec(Arc::clone(&wrapped)));
+
+        for plan in [wrapped.as_ref(), nested.as_ref()] {
+            assert!(!plan.is::<DowncastDelegatingExec>());
+            assert!(plan.downcast_ref::<DowncastDelegatingExec>().is_none());
+            assert!(plan.is::<EmptyExec>());
+            assert!(plan.downcast_ref::<EmptyExec>().is_some());
+            assert!(!plan.is::<RenamedEmptyExec>());
+            assert!(plan.downcast_ref::<RenamedEmptyExec>().is_none());
+        }
+    }
+
     /// A compilation test to ensure that the `ExecutionPlan::name()` method can
     /// be called from a trait object.
     /// Related ticket: https://github.com/apache/datafusion/pull/11047
-    #[allow(dead_code)]
+    #[expect(unused)]
     fn use_execution_plan_as_trait_object(plan: &dyn ExecutionPlan) {
         let _ = plan.name();
+    }
+
+    #[test]
+    fn buffer_exec_does_not_need_data_exchange() {
+        let schema = Arc::new(Schema::empty());
+        let input: Arc<dyn ExecutionPlan> = Arc::new(MockExec::new(vec![], schema));
+        let buffer: Arc<dyn ExecutionPlan> = Arc::new(BufferExec::new(input, 1024));
+
+        assert!(!need_data_exchange(buffer));
     }
 
     #[test]

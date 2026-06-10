@@ -18,13 +18,17 @@
 //! "math" DataFusion functions
 
 use crate::math::monotonicity::*;
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
 
 pub mod abs;
 pub mod bounds;
+pub mod ceil;
 pub mod cot;
+mod decimal;
 pub mod factorial;
+pub mod floor;
 pub mod gcd;
 pub mod iszero;
 pub mod lcm;
@@ -38,6 +42,14 @@ pub mod random;
 pub mod round;
 pub mod signum;
 pub mod trunc;
+
+fn validate_sqrt_input(value: f64) -> Result<()> {
+    if value < 0.0 {
+        exec_err!("cannot take square root of a negative number")
+    } else {
+        Ok(())
+    }
+}
 
 // Create UDFs
 make_udf_function!(abs::AbsFunc, abs);
@@ -104,14 +116,7 @@ make_math_unary_udf!(
     super::bounds::unbounded_bounds,
     super::get_cbrt_doc
 );
-make_math_unary_udf!(
-    CeilFunc,
-    ceil,
-    ceil,
-    super::ceil_order,
-    super::bounds::unbounded_bounds,
-    super::get_ceil_doc
-);
+make_udf_function!(ceil::CeilFunc, ceil);
 make_math_unary_udf!(
     CosFunc,
     cos,
@@ -146,14 +151,7 @@ make_math_unary_udf!(
     super::get_exp_doc
 );
 make_udf_function!(factorial::FactorialFunc, factorial);
-make_math_unary_udf!(
-    FloorFunc,
-    floor,
-    floor,
-    super::floor_order,
-    super::bounds::unbounded_bounds,
-    super::get_floor_doc
-);
+make_udf_function!(floor::FloorFunc, floor);
 make_udf_function!(log::LogFunc, log);
 make_udf_function!(gcd::GcdFunc, gcd);
 make_udf_function!(nans::IsNanFunc, isnan);
@@ -219,7 +217,8 @@ make_math_unary_udf!(
     sqrt,
     super::sqrt_order,
     super::bounds::sqrt_bounds,
-    super::get_sqrt_doc
+    super::get_sqrt_doc,
+    Some(super::validate_sqrt_input)
 );
 make_math_unary_udf!(
     TanFunc,

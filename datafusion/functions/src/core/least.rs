@@ -16,17 +16,16 @@
 // under the License.
 
 use crate::core::greatest_least_utils::GreatestLeastOperator;
-use arrow::array::{make_comparator, Array, BooleanArray};
+use arrow::array::{Array, BooleanArray, make_comparator};
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::kernels::cmp;
 use arrow::compute::SortOptions;
+use arrow::compute::kernels::cmp;
 use arrow::datatypes::DataType;
-use datafusion_common::{assert_eq_or_internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
-use std::any::Any;
 
 const SORT_OPTIONS: SortOptions = SortOptions {
     // Having the smallest result first
@@ -103,11 +102,7 @@ impl GreatestLeastOperator for LeastFunc {
             SORT_OPTIONS,
         )?;
 
-        if cmp(0, 0).is_le() {
-            Ok(lhs)
-        } else {
-            Ok(rhs)
-        }
+        if cmp(0, 0).is_le() { Ok(lhs) } else { Ok(rhs) }
     }
 
     /// Return boolean array where `arr[i] = lhs[i] <= rhs[i]` for all i, where `arr` is the result array
@@ -140,10 +135,6 @@ impl GreatestLeastOperator for LeastFunc {
 }
 
 impl ScalarUDFImpl for LeastFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "least"
     }

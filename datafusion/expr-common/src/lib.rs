@@ -31,8 +31,6 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 pub mod accumulator;
@@ -42,7 +40,10 @@ pub mod dyn_eq;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;
 pub mod operator;
+pub mod placement;
 pub mod signature;
 pub mod sort_properties;
 pub mod statistics;
 pub mod type_coercion;
+
+pub use placement::ExpressionPlacement;

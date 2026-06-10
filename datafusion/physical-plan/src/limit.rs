@@ -17,7 +17,6 @@
 
 //! Defines the LIMIT plan
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -28,13 +27,17 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
-use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
+use crate::{
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    check_if_same_properties,
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{assert_eq_or_internal_err, internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 
+use datafusion_physical_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -50,7 +53,10 @@ pub struct GlobalLimitExec {
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    /// Does the limit have to preserve the order of its input, and if so what is it?
+    /// Some optimizations may reorder the input if no particular sort is required
+    required_ordering: Option<LexOrdering>,
+    cache: Arc<PlanProperties>,
 }
 
 impl GlobalLimitExec {
@@ -62,7 +68,8 @@ impl GlobalLimitExec {
             skip,
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            required_ordering: None,
+            cache: Arc::new(cache),
         }
     }
 
@@ -90,6 +97,27 @@ impl GlobalLimitExec {
             // Limit operations are always bounded since they output a finite number of rows
             Boundedness::Bounded,
         )
+    }
+
+    /// Get the required ordering from limit
+    pub fn required_ordering(&self) -> &Option<LexOrdering> {
+        &self.required_ordering
+    }
+
+    /// Set the required ordering for limit
+    pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
+        self.required_ordering = required_ordering;
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -125,11 +153,7 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -151,10 +175,11 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(GlobalLimitExec::new(
-            Arc::clone(&children[0]),
+            children.swap_remove(0),
             self.skip,
             self.fetch,
         )))
@@ -194,14 +219,9 @@ impl ExecutionPlan for GlobalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(partition)?
-            .with_fetch(self.fetch, self.skip, 1)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -214,7 +234,7 @@ impl ExecutionPlan for GlobalLimitExec {
 }
 
 /// LocalLimitExec applies a limit to a single partition
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LocalLimitExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
@@ -222,7 +242,10 @@ pub struct LocalLimitExec {
     fetch: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    /// If the child plan is a sort node, after the sort node is removed during
+    /// physical optimization, we should add the required ordering to the limit node
+    required_ordering: Option<LexOrdering>,
+    cache: Arc<PlanProperties>,
 }
 
 impl LocalLimitExec {
@@ -233,7 +256,8 @@ impl LocalLimitExec {
             input,
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
-            cache,
+            required_ordering: None,
+            cache: Arc::new(cache),
         }
     }
 
@@ -256,6 +280,27 @@ impl LocalLimitExec {
             // Limit operations are always bounded since they output a finite number of rows
             Boundedness::Bounded,
         )
+    }
+
+    /// Get the required ordering from limit
+    pub fn required_ordering(&self) -> &Option<LexOrdering> {
+        &self.required_ordering
+    }
+
+    /// Set the required ordering for limit
+    pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
+        self.required_ordering = required_ordering;
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -282,11 +327,7 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -306,6 +347,7 @@ impl ExecutionPlan for LocalLimitExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         match children.len() {
             1 => Ok(Arc::new(LocalLimitExec::new(
                 Arc::clone(&children[0]),
@@ -320,7 +362,12 @@ impl ExecutionPlan for LocalLimitExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let stream = self.input.execute(partition, context)?;
         Ok(Box::pin(LimitStream::new(
@@ -335,14 +382,9 @@ impl ExecutionPlan for LocalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(partition)?
-            .with_fetch(Some(self.fetch), 0, 1)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        Ok(Arc::new(stats.with_fetch(Some(self.fetch), 0, 1)?))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -494,8 +536,8 @@ mod tests {
     use arrow::array::RecordBatchOptions;
     use arrow::datatypes::Schema;
     use datafusion_common::stats::Precision;
-    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::expressions::col;
 
     #[tokio::test]
     async fn limit() -> Result<()> {
@@ -721,9 +763,12 @@ mod tests {
             row_number_inexact_statistics_for_global_limit(5, Some(10)).await?;
         assert_eq!(row_count, Precision::Inexact(10));
 
+        // Input was Inexact, so an `nr <= skip` outcome must remain Inexact:
+        // the inexact estimate could be wrong, so we cannot promote 0 to
+        // Exact.
         let row_count =
             row_number_inexact_statistics_for_global_limit(400, Some(10)).await?;
-        assert_eq!(row_count, Precision::Exact(0));
+        assert_eq!(row_count, Precision::Inexact(0));
 
         let row_count =
             row_number_inexact_statistics_for_global_limit(398, Some(10)).await?;

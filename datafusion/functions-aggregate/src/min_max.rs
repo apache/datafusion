@@ -23,13 +23,13 @@ mod min_max_struct;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    DurationSecondType, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_err, ColumnStatistics, Result};
+use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
 use std::cmp::Ordering;
@@ -46,8 +46,8 @@ use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
-    SetMonotonicity, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, SetMonotonicity, Signature, Volatility,
+    function::AccumulatorArgs,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
@@ -171,9 +171,8 @@ trait FromColumnStatistics {
                     let col_stats = &statistics_args.statistics.column_statistics;
                     if statistics_args.exprs.len() == 1 {
                         // TODO optimize with exprs other than Column
-                        if let Some(col_expr) = statistics_args.exprs[0]
-                            .as_any()
-                            .downcast_ref::<expressions::Column>()
+                        if let Some(col_expr) =
+                            statistics_args.exprs[0].downcast_ref::<expressions::Column>()
                         {
                             return self.value_from_column_statistics(
                                 &col_stats[col_expr.index()],
@@ -193,20 +192,16 @@ impl FromColumnStatistics for Max {
         &self,
         col_stats: &ColumnStatistics,
     ) -> Option<ScalarValue> {
-        if let Precision::Exact(ref val) = col_stats.max_value {
-            if !val.is_null() {
-                return Some(val.clone());
-            }
+        if let Precision::Exact(ref val) = col_stats.max_value
+            && !val.is_null()
+        {
+            return Some(val.clone());
         }
         None
     }
 }
 
 impl AggregateUDFImpl for Max {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "max"
     }
@@ -480,20 +475,16 @@ impl FromColumnStatistics for Min {
         &self,
         col_stats: &ColumnStatistics,
     ) -> Option<ScalarValue> {
-        if let Precision::Exact(ref val) = col_stats.min_value {
-            if !val.is_null() {
-                return Some(val.clone());
-            }
+        if let Precision::Exact(ref val) = col_stats.min_value
+            && !val.is_null()
+        {
+            return Some(val.clone());
         }
         None
     }
 }
 
 impl AggregateUDFImpl for Min {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "min"
     }
@@ -1012,12 +1003,13 @@ mod tests {
     use super::*;
     use arrow::{
         array::{
-            DictionaryArray, Float32Array, Int32Array, IntervalDayTimeArray,
-            IntervalMonthDayNanoArray, IntervalYearMonthArray, StringArray,
+            Array, DictionaryArray, Float32Array, Int8Array, Int32Array,
+            IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+            PrimitiveArray, StringArray,
         },
         datatypes::{
-            IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-            IntervalYearMonthType,
+            ArrowDictionaryKeyType, IntervalDayTimeType, IntervalMonthDayNanoType,
+            IntervalUnit, IntervalYearMonthType,
         },
     };
     use std::sync::Arc;
@@ -1154,7 +1146,6 @@ mod tests {
         check(&mut max(), &[&[zero, neg_inf]], zero);
     }
 
-    use datafusion_common::Result;
     use rand::Rng;
 
     fn get_random_vec_i32(len: usize) -> Vec<i32> {
@@ -1268,7 +1259,178 @@ mod tests {
         let mut max_acc = MaxAccumulator::try_new(&rt_type)?;
         max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
         let max_result = max_acc.evaluate()?;
-        assert_eq!(max_result, ScalarValue::Utf8(Some("🦀".to_string())));
+        assert_eq!(max_result, ScalarValue::Utf8(Some("d".to_string())));
+        Ok(())
+    }
+
+    fn dict_scalar(key_type: DataType, inner: ScalarValue) -> ScalarValue {
+        ScalarValue::Dictionary(Box::new(key_type), Box::new(inner))
+    }
+
+    fn utf8_dict_scalar(key_type: DataType, value: &str) -> ScalarValue {
+        dict_scalar(key_type, ScalarValue::Utf8(Some(value.to_string())))
+    }
+
+    fn string_dictionary_batch(values: &[&str], keys: &[Option<i32>]) -> ArrayRef {
+        string_dictionary_batch_with_keys(Int32Array::from(keys.to_vec()), values)
+    }
+
+    fn string_dictionary_batch_with_keys<K>(
+        keys: PrimitiveArray<K>,
+        values: &[&str],
+    ) -> ArrayRef
+    where
+        K: ArrowDictionaryKeyType,
+    {
+        let values = Arc::new(StringArray::from(values.to_vec())) as ArrayRef;
+        Arc::new(DictionaryArray::try_new(keys, values).unwrap()) as ArrayRef
+    }
+
+    fn optional_string_dictionary_batch(
+        values: &[Option<&str>],
+        keys: &[Option<i32>],
+    ) -> ArrayRef {
+        let values = Arc::new(StringArray::from(values.to_vec())) as ArrayRef;
+        Arc::new(
+            DictionaryArray::try_new(Int32Array::from(keys.to_vec()), values).unwrap(),
+        ) as ArrayRef
+    }
+
+    fn float_dictionary_batch(values: &[f32], keys: &[Option<i32>]) -> ArrayRef {
+        let values = Arc::new(Float32Array::from(values.to_vec())) as ArrayRef;
+        Arc::new(
+            DictionaryArray::try_new(Int32Array::from(keys.to_vec()), values).unwrap(),
+        ) as ArrayRef
+    }
+
+    fn evaluate_dictionary_accumulator(
+        mut acc: impl Accumulator,
+        batches: &[ArrayRef],
+    ) -> Result<ScalarValue> {
+        for batch in batches {
+            acc.update_batch(&[Arc::clone(batch)])?;
+        }
+        acc.evaluate()
+    }
+
+    fn assert_dictionary_min_max(
+        dict_type: &DataType,
+        batches: &[ArrayRef],
+        expected_min: &str,
+        expected_max: &str,
+    ) -> Result<()> {
+        let key_type = match dict_type {
+            DataType::Dictionary(key_type, _) => key_type.as_ref().clone(),
+            other => panic!("expected dictionary type, got {other:?}"),
+        };
+
+        let min_result = evaluate_dictionary_accumulator(
+            MinAccumulator::try_new(dict_type)?,
+            batches,
+        )?;
+        assert_eq!(min_result, utf8_dict_scalar(key_type.clone(), expected_min));
+
+        let max_result = evaluate_dictionary_accumulator(
+            MaxAccumulator::try_new(dict_type)?,
+            batches,
+        )?;
+        assert_eq!(max_result, utf8_dict_scalar(key_type, expected_max));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_min_max_dictionary_without_coercion() -> Result<()> {
+        let dict_array_ref = string_dictionary_batch(
+            &["b", "c", "a", "d"],
+            &[Some(0), Some(1), Some(2), Some(3)],
+        );
+        let dict_type = dict_array_ref.data_type().clone();
+
+        assert_dictionary_min_max(&dict_type, &[dict_array_ref], "a", "d")
+    }
+
+    #[test]
+    fn test_min_max_dictionary_with_nulls() -> Result<()> {
+        let dict_array_ref = string_dictionary_batch(
+            &["b", "c", "a"],
+            &[None, Some(0), None, Some(1), Some(2)],
+        );
+        let dict_type = dict_array_ref.data_type().clone();
+
+        assert_dictionary_min_max(&dict_type, &[dict_array_ref], "a", "c")
+    }
+
+    #[test]
+    fn test_min_max_dictionary_ignores_unreferenced_values() -> Result<()> {
+        let dict_array_ref =
+            string_dictionary_batch(&["a", "z", "zz_unused"], &[Some(1), Some(1), None]);
+        let dict_type = dict_array_ref.data_type().clone();
+
+        assert_dictionary_min_max(&dict_type, &[dict_array_ref], "z", "z")
+    }
+
+    #[test]
+    fn test_min_max_dictionary_ignores_referenced_null_values() -> Result<()> {
+        let dict_array_ref = optional_string_dictionary_batch(
+            &[Some("b"), None, Some("a"), Some("d")],
+            &[Some(0), Some(1), Some(2), Some(3)],
+        );
+        let dict_type = dict_array_ref.data_type().clone();
+
+        assert_dictionary_min_max(&dict_type, &[dict_array_ref], "a", "d")
+    }
+
+    #[test]
+    fn test_min_max_dictionary_multi_batch() -> Result<()> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let batch1 = string_dictionary_batch(&["b", "c"], &[Some(0), Some(1)]);
+        let batch2 = string_dictionary_batch(&["a", "d"], &[Some(0), Some(1)]);
+
+        assert_dictionary_min_max(&dict_type, &[batch1, batch2], "a", "d")
+    }
+
+    #[test]
+    fn test_min_max_dictionary_int8_keys() -> Result<()> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+        let dict_array_ref = string_dictionary_batch_with_keys(
+            Int8Array::from(vec![Some(0), Some(1), Some(2), Some(3)]),
+            &["b", "c", "a", "d"],
+        );
+
+        assert_dictionary_min_max(&dict_type, &[dict_array_ref], "a", "d")
+    }
+
+    #[test]
+    fn test_min_max_dictionary_float_with_nans() -> Result<()> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float32));
+        let batch1 = float_dictionary_batch(&[0.0, f32::NAN], &[Some(0), Some(1)]);
+        let batch2 = float_dictionary_batch(&[f32::NEG_INFINITY], &[Some(0)]);
+
+        let min_result = evaluate_dictionary_accumulator(
+            MinAccumulator::try_new(&dict_type)?,
+            &[Arc::clone(&batch1), Arc::clone(&batch2)],
+        )?;
+        assert_eq!(
+            min_result,
+            dict_scalar(
+                DataType::Int32,
+                ScalarValue::Float32(Some(f32::NEG_INFINITY)),
+            )
+        );
+
+        let max_result = evaluate_dictionary_accumulator(
+            MaxAccumulator::try_new(&dict_type)?,
+            &[batch1, batch2],
+        )?;
+        assert_eq!(
+            max_result,
+            dict_scalar(DataType::Int32, ScalarValue::Float32(Some(f32::NAN)))
+        );
+
         Ok(())
     }
 }

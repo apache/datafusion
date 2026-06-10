@@ -18,17 +18,23 @@
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
 use arrow::{
-    array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
-    compute::{kernels, max, min, CastOptions},
-    datatypes::DataType,
+    array::{
+        Array, ArrayRef, Date32Array, Date64Array, NullArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    },
+    compute::{CastOptions, kernels, max, min},
+    datatypes::{DataType, TimeUnit},
     util::pretty::pretty_format_columns,
 };
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
+    Result, ScalarValue,
     format::DEFAULT_CAST_OPTIONS,
     internal_err,
-    scalar::{date_to_timestamp_multiplier, ensure_timestamp_in_bounds},
-    Result, ScalarValue,
+    scalar::{
+        date_to_timestamp_multiplier, ensure_timestamp_in_bounds,
+        timestamp_to_timestamp_multiplier,
+    },
 };
 use std::fmt;
 use std::sync::Arc;
@@ -274,7 +280,17 @@ impl ColumnarValue {
         Ok(args)
     }
 
-    /// Cast's this [ColumnarValue] to the specified `DataType`
+    /// Cast this [ColumnarValue] to the specified `DataType`
+    ///
+    /// # Struct Casting Behavior
+    ///
+    /// When casting struct types, fields are matched **by name** rather than position:
+    /// - Source fields are matched to target fields using case-sensitive name comparison
+    /// - Fields are reordered to match the target schema
+    /// - Missing target fields are filled with null arrays
+    /// - Extra source fields are ignored
+    ///
+    /// For non-struct types, uses Arrow's standard positional casting.
     pub fn cast_to(
         &self,
         cast_type: &DataType,
@@ -283,12 +299,8 @@ impl ColumnarValue {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
             ColumnarValue::Array(array) => {
-                ensure_date_array_timestamp_bounds(array, cast_type)?;
-                Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
-                    array,
-                    cast_type,
-                    &cast_options,
-                )?))
+                let casted = cast_array_by_name(array, cast_type, &cast_options)?;
+                Ok(ColumnarValue::Array(casted))
             }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 scalar.cast_to_with_options(cast_type, &cast_options)?,
@@ -297,12 +309,39 @@ impl ColumnarValue {
     }
 }
 
-fn ensure_date_array_timestamp_bounds(
+fn cast_array_by_name(
+    array: &ArrayRef,
+    cast_type: &DataType,
+    cast_options: &CastOptions<'static>,
+) -> Result<ArrayRef> {
+    // If types are already equal, no cast needed
+    if array.data_type() == cast_type {
+        return Ok(Arc::clone(array));
+    }
+
+    if datafusion_common::nested_struct::requires_nested_struct_cast(
+        array.data_type(),
+        cast_type,
+    ) {
+        datafusion_common::nested_struct::cast_column(array, cast_type, cast_options)
+    } else {
+        ensure_temporal_array_timestamp_bounds(array, cast_type)?;
+        Ok(kernels::cast::cast_with_options(
+            array,
+            cast_type,
+            cast_options,
+        )?)
+    }
+}
+
+fn ensure_temporal_array_timestamp_bounds(
     array: &ArrayRef,
     cast_type: &DataType,
 ) -> Result<()> {
     let source_type = array.data_type().clone();
-    let Some(multiplier) = date_to_timestamp_multiplier(&source_type, cast_type) else {
+    let Some(multiplier) = date_to_timestamp_multiplier(&source_type, cast_type)
+        .or_else(|| timestamp_to_timestamp_multiplier(&source_type, cast_type))
+    else {
         return Ok(());
     };
 
@@ -336,7 +375,55 @@ fn ensure_date_array_timestamp_bounds(
                 })?;
             (min(arr), max(arr))
         }
-        _ => return Ok(()), // Not a date type, nothing to do
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected TimestampSecondArray but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected TimestampMillisecondArray but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected TimestampMicrosecondArray but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected TimestampNanosecondArray but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        _ => return Ok(()), // Not a temporal type that needs checking.
     };
 
     // Only validate the min and max values instead of all elements
@@ -378,8 +465,8 @@ impl fmt::Display for ColumnarValue {
 mod tests {
     use super::*;
     use arrow::{
-        array::{Date64Array, Int32Array},
-        datatypes::TimeUnit,
+        array::{Date64Array, Int32Array, StructArray},
+        datatypes::{Field, Fields, TimeUnit},
     };
 
     #[test]
@@ -554,9 +641,121 @@ mod tests {
     }
 
     #[test]
+    fn cast_struct_by_field_name() {
+        let source_fields = Fields::from(vec![
+            Field::new("b", DataType::Int32, true),
+            Field::new("a", DataType::Int32, true),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+
+        let struct_array = StructArray::new(
+            source_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(3)])),
+                Arc::new(Int32Array::from(vec![Some(4)])),
+            ],
+            None,
+        );
+
+        let value = ColumnarValue::Array(Arc::new(struct_array));
+        let casted = value
+            .cast_to(&DataType::Struct(target_fields.clone()), None)
+            .expect("struct cast should succeed");
+
+        let ColumnarValue::Array(arr) = casted else {
+            panic!("expected array after cast");
+        };
+
+        let struct_array = arr
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("expected StructArray");
+
+        let field_a = struct_array
+            .column_by_name("a")
+            .expect("expected field a in cast result");
+        let field_b = struct_array
+            .column_by_name("b")
+            .expect("expected field b in cast result");
+
+        assert_eq!(
+            field_a
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("expected Int32 array")
+                .value(0),
+            4
+        );
+        assert_eq!(
+            field_b
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("expected Int32 array")
+                .value(0),
+            3
+        );
+    }
+
+    #[test]
+    fn cast_struct_missing_field_inserts_nulls() {
+        let source_fields = Fields::from(vec![Field::new("a", DataType::Int32, true)]);
+
+        let target_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+
+        let struct_array = StructArray::new(
+            source_fields,
+            vec![Arc::new(Int32Array::from(vec![Some(5)]))],
+            None,
+        );
+
+        let value = ColumnarValue::Array(Arc::new(struct_array));
+        let casted = value
+            .cast_to(&DataType::Struct(target_fields.clone()), None)
+            .expect("struct cast should succeed");
+
+        let ColumnarValue::Array(arr) = casted else {
+            panic!("expected array after cast");
+        };
+
+        let struct_array = arr
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("expected StructArray");
+
+        let field_b = struct_array
+            .column_by_name("b")
+            .expect("expected missing field to be added");
+
+        assert!(field_b.is_null(0));
+    }
+
+    #[test]
     fn cast_date64_array_to_timestamp_overflow() {
         let overflow_value = i64::MAX / 1_000_000 + 1;
         let array: ArrayRef = Arc::new(Date64Array::from(vec![Some(overflow_value)]));
+        let value = ColumnarValue::Array(array);
+        let result =
+            value.cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None), None);
+        let err = result.expect_err("expected overflow to be detected");
+        assert!(
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn cast_timestamp_array_to_timestamp_overflow() {
+        let overflow_value = i64::MAX / 1_000_000_000 + 1;
+        let array: ArrayRef =
+            Arc::new(TimestampSecondArray::from(vec![Some(overflow_value)]));
         let value = ColumnarValue::Array(array);
         let result =
             value.cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None), None);

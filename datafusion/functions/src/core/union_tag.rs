@@ -18,7 +18,7 @@
 use arrow::array::{Array, AsArray, DictionaryArray, Int8Array, StringArray};
 use arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -63,10 +63,6 @@ impl UnionTagFunc {
 }
 
 impl ScalarUDFImpl for UnionTagFunc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "union_tag"
     }
@@ -143,7 +139,7 @@ impl ScalarUDFImpl for UnionTagFunc {
                     args.return_field.data_type(),
                 )?)),
             },
-            v => exec_err!("union_tag only support unions, got {:?}", v.data_type()),
+            v => exec_err!("union_tag only support unions, got {}", v.data_type()),
         }
     }
 
@@ -156,8 +152,8 @@ impl ScalarUDFImpl for UnionTagFunc {
 mod tests {
     use super::UnionTagFunc;
     use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 

@@ -21,50 +21,62 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
+    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::file_sink_config::FileSink;
-use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::{FileRange, PartitionedFile};
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_expr::WindowFrame;
-use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr::ScalarFunctionExpr;
-use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
+use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
+use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion_physical_plan::expressions::LikeExpr;
-use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
-};
+use datafusion_physical_plan::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
-use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
-
-use crate::protobuf::{
-    self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
-    PhysicalSortExprNodeCollection,
+use datafusion_physical_plan::{
+    Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, WindowExpr,
 };
 
-use super::PhysicalExtensionCodec;
+use super::{
+    DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    PhysicalProtoConverterExtension, encode_human_display_alias,
+};
+use crate::convert::TryFromProto;
+use crate::protobuf::{
+    self, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
+    physical_aggregate_expr_node, physical_window_expr_node,
+};
 
 #[expect(clippy::needless_pass_by_value)]
 pub fn serialize_physical_aggr_expr(
     aggr_expr: Arc<AggregateFunctionExpr>,
     codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::PhysicalExprNode> {
-    let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
-    let order_bys =
-        serialize_physical_sort_exprs(aggr_expr.order_bys().iter().cloned(), codec)?;
+    let expressions =
+        serialize_physical_exprs(&aggr_expr.expressions(), codec, proto_converter)?;
+    let order_bys = serialize_physical_sort_exprs(
+        aggr_expr.order_bys().iter().cloned(),
+        codec,
+        proto_converter,
+    )?;
 
     let name = aggr_expr.fun().name().to_string();
     let mut buf = Vec::new();
     codec.try_encode_udaf(aggr_expr.fun(), &mut buf)?;
+    let human_display = match (aggr_expr.human_display(), aggr_expr.human_display_alias())
+    {
+        (Some(display), Some(alias)) => encode_human_display_alias(display, alias),
+        (Some(display), None) => display.to_string(),
+        (None, _) => String::new(),
+    };
     Ok(protobuf::PhysicalExprNode {
+        expr_id: None,
         expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
             protobuf::PhysicalAggregateExprNode {
                 aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
@@ -73,7 +85,7 @@ pub fn serialize_physical_aggr_expr(
                 distinct: aggr_expr.is_distinct(),
                 ignore_nulls: aggr_expr.ignore_nulls(),
                 fun_definition: (!buf.is_empty()).then_some(buf),
-                human_display: aggr_expr.human_display().to_string(),
+                human_display,
             },
         )),
     })
@@ -99,9 +111,10 @@ fn serialize_physical_window_aggr_expr(
 pub fn serialize_physical_window_expr(
     window_expr: &Arc<dyn WindowExpr>,
     codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::PhysicalWindowExprNode> {
     let expr = window_expr.as_any();
-    let args = window_expr.expressions().to_vec();
+    let mut args = window_expr.expressions().to_vec();
     let window_frame = window_expr.get_window_frame();
 
     let (window_function, fun_definition, ignore_nulls, distinct) =
@@ -137,6 +150,7 @@ pub fn serialize_physical_window_expr(
             {
                 let mut buf = Vec::new();
                 codec.try_encode_udwf(expr.fun(), &mut buf)?;
+                args = expr.args().to_vec();
                 (
                     physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
                         expr.fun().name().to_string(),
@@ -154,12 +168,15 @@ pub fn serialize_physical_window_expr(
             return not_impl_err!("WindowExpr not supported: {window_expr:?}");
         };
 
-    let args = serialize_physical_exprs(&args, codec)?;
-    let partition_by = serialize_physical_exprs(window_expr.partition_by(), codec)?;
-    let order_by = serialize_physical_sort_exprs(window_expr.order_by().to_vec(), codec)?;
-    let window_frame: protobuf::WindowFrame = window_frame
-        .as_ref()
-        .try_into()
+    let args = serialize_physical_exprs(&args, codec, proto_converter)?;
+    let partition_by =
+        serialize_physical_exprs(window_expr.partition_by(), codec, proto_converter)?;
+    let order_by = serialize_physical_sort_exprs(
+        window_expr.order_by().to_vec(),
+        codec,
+        proto_converter,
+    )?;
+    let window_frame = protobuf::WindowFrame::try_from_proto(window_frame.as_ref())
         .map_err(|e| internal_datafusion_err!("{e}"))?;
 
     Ok(protobuf::PhysicalWindowExprNode {
@@ -178,22 +195,24 @@ pub fn serialize_physical_window_expr(
 pub fn serialize_physical_sort_exprs<I>(
     sort_exprs: I,
     codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<Vec<PhysicalSortExprNode>>
 where
     I: IntoIterator<Item = PhysicalSortExpr>,
 {
     sort_exprs
         .into_iter()
-        .map(|sort_expr| serialize_physical_sort_expr(sort_expr, codec))
+        .map(|sort_expr| serialize_physical_sort_expr(sort_expr, codec, proto_converter))
         .collect()
 }
 
 pub fn serialize_physical_sort_expr(
     sort_expr: PhysicalSortExpr,
     codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<PhysicalSortExprNode> {
     let PhysicalSortExpr { expr, options } = sort_expr;
-    let expr = serialize_physical_expr(&expr, codec)?;
+    let expr = proto_converter.physical_expr_to_proto(&expr, codec)?;
     Ok(PhysicalSortExprNode {
         expr: Some(Box::new(expr)),
         asc: !options.descending,
@@ -204,13 +223,14 @@ pub fn serialize_physical_sort_expr(
 pub fn serialize_physical_exprs<'a, I>(
     values: I,
     codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<Vec<protobuf::PhysicalExprNode>>
 where
     I: IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
 {
     values
         .into_iter()
-        .map(|value| serialize_physical_expr(value, codec))
+        .map(|value| proto_converter.physical_expr_to_proto(value, codec))
         .collect()
 }
 
@@ -222,145 +242,73 @@ pub fn serialize_physical_expr(
     value: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
-    // Snapshot the expr in case it has dynamic predicate state so
-    // it can be serialized
-    let value = snapshot_physical_expr(Arc::clone(value))?;
-    let expr = value.as_any();
+    serialize_physical_expr_with_converter(
+        value,
+        codec,
+        &DefaultPhysicalProtoConverter {},
+    )
+}
 
-    if let Some(expr) = expr.downcast_ref::<Column>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
-                protobuf::PhysicalColumn {
-                    name: expr.name().to_string(),
-                    index: expr.index() as u32,
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
-                protobuf::UnknownColumn {
-                    name: expr.name().to_string(),
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
-        let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
-            l: Some(Box::new(serialize_physical_expr(expr.left(), codec)?)),
-            r: Some(Box::new(serialize_physical_expr(expr.right(), codec)?)),
-            op: format!("{:?}", expr.op()),
-        });
+/// Concrete [`PhysicalExprEncode`] driver used to back
+/// [`PhysicalExprEncodeCtx`] when expressions invoke `PhysicalExpr::to_proto`.
+///
+/// Wraps the existing extension codec + converter pair so individual
+/// expressions can recurse into children without depending on
+/// `datafusion-proto` directly.
+///
+/// [`PhysicalExprEncode`]: datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode
+/// [`PhysicalExprEncodeCtx`]: datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx
+struct ConverterEncoder<'a> {
+    codec: &'a dyn PhysicalExtensionCodec,
+    proto_converter: &'a dyn PhysicalProtoConverterExtension,
+}
 
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::BinaryExpr(
-                binary_expr,
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<CaseExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(
-                protobuf::physical_expr_node::ExprType::Case(
-                    Box::new(
-                        protobuf::PhysicalCaseNode {
-                            expr: expr
-                                .expr()
-                                .map(|exp| {
-                                    serialize_physical_expr(exp, codec).map(Box::new)
-                                })
-                                .transpose()?,
-                            when_then_expr: expr
-                                .when_then_expr()
-                                .iter()
-                                .map(|(when_expr, then_expr)| {
-                                    serialize_when_then_expr(when_expr, then_expr, codec)
-                                })
-                                .collect::<Result<
-                                    Vec<protobuf::PhysicalWhenThen>,
-                                    DataFusionError,
-                                >>()?,
-                            else_expr: expr
-                                .else_expr()
-                                .map(|a| serialize_physical_expr(a, codec).map(Box::new))
-                                .transpose()?,
-                        },
-                    ),
-                ),
-            ),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<NotExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(Box::new(
-                protobuf::PhysicalNot {
-                    expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
-                },
-            ))),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<IsNullExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
-                Box::new(protobuf::PhysicalIsNull {
-                    expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
-                }),
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<IsNotNullExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::IsNotNullExpr(
-                Box::new(protobuf::PhysicalIsNotNull {
-                    expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
-                }),
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<InListExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
-                protobuf::PhysicalInListNode {
-                    expr: Some(Box::new(serialize_physical_expr(expr.expr(), codec)?)),
-                    list: serialize_physical_exprs(expr.list(), codec)?,
-                    negated: expr.negated(),
-                },
-            ))),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
-                protobuf::PhysicalNegativeNode {
-                    expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
-                },
-            ))),
-        })
-    } else if let Some(lit) = expr.downcast_ref::<Literal>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
-                lit.value().try_into()?,
-            )),
-        })
-    } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
-                protobuf::PhysicalCastNode {
-                    expr: Some(Box::new(serialize_physical_expr(cast.expr(), codec)?)),
-                    arrow_type: Some(cast.cast_type().try_into()?),
-                },
-            ))),
-        })
-    } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(Box::new(
-                protobuf::PhysicalTryCastNode {
-                    expr: Some(Box::new(serialize_physical_expr(cast.expr(), codec)?)),
-                    arrow_type: Some(cast.cast_type().try_into()?),
-                },
-            ))),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
+impl datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode
+    for ConverterEncoder<'_>
+{
+    fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<protobuf::PhysicalExprNode> {
+        self.proto_converter
+            .physical_expr_to_proto(expr, self.codec)
+    }
+}
+
+/// Serialize a `PhysicalExpr` to default protobuf representation.
+///
+/// If required, a [`PhysicalExtensionCodec`] can be provided which can handle
+/// serialization of udfs requiring specialized serialization (see [`PhysicalExtensionCodec::try_encode_udf`]).
+/// A [`PhysicalProtoConverterExtension`] can be provided to handle the
+/// conversion process (see [`PhysicalProtoConverterExtension::physical_expr_to_proto`]).
+pub fn serialize_physical_expr_with_converter(
+    value: &Arc<dyn PhysicalExpr>,
+    codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+) -> Result<protobuf::PhysicalExprNode> {
+    let expr = value.as_ref();
+    let expr_id = value.expression_id();
+
+    // Give the expression a chance to serialize itself first. Returning
+    // `Ok(Some(node))` lets expressions with private state (e.g.
+    // `DynamicFilterPhysicalExpr`) avoid exposing pub-for-proto accessors.
+    // `Ok(None)` falls through to the downcast chain below — that's the
+    // default for built-in expressions which haven't been migrated yet.
+    let encoder = ConverterEncoder {
+        codec,
+        proto_converter,
+    };
+    let ctx = datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx::new(&encoder);
+    if let Some(node) = expr.try_to_proto(&ctx)? {
+        return Ok(node);
+    }
+
+    if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
         let mut buf = Vec::new();
         codec.try_encode_udf(expr.fun(), &mut buf)?;
         Ok(protobuf::PhysicalExprNode {
+            expr_id,
             expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
                 protobuf::PhysicalScalarUdfNode {
                     name: expr.name().to_string(),
-                    args: serialize_physical_exprs(expr.args(), codec)?,
+                    args: serialize_physical_exprs(expr.args(), codec, proto_converter)?,
                     fun_definition: (!buf.is_empty()).then_some(buf),
                     return_type: Some(expr.return_type().try_into()?),
                     nullable: expr.nullable(),
@@ -371,30 +319,61 @@ pub fn serialize_physical_expr(
                 },
             )),
         })
-    } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
+    } else if let Some(expr) = expr.downcast_ref::<ScalarSubqueryExpr>() {
         Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(Box::new(
-                protobuf::PhysicalLikeExprNode {
-                    negated: expr.negated(),
-                    case_insensitive: expr.case_insensitive(),
-                    expr: Some(Box::new(serialize_physical_expr(expr.expr(), codec)?)),
-                    pattern: Some(Box::new(serialize_physical_expr(
-                        expr.pattern(),
-                        codec,
-                    )?)),
+            expr_id,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarSubquery(
+                protobuf::PhysicalScalarSubqueryExprNode {
+                    data_type: Some(expr.data_type().try_into()?),
+                    nullable: expr.nullable(),
+                    index: expr.index().as_usize() as u32,
                 },
-            ))),
+            )),
+        })
+    } else if let Some(df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
+        let children = df
+            .original_children()
+            .iter()
+            .map(|child| proto_converter.physical_expr_to_proto(child, codec))
+            .collect::<Result<Vec<_>>>()?;
+
+        let remapped_children = if let Some(remapped) = df.remapped_children() {
+            remapped
+                .iter()
+                .map(|child| proto_converter.physical_expr_to_proto(child, codec))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            vec![]
+        };
+
+        // Atomic snapshot of inner state.
+        let inner = df.inner();
+        let inner_expr =
+            Box::new(proto_converter.physical_expr_to_proto(&inner.expr, codec)?);
+
+        Ok(protobuf::PhysicalExprNode {
+            expr_id,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::DynamicFilter(
+                Box::new(protobuf::PhysicalDynamicFilterNode {
+                    children,
+                    remapped_children,
+                    generation: inner.generation,
+                    inner_expr: Some(inner_expr),
+                    is_complete: inner.is_complete,
+                }),
+            )),
         })
     } else {
         let mut buf: Vec<u8> = vec![];
-        match codec.try_encode_expr(&value, &mut buf) {
+        match codec.try_encode_expr(value, &mut buf) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalExprNode> = value
                     .children()
                     .into_iter()
-                    .map(|e| serialize_physical_expr(e, codec))
+                    .map(|e| proto_converter.physical_expr_to_proto(e, codec))
                     .collect::<Result<_>>()?;
                 Ok(protobuf::PhysicalExprNode {
+                    expr_id,
                     expr_type: Some(protobuf::physical_expr_node::ExprType::Extension(
                         protobuf::PhysicalExtensionExprNode { expr: buf, inputs },
                     )),
@@ -410,6 +389,7 @@ pub fn serialize_physical_expr(
 pub fn serialize_partitioning(
     partitioning: &Partitioning,
     codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::Partitioning> {
     let serialized_partitioning = match partitioning {
         Partitioning::RoundRobinBatch(partition_count) => protobuf::Partitioning {
@@ -418,7 +398,8 @@ pub fn serialize_partitioning(
             )),
         },
         Partitioning::Hash(exprs, partition_count) => {
-            let serialized_exprs = serialize_physical_exprs(exprs, codec)?;
+            let serialized_exprs =
+                serialize_physical_exprs(exprs, codec, proto_converter)?;
             protobuf::Partitioning {
                 partition_method: Some(protobuf::partitioning::PartitionMethod::Hash(
                     protobuf::PhysicalHashRepartition {
@@ -428,6 +409,11 @@ pub fn serialize_partitioning(
                 )),
             }
         }
+        Partitioning::Range(range) => protobuf::Partitioning {
+            partition_method: Some(protobuf::partitioning::PartitionMethod::Range(
+                serialize_range_partitioning(range, codec, proto_converter)?,
+            )),
+        },
         Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
             partition_method: Some(protobuf::partitioning::PartitionMethod::Unknown(
                 *partition_count as u64,
@@ -437,21 +423,44 @@ pub fn serialize_partitioning(
     Ok(serialized_partitioning)
 }
 
-fn serialize_when_then_expr(
-    when_expr: &Arc<dyn PhysicalExpr>,
-    then_expr: &Arc<dyn PhysicalExpr>,
+fn serialize_range_partitioning(
+    range: &RangePartitioning,
     codec: &dyn PhysicalExtensionCodec,
-) -> Result<protobuf::PhysicalWhenThen> {
-    Ok(protobuf::PhysicalWhenThen {
-        when_expr: Some(serialize_physical_expr(when_expr, codec)?),
-        then_expr: Some(serialize_physical_expr(then_expr, codec)?),
+    proto_converter: &dyn PhysicalProtoConverterExtension,
+) -> Result<protobuf::PhysicalRangePartitioning> {
+    Ok(protobuf::PhysicalRangePartitioning {
+        sort_expr: serialize_physical_sort_exprs(
+            range.ordering().iter().cloned(),
+            codec,
+            proto_converter,
+        )?,
+        split_point: range
+            .split_points()
+            .iter()
+            .map(serialize_range_split_point)
+            .collect::<Result<_>>()?,
     })
 }
 
-impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
+fn serialize_range_split_point(
+    split_point: &SplitPoint,
+) -> Result<protobuf::PhysicalRangeSplitPoint> {
+    Ok(protobuf::PhysicalRangeSplitPoint {
+        value: split_point
+            .values()
+            .iter()
+            .map(|value| {
+                TryInto::<datafusion_proto_common::ScalarValue>::try_into(value)
+                    .map_err(Into::into)
+            })
+            .collect::<Result<_>>()?,
+    })
+}
+
+impl TryFromProto<&PartitionedFile> for protobuf::PartitionedFile {
     type Error = DataFusionError;
 
-    fn try_from(pf: &PartitionedFile) -> Result<Self> {
+    fn try_from_proto(pf: &PartitionedFile) -> Result<Self> {
         let last_modified = pf.object_meta.last_modified;
         let last_modified_ns = last_modified.timestamp_nanos_opt().ok_or_else(|| {
             DataFusionError::Plan(format!(
@@ -459,6 +468,11 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
             ))
         })? as u64;
         Ok(protobuf::PartitionedFile {
+            arrow_schema: pf
+                .arrow_schema
+                .as_ref()
+                .map(|s| s.as_ref().try_into())
+                .transpose()?,
             path: pf.object_meta.location.as_ref().to_owned(),
             size: pf.object_meta.size,
             last_modified_ns,
@@ -467,16 +481,20 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .iter()
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
+            range: pf
+                .range
+                .as_ref()
+                .map(protobuf::FileRange::try_from_proto)
+                .transpose()?,
             statistics: pf.statistics.as_ref().map(|s| s.as_ref().into()),
         })
     }
 }
 
-impl TryFrom<&FileRange> for protobuf::FileRange {
+impl TryFromProto<&FileRange> for protobuf::FileRange {
     type Error = DataFusionError;
 
-    fn try_from(value: &FileRange) -> Result<Self> {
+    fn try_from_proto(value: &FileRange) -> Result<Self> {
         Ok(protobuf::FileRange {
             start: value.start,
             end: value.end,
@@ -484,14 +502,14 @@ impl TryFrom<&FileRange> for protobuf::FileRange {
     }
 }
 
-impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
+impl TryFromProto<&[PartitionedFile]> for protobuf::FileGroup {
     type Error = DataFusionError;
 
-    fn try_from(gr: &[PartitionedFile]) -> Result<Self, Self::Error> {
+    fn try_from_proto(gr: &[PartitionedFile]) -> Result<Self, Self::Error> {
         Ok(protobuf::FileGroup {
             files: gr
                 .iter()
-                .map(|f| f.try_into())
+                .map(protobuf::PartitionedFile::try_from_proto)
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
@@ -500,16 +518,18 @@ impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
 pub fn serialize_file_scan_config(
     conf: &FileScanConfig,
     codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::FileScanExecConf> {
     let file_groups = conf
         .file_groups
         .iter()
-        .map(|p| p.files().try_into())
+        .map(|p| protobuf::FileGroup::try_from_proto(p.files()))
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut output_orderings = vec![];
     for order in &conf.output_ordering {
-        let ordering = serialize_physical_sort_exprs(order.to_vec(), codec)?;
+        let ordering =
+            serialize_physical_sort_exprs(order.to_vec(), codec, proto_converter)?;
         output_orderings.push(ordering)
     }
 
@@ -524,22 +544,37 @@ pub fn serialize_file_scan_config(
     fields.extend(conf.table_partition_cols().iter().cloned());
 
     let schema = Arc::new(
-        arrow::datatypes::Schema::new(fields.clone())
-            .with_metadata(conf.file_schema().metadata.clone()),
+        Schema::new(fields.clone()).with_metadata(conf.file_schema().metadata.clone()),
     );
+
+    let projection_exprs = conf
+        .file_source
+        .projection()
+        .as_ref()
+        .map(|projection_exprs| {
+            let projections = projection_exprs.iter().cloned().collect::<Vec<_>>();
+            Ok::<_, DataFusionError>(protobuf::ProjectionExprs {
+                projections: projections
+                    .into_iter()
+                    .map(|expr| {
+                        Ok(protobuf::ProjectionExpr {
+                            alias: expr.alias.to_string(),
+                            expr: Some(
+                                proto_converter
+                                    .physical_expr_to_proto(&expr.expr, codec)?,
+                            ),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            })
+        })
+        .transpose()?;
 
     Ok(protobuf::FileScanExecConf {
         file_groups,
         statistics: Some((&conf.statistics()).into()),
         limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
-        projection: conf
-            .projection_exprs
-            .as_ref()
-            .map(|p| p.column_indices())
-            .unwrap_or((0..schema.fields().len()).collect::<Vec<_>>())
-            .iter()
-            .map(|n| *n as u32)
-            .collect(),
+        projection: vec![],
         schema: Some(schema.as_ref().try_into()?),
         table_partition_cols: conf
             .table_partition_cols()
@@ -555,17 +590,20 @@ pub fn serialize_file_scan_config(
             .collect::<Vec<_>>(),
         constraints: Some(conf.constraints.clone().into()),
         batch_size: conf.batch_size.map(|s| s as u64),
+        projection_exprs,
+        partitioned_by_file_group: Some(conf.partitioned_by_file_group),
     })
 }
 
 pub fn serialize_maybe_filter(
     expr: Option<Arc<dyn PhysicalExpr>>,
     codec: &dyn PhysicalExtensionCodec,
+    proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::MaybeFilter> {
     match expr {
         None => Ok(protobuf::MaybeFilter { expr: None }),
         Some(expr) => Ok(protobuf::MaybeFilter {
-            expr: Some(serialize_physical_expr(&expr, codec)?),
+            expr: Some(proto_converter.physical_expr_to_proto(&expr, codec)?),
         }),
     }
 }
@@ -584,48 +622,48 @@ pub fn serialize_record_batches(batches: &[RecordBatch]) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-impl TryFrom<&JsonSink> for protobuf::JsonSink {
+impl TryFromProto<&JsonSink> for protobuf::JsonSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &JsonSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &JsonSink) -> Result<Self, Self::Error> {
         Ok(Self {
-            config: Some(value.config().try_into()?),
+            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
             writer_options: Some(value.writer_options().try_into()?),
         })
     }
 }
 
-impl TryFrom<&CsvSink> for protobuf::CsvSink {
+impl TryFromProto<&CsvSink> for protobuf::CsvSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &CsvSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &CsvSink) -> Result<Self, Self::Error> {
         Ok(Self {
-            config: Some(value.config().try_into()?),
+            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
             writer_options: Some(value.writer_options().try_into()?),
         })
     }
 }
 
 #[cfg(feature = "parquet")]
-impl TryFrom<&ParquetSink> for protobuf::ParquetSink {
+impl TryFromProto<&ParquetSink> for protobuf::ParquetSink {
     type Error = DataFusionError;
 
-    fn try_from(value: &ParquetSink) -> Result<Self, Self::Error> {
+    fn try_from_proto(value: &ParquetSink) -> Result<Self, Self::Error> {
         Ok(Self {
-            config: Some(value.config().try_into()?),
+            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
             parquet_options: Some(value.parquet_options().try_into()?),
         })
     }
 }
 
-impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
+impl TryFromProto<&FileSinkConfig> for protobuf::FileSinkConfig {
     type Error = DataFusionError;
 
-    fn try_from(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
+    fn try_from_proto(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
         let file_groups = conf
             .file_group
             .iter()
-            .map(TryInto::try_into)
+            .map(protobuf::PartitionedFile::try_from_proto)
             .collect::<Result<Vec<_>>>()?;
         let table_paths = conf
             .table_paths
@@ -642,6 +680,17 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let file_output_mode = match conf.file_output_mode {
+            datafusion_datasource::file_sink_config::FileOutputMode::Automatic => {
+                protobuf::FileOutputMode::Automatic
+            }
+            datafusion_datasource::file_sink_config::FileOutputMode::SingleFile => {
+                protobuf::FileOutputMode::SingleFile
+            }
+            datafusion_datasource::file_sink_config::FileOutputMode::Directory => {
+                protobuf::FileOutputMode::Directory
+            }
+        };
         Ok(Self {
             object_store_url: conf.object_store_url.to_string(),
             file_groups,
@@ -651,6 +700,7 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             keep_partition_by_columns: conf.keep_partition_by_columns,
             insert_op: conf.insert_op as i32,
             file_extension: conf.file_extension.to_string(),
+            file_output_mode: file_output_mode.into(),
         })
     }
 }

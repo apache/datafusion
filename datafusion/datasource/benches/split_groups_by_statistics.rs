@@ -24,7 +24,7 @@ use datafusion_datasource::{generate_test_files, verify_sort_integrity};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 pub fn compare_split_groups_by_statistics_algorithms(c: &mut Criterion) {
     let file_schema = Arc::new(Schema::new(vec![Field::new(

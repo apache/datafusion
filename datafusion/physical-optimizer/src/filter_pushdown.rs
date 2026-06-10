@@ -36,16 +36,16 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{assert_eq_or_internal_err, config::ConfigOptions, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err, config::ConfigOptions};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::filter_pushdown::{
     ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
 };
-use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, with_new_children_if_necessary};
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 
 /// Attempts to recursively push given filters from the top of the tree into leaves.
 ///

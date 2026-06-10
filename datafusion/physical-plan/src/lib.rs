@@ -23,8 +23,6 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
@@ -33,26 +31,27 @@
 
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
-pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::PhysicalSortExpr;
+pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, Distribution, Partitioning, PhysicalExpr,
+    Distribution, Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, expressions,
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::execution_plan::{
-    collect, collect_partitioned, displayable, execute_input_stream, execute_stream,
-    execute_stream_partitioned, get_plan_string, with_new_children_if_necessary,
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, collect, collect_partitioned,
+    displayable, execute_input_stream, execute_stream, execute_stream_partitioned,
+    get_plan_string, with_new_children_if_necessary,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+pub use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
-pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
+pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
 pub use crate::work_table::WorkTable;
 pub use spill::spill_manager::SpillManager;
 
@@ -64,9 +63,11 @@ mod visitor;
 pub mod aggregates;
 pub mod analyze;
 pub mod async_func;
+pub mod buffer;
 pub mod coalesce;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
+pub mod column_rewriter;
 pub mod common;
 pub mod coop;
 pub mod display;
@@ -79,10 +80,13 @@ pub mod joins;
 pub mod limit;
 pub mod memory;
 pub mod metrics;
+pub mod operator_statistics;
 pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
+pub mod scalar_subquery;
+pub mod sort_pushdown;
 pub mod sorts;
 pub mod spill;
 pub mod stream;

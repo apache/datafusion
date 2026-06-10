@@ -22,11 +22,11 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
-use crate::window::window_expr::{filter_array, AggregateWindowExpr, WindowFn};
+use crate::window::window_expr::{AggregateWindowExpr, WindowFn, filter_array};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
+use crate::{PhysicalExpr, expressions::PhysicalSortExpr};
 
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::FieldRef;

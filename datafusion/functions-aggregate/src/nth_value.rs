@@ -18,23 +18,22 @@
 //! Defines NTH_VALUE aggregate expression which may specify ordering requirement
 //! that can evaluated at runtime during query execution
 
-use std::any::Any;
 use std::collections::VecDeque;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
-use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
+use arrow::array::{ArrayRef, AsArray, StructArray, new_empty_array};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
-use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
+use datafusion_common::utils::{SingleRowListArrayBuilder, get_row_at_idx};
 use datafusion_common::{
-    assert_or_internal_err, exec_err, not_impl_err, Result, ScalarValue,
+    Result, ScalarValue, assert_or_internal_err, exec_err, not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    lit, Accumulator, AggregateUDFImpl, Documentation, ExprFunctionExt, ReversedUDAF,
-    Signature, SortExpr, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, ExprFunctionExt, ReversedUDAF,
+    Signature, SortExpr, Volatility, lit,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
@@ -112,10 +111,6 @@ impl Default for NthValueAgg {
 }
 
 impl AggregateUDFImpl for NthValueAgg {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "nth_value"
     }
@@ -130,7 +125,6 @@ impl AggregateUDFImpl for NthValueAgg {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let n = match acc_args.exprs[1]
-            .as_any()
             .downcast_ref::<Literal>()
             .map(|lit| lit.value())
         {
@@ -146,7 +140,7 @@ impl AggregateUDFImpl for NthValueAgg {
                     "{} not supported for n: {}",
                     self.name(),
                     &acc_args.exprs[1]
-                )
+                );
             }
         };
 
@@ -372,7 +366,7 @@ impl NthValueAccumulator {
             let array = if column_values.is_empty() {
                 new_empty_array(fields[i].data_type())
             } else {
-                ScalarValue::iter_to_array(column_values.into_iter())?
+                ScalarValue::iter_to_array(column_values)?
             };
             column_wise_ordering_values.push(array);
         }

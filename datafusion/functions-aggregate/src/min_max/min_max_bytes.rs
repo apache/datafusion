@@ -21,11 +21,13 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use datafusion_common::hash_map::Entry;
-use datafusion_common::{internal_err, HashMap, Result};
+use datafusion_common::{HashMap, Result, internal_err};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use std::mem::size_of;
 use std::sync::Arc;
+
+use datafusion_common::utils::split_vec_min_alloc;
 
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
 /// [`BinaryArray`], [`StringViewArray`], etc)
@@ -493,7 +495,7 @@ impl MinMaxBytesState {
                 )
             }
             EmitTo::First(n) => {
-                let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
+                let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
                 let first_data_capacity: usize = first_min_maxes
                     .iter()
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))

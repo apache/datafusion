@@ -17,11 +17,11 @@
 
 use std::sync::LazyLock;
 
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_doc::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_expr::Documentation;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::Documentation;
 
 /// Non-increasing on the interval \[−1, 1\], undefined otherwise.
 pub fn acos_order(input: &[ExprProperties]) -> Result<SortProperties> {
@@ -262,11 +262,11 @@ Can be a constant, column, or function, and any combination of arithmetic operat
     )
     .with_sql_example(r#"```sql
 > SELECT atan2(1, 1);
-+------------+
-| atan2(1,1) |
-+------------+
-| 0.7853982  |
-+------------+
++--------------------+
+| atan2(1,1)         |
++--------------------+
+| 0.7853981633974483 |
++--------------------+
 ```"#)
     .build()
     });
@@ -307,30 +307,6 @@ pub fn get_cbrt_doc() -> &'static Documentation {
 /// Non-decreasing for all real numbers.
 pub fn ceil_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
-}
-
-static DOCUMENTATION_CEIL: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
-        DOC_SECTION_MATH,
-        "Returns the nearest integer greater than or equal to a number.",
-        "ceil(numeric_expression)",
-    )
-    .with_standard_argument("numeric_expression", Some("Numeric"))
-    .with_sql_example(
-        r#"```sql
-    > SELECT ceil(3.14);
-+------------+
-| ceil(3.14) |
-+------------+
-| 4.0        |
-+------------+
-```"#,
-    )
-    .build()
-});
-
-pub fn get_ceil_doc() -> &'static Documentation {
-    &DOCUMENTATION_CEIL
 }
 
 /// Non-increasing on \[0, π\] and then non-decreasing on \[π, 2π\].
@@ -465,30 +441,6 @@ pub fn get_exp_doc() -> &'static Documentation {
 /// Non-decreasing for all real numbers.
 pub fn floor_order(input: &[ExprProperties]) -> Result<SortProperties> {
     Ok(input[0].sort_properties)
-}
-
-static DOCUMENTATION_FLOOR: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(
-        DOC_SECTION_MATH,
-        "Returns the nearest integer less than or equal to a number.",
-        "floor(numeric_expression)",
-    )
-    .with_standard_argument("numeric_expression", Some("Numeric"))
-    .with_sql_example(
-        r#"```sql
-> SELECT floor(3.14);
-+-------------+
-| floor(3.14) |
-+-------------+
-| 3.0         |
-+-------------+
-```"#,
-    )
-    .build()
-});
-
-pub fn get_floor_doc() -> &'static Documentation {
-    &DOCUMENTATION_FLOOR
 }
 
 /// Non-decreasing for x ≥ 0, undefined otherwise.
@@ -785,7 +737,6 @@ pub fn get_tanh_doc() -> &'static Documentation {
 #[cfg(test)]
 mod tests {
     use arrow::compute::SortOptions;
-    use datafusion_common::Result;
 
     use super::*;
 

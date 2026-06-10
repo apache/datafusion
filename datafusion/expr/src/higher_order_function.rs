@@ -1,0 +1,1684 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! [`HigherOrderUDF`]: User Defined Higher Order Functions
+
+use crate::expr::{
+    HigherOrderFunction, display_comma_separated,
+    schema_name_from_exprs_comma_separated_without_space,
+};
+use crate::type_coercion::functions::value_fields_with_higher_order_udf;
+use crate::udf_eq::UdfEq;
+use crate::{ColumnarValue, Documentation, Expr, ExprSchemable};
+use arrow::array::{ArrayRef, RecordBatch};
+use arrow::datatypes::{DataType, FieldRef, Schema};
+use arrow_schema::SchemaRef;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::datatype::FieldExt;
+use datafusion_common::hash_map::EntryRef;
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+};
+use datafusion_common::{
+    DFSchema, HashMap, HashSet, Result, ScalarValue, exec_err, internal_datafusion_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
+};
+use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
+use datafusion_expr_common::signature::Volatility;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use std::any::Any;
+use std::cmp::Ordering;
+use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
+use std::mem;
+use std::sync::Arc;
+
+/// The types of arguments for which a function has implementations.
+///
+/// [`HigherOrderTypeSignature`] **DOES NOT** define the types that a user query could call the
+/// function with. DataFusion will automatically coerce (cast) argument types to
+/// one of the supported function signatures, if possible.
+///
+/// # Overview
+/// Functions typically provide implementations for a small number of different
+/// argument [`DataType`]s, rather than all possible combinations. If a user
+/// calls a function with arguments that do not match any of the declared types,
+/// DataFusion will attempt to automatically coerce (add casts to) function
+/// arguments so they match the [`HigherOrderTypeSignature`]. See the [`type_coercion`] module
+/// for more details
+///
+/// [`type_coercion`]: crate::type_coercion
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum HigherOrderTypeSignature {
+    /// The acceptable signature and coercions rules are special for this
+    /// function.
+    ///
+    /// If this signature is specified,
+    /// DataFusion will call [`HigherOrderUDFImpl::coerce_value_types`] to prepare argument types.
+    UserDefined,
+    /// One or more lambdas or arguments with arbitrary types
+    VariadicAny,
+    /// The specified number of lambdas or arguments with arbitrary types.
+    Any(usize),
+    /// Exactly the specified arguments in the given order, with arbitrary types.
+    /// DataFusion will call [`HigherOrderUDFImpl::coerce_value_types`] to prepare the value
+    /// argument types.
+    Exact(Vec<ValueOrLambda<(), ()>>),
+}
+
+/// Provides information necessary for calling a higher order function.
+///
+/// - [`HigherOrderTypeSignature`] defines the argument types that a function has implementations
+///   for.
+///
+/// - [`Volatility`] defines how the output of the function changes with the input.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct HigherOrderSignature {
+    /// The data types that the function accepts. See [HigherOrderTypeSignature] for more information.
+    pub type_signature: HigherOrderTypeSignature,
+    /// The volatility of the function. See [Volatility] for more information.
+    pub volatility: Volatility,
+    /// The max number of times to call [HigherOrderUDFImpl::lambda_parameters] before raising an error.
+    /// Used to guard against implementations that causes an infinite loop by endlessly returning
+    /// [LambdaParametersProgress::Partial]. Defaults to 256
+    pub lambda_parameters_max_iterations: usize,
+}
+
+const LAMBDA_PARAMETERS_MAX_ITERATIONS: usize = 256;
+
+impl HigherOrderSignature {
+    /// Creates a new `HigherOrderSignature` from a given type signature and volatility.
+    pub fn new(type_signature: HigherOrderTypeSignature, volatility: Volatility) -> Self {
+        HigherOrderSignature {
+            type_signature,
+            volatility,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
+        }
+    }
+
+    /// User-defined coercion rules for the function.
+    pub fn user_defined(volatility: Volatility) -> Self {
+        Self {
+            type_signature: HigherOrderTypeSignature::UserDefined,
+            volatility,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
+        }
+    }
+
+    /// An arbitrary number of lambdas or arguments of any type.
+    pub fn variadic_any(volatility: Volatility) -> Self {
+        Self {
+            type_signature: HigherOrderTypeSignature::VariadicAny,
+            volatility,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
+        }
+    }
+
+    /// A specified number of arguments of any type
+    pub fn any(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: HigherOrderTypeSignature::Any(arg_count),
+            volatility,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
+        }
+    }
+
+    /// Exactly the specified arguments in the given order, with arbitrary types.
+    /// DataFusion will call [`HigherOrderUDFImpl::coerce_value_types`] to prepare the value
+    /// argument types.
+    ///
+    /// # Example
+    /// A function that takes one value argument followed by one lambda:
+    /// ```
+    /// # use datafusion_expr::{HigherOrderSignature, ValueOrLambda, Volatility};
+    /// let sig = HigherOrderSignature::exact(
+    ///     vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
+    ///     Volatility::Immutable,
+    /// );
+    /// ```
+    pub fn exact(args: Vec<ValueOrLambda<(), ()>>, volatility: Volatility) -> Self {
+        Self {
+            type_signature: HigherOrderTypeSignature::Exact(args),
+            volatility,
+            lambda_parameters_max_iterations: LAMBDA_PARAMETERS_MAX_ITERATIONS,
+        }
+    }
+}
+
+impl PartialEq for dyn HigherOrderUDFImpl {
+    fn eq(&self, other: &Self) -> bool {
+        self.dyn_eq(other as _)
+    }
+}
+
+impl PartialOrd for dyn HigherOrderUDFImpl {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let mut cmp = self.name().cmp(other.name());
+        if cmp == Ordering::Equal {
+            cmp = self.signature().partial_cmp(other.signature())?;
+        }
+        if cmp == Ordering::Equal {
+            cmp = self.aliases().partial_cmp(other.aliases())?;
+        }
+        // Contract for PartialOrd and PartialEq consistency requires that
+        // a == b if and only if partial_cmp(a, b) == Some(Equal).
+        if cmp == Ordering::Equal && self != other {
+            // Functions may have other properties besides name and signature
+            // that differentiate two instances (e.g. type, or arbitrary parameters).
+            // We cannot return Some(Equal) in such case.
+            return None;
+        }
+        debug_assert!(
+            cmp == Ordering::Equal || self != other,
+            "Detected incorrect implementation of PartialEq when comparing functions: '{}' and '{}'. \
+            The functions compare as equal, but they are not equal based on general properties that \
+            the PartialOrd implementation observes,",
+            self.name(),
+            other.name()
+        );
+        Some(cmp)
+    }
+}
+
+impl Eq for dyn HigherOrderUDFImpl {}
+
+impl Hash for dyn HigherOrderUDFImpl {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.dyn_hash(state)
+    }
+}
+
+/// Arguments passed to [`HigherOrderUDFImpl::invoke_with_args`] when invoking a
+/// higher order function.
+#[derive(Debug, Clone)]
+pub struct HigherOrderFunctionArgs {
+    /// The evaluated arguments and lambdas to the function
+    pub args: Vec<ValueOrLambda<ColumnarValue, LambdaArgument>>,
+    /// Field associated with each arg, if it exists
+    /// For lambdas, it will be the field of the result of
+    /// the lambda if evaluated with the parameters
+    /// returned from [`HigherOrderUDFImpl::lambda_parameters`]
+    pub arg_fields: Vec<ValueOrLambda<FieldRef, FieldRef>>,
+    /// The number of rows in record batch being evaluated
+    pub number_rows: usize,
+    /// The return field of the higher order function returned
+    /// (from `return_field_from_args`) when creating the
+    /// physical expression from the logical expression
+    pub return_field: FieldRef,
+    /// The config options at execution time
+    pub config_options: Arc<ConfigOptions>,
+}
+
+impl HigherOrderFunctionArgs {
+    /// The return type of the function. See [`Self::return_field`] for more
+    /// details.
+    pub fn return_type(&self) -> &DataType {
+        self.return_field.data_type()
+    }
+}
+
+/// A lambda argument to a HigherOrderFunction
+#[derive(Clone, Debug)]
+pub struct LambdaArgument {
+    /// The parameters defined in this lambda
+    ///
+    /// For example, for `array_transform([2], v -> -v)`,
+    /// this will be `vec![Field::new("v", DataType::Int32, true)]`
+    params: Vec<FieldRef>,
+    /// The body of the lambda
+    ///
+    /// For example, for `array_transform([2], v -> -v)`,
+    /// this will be the physical expression of `-v`
+    body: Arc<dyn PhysicalExpr>,
+    /// Cached schema built from `params`. Reused across every `evaluate` call
+    /// (and across every nested-list iteration when the lambda is called once
+    /// per outer sublist), avoiding the per-call `Schema::new` build that
+    /// includes constructing the internal name -> index map.
+    schema: SchemaRef,
+    /// A RecordBatch containing the captured columns inside this lambda body, if any
+    ///
+    /// For example, for `array_transform([2], v -> v + a + b)`,
+    /// this will be a `RecordBatch` with two columns, `a` and `b`
+    captures: Option<RecordBatch>,
+}
+
+impl LambdaArgument {
+    pub fn new(
+        params: Vec<FieldRef>,
+        body: Arc<dyn PhysicalExpr>,
+        captures: Option<RecordBatch>,
+    ) -> Self {
+        let fields = match &captures {
+            Some(batch) => batch
+                .schema_ref()
+                .fields()
+                .iter()
+                .cloned()
+                .chain(params.clone())
+                .collect(),
+            None => params.clone(),
+        };
+
+        let schema = Arc::new(Schema::new(fields));
+
+        Self {
+            params,
+            body,
+            schema,
+            captures,
+        }
+    }
+
+    /// Evaluate this lambda
+    /// `args` should evaluate to the value of each parameter
+    /// of the correspondent lambda returned in [HigherOrderUDFImpl::lambda_parameters].
+    ///
+    /// `spread_captures` is responsible for transforming the captured column arrays
+    /// so they align with the evaluation batch. Captures are snapshotted from the
+    /// outer batch at construction time, giving one value per outer row, but the
+    /// function may evaluate the lambda body over a batch with a different number
+    /// of rows. It is the function's responsibility to provide the appropriate
+    /// `spread_captures` closure to expand (or otherwise reshape) the captures
+    /// to match.
+    ///
+    /// Taking as an example the following table:
+    ///
+    /// ```sql
+    /// CREATE TABLE t (arr INT[], a INT) AS VALUES
+    ///   ([1, 2, 3], 10),
+    ///   ([],        20),
+    ///   ([4],       30);
+    /// ```
+    ///
+    /// `SELECT array_transform(arr, v -> v + a) from t` would execute over three outer rows:
+    ///
+    /// ```text
+    /// arr (ListArray):  [[1, 2, 3], [], [4]]   -- 3 outer rows, 4 total elements
+    /// a   (captured):   [10,        20,  30]   -- one value per outer row
+    /// ```
+    ///
+    /// `array_transform` flattens the list elements into a single batch of 4 rows,
+    /// so `spread_captures` must repeat/drop captured values to match:
+    ///
+    /// ```text
+    /// v (flattened args): [1,  2,  3,  4]
+    /// a (spread):         [10, 10, 10, 30]  -- 10 repeated for 3 elements in row 0,
+    ///                                        -- 20 dropped for the empty sublist in row 1,
+    ///                                        -- 30 once for the single element in row 2
+    /// ```
+    ///
+    /// The lambda body `v + a` then evaluates element-wise over these 4-row arrays,
+    /// producing `[11, 12, 13, 34]`, which `array_transform` reassembles into `[[11, 12, 13], [], [34]]`.
+    ///
+    /// If the lambda has no captures, `spread_captures` is never called.
+    pub fn evaluate(
+        &self,
+        args: &[&dyn Fn() -> Result<ArrayRef>],
+        spread_captures: impl FnOnce(&[ArrayRef]) -> Result<Vec<ArrayRef>>,
+    ) -> Result<ColumnarValue> {
+        let spread_captures = self
+            .captures
+            .as_ref()
+            .map(|captures| {
+                let spread_columns = spread_captures(captures.columns())?;
+
+                RecordBatch::try_new(captures.schema(), spread_columns)
+            })
+            .transpose()?;
+
+        let merged = merge_captures_with_variables(
+            spread_captures.as_ref(),
+            Arc::clone(&self.schema),
+            &self.params,
+            args,
+        )?;
+
+        self.body.evaluate(&merged)
+    }
+}
+
+fn merge_captures_with_variables(
+    captures: Option<&RecordBatch>,
+    schema: SchemaRef,
+    params: &[FieldRef],
+    variables: &[&dyn Fn() -> Result<ArrayRef>],
+) -> Result<RecordBatch> {
+    if variables.len() < params.len() {
+        return exec_err!(
+            "expected at least {} lambda arguments to merge with captures, got {}",
+            params.len(),
+            variables.len()
+        );
+    }
+
+    let columns = match captures {
+        Some(captures) => {
+            let mut columns = captures.columns().to_vec();
+
+            for arg in &variables[..params.len()] {
+                columns.push(arg()?);
+            }
+
+            columns
+        }
+        None => variables
+            .iter()
+            .take(params.len())
+            .map(|arg| arg())
+            .collect::<Result<_>>()?,
+    };
+
+    Ok(RecordBatch::try_new(schema, columns)?)
+}
+
+/// Information about arguments passed to the function
+///
+/// This structure contains metadata about how the function was called
+/// such as the type of the arguments, any scalar arguments and if the
+/// arguments can (ever) be null
+///
+/// See [`HigherOrderUDFImpl::return_field_from_args`] for more information
+#[derive(Clone, Debug)]
+pub struct HigherOrderReturnFieldArgs<'a> {
+    /// The data types of the arguments to the function
+    ///
+    /// If argument `i` to the function is a lambda, it will be the field of the result of the
+    /// lambda if evaluated with the parameters returned from [`HigherOrderUDFImpl::lambda_parameters`]
+    ///
+    /// For example, with `array_transform([1], v -> v == 5)`
+    /// this field will be
+    /// ```ignore
+    /// [
+    ///     ValueOrLambda::Value(Field::new("", DataType::new_list(DataType::Int32, true), true)),
+    ///     ValueOrLambda::Lambda(Field::new("", DataType::Boolean, true))
+    /// ]
+    /// ```
+    pub arg_fields: &'a [ValueOrLambda<FieldRef, FieldRef>],
+    /// Is argument `i` to the function a scalar (constant)?
+    ///
+    /// If the argument `i` is not a scalar, it will be None
+    ///
+    /// For example, if a function is called like `array_transform([1], v -> v == 5)`
+    /// this field will be `[Some(ScalarValue::List(...), None]`
+    pub scalar_arguments: &'a [Option<&'a ScalarValue>],
+}
+
+/// An argument to a higher order function
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Hash)]
+pub enum ValueOrLambda<V, L> {
+    /// A value with associated data
+    Value(V),
+    /// A lambda with associated data
+    Lambda(L),
+}
+
+/// Represents a step during the resolution of the parameters of all lambdas of a given
+/// higher-order function via [HigherOrderUDFImpl::lambda_parameters]. It's valid that the
+/// fields of a given lambda changes between steps, and is up to the implementation to
+/// provide during the function evaluation the parameters that matches the fields returned
+/// at the [LambdaParametersProgress::Complete] step. See [HigherOrderUDFImpl::lambda_parameters]
+/// docs for more details
+pub enum LambdaParametersProgress {
+    /// The parameters of some lambdas are unknown due to a dependency on another lambda output field
+    /// or are placeholders due to a dependency on it's own output field. It's perfectly valid to
+    /// contain only `Some`'s and not a single `None`, representing lambdas that depends only on itself
+    /// and not on others. [HigherOrderUDFImpl::lambda_parameters] will be called again with the output
+    /// field of all lambdas with known parameters.
+    Partial(Vec<Option<Vec<FieldRef>>>),
+    /// There are no unmet dependencies and all parameters are known, [HigherOrderUDFImpl::lambda_parameters]
+    /// will not be called again
+    Complete(Vec<Vec<FieldRef>>),
+}
+
+/// Trait for implementing user defined higher order functions.
+///
+/// This trait exposes the full API for implementing user defined functions and
+/// can be used to implement any function.
+///
+/// New higher order functions typically implement this trait and are then
+/// wrapped in a [`HigherOrderUDF`] for registration with DataFusion.
+///
+/// See [`array_transform.rs`] for a commented complete implementation
+///
+/// [`array_transform.rs`]: https://github.com/apache/datafusion/blob/main/datafusion/functions-nested/src/array_transform.rs
+pub trait HigherOrderUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
+    /// Returns this function's name
+    fn name(&self) -> &str;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Aliases can be used to invoke the same function using different names.
+    /// For example in some databases `now()` and `current_timestamp()` are
+    /// aliases for the same function. This behavior can be obtained by
+    /// returning `current_timestamp` as an alias for the `now` function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    /// Returns the name of the column this expression would create
+    ///
+    /// See [`Expr::schema_name`] for details
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        Ok(format!(
+            "{}({})",
+            self.name(),
+            schema_name_from_exprs_comma_separated_without_space(args)?
+        ))
+    }
+
+    /// Returns a [`HigherOrderSignature`] describing the argument types for which this
+    /// function has an implementation, and the function's [`Volatility`].
+    ///
+    /// See [`HigherOrderSignature`] for more details on argument type handling
+    /// and [`Self::return_field_from_args`] for computing the return type.
+    ///
+    /// [`Volatility`]: datafusion_expr_common::signature::Volatility
+    fn signature(&self) -> &HigherOrderSignature;
+
+    /// Return the field of all the parameters supported by the lambdas in `fields`.
+    /// If a lambda support multiple parameters, all should be returned, regardless of
+    /// whether they are used or not on a particular invocation
+    ///
+    /// Tip: If you have a [`HigherOrderFunction`] invocation, you can call the helper
+    /// [`HigherOrderFunction::lambda_parameters`] instead of this method directly
+    ///
+    /// The name of the returned fields are ignored.
+    ///
+    /// This function is repeatedelly called until [LambdaParametersProgress::Complete] is returned, with
+    /// `step` increased by one at each invocation, starting at 0.
+    ///
+    /// For functions which all lambda parameters depend only on the field of it's value arguments,
+    /// this can return [LambdaParametersProgress::Complete] at step 0. Taking as an example a strict
+    /// array_reduce with the signature `(arr: [V], initial_value: I, (I, V) -> I, (I) -> O) -> O`, which
+    /// requires it's initial value to be the exact same type of it's merge output, which is also the
+    /// parameter of it's finish lambda, the expression
+    ///
+    /// `array_reduce([1.2, 2.1], 0.0, (acc, v) -> acc + v + 1.5, v -> v > 5.1)`
+    ///
+    ///  would result in this function being called as the following:
+    ///
+    /// ```ignore
+    /// let lambda_parameters = array_reduce.lambda_parameters(
+    ///     0,
+    ///     &[
+    ///         // the Field of the literal `[1.2, 2.1]`, the array being reduced
+    ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::new_list(DataType::Float32, true), true))),
+    ///         // the Field of the literal `0.0`, the initial value
+    ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::Float32, true))),
+    ///         // the Field of the output of the merge lambda, which is unknown at this point because it depends
+    ///         // on the return of this call
+    ///         ValueOrLambda::Lambda(None),
+    ///         // the Field of the output of the finish lambda, unknown for the same reason as above
+    ///         ValueOrLambda::Lambda(None),
+    /// ])?;
+    ///
+    /// assert_eq!(
+    ///      lambda_parameters,
+    ///      LambdaParametersProgress::Complete(vec![
+    ///         // the finish lambda supported parameters, regardless of how many are actually used
+    ///         vec![
+    ///             // the accumulator which is the field of the initial value
+    ///             Arc::new(Field::new("ignored_name", DataType::Float32, true)),
+    ///             // the array values being reduced
+    ///             Arc::new(Field::new("", DataType::Float32, true)),
+    ///         ],
+    ///         // the merge lambda supported parameters
+    ///         vec![
+    ///             // the reduced value which is the field of the initial value
+    ///             Arc::new(Field::new("ignored_name", DataType::Float32, true)),
+    ///         ],
+    ///      ])
+    /// );
+    /// ```
+    ///
+    /// For functions which lambda parameters depends on the output of other lambdas, or on their own lambda,
+    /// this can return [LambdaParametersProgress::Partial] until all dependencies are met. Note that for
+    /// lambda with cyclic dependencies, you likely want to use [HigherOrderUDFImpl::coerce_values_for_lambdas] too.
+    /// Take as an example a flexible array_reduce with the signature `(arr: [V], initial_value: I, (ACC, V) -> ACC, (ACC) -> O) -> O`.
+    /// It has a cyclic dependency in the merge lambda, and a dependency of the finish lambda in the merge lambda,
+    /// and only requires the initial value to be *coercible* to the output of the merge lambda, which is defined by
+    /// it's [HigherOrderUDFImpl::coerce_values_for_lambdas] implementation. The expression
+    ///
+    /// `array_reduce([1.2, 2.1], 0, (acc, v) -> acc + v + 1.5, v -> v > 5.1)`
+    ///
+    /// would result in this function being called as the following:
+    ///
+    /// ```ignore
+    /// let lambda_parameters = array_reduce.lambda_parameters(
+    ///     0,
+    ///     &[
+    ///         // the Field of the literal `[1.2, 2.1]`, the array being reduced
+    ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::new_list(DataType::Float32, true), true))),
+    ///         // the Field of the literal `0`, the initial value
+    ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::Int32, true))),
+    ///         // the Field of the output of the merge lambda, which is unknown at this point because it depends on
+    ///         // the return this call
+    ///         ValueOrLambda::Lambda(None),
+    ///         // the Field of the output of the finish lambda, unknown for the same reason as above
+    ///         ValueOrLambda::Lambda(None),
+    /// ])?;
+    ///
+    /// assert_eq!(
+    ///      lambda_parameters,
+    ///      LambdaParametersProgress::Partial(vec![
+    ///         // the finish lambda supported parameters, regardless of how many are actually used
+    ///         Some(vec![
+    ///             // at step 0, use the field of the initial value
+    ///             Arc::new(Field::new("ignored_name", DataType::Int32, true)),
+    ///             // the array values being reduced
+    ///             Arc::new(Field::new("", DataType::Float32, true)),
+    ///         ]),
+    ///         // the merge lambda supported parameters, unknown at this point due to dependency on the merge output
+    ///         None,
+    ///      ])
+    /// );
+    ///
+    /// let lambda_parameters = array_reduce.lambda_parameters(
+    ///     1,
+    ///     &[
+    ///         // the Field of the literal `[1.2, 2.1]`, the array being reduced
+    ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::new_list(DataType::Float32, true), true))),
+    ///         // the Field of the literal `0`, the initial value
+    ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::Int32, true))),
+    ///         // the Field of the output of the merge lambda, which could be inferred to be a Float32 based on the
+    ///         // returned values of the previous step
+    ///         ValueOrLambda::Value(Arc::new(Field::new("", DataType::Float32, true))),
+    ///         // the Field of the output of the finish lambda, which is unknown at this point because it depends
+    ///         // on the return of this call
+    ///         ValueOrLambda::Lambda(None),
+    /// ])?;
+    ///
+    /// assert_eq!(
+    ///      lambda_parameters,
+    ///      LambdaParametersProgress::Complete(vec![
+    ///         // the finish lambda supported parameters, regardless of how many are actually used
+    ///         vec![
+    ///             // the finish lambda own output now used as it's accumulator
+    ///             Arc::new(Field::new("ignored_name", DataType::Float32, true)),
+    ///             // the array values being reduced
+    ///             Arc::new(Field::new("", DataType::Float32, true)),
+    ///         ],
+    ///         // the merge lambda supported parameters, which is the output of the merge lambda,
+    ///         vec![
+    ///             // the output of the merge lambda
+    ///             Arc::new(Field::new("", DataType::Float32, true)),
+    ///         ],
+    ///      ])
+    /// );
+    ///
+    /// let coerce_to = array_reduce.coerce_values_for_lambdas(&[
+    ///     // the literal `[1.2, 2.1]` data type, the array being reduced
+    ///     ValueOrLambda::Value(DataType::new_list(DataType::Float32, true)),
+    ///     // the literal `0` data type, the initial value
+    ///     ValueOrLambda::Value(DataType::Int32),
+    ///     // the output data type of the merge lambda
+    ///     ValueOrLambda::Lambda(DataType::Float32),
+    ///     // the output data type of the finish lambda
+    ///     ValueOrLambda::Lambda(DataType::Boolean),
+    /// ])?;
+    ///
+    /// assert_eq!(
+    ///     coerce_to,
+    ///     Some(vec![
+    ///         // return the same type for the array being reduced
+    ///         DataType::new_list(DataType::Float32, true),
+    ///         // coerce the initial value to the output of the merge lambda
+    ///         DataType::Float32,
+    ///     ])
+    /// );
+    ///
+    /// ```
+    ///
+    /// Note this may also be called at step 0 with all lambda outputs already set, and in that case,
+    /// [LambdaParametersProgress::Complete] must be returned
+    ///
+    /// The implementation can assume that some other part of the code has coerced
+    /// the actual argument types to match [`Self::signature`], except the coercion defined by
+    /// [Self::coerce_values_for_lambdas].
+    ///
+    /// [`HigherOrderFunction`]: crate::expr::HigherOrderFunction
+    /// [`HigherOrderFunction::lambda_parameters`]: crate::expr::HigherOrderFunction::lambda_parameters
+    fn lambda_parameters(
+        &self,
+        step: usize,
+        fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ) -> Result<LambdaParametersProgress>;
+
+    /// Coerce value arguments of a function call to types that the function can evaluate also taking into
+    /// account the *output type of it's lambdas*. This differs from [HigherOrderUDFImpl::coerce_value_types]
+    /// that only has access to the type of it's value arguments because it's called before the output type
+    /// of lambdas are known.
+    ///
+    /// See the [type coercion module](crate::type_coercion)
+    /// documentation for more details on type coercion
+    ///
+    /// # Parameters
+    /// * `fields`: The argument types of the value arguments of this function, or the output type of lambdas
+    ///
+    /// # Return value
+    /// If `Some`, contains a Vec with the same number of [ValueOrLambda::Value] in `fields`.
+    /// DataFusion will `CAST` the function call arguments to these specific types. If `None`, no
+    /// coercion will be applied beyond the one defined by the function signature.
+    ///
+    /// For example, a flexible array_reduce implementation (see [Self::lambda_parameters] docs), when working
+    /// with the expression below, may want to coerce it's initial value argument, the *integer* `0`,
+    /// to match the output of it's merge function, which is a *float*:
+    ///
+    /// `array_reduce([1.2, 2.1], 0, (acc, v) -> acc + v + 1.5, v -> v > 2.0)`
+    fn coerce_values_for_lambdas(
+        &self,
+        _fields: &[ValueOrLambda<DataType, DataType>],
+    ) -> Result<Option<Vec<DataType>>> {
+        Ok(None)
+    }
+
+    /// What type will be returned by this function, given the arguments?
+    ///
+    /// The implementation can assume that some other part of the code has coerced
+    /// the actual argument types to match [`Self::signature`], including the coercion
+    /// defined by [Self::coerce_values_for_lambdas].
+    ///
+    /// # Example creating `Field`
+    ///
+    /// Note the name of the `Field` is ignored, except for structured types such as
+    /// `DataType::Struct`.
+    ///
+    /// ```rust
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, FieldRef};
+    /// # use datafusion_common::Result;
+    /// # use datafusion_expr::HigherOrderReturnFieldArgs;
+    /// # struct Example{}
+    /// # impl Example {
+    /// fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
+    ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
+    ///     Ok(field)
+    /// }
+    /// # }
+    /// ```
+    fn return_field_from_args(
+        &self,
+        args: HigherOrderReturnFieldArgs,
+    ) -> Result<FieldRef>;
+
+    /// Whether List or LargeList arguments should have it's non-empty null
+    /// sublists cleaned with [remove_list_null_values] before invoking this function
+    ///
+    /// The default implementation always returns true and should only be implemented
+    /// if you want to handle non-empty null sublists yourself
+    ///
+    /// [remove_list_null_values]: datafusion_common::utils::remove_list_null_values
+    // todo: extend this to listview and maps when remove_list_null_values supports it
+    fn clear_null_values(&self) -> bool {
+        true
+    }
+
+    /// Invoke the function returning the appropriate result.
+    ///
+    /// # Performance
+    ///
+    /// For the best performance, the implementations should handle the common case
+    /// when one or more of their arguments are constant values (aka
+    /// [`ColumnarValue::Scalar`]).
+    ///
+    /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
+    /// to arrays, which will likely be simpler code, but be slower.
+    fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue>;
+
+    /// Returns true if some of this `exprs` subexpressions may not be evaluated
+    /// and thus any side effects (like divide by zero) may not be encountered.
+    ///
+    /// Setting this to true prevents certain optimizations such as common
+    /// subexpression elimination
+    ///
+    /// When overriding this function to return `true`, [HigherOrderUDFImpl::conditional_arguments] can also be
+    /// overridden to report more accurately which arguments are eagerly evaluated and which ones
+    /// lazily.
+    fn short_circuits(&self) -> bool {
+        false
+    }
+
+    /// Determines which of the arguments passed to *this higher-order function*
+    /// are evaluated eagerly and which may be evaluated lazily. Note that this
+    /// does *not* applies to the arguments that *lambda functions* pass to it's
+    /// body expression
+    ///
+    /// If this function returns `None`, all arguments are eagerly evaluated.
+    /// Returning `None` is a micro optimization that saves a needless `Vec`
+    /// allocation.
+    ///
+    /// If the function returns `Some`, returns (`eager`, `lazy`) where `eager`
+    /// are the arguments that are always evaluated, and `lazy` are the
+    /// arguments that may be evaluated lazily (i.e. may not be evaluated at all
+    /// in some cases).
+    ///
+    /// Implementations must ensure that the two returned `Vec`s are disjunct,
+    /// and that each argument from `args` is present in one the two `Vec`s.
+    ///
+    /// When overriding this function, [HigherOrderUDFImpl::short_circuits] must
+    /// be overridden to return `true`.
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        if self.short_circuits() {
+            Some((vec![], args.iter().collect()))
+        } else {
+            None
+        }
+    }
+
+    /// Coerce value arguments of a function call to types that the function can evaluate.
+    /// Note that if you need to coerce values based on the output type of lambdas, you
+    /// must use [HigherOrderUDFImpl::coerce_values_for_lambdas], as this function is used before
+    /// the output type of lambdas are known
+    ///
+    /// See the [type coercion module](crate::type_coercion)
+    /// documentation for more details on type coercion
+    ///
+    /// For example, if your function requires a contiguous list argument, but the user calls
+    /// it like `my_func(c, v -> v+2)` (i.e. with `c` as a ListView), coerce_types can return `[DataType::List(..)]`
+    /// to ensure the argument is converted to a List
+    ///
+    /// # Parameters
+    /// * `arg_types`: The argument types of the value arguments of this function, excluding lambdas
+    ///
+    /// # Return value
+    /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
+    /// arguments to these specific types.
+    fn coerce_value_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!(
+            "Function {} does not implement coerce_value_types",
+            self.name()
+        )
+    }
+
+    /// Returns the documentation for this function.
+    ///
+    /// Documentation can be accessed programmatically as well as generating
+    /// publicly facing documentation.
+    fn documentation(&self) -> Option<&Documentation> {
+        None
+    }
+}
+
+/// Logical representation of a Higher Order User Defined Function.
+///
+/// A higher order function takes one or more lambda arguments in addition to
+/// regular value arguments. This struct contains the information DataFusion
+/// needs to plan and invoke functions you supply such as name, type signature,
+/// return type, and actual implementation.
+#[derive(Debug, Clone)]
+pub struct HigherOrderUDF {
+    inner: Arc<dyn HigherOrderUDFImpl>,
+}
+
+impl PartialEq for HigherOrderUDF {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.as_ref().dyn_eq(other.inner.as_ref())
+    }
+}
+
+impl PartialOrd for HigherOrderUDF {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let mut cmp = self.name().cmp(other.name());
+        if cmp == Ordering::Equal {
+            cmp = self.signature().partial_cmp(other.signature())?;
+        }
+        if cmp == Ordering::Equal {
+            cmp = self.aliases().partial_cmp(other.aliases())?;
+        }
+        // Contract for PartialOrd and PartialEq consistency requires that
+        // a == b if and only if partial_cmp(a, b) == Some(Equal).
+        if cmp == Ordering::Equal && self != other {
+            // Functions may have other properties besides name and signature
+            // that differentiate two instances (e.g. type, or arbitrary parameters).
+            // We cannot return Some(Equal) in such case.
+            return None;
+        }
+        debug_assert!(
+            cmp == Ordering::Equal || self != other,
+            "Detected incorrect implementation of PartialEq when comparing functions: '{}' and '{}'. \
+            The functions compare as equal, but they are not equal based on general properties that \
+            the PartialOrd implementation observes,",
+            self.name(),
+            other.name()
+        );
+        Some(cmp)
+    }
+}
+
+impl Eq for HigherOrderUDF {}
+
+impl Hash for HigherOrderUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.dyn_hash(state)
+    }
+}
+
+impl HigherOrderUDF {
+    /// Create a new `HigherOrderUDF` from a [`HigherOrderUDFImpl`] trait object.
+    ///
+    /// Note this is the same as using the `From` impl (`HigherOrderUDF::from`).
+    pub fn new_from_impl<F>(fun: F) -> HigherOrderUDF
+    where
+        F: HigherOrderUDFImpl + 'static,
+    {
+        Self::new_from_shared_impl(Arc::new(fun))
+    }
+
+    /// Create a new `HigherOrderUDF` from a shared [`HigherOrderUDFImpl`] trait object.
+    pub fn new_from_shared_impl(fun: Arc<dyn HigherOrderUDFImpl>) -> HigherOrderUDF {
+        Self { inner: fun }
+    }
+
+    /// Return the underlying [`HigherOrderUDFImpl`] trait object for this function.
+    pub fn inner(&self) -> &Arc<dyn HigherOrderUDFImpl> {
+        &self.inner
+    }
+
+    /// Adds additional names that can be used to invoke this function, in
+    /// addition to `name`.
+    ///
+    /// If you implement [`HigherOrderUDFImpl`] directly you should return aliases
+    /// directly.
+    pub fn with_aliases(self, aliases: impl IntoIterator<Item = &'static str>) -> Self {
+        Self::new_from_impl(AliasedHigherOrderUDFImpl::new(
+            Arc::clone(&self.inner),
+            aliases,
+        ))
+    }
+
+    /// Returns this function's name.
+    ///
+    /// See [`HigherOrderUDFImpl::name`] for more details.
+    pub fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    /// Returns the aliases for this function.
+    ///
+    /// See [`HigherOrderUDF::with_aliases`] for more details.
+    pub fn aliases(&self) -> &[String] {
+        self.inner.aliases()
+    }
+
+    /// Returns this function's schema_name.
+    ///
+    /// See [`HigherOrderUDFImpl::schema_name`] for more details.
+    pub fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        self.inner.schema_name(args)
+    }
+
+    /// Returns this function's [`HigherOrderSignature`].
+    pub fn signature(&self) -> &HigherOrderSignature {
+        self.inner.signature()
+    }
+
+    /// Returns the parameters of all lambdas of this function for the current step.
+    ///
+    /// See [`HigherOrderUDFImpl::lambda_parameters`] for more details.
+    pub fn lambda_parameters(
+        &self,
+        step: usize,
+        fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ) -> Result<LambdaParametersProgress> {
+        self.inner.lambda_parameters(step, fields)
+    }
+
+    /// Coerce value arguments based on lambda output types.
+    ///
+    /// See [`HigherOrderUDFImpl::coerce_values_for_lambdas`] for more details.
+    pub fn coerce_values_for_lambdas(
+        &self,
+        fields: &[ValueOrLambda<DataType, DataType>],
+    ) -> Result<Option<Vec<DataType>>> {
+        self.inner.coerce_values_for_lambdas(fields)
+    }
+
+    /// Returns the return field of the function given its arguments.
+    ///
+    /// See [`HigherOrderUDFImpl::return_field_from_args`] for more details.
+    pub fn return_field_from_args(
+        &self,
+        args: HigherOrderReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        self.inner.return_field_from_args(args)
+    }
+
+    /// Whether List or LargeList arguments should have non-empty null sublists
+    /// cleaned before invoking this function.
+    pub fn clear_null_values(&self) -> bool {
+        self.inner.clear_null_values()
+    }
+
+    /// Invoke the function returning the appropriate result.
+    ///
+    /// See [`HigherOrderUDFImpl::invoke_with_args`] for more details.
+    pub fn invoke_with_args(
+        &self,
+        args: HigherOrderFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        self.inner.invoke_with_args(args)
+    }
+
+    /// Returns true if some of this function's subexpressions may not be evaluated.
+    ///
+    /// See [`HigherOrderUDFImpl::short_circuits`] for more details.
+    pub fn short_circuits(&self) -> bool {
+        self.inner.short_circuits()
+    }
+
+    /// Returns which arguments are evaluated eagerly vs lazily.
+    ///
+    /// See [`HigherOrderUDFImpl::conditional_arguments`] for more details.
+    pub fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        self.inner.conditional_arguments(args)
+    }
+
+    /// Coerce value arguments of a function call to types that the function can evaluate.
+    ///
+    /// See [`HigherOrderUDFImpl::coerce_value_types`] for more details.
+    pub fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_value_types(arg_types)
+    }
+
+    /// Returns the documentation for this function, if any.
+    pub fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
+    }
+}
+
+impl<F> From<F> for HigherOrderUDF
+where
+    F: HigherOrderUDFImpl + 'static,
+{
+    fn from(fun: F) -> Self {
+        Self::new_from_impl(fun)
+    }
+}
+
+/// `HigherOrderUDFImpl` that adds aliases to the underlying function. It is
+/// better to implement [`HigherOrderUDFImpl`], which supports aliases, directly
+/// if possible.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct AliasedHigherOrderUDFImpl {
+    inner: UdfEq<Arc<dyn HigherOrderUDFImpl>>,
+    aliases: Vec<String>,
+}
+
+impl AliasedHigherOrderUDFImpl {
+    fn new(
+        inner: Arc<dyn HigherOrderUDFImpl>,
+        new_aliases: impl IntoIterator<Item = &'static str>,
+    ) -> Self {
+        let mut aliases = inner.aliases().to_vec();
+        aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
+        Self {
+            inner: inner.into(),
+            aliases,
+        }
+    }
+}
+
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
+impl HigherOrderUDFImpl for AliasedHigherOrderUDFImpl {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        self.inner.schema_name(args)
+    }
+
+    fn signature(&self) -> &HigherOrderSignature {
+        self.inner.signature()
+    }
+
+    fn lambda_parameters(
+        &self,
+        step: usize,
+        fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ) -> Result<LambdaParametersProgress> {
+        self.inner.lambda_parameters(step, fields)
+    }
+
+    fn coerce_values_for_lambdas(
+        &self,
+        fields: &[ValueOrLambda<DataType, DataType>],
+    ) -> Result<Option<Vec<DataType>>> {
+        self.inner.coerce_values_for_lambdas(fields)
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: HigherOrderReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        self.inner.return_field_from_args(args)
+    }
+
+    fn clear_null_values(&self) -> bool {
+        self.inner.clear_null_values()
+    }
+
+    fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
+        self.inner.invoke_with_args(args)
+    }
+
+    fn short_circuits(&self) -> bool {
+        self.inner.short_circuits()
+    }
+
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        self.inner.conditional_arguments(args)
+    }
+
+    fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_value_types(arg_types)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
+    }
+}
+
+pub(crate) fn resolve_lambda_variables(
+    expr: Expr,
+    schema: &DFSchema,
+    // a map of lambda variable name => a never empty stack of fields [ [..shadowed], in_scope ]
+    vars: &mut HashMap<String, Vec<FieldRef>>,
+) -> Result<Transformed<Expr>> {
+    expr.transform_down(|expr| match expr {
+        Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+            // not inlined to reduce nesting
+            resolve_higher_order_function(func, args, schema, vars)
+        }
+        Expr::LambdaVariable(mut var) => {
+            let field_stack = vars.get(&var.name).ok_or_else(|| {
+                plan_datafusion_err!(
+                    "missing field of lambda variable {} while resolving",
+                    var.name
+                )
+            })?;
+
+            let field = field_stack.last().ok_or_else(|| {
+                internal_datafusion_err!("every entry should have at least one field")
+            })?;
+
+            let field = Arc::clone(field).renamed(&var.name);
+
+            let transformed = var.field.as_ref().is_none_or(|old| old != &field);
+
+            var.field = Some(field);
+
+            Ok(Transformed::new_transformed(
+                Expr::LambdaVariable(var),
+                transformed,
+            ))
+        }
+        _ => Ok(Transformed::no(expr)),
+    })
+}
+
+fn resolve_higher_order_function(
+    func: Arc<HigherOrderUDF>,
+    args: Vec<Expr>,
+    schema: &DFSchema,
+    // a map of lambda variable name => a never empty stack of fields [ [..shadowed], in_scope ]
+    vars: &mut HashMap<String, Vec<FieldRef>>,
+) -> Result<Transformed<Expr>> {
+    let args = if !vars.is_empty() {
+        /*  if this is a nested lambda, we must resolve non-lambda args before invoking
+            lambda_parameters because it will invoke ExprSchemable::to_field for every
+            non-lambda parameter, and if one them contains a lambda variable, it will fail
+            due to it being unresolved. Example query:
+
+            array_transform([[1, 2]], a -> array_transform(a, b -> b+1))
+
+            the nested array_transform's lambda_parameters will call Lambdavariable::to_field
+            on it's first argument, the variable `a`, which must be resolved
+        */
+        args.map_elements(|arg| match arg {
+            Expr::Lambda(_) => Ok(Transformed::no(arg)),
+            _ => resolve_lambda_variables(arg, schema, vars),
+        })?
+    } else {
+        Transformed::no(args)
+    };
+
+    let transformed = args.transformed;
+    let mut args = args.data;
+
+    let current_fields = args
+        .iter()
+        .map(|e| match e {
+            Expr::Lambda(_lambda_function) => Ok(ValueOrLambda::Lambda(None)),
+            _ => Ok(ValueOrLambda::Value(e.to_field(schema)?.1)),
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // coerce fields because coercion may alter the lambda parameters
+    let mut fields = value_fields_with_higher_order_udf(&current_fields, func.as_ref())?;
+
+    let num_lambdas = args.iter().filter(|a| matches!(a, Expr::Lambda(_))).count();
+
+    let mut step = 0;
+
+    let lambda_params = loop {
+        match func.lambda_parameters(step, &fields)? {
+            LambdaParametersProgress::Partial(params) => {
+                let mut params = params.into_iter();
+
+                if params.len() != num_lambdas {
+                    return plan_err!(
+                        "{} lambda_parameters returned {} lambdas but {num_lambdas} expected",
+                        func.name(),
+                        params.len()
+                    );
+                }
+
+                for (arg, field) in std::iter::zip(&mut args, &mut fields) {
+                    match (arg, field) {
+                        (Expr::Lambda(lambda), ValueOrLambda::Lambda(field)) => {
+                            let params = params.next().ok_or_else(|| {
+                                internal_datafusion_err!(
+                                    "params len should have been checked above"
+                                )
+                            })?;
+
+                            if let Some(params) = params {
+                                for (name, field) in
+                                    std::iter::zip(&lambda.params, params)
+                                {
+                                    vars.entry_ref(name)
+                                        .or_default()
+                                        .push(field.renamed(name.as_str()));
+                                }
+
+                                let body_with_vars = resolve_lambda_variables(
+                                    mem::take(lambda.body.as_mut()),
+                                    schema,
+                                    vars,
+                                )?;
+
+                                remove_scope(vars, &lambda.params)?;
+
+                                *field = Some(body_with_vars.data.to_field(schema)?.1);
+                                *lambda.body = body_with_vars.data;
+                            }
+                        }
+                        (_, ValueOrLambda::Lambda(_)) => {
+                            return internal_err!(
+                                "value_fields_with_higher_order_udf returned a value for a lambda argument"
+                            );
+                        }
+                        (Expr::Lambda(_), ValueOrLambda::Value(_)) => {
+                            return internal_err!(
+                                "value_fields_with_higher_order_udf returned a lambda for a value argument"
+                            );
+                        }
+                        (_, ValueOrLambda::Value(_)) => {} // nothing to do
+                    }
+                }
+            }
+            LambdaParametersProgress::Complete(params) => break params,
+        }
+
+        let limit = func.signature().lambda_parameters_max_iterations;
+
+        step += 1;
+
+        if step > limit {
+            return plan_err!(
+                "{} lambda_parameters called {limit} times without completion",
+                func.name()
+            );
+        }
+    };
+
+    let mut lambda_params = lambda_params.into_iter();
+
+    if num_lambdas != lambda_params.len() {
+        return plan_err!(
+            "{} lambda_parameters returned {} values for {num_lambdas} lambdas",
+            func.name(),
+            lambda_params.len()
+        );
+    }
+
+    let args = args.map_elements(|arg| match arg {
+        Expr::Lambda(mut lambda) => {
+            let lambda_params = lambda_params.next().ok_or_else(|| {
+                internal_datafusion_err!(
+                    "lambda_params len should have been checked above"
+                )
+            })?;
+
+            if lambda.params.len() > lambda_params.len() {
+                return plan_err!(
+                    "{} lambda defined {} params ({}), but only {} supported",
+                    func.name(),
+                    lambda.params.len(),
+                    display_comma_separated(&lambda.params),
+                    lambda_params.len()
+                );
+            }
+
+            if !all_unique(&lambda.params) {
+                return plan_err!(
+                    "lambda params must be unique, got ({})",
+                    lambda.params.join(", ")
+                );
+            }
+
+            for (param, field) in std::iter::zip(&lambda.params, lambda_params) {
+                vars.entry_ref(param)
+                    .or_default()
+                    .push(field.renamed(param.as_str()));
+            }
+
+            let transformed =
+                resolve_lambda_variables(mem::take(lambda.body.as_mut()), schema, vars)?;
+
+            *lambda.body = transformed.data;
+
+            remove_scope(vars, &lambda.params)?;
+
+            Ok(Transformed::new(
+                Expr::Lambda(lambda),
+                transformed.transformed,
+                TreeNodeRecursion::Jump,
+            ))
+        }
+        arg => Ok(Transformed::no(arg)), // resolved at the start of the function
+    })?;
+
+    Ok(Transformed::new(
+        Expr::HigherOrderFunction(HigherOrderFunction::new(func, args.data)),
+        transformed || args.transformed,
+        TreeNodeRecursion::Jump,
+    ))
+}
+
+fn remove_scope(
+    vars: &mut HashMap<String, Vec<FieldRef>>,
+    scope: &[String],
+) -> Result<()> {
+    for param in scope {
+        match vars.entry_ref(param) {
+            EntryRef::Occupied(mut v) => {
+                if v.get().len() == 1 {
+                    v.remove();
+                } else {
+                    v.get_mut().pop().ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "every entry should have at least one field"
+                        )
+                    })?;
+                }
+            }
+            EntryRef::Vacant(_v) => {
+                return internal_err!("no empty value should be in the map");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn all_unique(params: &[String]) -> bool {
+    match params.len() {
+        0 | 1 => true,
+        2 => params[0] != params[1],
+        _ => {
+            let mut set = HashSet::with_capacity(params.len());
+
+            params.iter().all(|p| set.insert(p.as_str()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::hash::DefaultHasher;
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType, Field, FieldRef, Schema};
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr_common::columnar_value::ColumnarValue;
+    use datafusion_expr_common::signature::Volatility;
+
+    use crate::{
+        Expr, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
+        LambdaParametersProgress, ValueOrLambda, col,
+        expr::{HigherOrderFunction, LambdaVariable},
+        lambda, lambda_var, lit,
+    };
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestHigherOrderUDF {
+        name: &'static str,
+        field: &'static str,
+        signature: HigherOrderSignature,
+    }
+    impl HigherOrderUDFImpl for TestHigherOrderUDF {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn signature(&self) -> &HigherOrderSignature {
+            &self.signature
+        }
+
+        fn lambda_parameters(
+            &self,
+            _step: usize,
+            _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
+            unimplemented!()
+        }
+
+        fn return_field_from_args(
+            &self,
+            _args: HigherOrderReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            unimplemented!()
+        }
+
+        fn invoke_with_args(
+            &self,
+            _args: HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
+
+    // PartialEq and Hash must be consistent, and also PartialEq and PartialOrd
+    // must be consistent, so they are tested together.
+    #[test]
+    fn test_partial_eq_hash_and_partial_ord() {
+        // A parameterized function
+        let f = test_func("foo", "a");
+
+        // Same like `f`, different instance
+        let f2 = test_func("foo", "a");
+        assert_eq!(&f, &f2);
+        assert_eq!(hash(&f), hash(&f2));
+        assert_eq!(f.partial_cmp(&f2), Some(Ordering::Equal));
+
+        // Different parameter
+        let b = test_func("foo", "b");
+        assert_ne!(&f, &b);
+        assert_ne!(hash(&f), hash(&b)); // hash can collide for different values but does not collide in this test
+        assert_eq!(f.partial_cmp(&b), None);
+
+        // Different name
+        let o = test_func("other", "a");
+        assert_ne!(&f, &o);
+        assert_ne!(hash(&f), hash(&o)); // hash can collide for different values but does not collide in this test
+        assert_eq!(f.partial_cmp(&o), Some(Ordering::Less));
+
+        // Different name and parameter
+        assert_ne!(&b, &o);
+        assert_ne!(hash(&b), hash(&o)); // hash can collide for different values but does not collide in this test
+        assert_eq!(b.partial_cmp(&o), Some(Ordering::Less));
+    }
+
+    fn test_func(name: &'static str, parameter: &'static str) -> Arc<HigherOrderUDF> {
+        Arc::new(HigherOrderUDF::new_from_impl(TestHigherOrderUDF {
+            name,
+            field: parameter,
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
+        }))
+    }
+
+    fn hash<T: Hash>(value: &T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MockArrayReduce {
+        signature: HigherOrderSignature,
+    }
+
+    impl HigherOrderUDFImpl for MockArrayReduce {
+        fn name(&self) -> &str {
+            "array_reduce"
+        }
+
+        fn aliases(&self) -> &[String] {
+            &[]
+        }
+
+        fn signature(&self) -> &HigherOrderSignature {
+            &self.signature
+        }
+
+        fn lambda_parameters(
+            &self,
+            step: usize,
+            fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
+            // optional finish not supported for simplicity
+            let [
+                ValueOrLambda::Value(list),
+                ValueOrLambda::Value(initial_value),
+                ValueOrLambda::Lambda(merge),
+                ValueOrLambda::Lambda(_finish),
+            ] = fields
+            else {
+                unreachable!()
+            };
+
+            let list_field = match list.data_type() {
+                DataType::List(field) => field,
+                _ => unreachable!(),
+            };
+
+            Ok(match (step, merge) {
+                (0, None) => {
+                    // at the first step, we use the initial_value as merge accumulator,
+                    // and return None for finish since we don't know the output of merge
+                    LambdaParametersProgress::Partial(vec![
+                        // merge
+                        Some(vec![Arc::clone(initial_value), Arc::clone(list_field)]),
+                        // finish
+                        None,
+                    ])
+                }
+                (1, Some(accumulator)) | (0, Some(accumulator)) => {
+                    // now we can use the merge output as it's accumulator and
+                    // as the finish parameter
+                    LambdaParametersProgress::Complete(vec![
+                        // merge
+                        vec![Arc::clone(accumulator), Arc::clone(list_field)],
+                        // finish
+                        vec![Arc::clone(accumulator)],
+                    ])
+                }
+                (1, None) => {
+                    unreachable!()
+                }
+                _ => unreachable!(),
+            })
+        }
+
+        fn return_field_from_args(
+            &self,
+            args: HigherOrderReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            // optional finish not supported for simplicity
+            let [
+                ValueOrLambda::Value(_list),
+                ValueOrLambda::Value(_initial_value),
+                ValueOrLambda::Lambda(_merge),
+                ValueOrLambda::Lambda(finish),
+            ] = args.arg_fields
+            else {
+                unreachable!()
+            };
+
+            Ok(Arc::clone(finish))
+        }
+
+        fn invoke_with_args(
+            &self,
+            _args: HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn test_resolve_lambda_variables() {
+        let schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "c",
+            DataType::new_list(DataType::new_list(DataType::Int32, true), true),
+            true,
+        )]))
+        .unwrap();
+
+        let func = Arc::new(HigherOrderUDF::new_from_impl(MockArrayReduce {
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
+        }));
+
+        /*
+           array_reduce(
+               c,
+               0,
+               (acc1, v) -> acc + array_reduce(
+                   v,
+                   0,
+                   (acc2, v) -> acc2 + acc1 + v,
+                   reduced -> reduced * 2.0
+               ),
+               reduced -> reduced * 2
+           )
+        */
+        let expr = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::clone(&func),
+            vec![
+                col("c"),
+                lit(0),
+                lambda(
+                    ["acc1", "v"],
+                    lambda_var("acc1")
+                        + Expr::HigherOrderFunction(HigherOrderFunction::new(
+                            Arc::clone(&func),
+                            vec![
+                                lambda_var("v"),
+                                lit(0),
+                                lambda(
+                                    ["acc2", "v"],
+                                    lambda_var("acc2")
+                                        + lambda_var("acc1")
+                                        + lambda_var("v"),
+                                ),
+                                lambda(["reduced"], lambda_var("reduced") * lit(2.0)),
+                            ],
+                        )),
+                ),
+                lambda(["reduced"], lambda_var("reduced") * lit(2)),
+            ],
+        ));
+
+        let resolved_expr = expr.resolve_lambda_variables(&schema).unwrap().data;
+
+        /*
+           array_reduce(
+               c@[[Int32]],
+               0@Int64,
+               (acc1@Float64, v@[Int32]) -> acc@Float64 + array_reduce(
+                   v@[Int32],
+                   0@Int64,
+                   (acc2@Float64, v@Int32) -> acc2@Float64 + acc1@Float64 + v@Int32,
+                   reducedFloat64 -> reduced@Float64 * 2.0@Float64
+               ),
+               reduced@Float64 -> reduced@Float64 * 2@Int64
+           )
+        */
+        let expected = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::clone(&func),
+            vec![
+                col("c"),
+                lit(0),
+                lambda(
+                    ["acc1", "v"],
+                    resolved_lambda_var("acc1", DataType::Float64, true)
+                        + Expr::HigherOrderFunction(HigherOrderFunction::new(
+                            Arc::clone(&func),
+                            vec![
+                                resolved_lambda_var(
+                                    "v",
+                                    DataType::new_list(DataType::Int32, true),
+                                    true,
+                                ),
+                                lit(0),
+                                lambda(
+                                    ["acc2", "v"],
+                                    resolved_lambda_var("acc2", DataType::Float64, true)
+                                        + resolved_lambda_var(
+                                            "acc1",
+                                            DataType::Float64,
+                                            true,
+                                        )
+                                        + resolved_lambda_var("v", DataType::Int32, true),
+                                ),
+                                lambda(
+                                    ["reduced"],
+                                    resolved_lambda_var(
+                                        "reduced",
+                                        DataType::Float64,
+                                        true,
+                                    ) * lit(2.0),
+                                ),
+                            ],
+                        )),
+                ),
+                lambda(
+                    ["reduced"],
+                    resolved_lambda_var("reduced", DataType::Float64, true) * lit(2),
+                ),
+            ],
+        ));
+
+        assert_eq!(resolved_expr, expected);
+    }
+
+    fn resolved_lambda_var(name: &str, dt: DataType, nullable: bool) -> Expr {
+        Expr::LambdaVariable(LambdaVariable::new(
+            name.into(),
+            Some(Arc::new(Field::new(name, dt, nullable))),
+        ))
+    }
+}

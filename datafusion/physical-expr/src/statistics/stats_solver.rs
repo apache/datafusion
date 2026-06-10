@@ -15,26 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! DAG-based statistics propagation for the Statistics V2 framework.
+//!
+//! All public items in this module are **deprecated** as of `54.0.0`.
+//! See <https://github.com/apache/datafusion/pull/22071> for details.
+
+#![allow(deprecated)]
+
 use std::sync::Arc;
 
 use crate::expressions::Literal;
 use crate::intervals::cp_solver::PropagationResult;
 use crate::physical_expr::PhysicalExpr;
-use crate::utils::{build_dag, ExprTreeNode};
+use crate::utils::{ExprTreeNode, build_dag};
 
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::statistics::Distribution;
 use datafusion_expr_common::interval_arithmetic::Interval;
 
+use petgraph::Outgoing;
 use petgraph::adj::DefaultIx;
 use petgraph::prelude::Bfs;
 use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::visit::DfsPostOrder;
-use petgraph::Outgoing;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute statistics/distributions for expressions hierarchically.
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+)]
 #[derive(Clone, Debug)]
 pub struct ExprStatisticsGraph {
     graph: StableGraph<ExprStatisticsGraphNode, usize>,
@@ -43,6 +54,10 @@ pub struct ExprStatisticsGraph {
 
 /// This is a node in the DAEG; it encapsulates a reference to the actual
 /// [`PhysicalExpr`] as well as its statistics/distribution.
+#[deprecated(
+    since = "54.0.0",
+    note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+)]
 #[derive(Clone, Debug)]
 pub struct ExprStatisticsGraphNode {
     expr: Arc<dyn PhysicalExpr>,
@@ -86,7 +101,7 @@ impl ExprStatisticsGraphNode {
     /// indefinite range (i.e. `[-∞, ∞]`).
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
         let expr = Arc::clone(&node.expr);
-        if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(literal) = expr.downcast_ref::<Literal>() {
             let value = literal.value();
             Interval::try_new(value.clone(), value.clone())
                 .and_then(|interval| Self::new_uniform(expr, interval))
@@ -205,7 +220,7 @@ impl ExprStatisticsGraph {
 mod tests {
     use std::sync::Arc;
 
-    use crate::expressions::{binary, try_cast, Column};
+    use crate::expressions::{Column, binary, try_cast};
     use crate::intervals::cp_solver::PropagationResult;
     use crate::statistics::stats_solver::ExprStatisticsGraph;
 

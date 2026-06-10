@@ -18,15 +18,14 @@
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -37,7 +36,24 @@ Returns the current timestamp in the system configured timezone (None by default
 
 The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
 "#,
-    syntax_example = "now()"
+    syntax_example = "now()",
+    sql_example = r#"```sql
+> SELECT now();
++----------------------------------+
+| now()                            |
++----------------------------------+
+| 2024-12-23T06:30:00.123456789    |
++----------------------------------+
+
+-- The timezone of the returned timestamp depends on the session time zone
+> SET datafusion.execution.time_zone = 'America/New_York';
+> SELECT now();
++--------------------------------------+
+| now()                                |
++--------------------------------------+
+| 2024-12-23T01:30:00.123456789-05:00  |
++--------------------------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NowFunc {
@@ -83,10 +99,6 @@ impl NowFunc {
 /// wherever it appears within a single statement. This value is
 /// chosen during planning time.
 impl ScalarUDFImpl for NowFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "now"
     }
@@ -112,25 +124,24 @@ impl ScalarUDFImpl for NowFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn invoke_with_args(
-        &self,
-        _args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("invoke should not be called on a simplified now() function")
     }
 
     fn simplify(
         &self,
-        _args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        args: Vec<Expr>,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let now_ts = info
-            .execution_props()
-            .query_execution_start_time
-            .timestamp_nanos_opt();
+        let Some(now_ts) = info.query_execution_start_time() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
 
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::TimestampNanosecond(now_ts, self.timezone.clone()),
+            ScalarValue::TimestampNanosecond(
+                now_ts.timestamp_nanos_opt(),
+                self.timezone.clone(),
+            ),
             None,
         )))
     }
@@ -148,7 +159,7 @@ impl ScalarUDFImpl for NowFunc {
 mod tests {
     use super::*;
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[test]
     fn now_func_default_matches_config() {
         let default_config = ConfigOptions::default();

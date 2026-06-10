@@ -36,15 +36,15 @@ pub enum Operator {
     Plus,
     /// Subtraction
     Minus,
-    /// Multiplication operator, like `*`
+    /// Multiplication
     Multiply,
-    /// Division operator, like `/`
+    /// Division
     Divide,
-    /// Remainder operator, like `%`
+    /// Remainder
     Modulo,
-    /// Logical AND, like `&&`
+    /// Logical AND
     And,
-    /// Logical OR, like `||`
+    /// Logical OR
     Or,
     /// `IS DISTINCT FROM` (see [`distinct`])
     ///
@@ -80,20 +80,20 @@ pub enum Operator {
     BitwiseShiftRight,
     /// Bitwise left, like `<<`
     BitwiseShiftLeft,
-    /// String concat
+    /// String concatenation, like `||`
     StringConcat,
     /// At arrow, like `@>`.
     ///
     /// Currently only supported to be used with lists:
     /// ```sql
-    /// select [1,3] <@ [1,2,3]
+    /// select [1,2,3] @> [1,3]
     /// ```
     AtArrow,
     /// Arrow at, like `<@`.
     ///
     /// Currently only supported to be used with lists:
     /// ```sql
-    /// select [1,2,3] @> [1,3]
+    /// select [1,3] <@ [1,2,3]
     /// ```
     ArrowAt,
     /// Arrow, like `->`.
@@ -120,7 +120,7 @@ pub enum Operator {
     ///
     /// Not implemented in DataFusion yet.
     IntegerDivide,
-    /// Hash Minis, like `#-`
+    /// Hash Minus, like `#-`
     ///
     /// Not implemented in DataFusion yet.
     HashMinus,
@@ -140,6 +140,10 @@ pub enum Operator {
     ///
     /// Not implemented in DataFusion yet.
     QuestionPipe,
+    /// Colon operator, like `:`
+    ///
+    /// Not implemented in DataFusion yet.
+    Colon,
 }
 
 impl Operator {
@@ -159,6 +163,10 @@ impl Operator {
             Operator::ILikeMatch => Some(Operator::NotILikeMatch),
             Operator::NotLikeMatch => Some(Operator::LikeMatch),
             Operator::NotILikeMatch => Some(Operator::ILikeMatch),
+            Operator::RegexMatch => Some(Operator::RegexNotMatch),
+            Operator::RegexIMatch => Some(Operator::RegexNotIMatch),
+            Operator::RegexNotMatch => Some(Operator::RegexMatch),
+            Operator::RegexNotIMatch => Some(Operator::RegexIMatch),
             Operator::Plus
             | Operator::Minus
             | Operator::Multiply
@@ -166,10 +174,6 @@ impl Operator {
             | Operator::Modulo
             | Operator::And
             | Operator::Or
-            | Operator::RegexMatch
-            | Operator::RegexIMatch
-            | Operator::RegexNotMatch
-            | Operator::RegexNotIMatch
             | Operator::BitwiseAnd
             | Operator::BitwiseOr
             | Operator::BitwiseXor
@@ -188,7 +192,8 @@ impl Operator {
             | Operator::AtQuestion
             | Operator::Question
             | Operator::QuestionAnd
-            | Operator::QuestionPipe => None,
+            | Operator::QuestionPipe
+            | Operator::Colon => None,
         }
     }
 
@@ -250,9 +255,9 @@ impl Operator {
             Operator::GtEq => Some(Operator::LtEq),
             Operator::AtArrow => Some(Operator::ArrowAt),
             Operator::ArrowAt => Some(Operator::AtArrow),
-            Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
-            | Operator::Plus
+            Operator::IsDistinctFrom => Some(Operator::IsDistinctFrom),
+            Operator::IsNotDistinctFrom => Some(Operator::IsNotDistinctFrom),
+            Operator::Plus
             | Operator::Minus
             | Operator::Multiply
             | Operator::Divide
@@ -283,7 +288,8 @@ impl Operator {
             | Operator::AtQuestion
             | Operator::Question
             | Operator::QuestionAnd
-            | Operator::QuestionPipe => None,
+            | Operator::QuestionPipe
+            | Operator::Colon => None,
         }
     }
 
@@ -323,7 +329,8 @@ impl Operator {
             | Operator::AtQuestion
             | Operator::Question
             | Operator::QuestionAnd
-            | Operator::QuestionPipe => 30,
+            | Operator::QuestionPipe
+            | Operator::Colon => 30,
             Operator::Plus | Operator::Minus => 40,
             Operator::Multiply | Operator::Divide | Operator::Modulo => 45,
         }
@@ -369,7 +376,9 @@ impl Operator {
             | Operator::AtQuestion
             | Operator::Question
             | Operator::QuestionAnd
-            | Operator::QuestionPipe => true,
+            | Operator::QuestionPipe
+            | Operator::Colon
+            | Operator::StringConcat => true,
 
             // E.g. `TRUE OR NULL` is `TRUE`
             Operator::Or
@@ -377,10 +386,52 @@ impl Operator {
             | Operator::And
             // IS DISTINCT FROM and IS NOT DISTINCT FROM always return a TRUE/FALSE value, never NULL
             | Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
-            // DataFusion string concatenation operator treats NULL as an empty string
-            | Operator::StringConcat => false,
+            | Operator::IsNotDistinctFrom => false,
         }
+    }
+
+    /// Parse an `Operator` from the string name `datafusion-proto` uses on the
+    /// wire (the `Debug` name of the variant, e.g. `"Eq"`).
+    ///
+    /// Returns `None` for names with no binary-operator counterpart. This is
+    /// the canonical proto-string mapping, shared by `datafusion-proto`
+    /// (logical plans) and `PhysicalExpr` decoders such as `BinaryExpr`, so the
+    /// mapping is not duplicated across crates.
+    pub fn from_proto_name(name: &str) -> Option<Operator> {
+        Some(match name {
+            "And" => Operator::And,
+            "Or" => Operator::Or,
+            "Eq" => Operator::Eq,
+            "NotEq" => Operator::NotEq,
+            "LtEq" => Operator::LtEq,
+            "Lt" => Operator::Lt,
+            "Gt" => Operator::Gt,
+            "GtEq" => Operator::GtEq,
+            "Plus" => Operator::Plus,
+            "Minus" => Operator::Minus,
+            "Multiply" => Operator::Multiply,
+            "Divide" => Operator::Divide,
+            "Modulo" => Operator::Modulo,
+            "IsDistinctFrom" => Operator::IsDistinctFrom,
+            "IsNotDistinctFrom" => Operator::IsNotDistinctFrom,
+            "BitwiseAnd" => Operator::BitwiseAnd,
+            "BitwiseOr" => Operator::BitwiseOr,
+            "BitwiseXor" => Operator::BitwiseXor,
+            "BitwiseShiftLeft" => Operator::BitwiseShiftLeft,
+            "BitwiseShiftRight" => Operator::BitwiseShiftRight,
+            "RegexIMatch" => Operator::RegexIMatch,
+            "RegexMatch" => Operator::RegexMatch,
+            "RegexNotIMatch" => Operator::RegexNotIMatch,
+            "RegexNotMatch" => Operator::RegexNotMatch,
+            "LikeMatch" => Operator::LikeMatch,
+            "ILikeMatch" => Operator::ILikeMatch,
+            "NotLikeMatch" => Operator::NotLikeMatch,
+            "NotILikeMatch" => Operator::NotILikeMatch,
+            "StringConcat" => Operator::StringConcat,
+            "AtArrow" => Operator::AtArrow,
+            "ArrowAt" => Operator::ArrowAt,
+            _ => return None,
+        })
     }
 }
 
@@ -429,6 +480,7 @@ impl fmt::Display for Operator {
             Operator::Question => "?",
             Operator::QuestionAnd => "?&",
             Operator::QuestionPipe => "?|",
+            Operator::Colon => ":",
         };
         write!(f, "{display}")
     }

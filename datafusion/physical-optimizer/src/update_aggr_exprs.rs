@@ -22,10 +22,12 @@ use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_common::{Result, plan_datafusion_err};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
-use datafusion_physical_plan::aggregates::{concat_slices, AggregateExec};
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateInputMode, concat_slices,
+};
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -49,7 +51,7 @@ use crate::PhysicalOptimizerRule;
 pub struct OptimizeAggregateOrder {}
 
 impl OptimizeAggregateOrder {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -76,12 +78,12 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
-            if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+            if let Some(aggr_exec) = plan.downcast_ref::<AggregateExec>() {
                 // Final stage implementations do not rely on ordering -- those
                 // ordering fields may be pruned out by first stage aggregates.
                 // Hence, necessary information for proper merge is added during
                 // the first stage to the state field, which the final stage uses.
-                if !aggr_exec.mode().is_first_stage() {
+                if aggr_exec.mode().input_mode() == AggregateInputMode::Partial {
                     return Ok(Transformed::no(plan));
                 }
                 let input = aggr_exec.input();

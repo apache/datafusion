@@ -26,15 +26,15 @@ use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
+use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
 
 mod guarantees;
+pub use guarantees::GuaranteeRewriter;
 pub use guarantees::rewrite_with_guarantees;
 pub use guarantees::rewrite_with_guarantees_map;
-pub use guarantees::GuaranteeRewriter;
 mod order_by;
 
 pub use order_by::rewrite_sort_cols_by_aggs;
@@ -260,7 +260,18 @@ fn coerce_exprs_for_schema(
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
-                    _ => expr.cast_to(new_type, src_schema),
+                    _ => {
+                        match expr {
+                            // maintain the original name when casting a column, to avoid the
+                            // tablename being added to it when not explicitly set by the query
+                            // (see: https://github.com/apache/datafusion/issues/18818)
+                            Expr::Column(ref column) => {
+                                let name = column.name().to_owned();
+                                Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                            }
+                            _ => Ok(expr.cast_to(new_type, src_schema)?),
+                        }
+                    }
                 }
             } else {
                 Ok(expr)
@@ -329,8 +340,16 @@ impl NamePreserver {
 
     pub fn save(&self, expr: &Expr) -> SavedName {
         if self.use_alias {
-            let (relation, name) = expr.qualified_name();
-            SavedName::Saved { relation, name }
+            match expr {
+                Expr::Alias(alias) => SavedName::Saved {
+                    relation: alias.relation.clone(),
+                    name: alias.name.clone(),
+                },
+                _ => {
+                    let (relation, name) = expr.qualified_name();
+                    SavedName::Saved { relation, name }
+                }
+            }
         } else {
             SavedName::None
         }
@@ -360,10 +379,10 @@ mod test {
 
     use super::*;
     use crate::literal::lit_with_metadata;
-    use crate::{col, lit, Cast};
+    use crate::{Cast, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::tree_node::TreeNodeRewriter;
     use datafusion_common::ScalarValue;
+    use datafusion_common::tree_node::TreeNodeRewriter;
 
     #[derive(Default)]
     struct RecordingRewriter {
@@ -464,7 +483,7 @@ mod test {
             normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
                 .unwrap_err()
                 .strip_backtrace();
-        let expected = "Schema error: No field named b. \
+        let expected = "Schema error: No field named b.\n\
             Valid fields are \"tableA\".a.";
         assert_eq!(error, expected);
     }

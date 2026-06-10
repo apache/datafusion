@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -25,7 +24,7 @@ use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::DataType::{Int64, Utf8};
 use arrow::datatypes::{DataType, Int64Type};
 use datafusion_common::cast::as_string_array;
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, plan_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -51,10 +50,6 @@ impl SparkElt {
 }
 
 impl ScalarUDFImpl for SparkElt {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "elt"
     }
@@ -150,11 +145,6 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 mod tests {
     use super::*;
     use arrow::array::Int64Array;
-    use datafusion_common::Result;
-
-    use arrow::array::{ArrayRef, StringArray};
-    use datafusion_common::DataFusionError;
-    use std::sync::Arc;
 
     fn run_elt_arrays(arrs: Vec<ArrayRef>) -> Result<Arc<StringArray>> {
         let arr = elt(&arrs)?;

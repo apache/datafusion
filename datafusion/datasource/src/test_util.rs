@@ -17,14 +17,13 @@
 
 use crate::{
     file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
-    schema_adapter::SchemaAdapterFactory,
 };
 
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 use datafusion_common::Result;
-use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
+use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
 
@@ -32,37 +31,45 @@ use object_store::ObjectStore;
 #[derive(Clone)]
 pub(crate) struct MockSource {
     metrics: ExecutionPlanMetricsSet,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
     filter: Option<Arc<dyn PhysicalExpr>>,
     table_schema: crate::table_schema::TableSchema,
+    projection: crate::projection::SplitProjection,
+    file_opener: Option<Arc<dyn FileOpener>>,
 }
 
 impl Default for MockSource {
     fn default() -> Self {
+        let table_schema =
+            crate::table_schema::TableSchema::from(Arc::new(Schema::empty()));
         Self {
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
             filter: None,
-            table_schema: crate::table_schema::TableSchema::new(
-                Arc::new(Schema::empty()),
-                vec![],
-            ),
+            projection: crate::projection::SplitProjection::unprojected(&table_schema),
+            table_schema,
+            file_opener: None,
         }
     }
 }
 
 impl MockSource {
     pub fn new(table_schema: impl Into<crate::table_schema::TableSchema>) -> Self {
+        let table_schema = table_schema.into();
         Self {
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
             filter: None,
-            table_schema: table_schema.into(),
+            projection: crate::projection::SplitProjection::unprojected(&table_schema),
+            table_schema,
+            file_opener: None,
         }
     }
 
     pub fn with_filter(mut self, filter: Arc<dyn PhysicalExpr>) -> Self {
         self.filter = Some(filter);
+        self
+    }
+
+    pub fn with_file_opener(mut self, file_opener: Arc<dyn FileOpener>) -> Self {
+        self.file_opener = Some(file_opener);
         self
     }
 }
@@ -73,12 +80,10 @@ impl FileSource for MockSource {
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        unimplemented!()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    ) -> Result<Arc<dyn FileOpener>> {
+        self.file_opener.clone().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!("MockSource missing FileOpener")
+        })
     }
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
@@ -86,10 +91,6 @@ impl FileSource for MockSource {
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
@@ -101,22 +102,28 @@ impl FileSource for MockSource {
         "mock"
     }
 
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
-    }
-
     fn table_schema(&self) -> &crate::table_schema::TableSchema {
         &self.table_schema
+    }
+
+    fn try_pushdown_projection(
+        &self,
+        projection: &datafusion_physical_plan::projection::ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        let mut source = self.clone();
+        let new_projection = self.projection.source.try_merge(projection)?;
+        let split_projection = crate::projection::SplitProjection::new(
+            self.table_schema.file_schema(),
+            &new_projection,
+        );
+        source.projection = split_projection;
+        Ok(Some(Arc::new(source)))
+    }
+
+    fn projection(
+        &self,
+    ) -> Option<&datafusion_physical_plan::projection::ProjectionExprs> {
+        Some(&self.projection.source)
     }
 }
 

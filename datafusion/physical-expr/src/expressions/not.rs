@@ -17,7 +17,6 @@
 
 //! Not expression
 
-use std::any::Any;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -26,10 +25,11 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValue};
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::statistics::Distribution::{self, Bernoulli};
+use datafusion_common::{Result, ScalarValue, cast::as_boolean_array, internal_err};
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::interval_arithmetic::Interval;
+#[expect(deprecated)]
+use datafusion_expr::statistics::Distribution::{self, Bernoulli};
 
 /// Not expression
 #[derive(Debug, Eq)]
@@ -70,11 +70,6 @@ impl fmt::Display for NotExpr {
 }
 
 impl PhysicalExpr for NotExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(DataType::Boolean)
     }
@@ -132,6 +127,7 @@ impl PhysicalExpr for NotExpr {
             .map(|result| vec![result]))
     }
 
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         match children[0] {
             Bernoulli(b) => {
@@ -147,6 +143,7 @@ impl PhysicalExpr for NotExpr {
         }
     }
 
+    #[expect(deprecated)]
     fn propagate_statistics(
         &self,
         parent: &Distribution,
@@ -184,6 +181,45 @@ impl PhysicalExpr for NotExpr {
         write!(f, "NOT ")?;
         self.arg.fmt_sql(f)
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(Box::new(
+                protobuf::PhysicalNot {
+                    expr: Some(Box::new(ctx.encode_child(&self.arg)?)),
+                },
+            ))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl NotExpr {
+    /// Reconstruct a [`NotExpr`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let not_expr = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::NotExpr,
+            "NotExpr",
+        );
+        let expr =
+            ctx.decode_required_expression(not_expr.expr.as_deref(), "NotExpr", "expr")?;
+
+        Ok(Arc::new(NotExpr::new(expr)))
+    }
 }
 
 /// Creates a unary expression NOT
@@ -196,7 +232,7 @@ mod tests {
     use std::sync::LazyLock;
 
     use super::*;
-    use crate::expressions::{col, Column};
+    use crate::expressions::{Column, col};
 
     use arrow::{array::BooleanArray, datatypes::*};
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -259,34 +295,38 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics() -> Result<()> {
         let _schema = &Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
         let expr = not(a)?;
 
         // Uniform with non-boolean bounds
-        assert!(expr
-            .evaluate_statistics(&[&Distribution::new_uniform(
+        assert!(
+            expr.evaluate_statistics(&[&Distribution::new_uniform(
                 Interval::make_unbounded(&DataType::Float64)?
             )?])
-            .is_err());
+            .is_err()
+        );
 
         // Exponential
-        assert!(expr
-            .evaluate_statistics(&[&Distribution::new_exponential(
+        assert!(
+            expr.evaluate_statistics(&[&Distribution::new_exponential(
                 ScalarValue::from(1.0),
                 ScalarValue::from(1.0),
                 true
             )?])
-            .is_err());
+            .is_err()
+        );
 
         // Gaussian
-        assert!(expr
-            .evaluate_statistics(&[&Distribution::new_gaussian(
+        assert!(
+            expr.evaluate_statistics(&[&Distribution::new_gaussian(
                 ScalarValue::from(1.0),
                 ScalarValue::from(1.0),
             )?])
-            .is_err());
+            .is_err()
+        );
 
         // Bernoulli
         assert_eq!(
@@ -310,24 +350,26 @@ mod tests {
             Distribution::new_bernoulli(ScalarValue::from(0.75))?
         );
 
-        assert!(expr
-            .evaluate_statistics(&[&Distribution::new_generic(
+        assert!(
+            expr.evaluate_statistics(&[&Distribution::new_generic(
                 ScalarValue::Null,
                 ScalarValue::Null,
                 ScalarValue::Null,
                 Interval::make_unbounded(&DataType::UInt8)?
             )?])
-            .is_err());
+            .is_err()
+        );
 
         // Unknown with non-boolean interval as range
-        assert!(expr
-            .evaluate_statistics(&[&Distribution::new_generic(
+        assert!(
+            expr.evaluate_statistics(&[&Distribution::new_generic(
                 ScalarValue::Null,
                 ScalarValue::Null,
                 ScalarValue::Null,
                 Interval::make_unbounded(&DataType::Float64)?
             )?])
-            .is_err());
+            .is_err()
+        );
 
         Ok(())
     }
@@ -352,5 +394,114 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, true)]))
         });
         Arc::clone(&SCHEMA)
+    }
+}
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::{Column, col};
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalNot, physical_expr_node,
+    };
+
+    /// Build a `NotExpr` proto node with the given child.
+    fn not_node(expr: Option<Box<PhysicalExprNode>>) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::NotExpr(Box::new(
+                PhysicalNot { expr },
+            ))),
+        }
+    }
+
+    /// A `NotExpr` over a boolean column.
+    fn not_fixture() -> NotExpr {
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
+        NotExpr::new(col("a", &schema).unwrap())
+    }
+
+    #[test]
+    fn try_to_proto_encodes_not_expr() {
+        let not = not_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = not
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("NotExpr should encode to Some(node)");
+
+        assert!(node.expr_id.is_none());
+        let not_node = match node.expr_type {
+            Some(physical_expr_node::ExprType::NotExpr(boxed)) => *boxed,
+            other => panic!("expected a NotExpr node, got {other:?}"),
+        };
+        assert!(not_node.expr.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let not = not_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = not.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_not_expr() {
+        let node = not_node(Some(Box::new(column_node("a"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = NotExpr::try_from_proto(&node, &ctx).unwrap();
+        let not = decoded
+            .downcast_ref::<NotExpr>()
+            .expect("decoded expr should be a NotExpr");
+        assert!(not.arg().downcast_ref::<Column>().is_some());
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_not_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = NotExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a NotExpr"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_expr() {
+        let node = not_node(None);
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = NotExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("NotExpr is missing required field 'expr'"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_propagates_expr_decode_error() {
+        let node = not_node(Some(Box::new(column_node("a"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = NotExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
     }
 }

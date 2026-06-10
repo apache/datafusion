@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{assert_eq_or_internal_err, internal_datafusion_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
 
 pub(crate) fn str_to_byte(s: &String, description: &str) -> Result<u8> {
     assert_eq_or_internal_err!(
@@ -41,6 +41,24 @@ macro_rules! convert_required {
     ($PB:expr) => {{
         if let Some(field) = $PB.as_ref() {
             Ok(field.try_into()?)
+        } else {
+            Err(proto_error("Missing required field in protobuf"))
+        }
+    }};
+}
+
+/// Like [`convert_required`] but for types whose proto conversion goes through
+/// the [`TryFromProto`](crate::convert::TryFromProto) trait instead of
+/// [`TryFrom`]. Required because some prost-generated types now live in a
+/// separate crate, so `TryFrom`/`From` cannot be implemented on foreign-foreign
+/// pairs from `datafusion-proto` directly.
+#[macro_export]
+macro_rules! convert_required_proto {
+    ($T:ty, $PB:expr) => {{
+        if let Some(field) = $PB.as_ref() {
+            Ok::<$T, _>(<$T as $crate::convert::TryFromProto<_>>::try_from_proto(
+                field,
+            )?)
         } else {
             Err(proto_error("Missing required field in protobuf"))
         }

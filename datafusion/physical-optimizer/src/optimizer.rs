@@ -21,11 +21,9 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
-use crate::coalesce_batches::CoalesceBatches;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
-use crate::enforce_distribution::EnforceDistribution;
-use crate::enforce_sorting::EnforceSorting;
 use crate::ensure_coop::EnsureCooperative;
+use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
@@ -34,12 +32,58 @@ use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
 use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
+use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
+use crate::hash_join_buffering::HashJoinBuffering;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
-use datafusion_common::config::ConfigOptions;
+use crate::pushdown_sort::PushdownSort;
+use crate::window_topn::WindowTopN;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
+
+/// Context available to physical optimizer rules.
+///
+/// This trait provides access to configuration options and optional statistics
+/// registry for enhanced statistics lookup. It allows optimizer rules to access
+/// extended context without changing the core [`PhysicalOptimizerRule::optimize`]
+/// signature.
+pub trait PhysicalOptimizerContext: Send + Sync {
+    /// Returns the configuration options.
+    fn config_options(&self) -> &ConfigOptions;
+
+    /// Returns the statistics registry for enhanced statistics lookup.
+    ///
+    /// Returns `None` if no registry is configured, in which case rules
+    /// should fall back to using `ExecutionPlan::partition_statistics()`.
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        None
+    }
+}
+
+/// Simple context wrapping [`ConfigOptions`] for backward compatibility.
+///
+/// This struct provides a minimal implementation of [`PhysicalOptimizerContext`]
+/// that only supplies configuration options. Used when no statistics registry
+/// is available or needed.
+pub struct ConfigOnlyContext<'a> {
+    config: &'a ConfigOptions,
+}
+
+impl<'a> ConfigOnlyContext<'a> {
+    /// Create a new context wrapping the given config options.
+    pub fn new(config: &'a ConfigOptions) -> Self {
+        Self { config }
+    }
+}
+
+impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
+    fn config_options(&self) -> &ConfigOptions {
+        self.config
+    }
+}
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
 /// computes the same results, but in a potentially more efficient way.
@@ -48,13 +92,29 @@ use datafusion_physical_plan::ExecutionPlan;
 /// `PhysicalOptimizerRule`s.
 ///
 /// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_physical_optimizer_rule
-pub trait PhysicalOptimizerRule: Debug {
-    /// Rewrite `plan` to an optimized form
+pub trait PhysicalOptimizerRule: Debug + std::any::Any {
+    /// Rewrite `plan` to an optimized form.
+    ///
+    /// This is the primary optimization method. For rules that need access to
+    /// the statistics registry, override [`optimize_with_context`](Self::optimize_with_context) instead.
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Rewrite `plan` with access to extended context (statistics registry, etc.).
+    ///
+    /// Override this method if you need access to the statistics registry for
+    /// enhanced statistics lookup. The default implementation simply calls
+    /// [`optimize`](Self::optimize) with the config options from the context.
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.optimize(plan, context.config_options())
+    }
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
@@ -82,6 +142,12 @@ impl Default for PhysicalOptimizer {
 impl PhysicalOptimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
+        // NOTEs:
+        // - The order of rules in this list is important, as it determines the
+        //   order in which they are applied.
+        // - Adding a new rule here is expensive as it will be applied to all
+        //   queries, and will likely increase the optimization time. Please extend
+        //   existing rules when possible, rather than adding a new rule.
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
             // If there is a output requirement of the query, make sure that
             // this information is not lost across different rules during optimization.
@@ -89,11 +155,11 @@ impl PhysicalOptimizer {
             Arc::new(AggregateStatistics::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
-            // EnforceDistribution and EnforceSorting rules as they decide whether to add additional
-            // repartitioning and local sorting steps to meet distribution and ordering requirements.
-            // Therefore, it should run before EnforceDistribution and EnforceSorting.
+            // EnsureRequirements rule as it decides whether to add additional repartitioning and
+            // local sorting steps to meet distribution and ordering requirements. Therefore, it
+            // should run before EnsureRequirements.
             Arc::new(JoinSelection::new()),
-            // The LimitedDistinctAggregation rule should be applied before the EnforceDistribution rule,
+            // The LimitedDistinctAggregation rule should be applied before EnsureRequirements,
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
@@ -103,25 +169,36 @@ impl PhysicalOptimizer {
             // those are handled by the later `FilterPushdown` rule.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new()),
-            // The EnforceDistribution rule is for adding essential repartitioning to satisfy distribution
-            // requirements. Please make sure that the whole plan tree is determined before this rule.
-            // This rule increases parallelism if doing so is beneficial to the physical plan; i.e. at
-            // least one of the operators in the plan benefits from increased parallelism.
-            Arc::new(EnforceDistribution::new()),
-            // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution rule
+            // Ensures each input plan satisfies the distribution and ordering
+            // requirements declared by `ExecutionPlan::required_input_distribution`
+            // and `ExecutionPlan::required_input_ordering`.
+            //
+            // If the requirements are already satisfied, this rule leaves the plan
+            // unchanged. For example, it does not add sorting when the input is a
+            // file scan whose existing order already satisfies the required ordering.
+            // Otherwise, this rule inserts the necessary repartitioning and sorting
+            // operators.
+            //
+            // This used to be implemented as two separate rules: `EnforceDistribution`
+            // and `EnforceSorting`. It is now a single idempotent rule that decides
+            // distribution and sorting together in one bottom-up pass, so the
+            // `pushdown_sorts` step no longer breaks distribution invariants set
+            // earlier in the pipeline. See the module-level doc on
+            // [`EnsureRequirements`](crate::ensure_requirements) for the per-phase
+            // breakdown, and <https://github.com/apache/datafusion/issues/21973>
+            // for the original failure mode.
+            Arc::new(EnsureRequirements::new()),
+            // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),
-            // The EnforceSorting rule is for adding essential local sorting to satisfy the required
-            // ordering. Please make sure that the whole plan tree is determined before this rule.
-            // Note that one should always run this rule after running the EnforceDistribution rule
-            // as the latter may break local sorting requirements.
-            Arc::new(EnforceSorting::new()),
             // Run once after the local sorting requirement is changed
             Arc::new(OptimizeAggregateOrder::new()),
+            // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER) → Sort
+            // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
+            // Must run after EnsureRequirements (which inserts SortExec) and before
+            // ProjectionPushdown (which embeds projections into FilterExec).
+            Arc::new(WindowTopN::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
-            // The CoalesceBatches rule will not influence the distribution and ordering of the
-            // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
-            Arc::new(CoalesceBatches::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),
@@ -132,12 +209,21 @@ impl PhysicalOptimizer {
             Arc::new(TopKAggregation::new()),
             // Tries to push limits down through window functions, growing as appropriate
             // This can possibly be combined with [LimitPushdown]
-            // It needs to come after [EnforceSorting]
+            // It needs to come after [EnsureRequirements] (which handles sort enforcement)
             Arc::new(LimitPushPastWindows::new()),
+            // The HashJoinBuffering rule adds a BufferExec node with the configured capacity
+            // in the prob side of hash joins. That way, the probe side gets eagerly polled before
+            // the build side is completely finished.
+            Arc::new(HashJoinBuffering::new()),
             // The LimitPushdown rule tries to push limits down as far as possible,
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.
             Arc::new(LimitPushdown::new()),
+            // TopKRepartition pushes TopK (Sort with fetch) below Hash
+            // repartition when the partition key is a prefix of the sort key.
+            // This reduces data volume before a hash shuffle. It must run
+            // after LimitPushdown so that the TopK already exists on the SortExec.
+            Arc::new(TopKRepartition::new()),
             // The ProjectionPushdown rule tries to push projections towards
             // the sources in the execution plan. As a result of this process,
             // a projection can disappear if it reaches the source providers, and
@@ -145,9 +231,11 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // PushdownSort: Detect sorts that can be pushed down to data sources.
+            Arc::new(PushdownSort::new()),
             Arc::new(EnsureCooperative::new()),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
-            // Therefore it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
+            // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new_post_optimization()),
             // The SanityCheckPlan rule checks whether the order and

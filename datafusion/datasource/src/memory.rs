@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
@@ -30,19 +29,20 @@ use crate::source::{DataSource, DataSourceExec};
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
-    assert_or_internal_err, plan_err, project_schema, Result, ScalarValue,
+    Result, ScalarValue, assert_or_internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::project_orderings;
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::memory::MemoryStream;
 use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExpr,
+    all_alias_free_columns, new_projections_for_columns,
 };
 use datafusion_physical_plan::{
-    common, ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
-    SendableRecordBatchStream, Statistics,
+    ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
+    SendableRecordBatchStream, Statistics, common,
 };
 
 use async_trait::async_trait;
@@ -90,10 +90,6 @@ impl DataSource for MemorySourceConfig {
         )))
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
@@ -119,10 +115,10 @@ impl DataSource for MemorySourceConfig {
                     .map_or(String::new(), |limit| format!(", fetch={limit}"));
                 if self.show_sizes {
                     write!(
-                                f,
-                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                                partition_sizes.len(),
-                            )
+                        f,
+                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
                 } else {
                     write!(
                         f,
@@ -195,26 +191,26 @@ impl DataSource for MemorySourceConfig {
         SchedulingType::Cooperative
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(partition) = partition {
             // Compute statistics for a specific partition
             if let Some(batches) = self.partitions.get(partition) {
-                Ok(common::compute_record_batch_statistics(
+                Ok(Arc::new(common::compute_record_batch_statistics(
                     from_ref(batches),
                     &self.schema,
                     self.projection.clone(),
-                ))
+                )))
             } else {
                 // Invalid partition index
-                Ok(Statistics::new_unknown(&self.projected_schema))
+                Ok(Arc::new(Statistics::new_unknown(&self.projected_schema)))
             }
         } else {
             // Compute statistics across all partitions
-            Ok(common::compute_record_batch_statistics(
+            Ok(Arc::new(common::compute_record_batch_statistics(
                 &self.partitions,
                 &self.schema,
                 self.projection.clone(),
-            ))
+            )))
         }
     }
 
@@ -229,24 +225,34 @@ impl DataSource for MemorySourceConfig {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &[ProjectionExpr],
+        projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
-        all_alias_free_columns(projection)
+        let exprs = projection.iter().cloned().collect_vec();
+        all_alias_free_columns(exprs.as_slice())
             .then(|| {
                 let all_projections = (0..self.schema.fields().len()).collect();
                 let new_projections = new_projections_for_columns(
-                    projection,
+                    &exprs,
                     self.projection().as_ref().unwrap_or(&all_projections),
                 );
+                let projected_schema =
+                    project_schema(&self.schema, Some(&new_projections));
 
-                MemorySourceConfig::try_new(
-                    self.partitions(),
-                    self.original_schema(),
-                    Some(new_projections),
-                )
-                .map(|s| Arc::new(s) as Arc<dyn DataSource>)
+                projected_schema.map(|projected_schema| {
+                    // Clone self to preserve all metadata (fetch, sort_information,
+                    // show_sizes, etc.) then update only the projection-related fields.
+                    let mut new_source = self.clone();
+                    new_source.projection = Some(new_projections);
+                    new_source.projected_schema = projected_schema;
+                    // Project sort information to match the new projection
+                    new_source.sort_information = project_orderings(
+                        &new_source.sort_information,
+                        &new_source.projected_schema,
+                    );
+                    Arc::new(new_source) as Arc<dyn DataSource>
+                })
             })
             .transpose()
     }
@@ -746,10 +752,6 @@ impl MemSink {
 
 #[async_trait]
 impl DataSink for MemSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
@@ -773,7 +775,7 @@ impl DataSink for MemSink {
         }
 
         // write the outputs into the batches
-        for (target, mut batches) in self.batches.iter().zip(new_batches.into_iter()) {
+        for (target, mut batches) in self.batches.iter().zip(new_batches) {
             // Append all the new batches in one go to minimize locking overhead
             target.write().await.append(&mut batches);
         }
@@ -853,7 +855,6 @@ mod tests {
     use datafusion_physical_plan::expressions::lit;
 
     use datafusion_physical_plan::ExecutionPlan;
-    use futures::StreamExt;
 
     #[tokio::test]
     async fn exec_with_limit() -> Result<()> {
@@ -879,6 +880,39 @@ mod tests {
         ];
         assert_batches_eq!(expected, &results);
         Ok(())
+    }
+
+    /// Test that `try_swapping_with_projection` preserves the `fetch` limit.
+    /// Regression test for <https://github.com/apache/datafusion/issues/21176>
+    #[test]
+    fn try_swapping_with_projection_preserves_fetch() {
+        use datafusion_physical_expr::projection::ProjectionExprs;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Int64, false),
+        ]));
+        let partitions: Vec<Vec<RecordBatch>> = vec![vec![batch(10)]];
+        let source = MemorySourceConfig::try_new(&partitions, schema.clone(), None)
+            .unwrap()
+            .with_limit(Some(5));
+
+        assert_eq!(source.fetch, Some(5));
+
+        // Create a projection that reorders columns: [c, a] (indices 2, 0)
+        let projection = ProjectionExprs::from_indices(&[2, 0], &schema);
+        let swapped = source
+            .try_swapping_with_projection(&projection)
+            .unwrap()
+            .unwrap();
+        let new_source = swapped.downcast_ref::<MemorySourceConfig>().unwrap();
+
+        assert_eq!(
+            new_source.fetch,
+            Some(5),
+            "fetch limit must be preserved after projection pushdown"
+        );
     }
 
     #[tokio::test]
@@ -951,7 +985,7 @@ mod tests {
         let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
-            values.partition_statistics(None)?,
+            *values.partition_statistics(None)?,
             Statistics {
                 num_rows: Precision::Exact(rows),
                 total_byte_size: Precision::Exact(8), // not important
@@ -961,6 +995,7 @@ mod tests {
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },],
             }
         );
@@ -1081,8 +1116,7 @@ mod tests {
         let actual = partitioned_datasrc
             .map(|datasrc| datasrc.output_partitioning().partition_count());
         assert_eq!(
-            actual,
-            partition_cnt,
+            actual, partition_cnt,
             "partitioned datasrc does not match expected, we expected {should_exist}, instead found {actual:?}"
         );
     }
@@ -1200,9 +1234,8 @@ mod tests {
         // Starting = batch(100_000), batch(10_000), batch(100), batch(1).
         // It should have split as p1=batch(100_000), p2=[batch(10_000), batch(100), batch(1)]
         let partitioned_datasrc = partitioned_datasrc.unwrap();
-        let Some(mem_src_config) = partitioned_datasrc
-            .as_any()
-            .downcast_ref::<MemorySourceConfig>()
+        let Some(mem_src_config) =
+            partitioned_datasrc.downcast_ref::<MemorySourceConfig>()
         else {
             unreachable!()
         };
@@ -1268,8 +1301,8 @@ mod tests {
     }
 
     #[test]
-    fn test_repartition_no_sort_information_no_output_ordering_lopsized_batches(
-    ) -> Result<()> {
+    fn test_repartition_no_sort_information_no_output_ordering_lopsized_batches()
+    -> Result<()> {
         let no_sort = vec![];
         let no_output_ordering = None;
 
@@ -1399,9 +1432,8 @@ mod tests {
         // Starting = batch(100_000), batch(1), batch(100), batch(10_000).
         // It should have split as p1=batch(100_000), p2=[batch(1), batch(100), batch(10_000)]
         let partitioned_datasrc = partitioned_datasrc.unwrap();
-        let Some(mem_src_config) = partitioned_datasrc
-            .as_any()
-            .downcast_ref::<MemorySourceConfig>()
+        let Some(mem_src_config) =
+            partitioned_datasrc.downcast_ref::<MemorySourceConfig>()
         else {
             unreachable!()
         };

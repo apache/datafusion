@@ -19,8 +19,8 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow::array::{
-    types::ByteArrayType, Array, ArrowPrimitiveType, GenericByteArray,
-    GenericByteViewArray, OffsetSizeTrait, PrimitiveArray, StringViewArray,
+    Array, ArrowPrimitiveType, GenericByteArray, GenericByteViewArray, OffsetSizeTrait,
+    PrimitiveArray, StringViewArray, types::ByteArrayType,
 };
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::SortOptions;
@@ -445,7 +445,6 @@ mod tests {
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
     };
-    use std::sync::Arc;
 
     use super::*;
 

@@ -20,16 +20,21 @@
 
 pub mod expr_simplifier;
 mod inlist_simplifier;
+mod linear_aggregates;
 mod regex;
+mod reorder_predicates;
 pub mod simplify_exprs;
+pub mod simplify_literal;
 mod simplify_predicates;
+mod udf_preimage;
 mod unwrap_cast;
 mod utils;
 
 // backwards compatibility
-pub use datafusion_expr::simplify::{SimplifyContext, SimplifyInfo};
+pub use datafusion_expr::simplify::SimplifyContext;
 
 pub use expr_simplifier::*;
+pub(crate) use reorder_predicates::reorder_predicates;
 pub use simplify_exprs::*;
 pub use simplify_predicates::simplify_predicates;
 

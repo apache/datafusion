@@ -20,7 +20,7 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::Result;
+use datafusion_common::{Result, get_required_sort_exprs_indices, internal_err};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Aggregate, Expr, Sort, SortExpr};
 use std::hash::{Hash, Hasher};
@@ -32,7 +32,7 @@ use indexmap::IndexSet;
 pub struct EliminateDuplicatedExpr;
 
 impl EliminateDuplicatedExpr {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -76,11 +76,35 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     .map(|wrapper| wrapper.0)
                     .collect();
 
+                let sort_expr_names = unique_exprs
+                    .iter()
+                    .map(|sort_expr| sort_expr.expr.schema_name().to_string())
+                    .collect::<Vec<_>>();
+                let required_indices = get_required_sort_exprs_indices(
+                    sort.input.schema().as_ref(),
+                    &sort_expr_names,
+                );
+
+                let unique_exprs = if required_indices.len() < unique_exprs.len() {
+                    required_indices
+                        .into_iter()
+                        .map(|idx| unique_exprs[idx].clone())
+                        .collect()
+                } else {
+                    unique_exprs
+                };
+
                 let transformed = if len != unique_exprs.len() {
                     Transformed::yes
                 } else {
                     Transformed::no
                 };
+
+                if unique_exprs.is_empty() {
+                    return internal_err!(
+                        "FD pruning unexpectedly removed all ORDER BY expressions"
+                    );
+                }
 
                 Ok(transformed(LogicalPlan::Sort(Sort {
                     expr: unique_exprs,
@@ -118,9 +142,9 @@ impl OptimizerRule for EliminateDuplicatedExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
-    use crate::OptimizerContext;
     use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder};
     use std::sync::Arc;
 
@@ -130,7 +154,8 @@ mod tests {
             @ $expected:literal $(,)?
         ) => {{
             let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
-            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateDuplicatedExpr::new())];
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> =
+                vec![Arc::new(EliminateDuplicatedExpr::new())];
             assert_optimized_plan_eq_snapshot!(
                 optimizer_ctx,
                 rules,

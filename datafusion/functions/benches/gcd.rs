@@ -15,16 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate criterion;
-
 use arrow::datatypes::Field;
 use arrow::{
     array::{ArrayRef, Int64Array},
     datatypes::DataType,
 };
-use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion_common::config::ConfigOptions;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::gcd;
 use rand::Rng;

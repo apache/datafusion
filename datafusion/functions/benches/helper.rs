@@ -18,7 +18,7 @@
 use arrow::array::{StringArray, StringViewArray};
 use datafusion_expr::ColumnarValue;
 use rand::distr::Alphanumeric;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::sync::Arc;
 
 /// gen_arr(4096, 128, 0.1, 0.1, true) will generate a StringViewArray with

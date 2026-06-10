@@ -23,16 +23,16 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 pub mod aggregate_statistics;
-pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
-pub mod enforce_distribution;
-pub mod enforce_sorting;
 pub mod ensure_coop;
+pub mod ensure_requirements;
+// `enforce_distribution` and `enforce_sorting` are now internal implementation
+// details of `ensure_requirements`. Re-export at the crate root so external test
+// modules keep their public paths.
+pub use ensure_requirements::{enforce_distribution, enforce_sorting};
 pub mod filter_pushdown;
 pub mod join_selection;
 pub mod limit_pushdown;
@@ -42,9 +42,13 @@ pub mod optimizer;
 pub mod output_requirements;
 pub mod projection_pushdown;
 pub use datafusion_pruning as pruning;
+pub mod hash_join_buffering;
+pub mod pushdown_sort;
 pub mod sanity_checker;
 pub mod topk_aggregation;
+pub mod topk_repartition;
 pub mod update_aggr_exprs;
 pub mod utils;
+pub mod window_topn;
 
-pub use optimizer::PhysicalOptimizerRule;
+pub use optimizer::{ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule};

@@ -18,22 +18,24 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
-use std::task::{ready, Poll};
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
+use std::task::{Poll, ready};
 
 use super::metrics::{
-    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
-    RecordOutput,
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
+    MetricsSet, RecordOutput,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
-    SendableRecordBatchStream,
+    SendableRecordBatchStream, check_if_same_properties,
 };
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray,
-    Int64Array, LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray,
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray, Int64Array,
+    LargeListArray, LargeListViewArray, ListArray, ListViewArray, PrimitiveArray, Scalar,
+    StructArray, new_null_array,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -43,13 +45,13 @@ use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, Constraints, HashMap, HashSet, Result,
-    UnnestOptions,
+    Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
+    internal_err,
 };
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::PhysicalExpr;
 use futures::{Stream, StreamExt};
 use log::trace;
 
@@ -74,7 +76,7 @@ pub struct UnnestExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl UnnestExec {
@@ -100,7 +102,7 @@ impl UnnestExec {
             struct_column_indices,
             options,
             metrics: Default::default(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -193,6 +195,17 @@ impl UnnestExec {
     pub fn options(&self) -> &UnnestOptions {
         &self.options
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for UnnestExec {
@@ -217,11 +230,7 @@ impl ExecutionPlan for UnnestExec {
         "UnnestExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -231,10 +240,11 @@ impl ExecutionPlan for UnnestExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(UnnestExec::new(
-            Arc::clone(&children[0]),
+            children.swap_remove(0),
             self.list_column_indices.clone(),
             self.struct_column_indices.clone(),
             Arc::clone(&self.schema),
@@ -281,10 +291,13 @@ struct UnnestMetrics {
 
 impl UnnestMetrics {
     fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
+        let input_batches = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_batches", partition);
 
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+        let input_rows = MetricBuilder::new(metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("input_rows", partition);
 
         Self {
             baseline_metrics: BaselineMetrics::new(metrics, partition),
@@ -362,6 +375,7 @@ impl UnnestStream {
                     debug_assert!(result_batch.num_rows() > 0);
                     Some(Ok(result_batch))
                 }
+                // If the stream is depleted or returned an error, log the finish message:
                 other => {
                     trace!(
                         "Processed {} probe-side input batches containing {} rows and \
@@ -372,6 +386,14 @@ impl UnnestStream {
                         self.metrics.baseline_metrics.output_rows(),
                         self.metrics.baseline_metrics.elapsed_compute(),
                     );
+
+                    // In the non-error case, i.e., input is simply depleted:
+                    if other.is_none() {
+                        // Release the input pipeline's resources.
+                        let input_schema = self.input.schema();
+                        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+                    }
+
                     other
                 }
             });
@@ -406,9 +428,7 @@ fn flatten_struct_cols(
                     Ok(struct_arr.columns().to_vec())
                 }
                 data_type => internal_err!(
-                    "expecting column {} from input plan to be a struct, got {:?}",
-                    idx,
-                    data_type
+                    "expecting column {idx} from input plan to be a struct, got {data_type}"
                 ),
             },
             None => Ok(vec![Arc::clone(column_data)]),
@@ -827,6 +847,30 @@ impl ListArrayType for FixedSizeListArray {
     }
 }
 
+impl ListArrayType for ListViewArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offset = self.value_offsets()[row] as i64;
+        let size = self.value_sizes()[row] as i64;
+        (offset, offset + size)
+    }
+}
+
+impl ListArrayType for LargeListViewArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn value_offsets(&self, row: usize) -> (i64, i64) {
+        let offset = self.value_offsets()[row];
+        let size = self.value_sizes()[row];
+        (offset, offset + size)
+    }
+}
+
 /// Unnest multiple list arrays according to the length array.
 fn unnest_list_arrays(
     list_arrays: &[ArrayRef],
@@ -842,6 +886,12 @@ fn unnest_list_arrays(
             }
             DataType::FixedSizeList(_, _) => {
                 Ok(list_array.as_fixed_size_list() as &dyn ListArrayType)
+            }
+            DataType::ListView(_) => {
+                Ok(list_array.as_list_view::<i32>() as &dyn ListArrayType)
+            }
+            DataType::LargeListView(_) => {
+                Ok(list_array.as_list_view::<i64>() as &dyn ListArrayType)
             }
             other => exec_err!("Invalid unnest datatype {other }"),
         })
@@ -1199,32 +1249,32 @@ mod tests {
         .unwrap();
 
         assert_snapshot!(batches_to_string(&[ret]),
-        @r###"
-+---------------------------------+---------------------------------+---------------------------------+
-| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
-+---------------------------------+---------------------------------+---------------------------------+
-| [1, 2, 3]                       | 1                               | a                               |
-|                                 | 2                               | b                               |
-| [4, 5]                          | 3                               |                                 |
-| [1, 2, 3]                       |                                 | a                               |
-|                                 |                                 | b                               |
-| [4, 5]                          |                                 |                                 |
-| [1, 2, 3]                       | 4                               | a                               |
-|                                 | 5                               | b                               |
-| [4, 5]                          |                                 |                                 |
-| [7, 8, 9, 10]                   | 7                               | c                               |
-|                                 | 8                               | d                               |
-| [11, 12, 13]                    | 9                               |                                 |
-|                                 | 10                              |                                 |
-| [7, 8, 9, 10]                   |                                 | c                               |
-|                                 |                                 | d                               |
-| [11, 12, 13]                    |                                 |                                 |
-| [7, 8, 9, 10]                   | 11                              | c                               |
-|                                 | 12                              | d                               |
-| [11, 12, 13]                    | 13                              |                                 |
-|                                 |                                 | e                               |
-+---------------------------------+---------------------------------+---------------------------------+
-        "###);
+        @r"
+        +---------------------------------+---------------------------------+---------------------------------+
+        | col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
+        +---------------------------------+---------------------------------+---------------------------------+
+        | [1, 2, 3]                       | 1                               | a                               |
+        |                                 | 2                               | b                               |
+        | [4, 5]                          | 3                               |                                 |
+        | [1, 2, 3]                       |                                 | a                               |
+        |                                 |                                 | b                               |
+        | [4, 5]                          |                                 |                                 |
+        | [1, 2, 3]                       | 4                               | a                               |
+        |                                 | 5                               | b                               |
+        | [4, 5]                          |                                 |                                 |
+        | [7, 8, 9, 10]                   | 7                               | c                               |
+        |                                 | 8                               | d                               |
+        | [11, 12, 13]                    | 9                               |                                 |
+        |                                 | 10                              |                                 |
+        | [7, 8, 9, 10]                   |                                 | c                               |
+        |                                 |                                 | d                               |
+        | [11, 12, 13]                    |                                 |                                 |
+        | [7, 8, 9, 10]                   | 11                              | c                               |
+        |                                 | 12                              | d                               |
+        | [11, 12, 13]                    | 13                              |                                 |
+        |                                 |                                 | e                               |
+        +---------------------------------+---------------------------------+---------------------------------+
+        ");
         Ok(())
     }
 

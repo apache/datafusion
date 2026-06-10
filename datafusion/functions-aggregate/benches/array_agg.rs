@@ -20,29 +20,30 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
-    PrimitiveArray,
 };
 use arrow::datatypes::{Field, Int64Type};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
 use arrow::buffer::OffsetBuffer;
-use rand::distr::{Distribution, StandardUniform};
-use rand::prelude::StdRng;
+use arrow::util::bench_util::create_primitive_array;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::distr::{Distribution, StandardUniform};
+use rand::prelude::StdRng;
 
 /// Returns fixed seedable RNG
 pub fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
     c.bench_function(name, |b| {
         b.iter(|| {
-            #[allow(clippy::unit_arg)]
+            #[expect(clippy::unit_arg)]
             black_box(
                 ArrayAggAccumulator::try_new(&list_item_data_type, false)
                     .unwrap()
@@ -51,24 +52,6 @@ fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
             )
         })
     });
-}
-
-pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
-where
-    T: ArrowPrimitiveType,
-    StandardUniform: Distribution<T::Native>,
-{
-    let mut rng = seedable_rng();
-
-    (0..size)
-        .map(|_| {
-            if rng.random::<f32>() < null_density {
-                None
-            } else {
-                Some(rng.random())
-            }
-        })
-        .collect()
 }
 
 /// Create List array with the given item data type, null density, null locations and zero length lists density

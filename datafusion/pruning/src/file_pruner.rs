@@ -19,112 +19,150 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{FieldRef, Schema, SchemaRef};
-use datafusion_common::{
-    pruning::{
-        CompositePruningStatistics, PartitionPruningStatistics, PrunableStatistics,
-        PruningStatistics,
-    },
-    Result,
-};
+use arrow::datatypes::{FieldRef, SchemaRef};
+use datafusion_common::{Result, internal_datafusion_err, pruning::PrunableStatistics};
 use datafusion_datasource::PartitionedFile;
-use datafusion_physical_expr_common::physical_expr::{snapshot_generation, PhysicalExpr};
+use datafusion_physical_expr::DynamicFilterTracking;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::Count;
-use itertools::Itertools;
 use log::debug;
 
 use crate::build_pruning_predicate;
 
-/// Prune based on partition values and file-level statistics.
+/// Prune based on file-level statistics.
+///
+/// Note: Partition column pruning is handled earlier via `replace_columns_with_literals`
+/// which substitutes partition column references with their literal values before
+/// the predicate reaches this pruner.
 pub struct FilePruner {
-    predicate_generation: Option<u64>,
     predicate: Arc<dyn PhysicalExpr>,
-    /// Schema used for pruning, which combines the file schema and partition fields.
-    /// Partition fields are always at the end, as they are during scans.
-    pruning_schema: Arc<Schema>,
-    partitioned_file: PartitionedFile,
-    partition_fields: Vec<FieldRef>,
+    /// Tracks the dynamic filters inside `predicate` so we only rebuild the
+    /// pruning predicate when one of them has actually moved.
+    tracking: DynamicFilterTracking,
+    /// Whether [`Self::should_prune`] has built+evaluated the pruning predicate
+    /// at least once. The first check always runs; subsequent checks only run
+    /// when a watched dynamic filter changed.
+    checked_once: bool,
+    /// Schema used for pruning (the logical file schema).
+    file_schema: SchemaRef,
+    file_stats_pruning: PrunableStatistics,
     predicate_creation_errors: Count,
 }
 
 impl FilePruner {
+    #[deprecated(
+        since = "52.0.0",
+        note = "Use `try_new` instead which returns None if no statistics are available"
+    )]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new(
         predicate: Arc<dyn PhysicalExpr>,
         logical_file_schema: &SchemaRef,
-        partition_fields: Vec<FieldRef>,
+        _partition_fields: Vec<FieldRef>,
         partitioned_file: PartitionedFile,
         predicate_creation_errors: Count,
     ) -> Result<Self> {
-        // Build a pruning schema that combines the file fields and partition fields.
-        // Partition fields are always at the end.
-        let pruning_schema = Arc::new(
-            Schema::new(
-                logical_file_schema
-                    .fields()
-                    .iter()
-                    .cloned()
-                    .chain(partition_fields.iter().cloned())
-                    .collect_vec(),
-            )
-            .with_metadata(logical_file_schema.metadata().clone()),
-        );
-        Ok(Self {
-            // Initialize the predicate generation to None so that the first time we call `should_prune` we actually check the predicate
-            // Subsequent calls will only do work if the predicate itself has changed.
-            // See `snapshot_generation` for more info.
-            predicate_generation: None,
+        Self::try_new(
             predicate,
-            pruning_schema,
-            partitioned_file,
-            partition_fields,
+            logical_file_schema,
+            &partitioned_file,
+            predicate_creation_errors,
+        )
+        .ok_or_else(|| {
+            internal_datafusion_err!(
+                "FilePruner::new called on a file without statistics: {:?}",
+                partitioned_file
+            )
+        })
+    }
+
+    /// Create a file pruner for this file, or `None` when pruning it cannot
+    /// help.
+    ///
+    /// Returns `None` when the file has no statistics struct to evaluate a
+    /// pruning predicate against, or when the predicate is purely static and the
+    /// file has no usable column statistics — in that case planning already did
+    /// everything such a pruner could. A predicate carrying a dynamic filter is
+    /// always accepted (given a statistics struct), since it may prune via
+    /// partition-value folding even without column statistics.
+    pub fn try_new(
+        predicate: Arc<dyn PhysicalExpr>,
+        file_schema: &SchemaRef,
+        partitioned_file: &PartitionedFile,
+        predicate_creation_errors: Count,
+    ) -> Option<Self> {
+        // A pruning predicate is evaluated against a statistics struct, so one
+        // must exist (its columns may all be `Absent`).
+        let file_stats = partitioned_file.statistics.as_ref()?;
+        let tracking = DynamicFilterTracking::classify(&predicate);
+        // Only build a pruner when it could prune something planning didn't
+        // already: the file has real column statistics, or the predicate carries
+        // a dynamic filter (whose value, or folded partition columns, can prune
+        // even without column statistics). For a purely static predicate with no
+        // usable stats there is nothing to gain.
+        if !partitioned_file.has_statistics() && !tracking.contains_dynamic_filter() {
+            return None;
+        }
+        let file_stats_pruning =
+            PrunableStatistics::new(vec![file_stats.clone()], Arc::clone(file_schema));
+        Some(Self {
+            predicate,
+            tracking,
+            checked_once: false,
+            file_schema: Arc::clone(file_schema),
+            file_stats_pruning,
             predicate_creation_errors,
         })
     }
 
+    /// Returns `true` if this pruner watches a dynamic filter that can still
+    /// change, meaning [`Self::should_prune`] is worth re-checking as the scan
+    /// progresses. When `false`, the predicate is effectively static for the
+    /// remainder of the scan and the caller can avoid wrapping the stream in a
+    /// per-batch re-pruning adapter.
+    pub fn is_watching(&self) -> bool {
+        matches!(self.tracking, DynamicFilterTracking::Watching(_))
+    }
+
     pub fn should_prune(&mut self) -> Result<bool> {
-        let new_generation = snapshot_generation(&self.predicate);
-        if let Some(current_generation) = self.predicate_generation.as_mut() {
-            if *current_generation == new_generation {
-                return Ok(false);
-            }
-            *current_generation = new_generation;
+        // Building the pruning predicate is expensive (it involves expression
+        // analysis), so we only do it on the first check and whenever a dynamic
+        // filter inside the predicate has actually moved.
+        //
+        // Dynamic filter expressions can change their values during query
+        // execution; `DynamicFilterTracking` watches the still-incomplete
+        // filters and reports a change at most once per update. A purely static
+        // predicate (or one whose dynamic filters have all completed) is checked
+        // exactly once.
+        let should_build = if self.checked_once {
+            self.tracking.watcher().is_some_and(|w| w.changed())
         } else {
-            self.predicate_generation = Some(new_generation);
+            self.checked_once = true;
+            true
+        };
+        if !should_build {
+            return Ok(false);
         }
         let pruning_predicate = build_pruning_predicate(
             Arc::clone(&self.predicate),
-            &self.pruning_schema,
+            &self.file_schema,
             &self.predicate_creation_errors,
         );
-        if let Some(pruning_predicate) = pruning_predicate {
-            // The partition column schema is the schema of the table - the schema of the file
-            let mut pruning = Box::new(PartitionPruningStatistics::try_new(
-                vec![self.partitioned_file.partition_values.clone()],
-                self.partition_fields.clone(),
-            )?) as Box<dyn PruningStatistics>;
-            if let Some(stats) = &self.partitioned_file.statistics {
-                let stats_pruning = Box::new(PrunableStatistics::new(
-                    vec![Arc::clone(stats)],
-                    Arc::clone(&self.pruning_schema),
-                ));
-                pruning = Box::new(CompositePruningStatistics::new(vec![
-                    pruning,
-                    stats_pruning,
-                ]));
+        let Some(pruning_predicate) = pruning_predicate else {
+            return Ok(false);
+        };
+        match pruning_predicate.prune(&self.file_stats_pruning) {
+            Ok(values) => {
+                assert!(values.len() == 1);
+                // We expect a single container -> if all containers are false skip this file
+                if values.into_iter().all(|v| !v) {
+                    return Ok(true);
+                }
             }
-            match pruning_predicate.prune(pruning.as_ref()) {
-                Ok(values) => {
-                    assert!(values.len() == 1);
-                    // We expect a single container -> if all containers are false skip this file
-                    if values.into_iter().all(|v| !v) {
-                        return Ok(true);
-                    }
-                }
-                // Stats filter array could not be built, so we can't prune
-                Err(e) => {
-                    debug!("Ignoring error building pruning predicate for file: {e}");
-                    self.predicate_creation_errors.add(1);
-                }
+            // Stats filter array could not be built, so we can't prune
+            Err(e) => {
+                debug!("Ignoring error building pruning predicate for file: {e}");
+                self.predicate_creation_errors.add(1);
             }
         }
 
