@@ -45,6 +45,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use futures::StreamExt;
+use datafusion_physical_expr_common::metrics::MetricsSet;
 
 #[tokio::test]
 async fn test_sort_with_limited_memory() -> Result<()> {
@@ -69,7 +70,7 @@ async fn test_sort_with_limited_memory() -> Result<()> {
 
     // Basic test with a lot of groups that cannot all fit in memory and 1 record batch
     // from each spill file is too much memory
-    let spill_count = run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
+    let metrics = run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
         pool_size,
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
@@ -78,7 +79,7 @@ async fn test_sort_with_limited_memory() -> Result<()> {
     })
     .await?;
 
-    let total_spill_files_size = spill_count * record_batch_size;
+    let total_spill_files_size = metrics.spill_count().unwrap_or_default() * record_batch_size;
     assert!(
         total_spill_files_size > pool_size,
         "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
@@ -252,7 +253,7 @@ enum MemoryBehavior {
 
 async fn run_sort_test_with_limited_memory(
     mut args: RunTestWithLimitedMemoryArgs,
-) -> Result<usize> {
+) -> Result<MetricsSet> {
     let get_size_of_record_batch_to_generate = std::mem::replace(
         &mut args.get_size_of_record_batch_to_generate,
         Box::pin(move |_| unreachable!("should not be called after take")),
@@ -312,7 +313,17 @@ async fn run_sort_test_with_limited_memory(
 
     let result = sort_exec.execute(0, Arc::clone(&args.task_ctx))?;
 
-    run_test(args, sort_exec, result).await
+    let number_of_record_batches = args.number_of_record_batches;
+
+    let metrics = run_test(args, sort_exec, result).await?;
+
+    assert_baseline_metrics_for_non_empty_output(
+        metrics,
+        number_of_record_batches * output_batch_size,
+        record_batch_size as usize
+    );
+
+    Ok(metrics)
 }
 
 fn grow_memory_as_much_as_possible(
@@ -346,7 +357,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory() -> Result<()
 
     // Basic test with a lot of groups that cannot all fit in memory and 1 record batch
     // from each spill file is too much memory
-    let spill_count =
+    let metrics =
         run_test_aggregate_with_high_cardinality(RunTestWithLimitedMemoryArgs {
             pool_size,
             task_ctx: Arc::new(task_ctx),
@@ -356,7 +367,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory() -> Result<()
         })
         .await?;
 
-    let total_spill_files_size = spill_count * record_batch_size;
+    let total_spill_files_size = metrics.spill_count().unwrap_or_default() * record_batch_size;
     assert!(
         total_spill_files_size > pool_size,
         "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
@@ -498,7 +509,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_large_reco
 
 async fn run_test_aggregate_with_high_cardinality(
     mut args: RunTestWithLimitedMemoryArgs,
-) -> Result<usize> {
+) -> Result<MetricsSet> {
     let get_size_of_record_batch_to_generate = std::mem::replace(
         &mut args.get_size_of_record_batch_to_generate,
         Box::pin(move |_| unreachable!("should not be called after take")),
@@ -587,20 +598,13 @@ async fn run_test(
     args: RunTestWithLimitedMemoryArgs,
     plan: Arc<dyn ExecutionPlan>,
     result_stream: SendableRecordBatchStream,
-) -> Result<usize> {
+) -> Result<MetricsSet> {
     let number_of_record_batches = args.number_of_record_batches;
-    let output_batch_size = args.task_ctx.session_config().batch_size();
-    let number_of_rows = number_of_record_batches * output_batch_size;
 
     consume_stream_and_simulate_other_running_memory_consumers(args, result_stream)
         .await?;
-    
-    assert_baseline_metrics_for_non_empty_output(
-        plan.metrics().expect("must have metrics"),
-        number_of_rows,
-        output_batch_size
-    );
 
+    let metrics = plan.metrics().expect("must have metrics");
     let spill_count = assert_spill_count_metric(true, plan);
 
     assert!(
@@ -608,7 +612,7 @@ async fn run_test(
         "Expected spill, but did not, number of record batches: {number_of_record_batches}",
     );
 
-    Ok(spill_count)
+    Ok(metrics)
 }
 
 /// Consume the stream and change the amount of memory used while consuming it based on the [`MemoryBehavior`] provided
