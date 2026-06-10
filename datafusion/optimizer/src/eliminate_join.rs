@@ -327,6 +327,12 @@ fn rewrite_node(
                 Partitioning::Hash(exprs, _) | Partitioning::DistributeBy(exprs) => {
                     child_live.extend_from(exprs, input.schema())?;
                 }
+                Partitioning::Range(range) => {
+                    child_live.extend_from(
+                        range.ordering().iter().map(|sort_expr| &sort_expr.expr),
+                        input.schema(),
+                    )?;
+                }
                 Partitioning::RoundRobinBatch(_) => {}
             }
             rewrite_single_input(input, child_live, duplicate_insensitive, |input| {
@@ -572,10 +578,12 @@ mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::eliminate_join::EliminateJoin;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{Constraint, Constraints, NullEquality, Result};
+    use datafusion_common::{
+        Constraint, Constraints, NullEquality, Result, ScalarValue, SplitPoint,
+    };
     use datafusion_expr::JoinType::Inner;
     use datafusion_expr::{
-        Expr, JoinType, Partitioning, col, exists, lit,
+        Expr, JoinType, Partitioning, RangePartitioning, col, exists, lit,
         logical_plan::builder::{
             LogicalPlanBuilder, table_scan, table_source_with_constraints,
         },
@@ -1056,6 +1064,29 @@ mod tests {
         assert_optimized_plan_equal!(plan, @r"
         Projection: l.x
           Repartition: Hash(r.y) partition_count=4
+            Inner Join: l.id = r.id
+              TableScan: l
+              TableScan: r
+        ")
+    }
+
+    #[test]
+    fn repartition_range_key_keeps_removed_side_live() -> Result<()> {
+        // The projection keeps only `l.x`, and the right side is unique (PK), so
+        // absent any other use of `r` the inner join would collapse to a semi join.
+        // But the `Repartition` ranges on `r.y`, which keeps the right side live, so
+        // the join must stay an inner join to preserve `r.y` for the partitioning.
+        let plan = left_join_right_with_constraints(primary_key_on_id())?
+            .repartition(Partitioning::Range(RangePartitioning::try_new(
+                vec![col("r.y").sort(true, true)],
+                vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+            )?))?
+            .project(vec![col("l.x")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: l.x
+          Repartition: Range([r.y ASC NULLS FIRST], [(10)], 2)
             Inner Join: l.id = r.id
               TableScan: l
               TableScan: r
