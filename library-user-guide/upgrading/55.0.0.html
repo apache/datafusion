@@ -451,6 +451,11 @@
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">55.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
+<section id="dialect-available-replaced-by-dialect-available">
+<h3><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code><a class="headerlink" href="#dialect-available-replaced-by-dialect-available" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_common::config::Dialect::AVAILABLE</span></code> has been removed. Use
+<code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code> instead.</p>
+</section>
 <section id="decimal-scalar-formatting-uses-human-readable-values">
 <h3>Decimal scalar formatting uses human-readable values<a class="headerlink" href="#decimal-scalar-formatting-uses-human-readable-values" title="Link to this heading">#</a></h3>
 <p>Decimal scalar literals in <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code> output, expression display strings, and
@@ -690,6 +695,7 @@ silently or raised a non-configurable error.</p></li>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-55-0-0">DataFusion 55.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dialect-available-replaced-by-dialect-available"><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decimal-scalar-formatting-uses-human-readable-values">Decimal scalar formatting uses human-readable values</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-dynamic-physical-expr-is-deprecated"><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics</a></li>
