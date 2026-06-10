@@ -164,9 +164,8 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "arrow"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "378530e55cd479eda3c14eb345310799717e6f76d0c332041e8487022166b471"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -187,9 +186,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-arith"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0ab212d2c1886e802f51c5212d78ebbcbb0bec980fff9dadc1eb8d45cd0b738"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -201,9 +199,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfd33d3e92f207444098c75b42de99d329562be0cf686b307b097cc52b4e999e"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -220,9 +217,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-avro"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "049230728cd6e093088c8d231b4beede184e35cad7777c1505c0d5a8571f4376"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -244,9 +240,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-buffer"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c6cd424c2693bcdbc150d843dc9d4d137dd2de4782ce6df491ad11a3a0416c0"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "bytes",
  "half",
@@ -256,9 +251,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c5aefb56a2c02e9e2b30746241058b85f8983f0fcff2ba0c6d09006e1cded7f"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -278,9 +272,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-csv"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e94e8cf7e517657a52b91ea1263acf38c4ca62a84655d72458a3359b12ab97de"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -293,9 +286,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c88210023a2bfee1896af366309a3028fc3bcbd6515fa29a7990ee1baa08ee0"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -306,9 +298,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-flight"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28abfe8bf9f124e5fc83b334af4fa58f8d0323ad25312ccb2d1da50178415704"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -334,9 +325,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-ipc"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "238438f0834483703d88896db6fe5a7138b2230debc31b34c0336c2996e3c64f"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -350,9 +340,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-json"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "205ca2119e6d679d5c133c6f30e68f027738d95ed948cf77677ea69c7800036b"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -375,9 +364,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-ord"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bffd8fd2579286a5d63bac898159873e5094a79009940bcb42bbfce4f19f1d0"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -388,9 +376,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-row"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bab5994731204603c73ba69267616c50f80780774c6bb0476f1f830625115e0c"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -401,9 +388,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f633dbfdf39c039ada1bf9e34c694816eb71fbb7dc78f613993b7245e078a1ed"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "bitflags",
  "serde",
@@ -413,9 +399,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-select"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cd065c54172ac787cf3f2f8d4107e0d3fdc26edba76fdf4f4cc170258942222"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -427,9 +412,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-string"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29dd7cda3ab9692f43a2e4acc444d760cc17b12bb6d8232ddf64e9bab7c06b42"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -3731,12 +3715,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "integer-encoding"
-version = "3.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
-
-[[package]]
 name = "ipnet"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4390,15 +4368,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
-name = "ordered-float"
-version = "2.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68f19d67e5a2795c94e73e0bb1cc1a7edeb2e28efd39e2e1c9b7a40c1108b11c"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "outref"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4445,9 +4414,8 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "58.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dafa7d01085b62a47dd0c1829550a0a36710ea9c4fe358a05a85477cec8a908"
+version = "59.0.0"
+source = "git+https://github.com/ClSlaid/arrow-rs.git?branch=fix-9143-binaryview-filter-coalescer#28c3334e3f0ff0a62638ac4e6c877bbe46203af8"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -4474,7 +4442,6 @@ dependencies = [
  "seq-macro",
  "simdutf8",
  "snap",
- "thrift",
  "tokio",
  "twox-hash",
  "zstd",
@@ -4834,7 +4801,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "petgraph",
@@ -4853,7 +4820,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -6145,17 +6112,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "thrift"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e54bc85fc7faa8bc175c4bab5b92ba8d9a3ce893d0e9f42cc455c8ab16a9e09"
-dependencies = [
- "byteorder",
- "integer-encoding",
- "ordered-float",
 ]
 
 [[package]]
