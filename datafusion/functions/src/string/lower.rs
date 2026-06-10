@@ -21,8 +21,8 @@ use crate::string::common::to_lower;
 use datafusion_common::Result;
 use datafusion_common::types::logical_string;
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -57,9 +57,10 @@ impl LowerFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
+                vec![Coercion::new_exact_preserving_encoding(
+                    TypeSignatureClass::Native(logical_string()),
+                    EncodingPreservation::Dictionary,
+                )],
                 Volatility::Immutable,
             ),
         }
@@ -91,9 +92,11 @@ impl ScalarUDFImpl for LowerFunc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, ArrayRef, StringArray, StringViewArray};
-    use arrow::datatypes::Field;
-    use datafusion_common::config::ConfigOptions;
+    use arrow::array::{
+        Array, ArrayRef, DictionaryArray, Int8Array, StringArray, StringViewArray,
+    };
+    use arrow::datatypes::{Field, Int8Type};
+    use datafusion_common::{ScalarValue, config::ConfigOptions};
     use std::sync::Arc;
 
     fn invoke_lower(input: ArrayRef) -> Result<ArrayRef> {
@@ -115,6 +118,52 @@ mod tests {
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let result = invoke_lower(input)?;
         assert_eq!(&expected, &result);
+        Ok(())
+    }
+
+    fn invoke_lower_scalar(input: ScalarValue) -> Result<ScalarValue> {
+        let func = LowerFunc::new();
+        let data_type = input.data_type();
+        let args = ScalarFunctionArgs {
+            number_rows: 1,
+            args: vec![ColumnarValue::Scalar(input)],
+            arg_fields: vec![Field::new("a", data_type.clone(), true).into()],
+            return_field: Field::new("f", data_type, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        match func.invoke_with_args(args)? {
+            ColumnarValue::Scalar(result) => Ok(result),
+            _ => unreachable!("lower"),
+        }
+    }
+
+    #[test]
+    fn lower_dictionary() -> Result<()> {
+        let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(0)]);
+        let input = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            keys.clone(),
+            Arc::new(StringArray::from(vec![Some("FOO"), Some("Bar")])),
+        )?) as ArrayRef;
+        let expected = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            keys,
+            Arc::new(StringArray::from(vec![Some("foo"), Some("bar")])),
+        )?) as ArrayRef;
+
+        to_lower(input, expected)
+    }
+
+    #[test]
+    fn lower_dictionary_scalar() -> Result<()> {
+        let input = ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Utf8(Some("FOO".to_string()))),
+        );
+        let expected = ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Utf8(Some("foo".to_string()))),
+        );
+
+        assert_eq!(invoke_lower_scalar(input)?, expected);
         Ok(())
     }
 

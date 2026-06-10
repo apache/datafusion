@@ -24,7 +24,7 @@ use crate::strings::{
     StringViewArrayBuilder, append_view,
 };
 use arrow::array::{
-    Array, ArrayRef, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
     StringViewArray, new_null_array,
 };
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
@@ -387,6 +387,9 @@ fn case_conversion(
 
                 Ok(ColumnarValue::Array(Arc::new(builder.finish(nulls)?)))
             }
+            DataType::Dictionary(_, _) => Ok(ColumnarValue::Array(
+                case_conversion_dictionary(array, lower, name)?,
+            )),
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -402,8 +405,42 @@ fn case_conversion(
                 let result = a.as_ref().map(|x| unicode_case(x, lower));
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(result)))
             }
+            ScalarValue::Dictionary(key_type, value) => {
+                let converted = case_conversion(
+                    &[ColumnarValue::Scalar((**value).clone())],
+                    lower,
+                    name,
+                )?;
+                match converted {
+                    ColumnarValue::Scalar(value) => Ok(ColumnarValue::Scalar(
+                        ScalarValue::Dictionary(key_type.clone(), Box::new(value)),
+                    )),
+                    ColumnarValue::Array(_) => {
+                        unreachable!("scalar case conversion returned an array")
+                    }
+                }
+            }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
+    }
+}
+
+fn case_conversion_dictionary(
+    array: &ArrayRef,
+    lower: bool,
+    name: &str,
+) -> Result<ArrayRef> {
+    let dictionary = array.as_any_dictionary();
+    let converted = case_conversion(
+        &[ColumnarValue::Array(Arc::clone(dictionary.values()))],
+        lower,
+        name,
+    )?;
+    match converted {
+        ColumnarValue::Array(values) => Ok(dictionary.with_values(values)),
+        ColumnarValue::Scalar(_) => {
+            unreachable!("array case conversion returned a scalar")
+        }
     }
 }
 
