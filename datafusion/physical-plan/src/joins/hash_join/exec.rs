@@ -1503,6 +1503,7 @@ impl ExecutionPlan for HashJoinExec {
             return Ok(None);
         }
 
+        // TODO: split by `col`/`JoinSide` instead so mark joins can also push down to children.
         let is_mark_join =
             matches!(self.join_type(), JoinType::LeftMark | JoinType::RightMark);
 

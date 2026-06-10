@@ -1317,6 +1317,25 @@ physical_plan
 04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)------DataSourceExec: partitions=1, partition_sizes=[2]
 
+query TT
+explain select t1_id from t1
+where t1_id > 40 or exists (select 1 from t2 where t2.t2_int = t1.t1_int)
+----
+logical_plan
+01)Projection: t1.t1_id
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.mark
+03)----Projection: t1.t1_id, __correlated_sq_1.mark
+04)------LeftMark Join: t1.t1_int = __correlated_sq_1.t2_int
+05)--------TableScan: t1 projection=[t1_id, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------TableScan: t2 projection=[t2_int]
+physical_plan
+01)FilterExec: t1_id@0 > 40 OR mark@1, projection=[t1_id@0]
+02)--HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(t2_int@0, t1_int@1)], projection=[t1_id@0, mark@2]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)------DataSourceExec: partitions=1, partition_sizes=[2]
+
 query I rowsort
 select t1_id from t1
 where t1_id > 40 or exists (select 1 from t2 where t2.t2_int = t1.t1_int)
@@ -1325,11 +1344,30 @@ where t1_id > 40 or exists (select 1 from t2 where t2.t2_int = t1.t1_int)
 33
 44
 
+query TT
+explain select t1_id from t1
+where t1_id > 40 or not exists (select 1 from t2 where t2.t2_int > t1.t1_int)
+----
+logical_plan
+01)Projection: t1.t1_id
+02)--Filter: t1.t1_id > Int32(40) OR NOT __correlated_sq_1.mark
+03)----Projection: t1.t1_id, __correlated_sq_1.mark
+04)------LeftMark Join:  Filter: __correlated_sq_1.t2_int > t1.t1_int
+05)--------TableScan: t1 projection=[t1_id, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------TableScan: t2 projection=[t2_int]
+physical_plan
+01)FilterExec: t1_id@0 > 40 OR NOT mark@1, projection=[t1_id@0]
+02)--NestedLoopJoinExec: join_type=RightMark, filter=t2_int@1 > t1_int@0, projection=[t1_id@0, mark@2]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)------DataSourceExec: partitions=1, partition_sizes=[2]
+
 query I rowsort
 select t1_id from t1
-where t1_id > 40 or not exists (select 1 from t2 where t2.t2_int = t1.t1_int)
+where t1_id > 40 or not exists (select 1 from t2 where t2.t2_int > t1.t1_int)
 ----
-22
+33
 44
 
 statement ok
