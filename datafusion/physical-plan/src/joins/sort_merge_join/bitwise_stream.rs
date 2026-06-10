@@ -829,6 +829,7 @@ impl BitwiseSortMergeJoinStream {
                     }
                     Some(Err(e)) => {
                         self.spill_stream = None;
+                        self.spill_stream_has_data = false;
                         return Poll::Ready(Err(e));
                     }
                     None => {
@@ -867,6 +868,7 @@ impl BitwiseSortMergeJoinStream {
         self.outer_offset = outer_group_end;
 
         self.spill_stream = None;
+        self.spill_stream_has_data = false;
 
         Poll::Ready(Ok(()))
     }
