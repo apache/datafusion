@@ -33,19 +33,21 @@ on:
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  
   # Test doc build
   linux-test-doc-build:
     name: Test doc build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup uv
-        uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098  # v7.3.1
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
       - name: Install doc dependencies
         run: uv sync --package datafusion-docs
       - name: Install dependency graph tooling

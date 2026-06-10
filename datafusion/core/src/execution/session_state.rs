@@ -30,7 +30,9 @@ use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow_schema::{DataType, FieldRef};
+#[cfg(feature = "sql")]
+use arrow_schema::DataType;
+use arrow_schema::FieldRef;
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, InformationSchemaProvider,
@@ -56,18 +58,25 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
-use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
+use datafusion_expr::registry::{
+    ExtensionTypeRegistryRef, FunctionRegistry, MemoryExtensionTypeRegistry,
+    SerializerRegistry,
+};
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{AggregateUDF, Explain, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+use datafusion_expr::{
+    AggregateUDF, Explain, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
+};
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerRule,
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_session::Session;
 #[cfg(feature = "sql")]
 use datafusion_sql::{
@@ -154,10 +163,14 @@ pub struct SessionState {
     table_functions: HashMap<String, Arc<TableFunction>>,
     /// Scalar functions that are registered with the context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    /// Higher order functions that are registered with the context
+    higher_order_functions: HashMap<String, Arc<HigherOrderUDF>>,
     /// Aggregate functions registered in the context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions registered in the context
     window_functions: HashMap<String, Arc<WindowUDF>>,
+    /// Extension types registry for extensions.
+    extension_types: ExtensionTypeRegistryRef,
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Holds registered external FileFormat implementations
@@ -186,9 +199,25 @@ pub struct SessionState {
     /// thus, changing dialect o PostgreSql is required
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
+    /// Optional statistics registry for pluggable statistics providers.
+    ///
+    /// When set, physical optimizer rules can use this registry to obtain
+    /// enhanced statistics (e.g., NDV overrides, histograms) beyond what
+    /// is available from `ExecutionPlan::partition_statistics()`.
+    statistics_registry: Option<StatisticsRegistry>,
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
+}
+
+impl PhysicalOptimizerContext for SessionState {
+    fn config_options(&self) -> &ConfigOptions {
+        self.config_options()
+    }
+
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        self.statistics_registry.as_ref()
+    }
 }
 
 impl Debug for SessionState {
@@ -222,6 +251,7 @@ impl Debug for SessionState {
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
+            .field("higher_order_functions", &self.higher_order_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
             .field("prepared_plans", &self.prepared_plans)
@@ -258,12 +288,20 @@ impl Session for SessionState {
         &self.scalar_functions
     }
 
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
+        &self.higher_order_functions
+    }
+
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
         &self.aggregate_functions
     }
 
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
         &self.window_functions
+    }
+
+    fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
+        &self.extension_types
     }
 
     fn runtime_env(&self) -> &Arc<RuntimeEnv> {
@@ -401,9 +439,8 @@ impl SessionState {
     ) -> datafusion_common::Result<Statement> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: \
-                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+                Dialect::available()
             )
         })?;
 
@@ -450,9 +487,8 @@ impl SessionState {
     ) -> datafusion_common::Result<SQLExprWithAlias> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: \
-                         Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+                Dialect::available()
             )
         })?;
 
@@ -655,6 +691,7 @@ impl SessionState {
                         stringified_plans,
                         schema: Arc::clone(&e.schema),
                         logical_optimization_succeeded: false,
+                        show_statistics: e.show_statistics,
                     }));
                 }
                 Err(e) => return Err(e),
@@ -692,6 +729,7 @@ impl SessionState {
                 stringified_plans,
                 schema: Arc::clone(&e.schema),
                 logical_optimization_succeeded,
+                show_statistics: e.show_statistics,
             }))
         } else {
             let analyzed_plan = self.analyzer.execute_and_check(
@@ -743,12 +781,13 @@ impl SessionState {
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
         let config_options = self.config_options();
-        let simplify_context = SimplifyContext::default()
+        let simplify_context = SimplifyContext::builder()
             .with_schema(Arc::new(df_schema.clone()))
             .with_config_options(Arc::clone(config_options))
             .with_query_execution_start_time(
                 self.execution_props().query_execution_start_time,
-            );
+            )
+            .build();
         let simplifier = ExprSimplifier::new(simplify_context);
         // apply type coercion here to ensure types match
         let mut expr = simplifier.coerce(expr, df_schema)?;
@@ -805,6 +844,14 @@ impl SessionState {
     /// return the configuration options
     pub fn config_options(&self) -> &Arc<ConfigOptions> {
         self.config.options()
+    }
+
+    /// Returns the statistics registry if one is configured.
+    ///
+    /// The registry provides pluggable statistics providers for enhanced
+    /// cardinality estimation (e.g., NDV overrides, histograms).
+    pub fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        self.statistics_registry.as_ref()
     }
 
     /// Mark the start of the execution
@@ -886,6 +933,11 @@ impl SessionState {
     /// Return reference to scalar_functions
     pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
         &self.scalar_functions
+    }
+
+    /// Return reference to higher_order_functions
+    pub fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
+        &self.higher_order_functions
     }
 
     /// Return reference to aggregate_functions
@@ -984,8 +1036,10 @@ pub struct SessionStateBuilder {
     catalog_list: Option<Arc<dyn CatalogProviderList>>,
     table_functions: Option<HashMap<String, Arc<TableFunction>>>,
     scalar_functions: Option<Vec<Arc<ScalarUDF>>>,
+    higher_order_functions: Option<Vec<Arc<HigherOrderUDF>>>,
     aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
     window_functions: Option<Vec<Arc<WindowUDF>>>,
+    extension_types: Option<ExtensionTypeRegistryRef>,
     serializer_registry: Option<Arc<dyn SerializerRegistry>>,
     file_formats: Option<Vec<Arc<dyn FileFormatFactory>>>,
     config: Option<SessionConfig>,
@@ -995,6 +1049,7 @@ pub struct SessionStateBuilder {
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
     cache_factory: Option<Arc<dyn CacheFactory>>,
+    statistics_registry: Option<StatisticsRegistry>,
     // fields to support convenience functions
     analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
     optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
@@ -1024,8 +1079,10 @@ impl SessionStateBuilder {
             catalog_list: None,
             table_functions: None,
             scalar_functions: None,
+            higher_order_functions: None,
             aggregate_functions: None,
             window_functions: None,
+            extension_types: None,
             serializer_registry: None,
             file_formats: None,
             table_options: None,
@@ -1035,6 +1092,7 @@ impl SessionStateBuilder {
             runtime_env: None,
             function_factory: None,
             cache_factory: None,
+            statistics_registry: None,
             // fields to support convenience functions
             analyzer_rules: None,
             optimizer_rules: None,
@@ -1077,10 +1135,14 @@ impl SessionStateBuilder {
             catalog_list: Some(existing.catalog_list),
             table_functions: Some(existing.table_functions),
             scalar_functions: Some(existing.scalar_functions.into_values().collect_vec()),
+            higher_order_functions: Some(
+                existing.higher_order_functions.into_values().collect_vec(),
+            ),
             aggregate_functions: Some(
                 existing.aggregate_functions.into_values().collect_vec(),
             ),
             window_functions: Some(existing.window_functions.into_values().collect_vec()),
+            extension_types: Some(existing.extension_types),
             serializer_registry: Some(existing.serializer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
             config: Some(new_config),
@@ -1090,6 +1152,7 @@ impl SessionStateBuilder {
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
             cache_factory: existing.cache_factory,
+            statistics_registry: existing.statistics_registry,
             // fields to support convenience functions
             analyzer_rules: None,
             optimizer_rules: None,
@@ -1118,6 +1181,10 @@ impl SessionStateBuilder {
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_scalar_functions());
 
+        self.higher_order_functions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_higher_order_functions());
+
         self.aggregate_functions
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_aggregate_functions());
@@ -1125,6 +1192,11 @@ impl SessionStateBuilder {
         self.window_functions
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_window_functions());
+
+        self.extension_types
+            .get_or_insert_with(|| Arc::new(MemoryExtensionTypeRegistry::new_empty()))
+            .extend(&SessionStateDefaults::default_extension_types())
+            .expect("MemoryExtensionTypeRegistry is not read-only.");
 
         self.table_functions
             .get_or_insert_with(HashMap::new)
@@ -1298,6 +1370,15 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Set the map of [`HigherOrderUDF`]s
+    pub fn with_higher_order_functions(
+        mut self,
+        higher_order_functions: Vec<Arc<HigherOrderUDF>>,
+    ) -> Self {
+        self.higher_order_functions = Some(higher_order_functions);
+        self
+    }
+
     /// Set the map of [`AggregateUDF`]s
     pub fn with_aggregate_functions(
         mut self,
@@ -1313,6 +1394,15 @@ impl SessionStateBuilder {
         window_functions: Vec<Arc<WindowUDF>>,
     ) -> Self {
         self.window_functions = Some(window_functions);
+        self
+    }
+
+    /// Sets the [`ExtensionTypeRegistry`](datafusion_expr::registry::ExtensionTypeRegistry).
+    pub fn with_extension_type_registry(
+        mut self,
+        registry: ExtensionTypeRegistryRef,
+    ) -> Self {
+        self.extension_types = Some(registry);
         self
     }
 
@@ -1397,6 +1487,16 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Set a [`StatisticsRegistry`] for pluggable statistics providers.
+    ///
+    /// The registry allows physical optimizer rules to access enhanced statistics
+    /// (e.g., NDV overrides, histograms) beyond what is available from
+    /// `ExecutionPlan::partition_statistics()`.
+    pub fn with_statistics_registry(mut self, registry: StatisticsRegistry) -> Self {
+        self.statistics_registry = Some(registry);
+        self
+    }
+
     /// Register an `ObjectStore` to the [`RuntimeEnv`]. See [`RuntimeEnv::register_object_store`]
     /// for more details.
     ///
@@ -1452,8 +1552,10 @@ impl SessionStateBuilder {
             catalog_list,
             table_functions,
             scalar_functions,
+            higher_order_functions,
             aggregate_functions,
             window_functions,
+            extension_types,
             serializer_registry,
             file_formats,
             table_options,
@@ -1463,6 +1565,7 @@ impl SessionStateBuilder {
             runtime_env,
             function_factory,
             cache_factory,
+            statistics_registry,
             analyzer_rules,
             optimizer_rules,
             physical_optimizer_rules,
@@ -1488,8 +1591,10 @@ impl SessionStateBuilder {
             }),
             table_functions: table_functions.unwrap_or_default(),
             scalar_functions: HashMap::new(),
+            higher_order_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
+            extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
             serializer_registry: serializer_registry
                 .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
             file_formats: HashMap::new(),
@@ -1502,6 +1607,7 @@ impl SessionStateBuilder {
             runtime_env,
             function_factory,
             cache_factory,
+            statistics_registry,
             prepared_plans: HashMap::new(),
         };
 
@@ -1541,6 +1647,29 @@ impl SessionStateBuilder {
             }
         }
 
+        if let Some(higher_order_functions) = higher_order_functions {
+            for function in higher_order_functions {
+                match state.register_higher_order_function(Arc::clone(&function)) {
+                    Ok(Some(existing)) => {
+                        debug!(
+                            "Overwrote existing higher-order function '{}'",
+                            existing.name()
+                        );
+                    }
+                    Ok(None) => {
+                        debug!("Registered higher-order function '{}'", function.name());
+                    }
+                    Err(err) => {
+                        debug!(
+                            "Failed to register higher-order function '{}': {}",
+                            function.name(),
+                            err
+                        );
+                    }
+                }
+            }
+        }
+
         if let Some(aggregate_functions) = aggregate_functions {
             aggregate_functions.into_iter().for_each(|udaf| {
                 let existing_udf = state.register_udaf(udaf);
@@ -1557,6 +1686,10 @@ impl SessionStateBuilder {
                     debug!("Overwrote an existing UDF: {}", existing_udf.name());
                 }
             });
+        }
+
+        if let Some(extension_types) = extension_types {
+            state.extension_types = extension_types;
         }
 
         if state.config.create_default_catalog_and_schema() {
@@ -1657,6 +1790,11 @@ impl SessionStateBuilder {
     /// Returns the current scalar_functions value
     pub fn scalar_functions(&mut self) -> &mut Option<Vec<Arc<ScalarUDF>>> {
         &mut self.scalar_functions
+    }
+
+    /// Returns the current scalar_functions value
+    pub fn higher_order_functions(&mut self) -> &mut Option<Vec<Arc<HigherOrderUDF>>> {
+        &mut self.higher_order_functions
     }
 
     /// Returns the current aggregate_functions value
@@ -1767,6 +1905,7 @@ impl Debug for SessionStateBuilder {
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
+            .field("higher_order_functions", &self.higher_order_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
             .finish()
@@ -1829,17 +1968,20 @@ impl ContextProvider for SessionContextProvider<'_> {
         name: &str,
         args: Vec<Expr>,
     ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+        use datafusion_catalog::TableFunctionArgs;
+
         let tbl_func = self
             .state
             .table_functions
             .get(name)
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("table function '{name}' not found"))?;
-        let simplify_context = SimplifyContext::default()
+        let simplify_context = SimplifyContext::builder()
             .with_config_options(Arc::clone(self.state.config_options()))
             .with_query_execution_start_time(
                 self.state.execution_props().query_execution_start_time,
-            );
+            )
+            .build();
         let simplifier = ExprSimplifier::new(simplify_context);
         let schema = DFSchema::empty();
         let args = args
@@ -1850,7 +1992,8 @@ impl ContextProvider for SessionContextProvider<'_> {
                     .and_then(|e| simplifier.simplify(e))
             })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
-        let provider = tbl_func.create_table_provider(&args)?;
+        let provider = tbl_func
+            .create_table_provider_with_args(TableFunctionArgs::new(&args, self.state))?;
 
         Ok(provider_as_source(provider))
     }
@@ -1871,6 +2014,10 @@ impl ContextProvider for SessionContextProvider<'_> {
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
         self.state.scalar_functions().get(name).cloned()
+    }
+
+    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<HigherOrderUDF>> {
+        self.state.higher_order_functions().get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
@@ -1907,6 +2054,14 @@ impl ContextProvider for SessionContextProvider<'_> {
 
     fn udf_names(&self) -> Vec<String> {
         self.state.scalar_functions().keys().cloned().collect()
+    }
+
+    fn higher_order_function_names(&self) -> Vec<String> {
+        self.state
+            .higher_order_functions()
+            .keys()
+            .cloned()
+            .collect()
     }
 
     fn udaf_names(&self) -> Vec<String> {
@@ -1948,6 +2103,16 @@ impl FunctionRegistry for SessionState {
         })
     }
 
+    fn higher_order_function(
+        &self,
+        name: &str,
+    ) -> datafusion_common::Result<Arc<HigherOrderUDF>> {
+        self.higher_order_functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("Higher Order Function {name} not found"))
+    }
+
     fn udaf(&self, name: &str) -> datafusion_common::Result<Arc<AggregateUDF>> {
         let result = self.aggregate_functions.get(name);
 
@@ -1973,6 +2138,19 @@ impl FunctionRegistry for SessionState {
                 .insert(alias.clone(), Arc::clone(&udf));
         });
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
+    }
+
+    fn register_higher_order_function(
+        &mut self,
+        function: Arc<HigherOrderUDF>,
+    ) -> datafusion_common::Result<Option<Arc<HigherOrderUDF>>> {
+        function.aliases().iter().for_each(|alias| {
+            self.higher_order_functions
+                .insert(alias.clone(), Arc::clone(&function));
+        });
+        Ok(self
+            .higher_order_functions
+            .insert(function.name().into(), function))
     }
 
     fn register_udaf(
@@ -2008,6 +2186,19 @@ impl FunctionRegistry for SessionState {
             }
         }
         Ok(udf)
+    }
+
+    fn deregister_higher_order_function(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<HigherOrderUDF>>> {
+        let function = self.higher_order_functions.remove(name);
+        if let Some(function) = &function {
+            for alias in function.aliases() {
+                self.higher_order_functions.remove(alias);
+            }
+        }
+        Ok(function)
     }
 
     fn deregister_udaf(
@@ -2056,6 +2247,10 @@ impl FunctionRegistry for SessionState {
         Ok(())
     }
 
+    fn higher_order_function_names(&self) -> HashSet<String> {
+        self.higher_order_functions.keys().cloned().collect()
+    }
+
     fn udafs(&self) -> HashSet<String> {
         self.aggregate_functions.keys().cloned().collect()
     }
@@ -2098,6 +2293,7 @@ impl From<&SessionState> for TaskContext {
             state.session_id.clone(),
             state.config.clone(),
             state.scalar_functions.clone(),
+            state.higher_order_functions.clone(),
             state.aggregate_functions.clone(),
             state.window_functions.clone(),
             Arc::clone(&state.runtime_env),
@@ -2167,12 +2363,25 @@ mod tests {
     use datafusion_common::config::Dialect;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
+    use datafusion_expr::HigherOrderUDF;
     use datafusion_optimizer::Optimizer;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    #[test]
+    #[cfg(feature = "sql")]
+    fn test_configured_dialect_names_are_accepted_by_sqlparser() {
+        for info in Dialect::metadata() {
+            assert!(
+                sqlparser::dialect::dialect_from_str(info.canonical_name).is_some(),
+                "sqlparser should accept configured dialect {}",
+                info.canonical_name
+            );
+        }
+    }
 
     #[test]
     #[cfg(feature = "sql")]
@@ -2480,6 +2689,10 @@ mod tests {
             self.state.scalar_functions().get(name).cloned()
         }
 
+        fn get_higher_order_meta(&self, name: &str) -> Option<Arc<HigherOrderUDF>> {
+            self.state.higher_order_functions().get(name).cloned()
+        }
+
         fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
             self.state.aggregate_functions().get(name).cloned()
         }
@@ -2498,6 +2711,14 @@ mod tests {
 
         fn udf_names(&self) -> Vec<String> {
             self.state.scalar_functions().keys().cloned().collect()
+        }
+
+        fn higher_order_function_names(&self) -> Vec<String> {
+            self.state
+                .higher_order_functions()
+                .keys()
+                .cloned()
+                .collect()
         }
 
         fn udaf_names(&self) -> Vec<String> {

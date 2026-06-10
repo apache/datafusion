@@ -51,7 +51,6 @@
 //! The plan concats incoming data with such last rows of previous input
 //! and continues partial sorting of the segments.
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -59,6 +58,7 @@ use std::task::{Context, Poll};
 
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -69,10 +69,9 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_execution::{RecordBatchStream, TaskContext};
-use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_expr::LexOrdering;
 
 use futures::{Stream, StreamExt, ready};
 use log::trace;
@@ -260,10 +259,6 @@ impl ExecutionPlan for PartialSortExec {
         "PartialSortExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -286,17 +281,6 @@ impl ExecutionPlan for PartialSortExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
     }
 
     fn with_new_children(
@@ -408,6 +392,9 @@ impl PartialSortStream {
             // Check if we've already reached the fetch limit
             if self.fetch == Some(0) {
                 self.is_closed = true;
+                // Release the input pipeline's resources.
+                let input_schema = self.input.schema();
+                self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                 return Poll::Ready(None);
             }
 
@@ -441,6 +428,9 @@ impl PartialSortStream {
                 Some(Err(e)) => return Poll::Ready(Some(Err(e))),
                 None => {
                     self.is_closed = true;
+                    // Release the input pipeline's resources before sorting.
+                    let input_schema = self.input.schema();
+                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                     // Once input is consumed, sort the rest of the inserted batches
                     let remaining_batch = self.sort_in_mem_batch()?;
                     return if remaining_batch.num_rows() > 0 {

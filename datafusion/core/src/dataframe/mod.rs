@@ -41,7 +41,6 @@ use crate::physical_plan::{
     execute_stream, execute_stream_partitioned,
 };
 use crate::prelude::SessionContext;
-use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -49,6 +48,7 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::FieldRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
@@ -58,19 +58,18 @@ use datafusion_common::{
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
-    dml::InsertOp,
-    expr::{Alias, ScalarFunction},
-    is_null, lit,
-    utils::COUNT_STAR_EXPANSION,
+    ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
+    dml::InsertOp, is_null, lit, utils::COUNT_STAR_EXPANSION,
 };
 use datafusion_functions::core::coalesce;
+use datafusion_functions::math::nanvl;
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::extension_types::DFArrayFormatterFactory;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -294,8 +293,11 @@ impl DataFrame {
         self.session_state.create_logical_expr(sql, df_schema)
     }
 
-    /// Consume the DataFrame and produce a physical plan
-    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
+    /// Create a physical plan from this DataFrame.
+    ///
+    /// The `DataFrame` remains accessible after this call, so you can inspect
+    /// the plan and still call [`DataFrame::collect`] or other execution methods.
+    pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
 
@@ -976,8 +978,13 @@ impl DataFrame {
 
     /// Return a new `DataFrame` that has statistics for a DataFrame.
     ///
-    /// Only summarizes numeric datatypes at the moment and returns nulls for
-    /// non numeric datatypes. The output format is modeled after pandas
+    /// The summary contains the `count`, `null_count`, `mean`, `std`, `min`,
+    /// `max`, and `median` of each column. `count` and `null_count` are
+    /// computed for every column; `min` and `max` for every column except
+    /// `Boolean`; and `mean`, `std`, and `median` only for numeric columns
+    /// (other columns report `null` for these). `min`/`max` of binary columns
+    /// (`Binary`, `LargeBinary`, `BinaryView`, `FixedSizeBinary`) are rendered
+    /// as lowercase hex. The output format is modeled after pandas
     ///
     /// # Example
     /// ```
@@ -1071,9 +1078,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| {
-                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                    })
+                    .filter(|f| !matches!(f.data_type(), DataType::Boolean))
                     .map(|f| min(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
@@ -1082,9 +1087,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| {
-                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                    })
+                    .filter(|f| !matches!(f.data_type(), DataType::Boolean))
                     .map(|f| max(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
@@ -1123,6 +1126,22 @@ impl DataFrame {
                                     Arc::new(StringArray::from(vec!["null"]))
                                 } else if field.data_type().is_numeric() {
                                     cast(column, &DataType::Float64)?
+                                } else if field.data_type().is_binary() {
+                                    let formatter = ArrayFormatter::try_new(
+                                        column.as_ref(),
+                                        &FormatOptions::default(),
+                                    )?;
+                                    let values: Vec<Option<String>> = (0..column.len())
+                                        .map(|i| {
+                                            if column.is_null(i) {
+                                                None
+                                            } else {
+                                                let value = formatter.value(i);
+                                                Some(value.to_string())
+                                            }
+                                        })
+                                        .collect();
+                                    Arc::new(StringArray::from(values))
                                 } else {
                                     cast(column, &DataType::Utf8)?
                                 }
@@ -1130,7 +1149,8 @@ impl DataFrame {
                             _ => Arc::new(StringArray::from(vec!["null"])),
                         }
                     }
-                    //Handling error when only boolean/binary column, and in other cases
+                    // Handles the case where all columns were filtered out
+                    // (e.g. only boolean columns for mean/std/min/max/median)
                     Err(err)
                         if err.to_string().contains(
                             "Error during planning: \
@@ -1514,7 +1534,12 @@ impl DataFrame {
     /// # }
     pub async fn to_string(self) -> Result<String> {
         let options = self.session_state.config().options().format.clone();
-        let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
+        let arrow_options: FormatOptions = (&options).try_into()?;
+
+        let registry = self.session_state.extension_type_registry();
+        let formatter_factory = DFArrayFormatterFactory::new(Arc::clone(registry));
+        let arrow_options =
+            arrow_options.with_formatter_factory(Some(&formatter_factory));
 
         let results = self.collect().await?;
         Ok(
@@ -2392,7 +2417,7 @@ impl DataFrame {
         } else {
             let context = SessionContext::new_with_state((*self.session_state).clone());
             // The schema is consistent with the output
-            let plan = self.clone().create_physical_plan().await?;
+            let plan = self.create_physical_plan().await?;
             let schema = plan.schema();
             let task_ctx = Arc::new(self.task_ctx());
             let partitions = collect_partitioned(plan, task_ctx).await?;
@@ -2445,6 +2470,64 @@ impl DataFrame {
         value: ScalarValue,
         columns: Vec<String>,
     ) -> Result<DataFrame> {
+        self.fill_columns(&value, &columns, &coalesce(), |_| true)
+    }
+
+    // Helper to find columns from names
+    fn find_columns(&self, names: &[impl AsRef<str>]) -> Result<Vec<FieldRef>> {
+        let schema = self.logical_plan().schema();
+        names
+            .iter()
+            .map(|name| {
+                let name = name.as_ref();
+                schema
+                    .field_with_name(None, name)
+                    .cloned()
+                    .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
+            })
+            .collect()
+    }
+
+    /// Fill NaN values in specified floating-point columns with a given value
+    /// If no columns are specified (empty slice), applies to all columns
+    /// Only floating-point columns are affected; other columns are left unchanged
+    /// Only fills if the value can be cast to the column's type
+    ///
+    /// # Arguments
+    /// * `value` - Value to fill NaNs with
+    /// * `columns` - List of column names to fill. If empty, fills all columns.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::ScalarValue;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// // Fill NaN in only columns "a" and "c":
+    /// let df = df.fill_nan(&ScalarValue::from(0.0), &["a", "c"])?;
+    /// // Fill NaN across all columns:
+    /// let df = df.fill_nan(&ScalarValue::from(0.0), &[])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn fill_nan(&self, value: &ScalarValue, columns: &[&str]) -> Result<DataFrame> {
+        self.fill_columns(value, columns, &nanvl(), |field| {
+            field.data_type().is_floating()
+        })
+    }
+
+    fn fill_columns(
+        &self,
+        value: &ScalarValue,
+        columns: &[impl AsRef<str>],
+        func: &Arc<ScalarUDF>,
+        applies: impl Fn(&FieldRef) -> bool,
+    ) -> Result<DataFrame> {
         let cols = if columns.is_empty() {
             self.logical_plan()
                 .schema()
@@ -2453,28 +2536,21 @@ impl DataFrame {
                 .map(Arc::clone)
                 .collect()
         } else {
-            self.find_columns(&columns)?
+            self.find_columns(columns)?
         };
 
-        // Create projections for each column
         let projections = self
             .logical_plan()
             .schema()
             .fields()
             .iter()
             .map(|field| {
-                if cols.contains(field) {
+                if cols.contains(field) && applies(field) {
                     // Try to cast fill value to column type. If the cast fails, fallback to the original column.
                     match value.clone().cast_to(field.data_type()) {
-                        Ok(fill_value) => Expr::Alias(Alias {
-                            expr: Box::new(Expr::ScalarFunction(ScalarFunction {
-                                func: coalesce(),
-                                args: vec![col(field.name()), lit(fill_value)],
-                            })),
-                            relation: None,
-                            name: field.name().to_string(),
-                            metadata: None,
-                        }),
+                        Ok(fill_value) => func
+                            .call(vec![col(field.name()), lit(fill_value)])
+                            .alias(field.name()),
                         Err(_) => col(field.name()),
                     }
                 } else {
@@ -2484,20 +2560,6 @@ impl DataFrame {
             .collect::<Vec<_>>();
 
         self.clone().select(projections)
-    }
-
-    // Helper to find columns from names
-    fn find_columns(&self, names: &[String]) -> Result<Vec<FieldRef>> {
-        let schema = self.logical_plan().schema();
-        names
-            .iter()
-            .map(|name| {
-                schema
-                    .field_with_name(None, name)
-                    .cloned()
-                    .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
-            })
-            .collect()
     }
 
     /// Find qualified columns for this dataframe from names
@@ -2639,10 +2701,6 @@ struct DataFrameTableProvider {
 
 #[async_trait]
 impl TableProvider for DataFrameTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.plan))
     }

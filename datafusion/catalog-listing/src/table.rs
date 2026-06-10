@@ -32,11 +32,10 @@ use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
-    ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
+    ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
 use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
-use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
@@ -47,7 +46,6 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -188,7 +186,7 @@ pub struct ListingTable {
     /// The SQL definition for this table, if any
     definition: Option<String>,
     /// Cache for collected file statistics
-    collected_statistics: Arc<dyn FileStatisticsCache>,
+    collected_statistics: Option<Arc<dyn FileStatisticsCache>>,
     /// Constraints applied to this table
     constraints: Constraints,
     /// Column default expressions for columns that are not physically present in the data files
@@ -232,7 +230,7 @@ impl ListingTable {
             schema_source,
             options,
             definition: None,
-            collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
+            collected_statistics: None,
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             expr_adapter_factory: config.expr_adapter_factory,
@@ -261,10 +259,8 @@ impl ListingTable {
     /// Setting a statistics cache on the `SessionContext` can avoid refetching statistics
     /// multiple times in the same session.
     ///
-    /// If `None`, creates a new [`DefaultFileStatisticsCache`] scoped to this query.
     pub fn with_cache(mut self, cache: Option<Arc<dyn FileStatisticsCache>>) -> Self {
-        self.collected_statistics =
-            cache.unwrap_or_else(|| Arc::new(DefaultFileStatisticsCache::default()));
+        self.collected_statistics = cache;
         self
     }
 
@@ -325,14 +321,15 @@ impl ListingTable {
 
     /// Creates a file source for this table
     fn create_file_source(&self) -> Arc<dyn FileSource> {
-        let table_schema = TableSchema::new(
-            Arc::clone(&self.file_schema),
-            self.options
-                .table_partition_cols
-                .iter()
-                .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
-                .collect(),
-        );
+        let table_schema = TableSchemaBuilder::from(&self.file_schema)
+            .with_table_partition_cols(
+                self.options
+                    .table_partition_cols
+                    .iter()
+                    .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
+                    .collect::<Vec<_>>(),
+            )
+            .build();
 
         self.options.format.file_source(table_schema)
     }
@@ -449,10 +446,6 @@ fn can_be_evaluated_for_partition_pruning(
 
 #[async_trait]
 impl TableProvider for ListingTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
     }
@@ -807,11 +800,15 @@ impl ListingTable {
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
         use datafusion_execution::cache::cache_manager::CachedFileMetadata;
 
-        let path = &part_file.object_meta.location;
+        let path = TableScopedPath {
+            table: part_file.table_reference.clone(),
+            path: part_file.object_meta.location.clone(),
+        };
         let meta = &part_file.object_meta;
 
         // Check cache first - if we have valid cached statistics and ordering
-        if let Some(cached) = self.collected_statistics.get(path)
+        if let Some(cache) = &self.collected_statistics
+            && let Some(cached) = cache.get(&path)
             && cached.is_valid_for(meta)
         {
             // Return cached statistics and ordering
@@ -828,14 +825,16 @@ impl ListingTable {
         let statistics = Arc::new(file_meta.statistics);
 
         // Store in cache
-        self.collected_statistics.put(
-            path,
-            CachedFileMetadata::new(
-                meta.clone(),
-                Arc::clone(&statistics),
-                file_meta.ordering.clone(),
-            ),
-        );
+        if let Some(cache) = &self.collected_statistics {
+            cache.put(
+                &path,
+                CachedFileMetadata::new(
+                    meta.clone(),
+                    Arc::clone(&statistics),
+                    file_meta.ordering.clone(),
+                ),
+            );
+        }
 
         Ok((statistics, file_meta.ordering))
     }
@@ -920,7 +919,6 @@ mod tests {
     use arrow::compute::SortOptions;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-    use std::sync::Arc;
 
     /// Helper to create a PhysicalSortExpr
     fn sort_expr(

@@ -29,17 +29,17 @@ use crate::aggregates::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
     bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
 };
-use ahash::RandomState;
-use arrow::array::{Array, ArrayRef};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
-    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Float32Type,
+    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Field, Float32Type,
     Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, SchemaRef,
     StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
     UInt64Type,
 };
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
@@ -82,7 +82,7 @@ pub trait GroupColumn: Send + Sync {
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut BooleanBufferBuilder,
     );
 
     /// The vectorized version `append_val`
@@ -212,7 +212,7 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// more general purpose [`GroupValuesRows`]. See the ticket for details:
     /// <https://github.com/apache/datafusion/pull/12269>
     ///
-    /// [`GroupValuesRows`]: crate::aggregates::group_values::row::GroupValuesRows
+    /// [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
     /// reused buffer to store hashes
@@ -224,7 +224,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
 
 /// Buffers to store intermediate results in `vectorized_append`
 /// and `vectorized_equal_to`, for reducing memory allocation
-#[derive(Default)]
 struct VectorizedOperationBuffers {
     /// The `vectorized append` row indices buffer
     append_row_indices: Vec<usize>,
@@ -235,8 +234,8 @@ struct VectorizedOperationBuffers {
     /// The `vectorized_equal_to` group indices buffer
     equal_to_group_indices: Vec<usize>,
 
-    /// The `vectorized_equal_to` result buffer
-    equal_to_results: Vec<bool>,
+    /// The `vectorized_equal_to` result buffer (bitmask)
+    equal_to_results: BooleanBufferBuilder,
 
     /// The buffer for storing row indices found not equal to
     /// exist groups in `group_values` in `vectorized_equal_to`.
@@ -244,12 +243,23 @@ struct VectorizedOperationBuffers {
     remaining_row_indices: Vec<usize>,
 }
 
+impl Default for VectorizedOperationBuffers {
+    fn default() -> Self {
+        Self {
+            append_row_indices: Vec::new(),
+            equal_to_row_indices: Vec::new(),
+            equal_to_group_indices: Vec::new(),
+            equal_to_results: BooleanBufferBuilder::new(0),
+            remaining_row_indices: Vec::new(),
+        }
+    }
+}
+
 impl VectorizedOperationBuffers {
     fn clear(&mut self) {
         self.append_row_indices.clear();
         self.equal_to_row_indices.clear();
         self.equal_to_group_indices.clear();
-        self.equal_to_results.clear();
         self.remaining_row_indices.clear();
     }
 }
@@ -262,6 +272,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     /// Create a new instance of GroupValuesColumn if supported for the specified schema
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = HashTable::with_capacity(0);
+        let group_values = Self::build_group_columns(&schema)?;
         Ok(Self {
             schema,
             map,
@@ -269,10 +280,25 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             emit_group_index_list_buffer: Vec::new(),
             vectorized_operation_buffers: VectorizedOperationBuffers::default(),
             map_size: 0,
-            group_values: vec![],
+            group_values,
             hashes_buffer: Default::default(),
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
+    }
+
+    /// Build one fresh [`GroupColumn`] per field in the schema.
+    ///
+    /// Used at construction time (`try_new`) and to repopulate the column
+    /// vector after operations that drain it (`emit(EmitTo::All)`,
+    /// `clear_shrink`). Centralising it keeps the post-condition that
+    /// `self.group_values` always contains exactly one builder per schema
+    /// field outside of those transient drain points.
+    fn build_group_columns(schema: &Schema) -> Result<Vec<Box<dyn GroupColumn>>> {
+        let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(schema.fields().len());
+        for f in schema.fields().iter() {
+            v.push(make_group_column(f.as_ref())?);
+        }
+        Ok(v)
     }
 
     // ========================================================================
@@ -499,7 +525,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .equal_to_group_indices
             .clear();
 
-        let mut group_values_len = self.group_values[0].len();
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self
                 .map
@@ -508,7 +533,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             let Some((_, group_index_view)) = entry else {
                 // 1. Bucket not found case
                 // Build `new inlined group index view`
-                let current_group_idx = group_values_len;
+                let current_group_idx = self.group_values[0].len()
+                    + self.vectorized_operation_buffers.append_row_indices.len();
                 let group_index_view =
                     GroupIndexView::new_inlined(current_group_idx as u64);
 
@@ -528,7 +554,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 // Set group index to row in `groups`
                 groups[row] = current_group_idx;
 
-                group_values_len += 1;
                 continue;
             };
 
@@ -615,15 +640,16 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
         // 1. Perform `vectorized_equal_to` for `rows` in `vectorized_equal_to_group_indices`
         //    and `group_indices` in `vectorized_equal_to_group_indices`
-        let mut equal_to_results =
-            mem::take(&mut self.vectorized_operation_buffers.equal_to_results);
-        equal_to_results.clear();
-        equal_to_results.resize(
-            self.vectorized_operation_buffers
-                .equal_to_group_indices
-                .len(),
-            true,
+        let n = self
+            .vectorized_operation_buffers
+            .equal_to_group_indices
+            .len();
+        let mut equal_to_results = mem::replace(
+            &mut self.vectorized_operation_buffers.equal_to_results,
+            BooleanBufferBuilder::new(0),
         );
+        equal_to_results.truncate(0);
+        equal_to_results.append_n(n, true);
 
         for (col_idx, group_col) in self.group_values.iter().enumerate() {
             group_col.vectorized_equal_to(
@@ -643,7 +669,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .iter()
             .enumerate()
         {
-            let equal_to_result = equal_to_results[idx];
+            let equal_to_result = equal_to_results.get_bit(idx);
 
             // Equal to case, set the `group_indices` to `rows` in `groups`
             if equal_to_result {
@@ -711,7 +737,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///
     /// The hash collision may be not frequent, so the fallback will indeed hardly happen.
     /// In most situations, `scalarized_indices` will found to be empty after finishing to
-    /// preform `vectorized_equal_to`.
+    /// perform `vectorized_equal_to`.
     fn scalarized_intern_remaining(
         &mut self,
         cols: &[ArrayRef],
@@ -888,172 +914,174 @@ macro_rules! instantiate_primitive {
     };
 }
 
+/// Returns true if the specified data type has a specialized
+/// [`GroupColumn`] builder in [`make_group_column`].
+///
+/// This is the allow-list that gates the `GroupValuesRows` fallback in
+/// [`crate::aggregates::group_values::new_group_values`]: it must accept
+/// exactly the set of types that [`make_group_column`] constructs a
+/// builder for. The `group_column_supported_type_matches_make_group_column`
+/// test below pins this biconditional.
+fn group_column_supported_type(data_type: &DataType) -> bool {
+    matches!(
+        *data_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::Date32
+            | DataType::Date64
+            // Only the semantically valid Time variants per the Arrow spec.
+            // The dispatcher in `make_group_column` returns NotImpl for the
+            // other unit combinations, so accepting them here would cause a
+            // schema to be routed into GroupValuesColumn and then fail at
+            // intern. Keep these two arms in lockstep with the dispatcher.
+            | DataType::Time32(TimeUnit::Second)
+            | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond)
+            | DataType::Time64(TimeUnit::Nanosecond)
+            | DataType::Timestamp(_, _)
+            | DataType::Utf8View
+            | DataType::BinaryView
+            | DataType::Boolean
+    )
+}
+
+/// Build a [`GroupColumn`] for a single schema field.
+///
+/// Extracted from the inline match that used to live in
+/// [`GroupValuesColumn::intern`] so the per-field dispatch lives in one
+/// place. This factory is the single source of truth for which Arrow types
+/// map to which builder, and it is the function that future nested-type
+/// specializations (e.g. `Struct`, `List`, `LargeList`) plug into without
+/// having to enumerate every combination inline.
+///
+/// Returns `Err(not_impl_err!(...))` for any type not in the supported set;
+/// callers (`GroupValues::intern`) propagate that error so the
+/// `GroupValuesRows` fallback can take over upstream of this builder.
+///
+/// The allow-list that gates this dispatcher lives in
+/// [`group_column_supported_type`] directly above.
+fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
+    let nullable = field.is_nullable();
+    let data_type = field.data_type();
+    let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(1);
+    match *data_type {
+        DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
+        DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
+        DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
+        DataType::Int64 => instantiate_primitive!(v, nullable, Int64Type, data_type),
+        DataType::UInt8 => instantiate_primitive!(v, nullable, UInt8Type, data_type),
+        DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type, data_type),
+        DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type, data_type),
+        DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type, data_type),
+        DataType::Float32 => {
+            instantiate_primitive!(v, nullable, Float32Type, data_type)
+        }
+        DataType::Float64 => {
+            instantiate_primitive!(v, nullable, Float64Type, data_type)
+        }
+        DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type, data_type),
+        DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type, data_type),
+        DataType::Time32(t) => match t {
+            TimeUnit::Second => {
+                instantiate_primitive!(v, nullable, Time32SecondType, data_type)
+            }
+            TimeUnit::Millisecond => {
+                instantiate_primitive!(v, nullable, Time32MillisecondType, data_type)
+            }
+            // Time32 with Microsecond / Nanosecond is not a valid Arrow type
+            // combination; reject explicitly so group_column_supported_type
+            // and this dispatcher stay in lockstep (see consistency fuzz below).
+            _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+        },
+        DataType::Time64(t) => match t {
+            TimeUnit::Microsecond => {
+                instantiate_primitive!(v, nullable, Time64MicrosecondType, data_type)
+            }
+            TimeUnit::Nanosecond => {
+                instantiate_primitive!(v, nullable, Time64NanosecondType, data_type)
+            }
+            // Time64 with Second / Millisecond is not a valid Arrow type
+            // combination; reject explicitly.
+            _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+        },
+        DataType::Timestamp(t, _) => match t {
+            TimeUnit::Second => {
+                instantiate_primitive!(v, nullable, TimestampSecondType, data_type)
+            }
+            TimeUnit::Millisecond => {
+                instantiate_primitive!(v, nullable, TimestampMillisecondType, data_type)
+            }
+            TimeUnit::Microsecond => {
+                instantiate_primitive!(v, nullable, TimestampMicrosecondType, data_type)
+            }
+            TimeUnit::Nanosecond => {
+                instantiate_primitive!(v, nullable, TimestampNanosecondType, data_type)
+            }
+        },
+        DataType::Decimal128(_, _) => {
+            instantiate_primitive!(v, nullable, Decimal128Type, data_type)
+        }
+        DataType::Utf8 => {
+            v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
+                OutputType::Utf8,
+            )));
+        }
+        DataType::LargeUtf8 => {
+            v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
+                OutputType::Utf8,
+            )));
+        }
+        DataType::Binary => {
+            v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
+                OutputType::Binary,
+            )));
+        }
+        DataType::LargeBinary => {
+            v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
+                OutputType::Binary,
+            )));
+        }
+        DataType::Utf8View => {
+            v.push(Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()));
+        }
+        DataType::BinaryView => {
+            v.push(Box::new(ByteViewGroupValueBuilder::<BinaryViewType>::new()));
+        }
+        DataType::Boolean => {
+            if nullable {
+                v.push(Box::new(BooleanGroupValueBuilder::<true>::new()));
+            } else {
+                v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
+            }
+        }
+        _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+    }
+    debug_assert_eq!(
+        v.len(),
+        1,
+        "make_group_column must push exactly one builder"
+    );
+    Ok(v.into_iter().next().unwrap())
+}
+
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        if self.group_values.is_empty() {
-            let mut v = Vec::with_capacity(cols.len());
-
-            for f in self.schema.fields().iter() {
-                let nullable = f.is_nullable();
-                let data_type = f.data_type();
-                match data_type {
-                    &DataType::Int8 => {
-                        instantiate_primitive!(v, nullable, Int8Type, data_type)
-                    }
-                    &DataType::Int16 => {
-                        instantiate_primitive!(v, nullable, Int16Type, data_type)
-                    }
-                    &DataType::Int32 => {
-                        instantiate_primitive!(v, nullable, Int32Type, data_type)
-                    }
-                    &DataType::Int64 => {
-                        instantiate_primitive!(v, nullable, Int64Type, data_type)
-                    }
-                    &DataType::UInt8 => {
-                        instantiate_primitive!(v, nullable, UInt8Type, data_type)
-                    }
-                    &DataType::UInt16 => {
-                        instantiate_primitive!(v, nullable, UInt16Type, data_type)
-                    }
-                    &DataType::UInt32 => {
-                        instantiate_primitive!(v, nullable, UInt32Type, data_type)
-                    }
-                    &DataType::UInt64 => {
-                        instantiate_primitive!(v, nullable, UInt64Type, data_type)
-                    }
-                    &DataType::Float32 => {
-                        instantiate_primitive!(v, nullable, Float32Type, data_type)
-                    }
-                    &DataType::Float64 => {
-                        instantiate_primitive!(v, nullable, Float64Type, data_type)
-                    }
-                    &DataType::Date32 => {
-                        instantiate_primitive!(v, nullable, Date32Type, data_type)
-                    }
-                    &DataType::Date64 => {
-                        instantiate_primitive!(v, nullable, Date64Type, data_type)
-                    }
-                    &DataType::Time32(t) => match t {
-                        TimeUnit::Second => {
-                            instantiate_primitive!(
-                                v,
-                                nullable,
-                                Time32SecondType,
-                                data_type
-                            )
-                        }
-                        TimeUnit::Millisecond => {
-                            instantiate_primitive!(
-                                v,
-                                nullable,
-                                Time32MillisecondType,
-                                data_type
-                            )
-                        }
-                        _ => {}
-                    },
-                    &DataType::Time64(t) => match t {
-                        TimeUnit::Microsecond => {
-                            instantiate_primitive!(
-                                v,
-                                nullable,
-                                Time64MicrosecondType,
-                                data_type
-                            )
-                        }
-                        TimeUnit::Nanosecond => {
-                            instantiate_primitive!(
-                                v,
-                                nullable,
-                                Time64NanosecondType,
-                                data_type
-                            )
-                        }
-                        _ => {}
-                    },
-                    &DataType::Timestamp(t, _) => match t {
-                        TimeUnit::Second => {
-                            instantiate_primitive!(
-                                v,
-                                nullable,
-                                TimestampSecondType,
-                                data_type
-                            )
-                        }
-                        TimeUnit::Millisecond => {
-                            instantiate_primitive!(
-                                v,
-                                nullable,
-                                TimestampMillisecondType,
-                                data_type
-                            )
-                        }
-                        TimeUnit::Microsecond => {
-                            instantiate_primitive!(
-                                v,
-                                nullable,
-                                TimestampMicrosecondType,
-                                data_type
-                            )
-                        }
-                        TimeUnit::Nanosecond => {
-                            instantiate_primitive!(
-                                v,
-                                nullable,
-                                TimestampNanosecondType,
-                                data_type
-                            )
-                        }
-                    },
-                    &DataType::Decimal128(_, _) => {
-                        instantiate_primitive! {
-                            v,
-                            nullable,
-                            Decimal128Type,
-                            data_type
-                        }
-                    }
-                    &DataType::Utf8 => {
-                        let b = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::LargeUtf8 => {
-                        let b = ByteGroupValueBuilder::<i64>::new(OutputType::Utf8);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Binary => {
-                        let b = ByteGroupValueBuilder::<i32>::new(OutputType::Binary);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::LargeBinary => {
-                        let b = ByteGroupValueBuilder::<i64>::new(OutputType::Binary);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Utf8View => {
-                        let b = ByteViewGroupValueBuilder::<StringViewType>::new();
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::BinaryView => {
-                        let b = ByteViewGroupValueBuilder::<BinaryViewType>::new();
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Boolean => {
-                        if nullable {
-                            let b = BooleanGroupValueBuilder::<true>::new();
-                            v.push(Box::new(b) as _)
-                        } else {
-                            let b = BooleanGroupValueBuilder::<false>::new();
-                            v.push(Box::new(b) as _)
-                        }
-                    }
-                    dt => {
-                        return not_impl_err!("{dt} not supported in GroupValuesColumn");
-                    }
-                }
-            }
-            self.group_values = v;
-        }
-
+        // `try_new` and the reset points in `emit` / `clear_shrink` keep
+        // `self.group_values` populated with one builder per schema field,
+        // so no lazy initialization is needed here.
         if !STREAMING {
             self.vectorized_intern(cols, groups)
         } else {
@@ -1081,8 +1109,14 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let mut output = match emit_to {
             EmitTo::All => {
-                let group_values = mem::take(&mut self.group_values);
-                debug_assert!(self.group_values.is_empty());
+                // Replace the column builders with a fresh set so the
+                // aggregator is immediately reusable after the drain.
+                // Same `self.schema` was already validated by `try_new`,
+                // so `build_group_columns` would only error here if some
+                // out-of-band schema mutation occurred — propagate it as
+                // a real Result rather than panicking.
+                let fresh = Self::build_group_columns(&self.schema)?;
+                let group_values = mem::replace(&mut self.group_values, fresh);
 
                 group_values
                     .into_iter()
@@ -1181,7 +1215,12 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
-        self.group_values.clear();
+        // Reset to a fresh column-builder vector. The schema was validated
+        // in `try_new`, so rebuilding cannot fail unless something else
+        // mutated the schema out-of-band — surface that as a panic since
+        // `clear_shrink` is infallible by trait signature.
+        self.group_values = Self::build_group_columns(&self.schema)
+            .expect("schema previously validated in try_new");
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
@@ -1203,39 +1242,7 @@ pub fn supported_schema(schema: &Schema) -> bool {
         .fields()
         .iter()
         .map(|f| f.data_type())
-        .all(supported_type)
-}
-
-/// Returns true if the specified data type is supported by [`GroupValuesColumn`]
-///
-/// In order to be supported, there must be a specialized implementation of
-/// [`GroupColumn`] for the data type, instantiated in [`GroupValuesColumn::intern`]
-fn supported_type(data_type: &DataType) -> bool {
-    matches!(
-        *data_type,
-        DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal128(_, _)
-            | DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Binary
-            | DataType::LargeBinary
-            | DataType::Date32
-            | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Timestamp(_, _)
-            | DataType::Utf8View
-            | DataType::BinaryView
-            | DataType::Boolean
-    )
+        .all(group_column_supported_type)
 }
 
 ///Shows how many `null`s there are in an array
@@ -1262,7 +1269,128 @@ mod tests {
         GroupValues, multi_group_by::GroupValuesColumn,
     };
 
-    use super::GroupIndexView;
+    use super::{
+        GroupIndexView, group_column_supported_type, make_group_column, supported_schema,
+    };
+
+    /// CRITICAL invariant: if `group_column_supported_type(t)` returns true
+    /// the dispatcher must accept that type at intern time, and conversely
+    /// if `group_column_supported_type(t)` returns false the planner must
+    /// NOT route it through `GroupValuesColumn`. A divergence here would
+    /// let the planner select `GroupValuesColumn` for a type whose
+    /// dispatcher arm is missing, producing a runtime `not_impl_err` after
+    /// the field reaches the builder factory.
+    ///
+    /// This test fuzzes a representative cross-section of types and asserts
+    /// both directions of the biconditional. When a new specialization is
+    /// added (`Float16`, `FixedSizeList`, `Struct`, ...) it should be added
+    /// to the supported_cases vector; when a type is intentionally rejected
+    /// it should be added to unsupported_cases.
+    #[test]
+    fn group_column_supported_type_matches_make_group_column() {
+        let supported_cases: Vec<DataType> = vec![
+            DataType::Int8,
+            DataType::Int64,
+            DataType::UInt64,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal128(38, 10),
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+            DataType::Boolean,
+            DataType::Date32,
+            DataType::Date64,
+            DataType::Time32(arrow::datatypes::TimeUnit::Second),
+            DataType::Time32(arrow::datatypes::TimeUnit::Millisecond),
+            DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+            DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+        ];
+
+        for dt in &supported_cases {
+            assert!(
+                group_column_supported_type(dt),
+                "expected group_column_supported_type=true for {dt:?}"
+            );
+            let field = Field::new("col", dt.clone(), true);
+            make_group_column(&field).unwrap_or_else(|e| {
+                panic!(
+                    "group_column_supported_type accepted {dt:?} but make_group_column rejected: {e}"
+                )
+            });
+        }
+
+        let unsupported_cases: Vec<DataType> = vec![
+            DataType::Float16,
+            DataType::Decimal256(76, 10),
+            // Invalid Time-unit combinations: Time32 is defined only for
+            // Second / Millisecond and Time64 only for Microsecond /
+            // Nanosecond. The TimeUnit enum allows constructing the other
+            // combinations programmatically, but they are not valid Arrow
+            // types and must be rejected by both group_column_supported_type
+            // and the dispatcher.
+            DataType::Time64(arrow::datatypes::TimeUnit::Second),
+            DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
+            DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
+            DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
+        ];
+
+        for dt in &unsupported_cases {
+            assert!(
+                !group_column_supported_type(dt),
+                "expected group_column_supported_type=false for {dt:?}"
+            );
+            let field = Field::new("col", dt.clone(), true);
+            assert!(
+                make_group_column(&field).is_err(),
+                "group_column_supported_type rejected {dt:?} but make_group_column accepted it"
+            );
+        }
+    }
+
+    #[test]
+    fn supported_schema_rejects_mix_of_supported_and_unsupported() {
+        // One Float16 column among supported columns flips the whole
+        // schema to GroupValuesRows fallback.
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float16, true),
+        ]);
+        assert!(!supported_schema(&schema));
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Boolean, true),
+        ]);
+        assert!(supported_schema(&schema));
+    }
+
+    #[test]
+    fn try_new_returns_not_impl_for_unsupported_top_level_type() {
+        // `try_new` now eagerly constructs the per-field GroupColumn
+        // builders via `make_group_column`, so an unsupported schema is
+        // rejected at construction time rather than at first `intern`.
+        // `GroupValuesColumn` doesn't implement `Debug`, so explicit match
+        // instead of `unwrap_err`.
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Float16, true)]));
+        match GroupValuesColumn::<false>::try_new(schema) {
+            Ok(_) => panic!("expected NotImpl error, but try_new succeeded"),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("not supported in GroupValuesColumn"),
+                    "expected NotImpl error from dispatcher, got: {msg}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_intern_for_vectorized_group_values() {
@@ -1333,6 +1461,17 @@ mod tests {
         let field = Field::new_list_field(DataType::Int32, true);
         let schema = Arc::new(Schema::new_with_metadata(vec![field], HashMap::new()));
         let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
+
+        // Seed the column with 12 placeholder rows so the upcoming
+        // `emit(EmitTo::First(4))` calls can `take_n` without panicking.
+        // The hashmap entries below reference group indices 0..=11, so the
+        // single column builder needs at least 12 rows to back them.
+        let seed: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![0_i32; 12]));
+        for row in 0..12 {
+            group_values.group_values[0]
+                .append_val(&seed, row)
+                .expect("seed append");
+        }
 
         // Insert group index views and check if success to insert
         insert_inline_group_index_view(&mut group_values, 0, 0);

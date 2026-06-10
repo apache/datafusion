@@ -24,7 +24,6 @@ use datafusion_expr::{
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible `size` function.
@@ -62,10 +61,6 @@ impl SparkSize {
 }
 
 impl ScalarUDFImpl for SparkSize {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "size"
     }

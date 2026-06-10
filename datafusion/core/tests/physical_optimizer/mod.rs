@@ -24,11 +24,13 @@ mod combine_partial_final_agg;
 mod enforce_distribution;
 mod enforce_sorting;
 mod enforce_sorting_monotonicity;
+mod ensure_requirements;
 mod filter_pushdown;
 mod join_selection;
 #[expect(clippy::needless_pass_by_value)]
 mod limit_pushdown;
 mod limited_distinct_aggregation;
+mod output_requirements;
 mod partition_statistics;
 mod projection_pushdown;
 mod pushdown_sort;
@@ -37,5 +39,6 @@ mod sanity_checker;
 #[expect(clippy::needless_pass_by_value)]
 mod test_utils;
 mod window_optimize;
+mod window_topn;
 
 mod pushdown_utils;

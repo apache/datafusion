@@ -38,7 +38,8 @@ use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
 use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
-use crate::joins::utils::{compare_join_arrays, get_final_indices_from_shared_bitmap};
+use crate::joins::utils::{JoinKeyComparator, get_final_indices_from_shared_bitmap};
+use crate::stream::EmptyRecordBatchStream;
 
 pub(super) enum PiecewiseMergeJoinStreamState {
     WaitBufferedSide,
@@ -212,6 +213,9 @@ impl ClassicPWMJStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         match ready!(self.streamed.poll_next_unpin(cx)) {
             None => {
+                // Release the streamed input pipeline's resources.
+                let streamed_schema = self.streamed.schema();
+                self.streamed = Box::pin(EmptyRecordBatchStream::new(streamed_schema));
                 if self
                     .buffered_side
                     .try_as_ready_mut()?
@@ -460,6 +464,14 @@ fn resolve_classic_join(
     let buffered_len = buffered_side.buffered_data.values().len();
     let stream_values = stream_batch.compare_key_values();
 
+    // Build comparator once for the batch pair
+    let cmp = JoinKeyComparator::new(
+        &[Arc::clone(&stream_values[0])],
+        &[Arc::clone(buffered_side.buffered_data.values())],
+        &[sort_options],
+        NullEquality::NullEqualsNothing,
+    )?;
+
     let mut buffer_idx = batch_process_state.start_buffer_idx;
     let mut stream_idx = batch_process_state.start_stream_idx;
 
@@ -475,17 +487,7 @@ fn resolve_classic_join(
     // in the previous stream row.
     for row_idx in stream_idx..stream_batch.batch.num_rows() {
         while buffer_idx < buffered_len {
-            let compare = {
-                let buffered_values = buffered_side.buffered_data.values();
-                compare_join_arrays(
-                    &[Arc::clone(&stream_values[0])],
-                    row_idx,
-                    &[Arc::clone(buffered_values)],
-                    buffer_idx,
-                    &[sort_options],
-                    NullEquality::NullEqualsNothing,
-                )?
-            };
+            let compare = cmp.compare(row_idx, buffer_idx);
 
             // If we find a match we append all indices and move to the next stream row index
             match operator {
@@ -662,7 +664,6 @@ mod tests {
     use arrow_schema::{DataType, Field};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
-    use datafusion_expr::JoinType;
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use insta::assert_snapshot;
     use std::sync::Arc;

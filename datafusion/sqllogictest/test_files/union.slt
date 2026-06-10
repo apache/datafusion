@@ -256,6 +256,30 @@ Bob_new
 John
 John_new
 
+# Test UNION ALL with unaliased duplicate literal values on the right side.
+# The second projection will inherit field names from the first one, and so
+# pass the unique projection expression name check.
+query TII rowsort
+SELECT name, 1 as table, 1 as row FROM t1 WHERE id = 1
+UNION ALL
+SELECT name, 2, 2 FROM t2 WHERE id = 2
+----
+Alex 1 1
+Bob 2 2
+
+# Test nested UNION, EXCEPT, INTERSECT with duplicate unaliased literals.
+# Only the first SELECT has column aliases, which should propagate to all projections.
+query III rowsort
+SELECT 1 as a, 0 as b, 0 as c
+UNION ALL
+((SELECT 2, 0, 0 UNION ALL SELECT 3, 0, 0) EXCEPT SELECT 3, 0, 0)
+UNION ALL
+(SELECT 4, 0, 0 INTERSECT SELECT 4, 0, 0)
+----
+1 0 0
+2 0 0
+4 0 0
+
 # Plan is unnested
 query TT
 EXPLAIN SELECT name FROM t1 UNION ALL (SELECT name from t2 UNION ALL SELECT name || '_new' from t2)
@@ -272,6 +296,53 @@ physical_plan
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 04)--ProjectionExec: expr=[name@0 || _new as name]
 05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# unions_to_filter is disabled by default
+
+statement ok
+set datafusion.optimizer.enable_unions_to_filter = false;
+
+query TT
+EXPLAIN SELECT id, name FROM t1 WHERE id = 1 UNION SELECT id, name FROM t1 WHERE id = 2
+----
+logical_plan
+01)Aggregate: groupBy=[[id, name]], aggr=[[]]
+02)--Union
+03)----Filter: t1.id = Int32(1)
+04)------TableScan: t1 projection=[id, name]
+05)----Filter: t1.id = Int32(2)
+06)------TableScan: t1 projection=[id, name]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+05)--------UnionExec
+06)----------FilterExec: id@0 = 1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----------FilterExec: id@0 = 2
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.enable_unions_to_filter = true;
+
+query TT
+EXPLAIN SELECT id, name FROM t1 WHERE id = 1 UNION SELECT id, name FROM t1 WHERE id = 2
+----
+logical_plan
+01)Aggregate: groupBy=[[id, name]], aggr=[[]]
+02)--Filter: t1.id = Int32(1) OR t1.id = Int32(2)
+03)----TableScan: t1 projection=[id, name]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------FilterExec: id@0 = 1 OR id@0 = 2
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.enable_unions_to_filter = false;
 
 # Make sure to choose a small batch size to introduce parallelism to the plan.
 statement ok
@@ -506,13 +577,12 @@ physical_plan
 13)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 14)--------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
 15)----ProjectionExec: expr=[1 as cnt]
-16)------GlobalLimitExec: skip=0, fetch=3
-17)--------PlaceholderRowExec
-18)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
-19)------GlobalLimitExec: skip=0, fetch=3
-20)--------BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
-21)----------ProjectionExec: expr=[1 as c1]
-22)------------PlaceholderRowExec
+16)------PlaceholderRowExec
+17)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
+18)------GlobalLimitExec: skip=0, fetch=3
+19)--------BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+20)----------ProjectionExec: expr=[1 as c1]
+21)------------PlaceholderRowExec
 
 
 ########
@@ -976,3 +1046,7 @@ query TITT
               END
 ----
 ns3 4 t3 m
+
+# Config reset
+statement ok
+RESET datafusion.execution.batch_size;

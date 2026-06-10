@@ -17,7 +17,6 @@
 
 //! Defines the LIMIT plan
 
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -35,11 +34,10 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 
-use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -155,10 +153,6 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -177,20 +171,6 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to required ordering expressions if present
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = &self.required_ordering {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 
     fn with_new_children(
@@ -347,10 +327,6 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -365,20 +341,6 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to required ordering expressions if present
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = &self.required_ordering {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 
     fn with_new_children(
@@ -801,9 +763,12 @@ mod tests {
             row_number_inexact_statistics_for_global_limit(5, Some(10)).await?;
         assert_eq!(row_count, Precision::Inexact(10));
 
+        // Input was Inexact, so an `nr <= skip` outcome must remain Inexact:
+        // the inexact estimate could be wrong, so we cannot promote 0 to
+        // Exact.
         let row_count =
             row_number_inexact_statistics_for_global_limit(400, Some(10)).await?;
-        assert_eq!(row_count, Precision::Exact(0));
+        assert_eq!(row_count, Precision::Inexact(0));
 
         let row_count =
             row_number_inexact_statistics_for_global_limit(398, Some(10)).await?;

@@ -140,7 +140,6 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Fields, Schema};
-    use datafusion_common::Result;
 
     #[test]
     fn test_join_equivalence_properties() -> Result<()> {

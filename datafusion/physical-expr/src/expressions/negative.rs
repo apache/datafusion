@@ -17,7 +17,6 @@
 
 //! Negation (-) expression
 
-use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -32,6 +31,7 @@ use arrow::{
 use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{
     self, Bernoulli, Exponential, Gaussian, Generic, Uniform,
 };
@@ -79,11 +79,6 @@ impl std::fmt::Display for NegativeExpr {
 }
 
 impl PhysicalExpr for NegativeExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         self.arg.data_type(input_schema)
     }
@@ -140,6 +135,7 @@ impl PhysicalExpr for NegativeExpr {
             .map(|result| vec![result]))
     }
 
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         match children[0] {
             Uniform(u) => Distribution::new_uniform(u.range().arithmetic_negate()?),
@@ -178,6 +174,45 @@ impl PhysicalExpr for NegativeExpr {
         self.arg.fmt_sql(f)?;
         write!(f, ")")
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
+                protobuf::PhysicalNegativeNode {
+                    expr: Some(Box::new(ctx.encode_child(&self.arg)?)),
+                },
+            ))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl NegativeExpr {
+    /// Reconstruct a [`NegativeExpr`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let n = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::Negative,
+            "Negative",
+        );
+        let expr =
+            ctx.decode_required_expression(n.expr.as_deref(), "NegativeExpr", "expr")?;
+
+        Ok(Arc::new(NegativeExpr::new(expr)))
+    }
 }
 
 /// Creates a unary expression NEGATIVE
@@ -214,10 +249,9 @@ mod tests {
     use datafusion_common::{DataFusionError, ScalarValue};
 
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
-    use paste::paste;
 
     macro_rules! test_array_negative_op {
-        ($DATA_TY:tt, $($VALUE:expr),*   ) => {
+        ($DATA_TY:tt, $ARRAY_TY:ty, $($VALUE:expr),*   ) => {
             let schema = Schema::new(vec![Field::new("a", DataType::$DATA_TY, true)]);
             let expr = negative(col("a", &schema)?, &schema)?;
             assert_eq!(expr.data_type(&schema)?, DataType::$DATA_TY);
@@ -230,8 +264,8 @@ mod tests {
             )+
             arr.push(None);
             arr_expected.push(None);
-            let input = paste!{[<$DATA_TY Array>]::from(arr)};
-            let expected = &paste!{[<$DATA_TY Array>]::from(arr_expected)};
+            let input = <$ARRAY_TY>::from(arr);
+            let expected = &<$ARRAY_TY>::from(arr_expected);
             let batch =
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(input)])?;
             let result = expr.evaluate(&batch)?.into_array(batch.num_rows()).expect("Failed to convert to array");
@@ -243,12 +277,12 @@ mod tests {
 
     #[test]
     fn array_negative_op() -> Result<()> {
-        test_array_negative_op!(Int8, 2i8, 1i8);
-        test_array_negative_op!(Int16, 234i16, 123i16);
-        test_array_negative_op!(Int32, 2345i32, 1234i32);
-        test_array_negative_op!(Int64, 23456i64, 12345i64);
-        test_array_negative_op!(Float32, 2345.0f32, 1234.0f32);
-        test_array_negative_op!(Float64, 23456.0f64, 12345.0f64);
+        test_array_negative_op!(Int8, Int8Array, 2i8, 1i8);
+        test_array_negative_op!(Int16, Int16Array, 234i16, 123i16);
+        test_array_negative_op!(Int32, Int32Array, 2345i32, 1234i32);
+        test_array_negative_op!(Int64, Int64Array, 23456i64, 12345i64);
+        test_array_negative_op!(Float32, Float32Array, 2345.0f32, 1234.0f32);
+        test_array_negative_op!(Float64, Float64Array, 23456.0f64, 12345.0f64);
         Ok(())
     }
 
@@ -265,6 +299,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_evaluate_statistics() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
 
@@ -344,6 +379,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_propagate_statistics_range_holders() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let original_child_interval = Interval::make(Some(-2), Some(3))?;
@@ -403,5 +439,113 @@ mod tests {
         assert_eq!(sql_string, "(- a)");
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::{Column, col};
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalNegativeNode, physical_expr_node,
+    };
+
+    /// Build a `NegativeExpr` proto node with the given children.
+    fn negative_node(expr: Option<Box<PhysicalExprNode>>) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::Negative(Box::new(
+                PhysicalNegativeNode { expr },
+            ))),
+        }
+    }
+
+    /// A `NegativeExpr` over a column of type Int32.
+    fn negative_fixture() -> NegativeExpr {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        NegativeExpr::new(col("a", &schema).unwrap())
+    }
+
+    #[test]
+    fn try_to_proto_encodes_negative_expr() {
+        let negative = negative_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = negative
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("NegativeExpr should encode to Some(node)");
+
+        assert!(node.expr_id.is_none());
+        let negative_node = match node.expr_type {
+            Some(physical_expr_node::ExprType::Negative(boxed)) => *boxed,
+            other => panic!("expected a NegativeExpr node, got {other:?}"),
+        };
+        assert!(negative_node.expr.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let negative = negative_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = negative.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_negative_expr() {
+        let node = negative_node(Some(Box::new(column_node("a"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = NegativeExpr::try_from_proto(&node, &ctx).unwrap();
+        let negative = decoded
+            .downcast_ref::<NegativeExpr>()
+            .expect("decoded expr should be a NegativeExpr");
+        assert!(negative.arg().downcast_ref::<Column>().is_some());
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_negative_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = NegativeExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a Negative"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_expr() {
+        let node = negative_node(None);
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = NegativeExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("NegativeExpr is missing required field 'expr'"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_propagates_expr_decode_error() {
+        let node = negative_node(Some(Box::new(column_node("a"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = NegativeExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
     }
 }

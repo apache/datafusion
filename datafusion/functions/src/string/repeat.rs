@@ -15,20 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::sync::Arc;
-
-use crate::utils::utf8_to_str_type;
-use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
-    OffsetSizeTrait, StringArrayType, StringViewArray,
+use crate::strings::{
+    BulkNullStringArrayBuilder, GenericStringArrayBuilder, StringViewArrayBuilder,
 };
+use crate::utils::utf8_to_str_type;
+use arrow::array::{Array, ArrayRef, AsArray, Int64Array, StringArrayType};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{NativeType, logical_int64, logical_string};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
+};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
@@ -83,10 +83,6 @@ impl RepeatFunc {
 }
 
 impl ScalarUDFImpl for RepeatFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "repeat"
     }
@@ -96,6 +92,9 @@ impl ScalarUDFImpl for RepeatFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types[0] == Utf8View {
+            return Ok(Utf8View);
+        }
         utf8_to_str_type(&arg_types[0], "repeat")
     }
 
@@ -131,13 +130,12 @@ impl ScalarUDFImpl for RepeatFunc {
                 };
 
                 let result = match string_scalar {
-                    ScalarValue::Utf8(Some(s)) | ScalarValue::Utf8View(Some(s)) => {
-                        ScalarValue::Utf8(Some(compute_repeat(
-                            s,
-                            count,
-                            i32::MAX as usize,
-                        )?))
-                    }
+                    ScalarValue::Utf8View(Some(s)) => ScalarValue::Utf8View(Some(
+                        compute_repeat(s, count, i32::MAX as usize)?,
+                    )),
+                    ScalarValue::Utf8(Some(s)) => ScalarValue::Utf8(Some(
+                        compute_repeat(s, count, i32::MAX as usize)?,
+                    )),
                     ScalarValue::LargeUtf8(Some(s)) => ScalarValue::LargeUtf8(Some(
                         compute_repeat(s, count, i64::MAX as usize)?,
                     )),
@@ -170,7 +168,21 @@ fn compute_repeat(s: &str, count: i64, max_size: usize) -> Result<String> {
     if count <= 0 {
         return Ok(String::new());
     }
-    let result_len = s.len().saturating_mul(count as usize);
+    let result_len = repeat_len(s.len(), count, max_size)?;
+    debug_assert!(result_len <= max_size);
+    let count = repeat_count(count, max_size)?;
+    Ok(s.repeat(count))
+}
+
+fn repeat_len(string_len: usize, count: i64, max_size: usize) -> Result<usize> {
+    let count = repeat_count(count, max_size)?;
+    let result_len = string_len.checked_mul(count).ok_or_else(|| {
+        exec_datafusion_err!(
+            "string size overflow on repeat, max size is {}, but got {}",
+            max_size,
+            usize::MAX
+        )
+    })?;
     if result_len > max_size {
         return exec_err!(
             "string size overflow on repeat, max size is {}, but got {}",
@@ -178,7 +190,18 @@ fn compute_repeat(s: &str, count: i64, max_size: usize) -> Result<String> {
             result_len
         );
     }
-    Ok(s.repeat(count as usize))
+    Ok(result_len)
+}
+
+fn repeat_count(count: i64, max_size: usize) -> Result<usize> {
+    match usize::try_from(count) {
+        Ok(count) => Ok(count),
+        Err(_) => exec_err!(
+            "string size overflow on repeat, max size is {}, but got {}",
+            max_size,
+            usize::MAX
+        ),
+    }
 }
 
 /// Repeats string the specified number of times.
@@ -188,27 +211,33 @@ fn repeat(string_array: &ArrayRef, count_array: &ArrayRef) -> Result<ArrayRef> {
     match string_array.data_type() {
         Utf8View => {
             let string_view_array = string_array.as_string_view();
-            repeat_impl::<i32, &StringViewArray>(
+            let (_, max_item_capacity) = calculate_capacities(
                 &string_view_array,
                 number_array,
                 i32::MAX as usize,
-            )
+            )?;
+            let builder = StringViewArrayBuilder::with_capacity(string_array.len());
+            repeat_impl(&string_view_array, number_array, max_item_capacity, builder)
         }
         Utf8 => {
             let string_arr = string_array.as_string::<i32>();
-            repeat_impl::<i32, &GenericStringArray<i32>>(
-                &string_arr,
-                number_array,
-                i32::MAX as usize,
-            )
+            let (total_capacity, max_item_capacity) =
+                calculate_capacities(&string_arr, number_array, i32::MAX as usize)?;
+            let builder = GenericStringArrayBuilder::<i32>::with_capacity(
+                string_array.len(),
+                total_capacity,
+            );
+            repeat_impl(&string_arr, number_array, max_item_capacity, builder)
         }
         LargeUtf8 => {
             let string_arr = string_array.as_string::<i64>();
-            repeat_impl::<i64, &GenericStringArray<i64>>(
-                &string_arr,
-                number_array,
-                i64::MAX as usize,
-            )
+            let (total_capacity, max_item_capacity) =
+                calculate_capacities(&string_arr, number_array, i64::MAX as usize)?;
+            let builder = GenericStringArrayBuilder::<i64>::with_capacity(
+                string_array.len(),
+                total_capacity,
+            );
+            repeat_impl(&string_arr, number_array, max_item_capacity, builder)
         }
         other => exec_err!(
             "Unsupported data type {other:?} for function repeat. \
@@ -217,30 +246,30 @@ fn repeat(string_array: &ArrayRef, count_array: &ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-fn repeat_impl<'a, T, S>(
+fn calculate_capacities<'a, S>(
     string_array: &S,
     number_array: &Int64Array,
     max_str_len: usize,
-) -> Result<ArrayRef>
+) -> Result<(usize, usize)>
 where
-    T: OffsetSizeTrait,
-    S: StringArrayType<'a> + 'a,
+    S: StringArrayType<'a>,
 {
-    let mut total_capacity = 0;
-    let mut max_item_capacity = 0;
+    let mut total_capacity = 0usize;
+    let mut max_item_capacity = 0usize;
+
     string_array.iter().zip(number_array.iter()).try_for_each(
         |(string, number)| -> Result<(), DataFusionError> {
             match (string, number) {
                 (Some(string), Some(number)) if number >= 0 => {
-                    let item_capacity = string.len() * number as usize;
-                    if item_capacity > max_str_len {
-                        return exec_err!(
-                            "string size overflow on repeat, max size is {}, but got {}",
-                            max_str_len,
-                            number as usize * string.len()
-                        );
-                    }
-                    total_capacity += item_capacity;
+                    let item_capacity = repeat_len(string.len(), number, max_str_len)?;
+                    total_capacity =
+                        total_capacity.checked_add(item_capacity).ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "string size overflow on repeat, max size is {}, but got {}",
+                                max_str_len,
+                                usize::MAX
+                            )
+                        })?;
                     max_item_capacity = max_item_capacity.max(item_capacity);
                 }
                 _ => (),
@@ -249,9 +278,19 @@ where
         },
     )?;
 
-    let mut builder =
-        GenericStringBuilder::<T>::with_capacity(string_array.len(), total_capacity);
+    Ok((total_capacity, max_item_capacity))
+}
 
+fn repeat_impl<'a, S, B>(
+    string_array: &S,
+    number_array: &Int64Array,
+    max_item_capacity: usize,
+    mut builder: B,
+) -> Result<ArrayRef>
+where
+    S: StringArrayType<'a> + 'a,
+    B: BulkNullStringArrayBuilder,
+{
     // Reusable buffer to avoid allocations in string.repeat()
     let mut buffer = Vec::<u8>::with_capacity(max_item_capacity);
 
@@ -273,12 +312,18 @@ where
         }
     }
 
-    // Fast path: no nulls in either array
-    if string_array.null_count() == 0 && number_array.null_count() == 0 {
+    // Output is null IFF either input is null
+    let nulls = NullBuffer::union(string_array.nulls(), number_array.nulls());
+
+    if let Some(ref n) = nulls {
         for i in 0..string_array.len() {
-            // SAFETY: i is within bounds (0..len) and null_count() == 0 guarantees valid value
+            if n.is_null(i) {
+                builder.append_placeholder();
+                continue;
+            }
+            // SAFETY: index `i` in both arrays is valid
             let string = unsafe { string_array.value_unchecked(i) };
-            let count = number_array.value(i);
+            let count = unsafe { number_array.value_unchecked(i) };
             if count > 0 {
                 repeat_to_buffer(&mut buffer, string, count as usize);
                 // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
@@ -288,28 +333,31 @@ where
             }
         }
     } else {
-        // Slow path: handle nulls
-        for (string, number) in string_array.iter().zip(number_array.iter()) {
-            match (string, number) {
-                (Some(string), Some(count)) if count > 0 => {
-                    repeat_to_buffer(&mut buffer, string, count as usize);
-                    // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
-                    builder
-                        .append_value(unsafe { std::str::from_utf8_unchecked(&buffer) });
-                }
-                (Some(_), Some(_)) => builder.append_value(""),
-                _ => builder.append_null(),
+        for i in 0..string_array.len() {
+            // SAFETY: no nulls, so every index in both arrays is valid
+            let string = unsafe { string_array.value_unchecked(i) };
+            let count = unsafe { number_array.value_unchecked(i) };
+            if count > 0 {
+                repeat_to_buffer(&mut buffer, string, count as usize);
+                // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
+                builder.append_value(unsafe { std::str::from_utf8_unchecked(&buffer) });
+            } else {
+                builder.append_value("");
             }
         }
     }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    builder.finish(nulls)
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
-    use arrow::datatypes::DataType::Utf8;
+    use std::sync::Arc;
+
+    use arrow::array::{
+        Array, ArrayRef, Int64Array, LargeStringArray, StringArray, StringViewArray,
+    };
+    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 
     use datafusion_common::ScalarValue;
     use datafusion_common::{Result, exec_err};
@@ -362,8 +410,8 @@ mod tests {
             ],
             Ok(Some("PgPgPgPg")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             RepeatFunc::new(),
@@ -373,8 +421,19 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            RepeatFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("Pg")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(None)),
+            ],
+            Ok(None),
+            &str,
+            LargeUtf8,
+            LargeStringArray
         );
         test_function!(
             RepeatFunc::new(),
@@ -384,8 +443,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             RepeatFunc::new(),
@@ -404,5 +463,82 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    // Slicing the input arrays produces a NullBuffer with a non-zero offset.
+    // The tests below use 6-row inputs sliced to (1, 4) so that:
+    //   slot 0 (orig 1): "a"  × 3    → "aaa"
+    //   slot 1 (orig 2): "bb" × 2    → "bbbb"
+    //   slot 2 (orig 3): "c"  × NULL → NULL (count-side null)
+    //   slot 3 (orig 4): NULL × 1    → NULL (string-side null)
+    fn sliced_offset_inputs<F>(make_strings: F) -> (ArrayRef, ArrayRef)
+    where
+        F: FnOnce(Vec<Option<&'static str>>) -> ArrayRef,
+    {
+        let strings = make_strings(vec![
+            None,
+            Some("a"),
+            Some("bb"),
+            Some("c"),
+            None,
+            Some("d"),
+        ]);
+        let counts: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(2),
+            Some(3),
+            Some(2),
+            None,
+            Some(1),
+            Some(2),
+        ]));
+        (strings.slice(1, 4), counts.slice(1, 4))
+    }
+
+    fn assert_sliced_offset_output<A: Array + 'static>(result: ArrayRef)
+    where
+        for<'a> &'a A: arrow::array::ArrayAccessor<Item = &'a str>,
+    {
+        let result = result.as_any().downcast_ref::<A>().unwrap();
+        assert_eq!(result.len(), 4);
+        assert_eq!(arrow::array::ArrayAccessor::value(&result, 0), "aaa");
+        assert_eq!(arrow::array::ArrayAccessor::value(&result, 1), "bbbb");
+        assert!(result.is_null(2));
+        assert!(result.is_null(3));
+        assert_eq!(result.null_count(), 2);
+    }
+
+    #[test]
+    fn test_repeat_sliced_string_with_null_offset() {
+        let (strings, counts) = sliced_offset_inputs(|v| Arc::new(StringArray::from(v)));
+        let result = super::repeat(&strings, &counts).unwrap();
+        assert_sliced_offset_output::<StringArray>(result);
+    }
+
+    #[test]
+    fn test_repeat_string_array_overflow() {
+        let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("abc")]));
+        let counts: ArrayRef = Arc::new(Int64Array::from(vec![Some(i64::MAX)]));
+
+        let err = super::repeat(&strings, &counts).unwrap_err().to_string();
+        assert!(
+            err.contains("string size overflow on repeat"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_repeat_sliced_large_string_with_null_offset() {
+        let (strings, counts) =
+            sliced_offset_inputs(|v| Arc::new(LargeStringArray::from(v)));
+        let result = super::repeat(&strings, &counts).unwrap();
+        assert_sliced_offset_output::<LargeStringArray>(result);
+    }
+
+    #[test]
+    fn test_repeat_sliced_string_view_with_null_offset() {
+        let (strings, counts) =
+            sliced_offset_inputs(|v| Arc::new(StringViewArray::from(v)));
+        let result = super::repeat(&strings, &counts).unwrap();
+        assert_sliced_offset_output::<StringViewArray>(result);
     }
 }

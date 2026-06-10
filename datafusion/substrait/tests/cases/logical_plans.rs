@@ -19,6 +19,7 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::cases::roundtrip_logical_plan::higher_order_function_ctx;
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
     use datafusion::common::test_util::format_batches;
     use std::collections::HashSet;
@@ -85,6 +86,31 @@ mod tests {
                 );
 
         // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nested_window_function_in_expression() -> Result<()> {
+        // The Substrait Project expression represents:
+        // SELECT 1 + count(*) OVER () FROM DATA
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/nested_window_expression.substrait.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @r"
+        Projection: Int64(1) + count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS EXPR$0
+          WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+            TableScan: DATA
+        "
+                );
+
+        // Trigger execution to ensure the nested window is physically plannable
         DataFrame::new(ctx.state(), plan).show().await?;
 
         Ok(())
@@ -268,6 +294,50 @@ mod tests {
         let field_names: HashSet<_> = schema.fields().iter().map(|f| f.name()).collect();
         assert_eq!(field_names.len(), schema.fields().len());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nested_list_expressions() -> Result<()> {
+        // Tests that a Substrait Nested list expression containing non-literal
+        // expressions (column references) uses the make_array UDF.
+        let proto_plan =
+            read_json("tests/testdata/test_plans/nested_list_expressions.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+            plan,
+            @r"
+        Projection: make_array(DATA.a, DATA.b) AS my_list
+          TableScan: DATA
+        "
+        );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn higher_order_function() -> Result<()> {
+        let proto_plan =
+            read_json("tests/testdata/test_plans/higher_order_function.json");
+        // ctx already contains the queried table
+        let ctx = higher_order_function_ctx().await?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @"
+        Projection: array_transform2(make_array(make_array(data3.p1)), (p0, p2) -> array_concat(array_transform2(p0, (p3, p4) -> p3 * p2 * p4), array_transform2(p0, (p5, p6) -> p5 * p2 * p6))) AS array_transform2(make_array(make_array(data3.p1)),(v, i) -> array_concat(array_transform2(v,(v, j) -> v * i * j),array_transform2(v,(v, j) -> v * i * j)))
+          TableScan: data3
+        "
+        );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
         Ok(())
     }
 }

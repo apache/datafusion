@@ -20,6 +20,7 @@ use crate::logical_plan::consumer::utils::NameTracker;
 use async_recursion::async_recursion;
 use datafusion::common::{Column, not_impl_err};
 use datafusion::logical_expr::builder::project;
+use datafusion::logical_expr::utils::find_window_exprs;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -50,18 +51,16 @@ pub async fn from_project_rel(
         // For WindowFunctions, we need to wrap them in a Window relation. If there are duplicates,
         // we can do the window'ing only once, then the project will duplicate the result.
         // Order here doesn't matter since LPB::window_plan sorts the expressions.
+        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+        // Expr contains Arc with interior mutability but is intentionally used as hash key
         let mut window_exprs: HashSet<Expr> = HashSet::new();
         for expr in &p.expressions {
             let e = consumer
                 .consume_expression(expr, input.clone().schema())
                 .await?;
-            // if the expression is WindowFunction, wrap in a Window relation
-            if let Expr::WindowFunction(_) = &e {
-                // Adding the same expression here and in the project below
-                // works because the project's builder uses columnize_expr(..)
-                // to transform it into a column reference
-                window_exprs.insert(e.clone());
-            }
+            // The project's builder uses columnize_expr(..) to transform
+            // nested window expressions into column references.
+            window_exprs.extend(find_window_exprs([&e]));
             explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
 

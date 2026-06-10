@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::Float64Array;
@@ -45,6 +44,7 @@ The random seed is unique to each row."#,
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RandomFunc {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
 impl Default for RandomFunc {
@@ -57,15 +57,12 @@ impl RandomFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::nullary(Volatility::Volatile),
+            aliases: vec![String::from("rand")],
         }
     }
 }
 
 impl ScalarUDFImpl for RandomFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "random"
     }
@@ -76,6 +73,10 @@ impl ScalarUDFImpl for RandomFunc {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(Float64)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

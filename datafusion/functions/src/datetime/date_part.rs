@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -51,8 +50,8 @@ use datafusion_common::{
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility, interval_arithmetic,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility, interval_arithmetic,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -81,13 +80,27 @@ use datafusion_macros::user_doc;
     - dow (day of the week where Sunday is 0)
     - doy (day of the year)
     - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
-    - isodow (day of the week where Monday is 0)
+    - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
 "#
     ),
     argument(
         name = "expression",
         description = "Time expression to operate on. Can be a constant, column, or function."
-    )
+    ),
+    sql_example = r#"```sql
+> SELECT date_part('year', '2024-05-01T00:00:00');
++-----------------------------------------------------+
+| date_part(Utf8("year"),Utf8("2024-05-01T00:00:00")) |
++-----------------------------------------------------+
+| 2024                                                |
++-----------------------------------------------------+
+> SELECT extract(day FROM timestamp '2024-05-01T00:00:00');
++----------------------------------------------------+
+| date_part(Utf8("DAY"),Utf8("2024-05-01T00:00:00")) |
++----------------------------------------------------+
+| 1                                                  |
++----------------------------------------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DatePartFunc {
@@ -140,10 +153,6 @@ impl DatePartFunc {
 }
 
 impl ScalarUDFImpl for DatePartFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "date_part"
     }
@@ -183,10 +192,7 @@ impl ScalarUDFImpl for DatePartFunc {
             )
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         let [part, array] = take_function_args(self.name(), args)?;
 
@@ -233,7 +239,18 @@ impl ScalarUDFImpl for DatePartFunc {
                 "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
                 "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
                 "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
-                "isodow" => date_part(array.as_ref(), DatePart::DayOfWeekMonday0)?,
+                "isodow" => {
+                    // Postgres `isodow` is 1..=7 with Mon=1. Arrow's
+                    // `DayOfWeekMonday0` returns 0..=6 with Mon=0; shift by
+                    // +1 to match Postgres. TODO: switch to a future
+                    // `DatePart::DayOfWeekMonday1` upstream variant once it
+                    // exists, so this kernel-then-add becomes a single call.
+                    let zero_based =
+                        date_part(array.as_ref(), DatePart::DayOfWeekMonday0)?;
+                    let int_arr = as_int32_array(&zero_based)?;
+                    let one_based: Int32Array = int_arr.unary(|v| v + 1);
+                    Arc::new(one_based) as ArrayRef
+                }
                 "epoch" => epoch(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
             }

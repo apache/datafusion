@@ -32,11 +32,10 @@ use datafusion_common::cast::{
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -102,9 +101,6 @@ impl ArrayLength {
 }
 
 impl ScalarUDFImpl for ArrayLength {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "array_length"
     }
@@ -117,10 +113,7 @@ impl ScalarUDFImpl for ArrayLength {
         Ok(UInt64)
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_length_inner)(&args.args)
     }
 

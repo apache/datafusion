@@ -312,8 +312,8 @@ impl RunOpt {
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
         config.options_mut().execution.hash_join_buffering_capacity =
             self.hash_join_buffering_capacity;
-        let rt_builder = self.common.runtime_env_builder()?;
-        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
+        let rt = self.common.build_runtime()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt);
 
         // register tables
         self.register_tables(&ctx).await?;
@@ -470,7 +470,9 @@ impl RunOpt {
             _ => unreachable!(),
         };
 
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        Ok(Arc::new(ListingTable::try_new(config)?.with_cache(
+            ctx.runtime_env().cache_manager.get_file_statistic_cache(),
+        )))
     }
 
     fn iterations(&self) -> usize {
@@ -523,6 +525,7 @@ mod tests {
             memory_limit: None,
             sort_spill_reservation_bytes: None,
             debug: false,
+            simulate_latency: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -560,6 +563,7 @@ mod tests {
             memory_limit: None,
             sort_spill_reservation_bytes: None,
             debug: false,
+            simulate_latency: false,
         };
         let opt = RunOpt {
             query: Some(query),

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
@@ -62,10 +61,6 @@ impl SparkTrunc {
 }
 
 impl ScalarUDFImpl for SparkTrunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "trunc"
     }

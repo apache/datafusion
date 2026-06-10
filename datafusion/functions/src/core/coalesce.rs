@@ -26,7 +26,6 @@ use datafusion_expr::{
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use itertools::Itertools;
-use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Conditional Functions"),
@@ -65,10 +64,6 @@ impl CoalesceFunc {
 }
 
 impl ScalarUDFImpl for CoalesceFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "coalesce"
     }

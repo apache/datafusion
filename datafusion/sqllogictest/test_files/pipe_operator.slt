@@ -15,11 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# BigQuery supports the pipe operator syntax
-# TODO: Make the Generic dialect support the pipe operator syntax
-statement ok
-set datafusion.sql_parser.dialect = 'BigQuery';
-
 statement ok
 CREATE TABLE test(
     a INT,
@@ -188,7 +183,7 @@ query TII
 |> AS produce_sales
 |> LEFT JOIN
      (
-       SELECT "apples" AS item, 123 AS id
+       SELECT 'apples' AS item, 123 AS id
      ) AS produce_data
    ON produce_sales.item = produce_data.item
 |> SELECT produce_sales.item, sales, id;

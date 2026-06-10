@@ -22,11 +22,10 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use std::hash::Hash;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 /// IS NULL expression
 #[derive(Debug, Eq)]
@@ -67,11 +66,6 @@ impl std::fmt::Display for IsNullExpr {
 }
 
 impl PhysicalExpr for IsNullExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(DataType::Boolean)
     }
@@ -106,6 +100,45 @@ impl PhysicalExpr for IsNullExpr {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.arg.fmt_sql(f)?;
         write!(f, " IS NULL")
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
+                Box::new(protobuf::PhysicalIsNull {
+                    expr: Some(Box::new(ctx.encode_child(&self.arg)?)),
+                }),
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl IsNullExpr {
+    /// Reconstruct an [`IsNullExpr`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let node = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::IsNullExpr,
+            "IsNullExpr",
+        );
+        let expr =
+            ctx.decode_required_expression(node.expr.as_deref(), "IsNullExpr", "expr")?;
+
+        Ok(Arc::new(IsNullExpr::new(expr)))
     }
 }
 
@@ -227,5 +260,111 @@ mod tests {
         assert_eq!(sql_string, "a IS NULL");
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::{Column, col};
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalIsNull, physical_expr_node,
+    };
+
+    fn is_null_node(expr: Option<Box<PhysicalExprNode>>) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::IsNullExpr(Box::new(
+                PhysicalIsNull { expr },
+            ))),
+        }
+    }
+
+    fn is_null_fixture() -> IsNullExpr {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        IsNullExpr::new(col("a", &schema).unwrap())
+    }
+
+    #[test]
+    fn try_to_proto_encodes_is_null_expr() {
+        let is_null = is_null_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = is_null
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("IsNullExpr should encode to Some(node)");
+
+        assert!(node.expr_id.is_none());
+        let is_null_node = match node.expr_type {
+            Some(physical_expr_node::ExprType::IsNullExpr(boxed)) => *boxed,
+            other => panic!("expected an IsNullExpr node, got {other:?}"),
+        };
+        assert!(is_null_node.expr.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let is_null = is_null_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = is_null.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_is_null_expr() {
+        let node = is_null_node(Some(Box::new(column_node("a"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = IsNullExpr::try_from_proto(&node, &ctx).unwrap();
+        let is_null = decoded
+            .downcast_ref::<IsNullExpr>()
+            .expect("decoded expr should be an IsNullExpr");
+        assert!(is_null.arg().downcast_ref::<Column>().is_some());
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_is_null_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = IsNullExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a IsNullExpr"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_expr() {
+        let node = is_null_node(None);
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = IsNullExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("IsNullExpr is missing required field 'expr'"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_propagates_expr_decode_error() {
+        let node = is_null_node(Some(Box::new(column_node("a"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = IsNullExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
     }
 }

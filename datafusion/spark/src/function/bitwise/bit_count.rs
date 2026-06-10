@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Int32Array};
@@ -64,10 +63,6 @@ impl SparkBitCount {
 }
 
 impl ScalarUDFImpl for SparkBitCount {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "bit_count"
     }
@@ -176,7 +171,7 @@ mod tests {
         Array, BooleanArray, Int8Array, Int16Array, Int32Array, Int64Array, UInt8Array,
         UInt16Array, UInt32Array, UInt64Array,
     };
-    use arrow::datatypes::{Field, Int32Type};
+    use arrow::datatypes::Field;
 
     #[test]
     fn test_bit_count_basic() {

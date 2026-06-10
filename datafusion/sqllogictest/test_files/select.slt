@@ -960,6 +960,12 @@ physical_plan
 01)ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN Int64(2) AND Int64(3)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# regression test: full i64 BETWEEN bounds should not overflow
+query I
+SELECT * FROM (VALUES (1)) AS t(x)
+WHERE x BETWEEN -9223372036854775808 AND 9223372036854775807
+----
+1
 
 # TODO: query_get_indexed_field
 
@@ -1181,7 +1187,7 @@ SELECT * FROM empty_table
 statement ok
 CREATE TABLE case_sensitive_table("INT32" int) AS VALUES (1), (2), (3), (4), (5);
 
-statement error DataFusion error: Schema error: No field named int32\. Valid fields are case_sensitive_table\."INT32"\.
+statement error DataFusion error: Schema error: No field named int32\. Did you mean 'case_sensitive_table\."INT32"'\?\nColumn names are case sensitive\. You can use double quotes to refer to the case_sensitive_table\."INT32" column or disable the datafusion\.sql_parser\.enable_ident_normalization configuration\.\nValid fields are case_sensitive_table\."INT32"\.
 select "int32" from case_sensitive_table
 
 query I
@@ -1318,25 +1324,25 @@ statement error
 SELECT * EXCLUDE(a, a)
 FROM table1
 
-# if EXCEPT all the columns, query should still succeed but return empty
-statement ok
+# if EXCEPT all the columns, query should return an error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT(a, b, c, d)
 FROM table1
 
-# try zero column with LIMIT, 1 row but empty
-statement ok
+# try zero column with LIMIT, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT (a, b, c, d)
 FROM table1
 LIMIT 1
 
-# try zero column with GROUP BY, 2 row but empty
-statement ok
+# try zero column with GROUP BY, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT (a, b, c, d)
 FROM table1
 GROUP BY a
 
-# try zero column with WHERE, 1 row but empty
-statement ok
+# try zero column with WHERE, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT (a, b, c, d)
 FROM table1
 WHERE a = 1
@@ -1352,15 +1358,15 @@ CREATE TABLE table2 (
   (1, 10, 100, 1000),
   (2, 20, 200, 2000);
 
-# try zero column with inner JOIN, 2 row but empty
-statement ok
+# try zero column with inner JOIN, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 WITH t1 AS (SELECT a AS t1_a FROM table1), t2 AS (SELECT a AS t2_a FROM table2)
 SELECT * EXCEPT (t1_a, t2_a)
 FROM t1
 JOIN t2 ON (t1_a = t2_a)
 
-# try zero column with more JOIN, 2 row but empty
-statement ok
+# try zero column with more JOIN, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT (b1, b2)
 FROM (
   SELECT b AS b1 FROM table1
@@ -1369,8 +1375,8 @@ JOIN (
   SELECT b AS b2 FROM table2
 ) ON b1 = b2
 
-# try zero column with Window, 2 row but empty
-statement ok
+# try zero column with Window, should error
+statement error DataFusion error: Error during planning: SELECT list is empty after resolving \* expressions, the wildcard expanded to zero columns
 SELECT * EXCEPT (a, b, row_num)
 FROM (
     SELECT
@@ -1823,7 +1829,7 @@ select a + b from (select 1 as a, 2 as b, 1 as "a + b");
 3
 
 # Can't reference an output column by expression over projection.
-query error DataFusion error: Schema error: No field named a\. Valid fields are "a \+ Int64\(1\)"\.
+query error DataFusion error: Schema error: No field named a\.\nValid fields are "a \+ Int64\(1\)"\.
 select a + 1 from (select a+1 from (select 1 as a));
 
 query I
@@ -1861,7 +1867,7 @@ statement ok
 DROP TABLE test;
 
 # Can't reference an unqualified column by a qualified name
-query error DataFusion error: Schema error: No field named t1\.v1\. Column names are case sensitive\. You can use double quotes to refer to the "t1\.v1" column or set the datafusion\.sql_parser\.enable_ident_normalization configuration\. Valid fields are "t1\.v1"\.
+query error DataFusion error: Schema error: No field named t1\.v1\. Did you mean '"t1\.v1"'\?\nValid fields are "t1\.v1"\.
 SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");
 
 # Test issue: https://github.com/apache/datafusion/issues/14124
@@ -1960,3 +1966,13 @@ query I
 SELECT COUNT(*) FROM t0 AS tt0 WHERE (4==(3/0));
 ----
 0
+
+# Config reset
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.optimizer.max_passes;

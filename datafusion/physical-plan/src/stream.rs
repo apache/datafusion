@@ -330,6 +330,11 @@ impl RecordBatchReceiverStreamBuilder {
         context: Arc<TaskContext>,
     ) {
         let output = self.tx();
+        let input_display = if log::log_enabled!(log::Level::Debug) {
+            displayable(input.as_ref()).one_line().to_string()
+        } else {
+            String::new()
+        };
 
         self.inner.spawn(async move {
             let mut stream = match input.execute(partition, context) {
@@ -338,13 +343,17 @@ impl RecordBatchReceiverStreamBuilder {
                     // is no place to send the error and no reason to continue.
                     output.send(Err(e)).await.ok();
                     debug!(
-                        "Stopping execution: error executing input: {}",
-                        displayable(input.as_ref()).one_line()
+                        "Stopping execution: error executing input: {input_display}",
                     );
                     return Ok(());
                 }
                 Ok(stream) => stream,
             };
+
+            // Drop the input early, as soon as we're done with it.
+            // Holding on to it can cause delays in cancelling the child plan when the query is
+            // cancelled.
+            drop(input);
 
             // Transfer batches from inner stream to the output tx
             // immediately.
@@ -355,8 +364,7 @@ impl RecordBatchReceiverStreamBuilder {
                 // place to send the error and no reason to continue.
                 if output.send(item).await.is_err() {
                     debug!(
-                        "Stopping execution: output is gone, plan cancelling: {}",
-                        displayable(input.as_ref()).one_line()
+                        "Stopping execution: output is gone, plan cancelling: {input_display}",
                     );
                     return Ok(());
                 }
@@ -364,10 +372,7 @@ impl RecordBatchReceiverStreamBuilder {
                 // Stop after the first error is encountered (Don't
                 // drive all streams to completion)
                 if is_err {
-                    debug!(
-                        "Stopping execution: plan returned error: {}",
-                        displayable(input.as_ref()).one_line()
-                    );
+                    debug!("Stopping execution: plan returned error: {input_display}");
                     return Ok(());
                 }
             }
@@ -406,8 +411,11 @@ pin_project! {
     pub struct RecordBatchStreamAdapter<S> {
         schema: SchemaRef,
 
+        // Wrapped in Option so we can drop the inner stream as soon as it
+        // returns `None`, releasing any upstream pipeline resources before the
+        // adapter itself is dropped.
         #[pin]
-        stream: S,
+        stream: Option<S>,
     }
 }
 
@@ -436,7 +444,10 @@ impl<S> RecordBatchStreamAdapter<S> {
     /// // ...
     /// ```
     pub fn new(schema: SchemaRef, stream: S) -> Self {
-        Self { schema, stream }
+        Self {
+            schema,
+            stream: Some(stream),
+        }
     }
 }
 
@@ -455,11 +466,29 @@ where
     type Item = Result<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.project().stream.poll_next(cx)
+        let mut this = self.project();
+        let Some(inner) = this.stream.as_mut().as_pin_mut() else {
+            return Poll::Ready(None);
+        };
+        let item = ready!(inner.poll_next(cx));
+        if item.is_none() {
+            // Drop the inner stream in place to release its resources.
+            // SAFETY: the inner stream is dropped without moving it out of
+            // its pinned location; assigning `None` only runs the inner
+            // value's destructor in place, which is permitted for pinned
+            // values.
+            unsafe {
+                *this.stream.as_mut().get_unchecked_mut() = None;
+            }
+        }
+        Poll::Ready(item)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.stream.size_hint()
+        match self.stream.as_ref() {
+            Some(stream) => stream.size_hint(),
+            None => (0, Some(0)),
+        }
     }
 }
 
@@ -533,6 +562,7 @@ impl ObservedStream {
         let Some(fetch) = self.fetch else { return poll };
 
         if self.produced >= fetch {
+            self.release_inner();
             return Poll::Ready(None);
         }
 
@@ -540,11 +570,21 @@ impl ObservedStream {
             if self.produced + batch.num_rows() > fetch {
                 let batch = batch.slice(0, fetch.saturating_sub(self.produced));
                 self.produced += batch.num_rows();
+                if self.produced >= fetch {
+                    self.release_inner();
+                }
                 return Poll::Ready(Some(Ok(batch)));
             };
             self.produced += batch.num_rows()
         }
         poll
+    }
+
+    /// Replace the inner stream with an [`EmptyRecordBatchStream`], dropping
+    /// the original stream so its upstream pipeline can be torn down.
+    fn release_inner(&mut self) {
+        let schema = self.inner.schema();
+        self.inner = Box::pin(EmptyRecordBatchStream::new(schema));
     }
 }
 
@@ -673,7 +713,12 @@ impl BatchSplitStream {
                 }
             }
             Some(Err(e)) => Poll::Ready(Some(Err(e))),
-            None => Poll::Ready(None),
+            None => {
+                // Release the input pipeline's resources.
+                let input_schema = self.input.schema();
+                self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+                Poll::Ready(None)
+            }
         }
     }
 }
@@ -746,6 +791,9 @@ impl Stream for ReservationStream {
                     None => {
                         // Stream is done so free the reservation completely
                         self.reservation.free();
+                        // Release the input pipeline's resources.
+                        let inner_schema = self.inner.schema();
+                        self.inner = Box::pin(EmptyRecordBatchStream::new(inner_schema));
                         Poll::Ready(None)
                     }
                 }

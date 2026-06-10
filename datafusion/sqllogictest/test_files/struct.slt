@@ -126,6 +126,49 @@ physical_plan
 01)ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# get_field over an inline named_struct is resolved during logical
+# simplification: the field access collapses to the underlying expression
+# instead of materializing the intermediate struct.
+query R
+select get_field(named_struct('min', a, 'max', b), 'max') from values;
+----
+1.1
+2.2
+3.3
+
+query TT
+explain select get_field(named_struct('min', a, 'max', b), 'max') from values;
+----
+logical_plan
+01)Projection: values.b AS named_struct(Utf8("min"),values.a,Utf8("max"),values.b)[max]
+02)--TableScan: values projection=[b]
+physical_plan
+01)ProjectionExec: expr=[b@0 as named_struct(Utf8("min"),values.a,Utf8("max"),values.b)[max]]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# the same simplification applies to the positional struct() constructor,
+# whose fields are named c0, c1, ...
+query TT
+explain select get_field(struct(a, b, c), 'c1') from values;
+----
+logical_plan
+01)Projection: values.b AS struct(values.a,values.b,values.c)[c1]
+02)--TableScan: values projection=[b]
+physical_plan
+01)ProjectionExec: expr=[b@0 as struct(values.a,values.b,values.c)[c1]]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# nested constructors collapse all the way through
+query TT
+explain select named_struct('outer', named_struct('inner', a))['outer']['inner'] from values;
+----
+logical_plan
+01)Projection: values.a AS named_struct(Utf8("outer"),named_struct(Utf8("inner"),values.a))[outer][inner]
+02)--TableScan: values projection=[a]
+physical_plan
+01)ProjectionExec: expr=[a@0 as named_struct(Utf8("outer"),named_struct(Utf8("inner"),values.a))[outer][inner]]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
 # error on 0 arguments
 query error
 select named_struct();
@@ -1116,7 +1159,7 @@ select [
 query ?
 select [[{x: 1, y: 2}], [{y: 4, x: 3}]];
 ----
-[[{x: 1, y: 2}], [{x: 3, y: 4}]]
+[[{y: 2, x: 1}], [{y: 4, x: 3}]]
 
 # Test array literal with float type coercion across elements
 query ?
@@ -1664,6 +1707,10 @@ order by id;
 1 1 100
 2 1 300
 3 2 150
+
+# Config reset
+statement ok
+RESET datafusion.sql_parser.dialect;
 
 statement ok
 drop table t_agg_window;

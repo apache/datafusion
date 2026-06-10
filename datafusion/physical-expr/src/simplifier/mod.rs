@@ -69,7 +69,7 @@ impl<'a> PhysicalExprSimplifier<'a> {
                 let rewritten = not::simplify_not_expr(node, schema)?
                     .transform_data(|node| unwrap_cast_in_comparison(node, schema))?
                     .transform_data(|node| {
-                        const_evaluator::simplify_const_expr_immediate(node, &batch)
+                        const_evaluator::simplify_const_expr_immediate(node, batch)
                     })?;
 
                 #[cfg(debug_assertions)]
@@ -97,7 +97,7 @@ mod tests {
     use crate::expressions::{
         BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr, col, in_list, lit,
     };
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
 
@@ -119,15 +119,13 @@ mod tests {
 
     /// Helper function to extract a Literal from a PhysicalExpr
     fn as_literal(expr: &Arc<dyn PhysicalExpr>) -> &Literal {
-        expr.as_any()
-            .downcast_ref::<Literal>()
+        expr.downcast_ref::<Literal>()
             .unwrap_or_else(|| panic!("Expected Literal, got: {expr}"))
     }
 
     /// Helper function to extract a BinaryExpr from a PhysicalExpr
     fn as_binary(expr: &Arc<dyn PhysicalExpr>) -> &BinaryExpr {
-        expr.as_any()
-            .downcast_ref::<BinaryExpr>()
+        expr.downcast_ref::<BinaryExpr>()
             .unwrap_or_else(|| panic!("Expected BinaryExpr, got: {expr}"))
     }
 
@@ -164,8 +162,8 @@ mod tests {
         // Should be optimized to: c2 != INT64(99) (c2 is INT64, literal cast to match)
         let left_expr = optimized_binary.left();
         assert!(
-            left_expr.as_any().downcast_ref::<CastExpr>().is_none()
-                && left_expr.as_any().downcast_ref::<TryCastExpr>().is_none()
+            left_expr.downcast_ref::<CastExpr>().is_none()
+                && left_expr.downcast_ref::<TryCastExpr>().is_none()
         );
         let right_literal = as_literal(optimized_binary.right());
         assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(99)));
@@ -198,11 +196,8 @@ mod tests {
         let left_binary = as_binary(or_binary.left());
         let left_left_expr = left_binary.left();
         assert!(
-            left_left_expr.as_any().downcast_ref::<CastExpr>().is_none()
-                && left_left_expr
-                    .as_any()
-                    .downcast_ref::<TryCastExpr>()
-                    .is_none()
+            left_left_expr.downcast_ref::<CastExpr>().is_none()
+                && left_left_expr.downcast_ref::<TryCastExpr>().is_none()
         );
         let left_literal = as_literal(left_binary.right());
         assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(5)));
@@ -211,14 +206,8 @@ mod tests {
         let right_binary = as_binary(or_binary.right());
         let right_left_expr = right_binary.left();
         assert!(
-            right_left_expr
-                .as_any()
-                .downcast_ref::<CastExpr>()
-                .is_none()
-                && right_left_expr
-                    .as_any()
-                    .downcast_ref::<TryCastExpr>()
-                    .is_none()
+            right_left_expr.downcast_ref::<CastExpr>().is_none()
+                && right_left_expr.downcast_ref::<TryCastExpr>().is_none()
         );
         let right_literal = as_literal(right_binary.right());
         assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(10)));
@@ -476,7 +465,7 @@ mod tests {
         // If we just let `expr` go out of scope, Rust's recursive Drop will blow the stack
         // even with recursive_protection, because Drop doesn't use the #[recursive] attribute.
         // We peel off layers one by one to avoid deep recursion in Drop.
-        while let Some(not_expr) = expr.as_any().downcast_ref::<NotExpr>() {
+        while let Some(not_expr) = expr.downcast_ref::<NotExpr>() {
             // Clone the child (Arc increment).
             // Now child has 2 refs: one in parent, one in `child`.
             let child = Arc::clone(not_expr.arg());
@@ -577,7 +566,7 @@ mod tests {
         ));
         let result = simplifier.simplify(expr).unwrap();
         // Should remain a BinaryExpr, not become a Literal
-        assert!(result.as_any().downcast_ref::<BinaryExpr>().is_some());
+        assert!(result.downcast_ref::<BinaryExpr>().is_some());
     }
 
     #[test]
@@ -599,6 +588,75 @@ mod tests {
         let binary = as_binary(&result);
         let left_literal = as_literal(binary.left());
         assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(3)));
+    }
+
+    /// Regression test for https://github.com/apache/datafusion/issues/22367.
+    ///
+    /// A leaf `PhysicalExpr` that is neither a `Literal` nor a `Column`
+    /// (nor volatile) must not be const-folded: it has no children to
+    /// derive constness from, and evaluating it against the dummy batch
+    /// produces a value unrelated to its real runtime semantics. Without
+    /// the zero-children guard, `all(empty)` would vacuously hold and the
+    /// node would be replaced with whatever scalar fell out of the dummy
+    /// evaluation. Verify the node is left untouched.
+    #[test]
+    fn test_no_simplify_opaque_leaf_expr() {
+        use arrow::array::ArrayRef;
+        use arrow::array::Int32Array;
+        use arrow::record_batch::RecordBatch;
+        use datafusion_expr_common::columnar_value::ColumnarValue;
+        use datafusion_physical_expr_common::physical_expr::PhysicalExpr as PhysicalExprTrait;
+        use std::fmt;
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        struct OpaqueLeaf;
+
+        impl fmt::Display for OpaqueLeaf {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "OpaqueLeaf")
+            }
+        }
+
+        impl PhysicalExprTrait for OpaqueLeaf {
+            fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+                Ok(DataType::Int32)
+            }
+            fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+                Ok(true)
+            }
+            fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+                // Simulate the broken FFI Column path: when handed a dummy
+                // batch, return whatever scalar happens to materialize. If
+                // the simplifier ever reaches this branch for a leaf node,
+                // the predicate has already been silently corrupted.
+                let arr: ArrayRef = Arc::new(Int32Array::from(vec![0; batch.num_rows()]));
+                Ok(ColumnarValue::Array(arr))
+            }
+            fn children(&self) -> Vec<&Arc<dyn PhysicalExprTrait>> {
+                vec![]
+            }
+            fn with_new_children(
+                self: Arc<Self>,
+                _children: Vec<Arc<dyn PhysicalExprTrait>>,
+            ) -> Result<Arc<dyn PhysicalExprTrait>> {
+                Ok(self)
+            }
+            fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "OpaqueLeaf")
+            }
+        }
+
+        let schema = Schema::empty();
+        let simplifier = PhysicalExprSimplifier::new(&schema);
+
+        let opaque: Arc<dyn PhysicalExpr> = Arc::new(OpaqueLeaf);
+        let result = simplifier.simplify(Arc::clone(&opaque)).unwrap();
+
+        assert!(
+            result.downcast_ref::<Literal>().is_none(),
+            "opaque leaf must not be rewritten to a Literal, got: {result}"
+        );
+        assert_eq!(&result, &opaque);
     }
 
     #[test]

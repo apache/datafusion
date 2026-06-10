@@ -1,0 +1,229 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init_data.slt.part
+
+# string_to_array scalar function
+query ?
+SELECT string_to_array('abcxxxdef', 'xxx')
+----
+[abc, def]
+
+query I
+SELECT cardinality(string_to_array('', ','))
+----
+0
+
+query I
+SELECT cardinality(string_to_array('', ''))
+----
+0
+
+query I
+SELECT cardinality(string_to_array('', ',', 'x'))
+----
+0
+
+query I
+SELECT cardinality(string_to_array('', '', 'x'))
+----
+0
+
+query ?
+SELECT string_to_array('abc', '')
+----
+[abc]
+
+query ?
+SELECT string_to_array('abc', NULL)
+----
+[a, b, c]
+
+query ?
+SELECT string_to_array('abc def', ' ', 'def')
+----
+[abc, NULL]
+
+query ?
+select string_to_array(e, ',') from values;
+----
+[Lorem]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+# karge string tests for string_to_array
+
+# string_to_array scalar function
+query ?
+SELECT string_to_array(arrow_cast('abcxxxdef', 'LargeUtf8'), 'xxx')
+----
+[abc, def]
+
+# string_to_array scalar function
+query ?
+SELECT string_to_array(arrow_cast('abcxxxdef', 'LargeUtf8'), arrow_cast('xxx', 'LargeUtf8'))
+----
+[abc, def]
+
+query ?
+SELECT string_to_array(arrow_cast('abc', 'LargeUtf8'), NULL)
+----
+[a, b, c]
+
+query ?
+select string_to_array(arrow_cast(e, 'LargeUtf8'), ',') from values;
+----
+[Lorem]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+query ?
+select string_to_array(arrow_cast(e, 'LargeUtf8'), ',', arrow_cast('Lorem', 'LargeUtf8')) from values;
+----
+[NULL]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+# string view tests for string_to_array
+
+# string_to_array scalar function
+query ?
+SELECT string_to_array(arrow_cast('abcxxxdef', 'Utf8View'), 'xxx')
+----
+[abc, def]
+
+query ?
+SELECT string_to_array(arrow_cast('abc', 'Utf8View'), NULL)
+----
+[a, b, c]
+
+query ?
+select string_to_array(arrow_cast(e, 'Utf8View'), ',') from values;
+----
+[Lorem]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+# test string_to_array aliases
+
+query ?
+select string_to_list(e, 'm') from values;
+----
+[Lore, ]
+[ipsu, ]
+[dolor]
+[sit]
+[a, et]
+[,]
+[consectetur]
+[adipiscing]
+NULL
+
+# string_to_array: single-char delimiter producing multiple elements
+query ?
+SELECT string_to_array('a,b,c', ',')
+----
+[a, b, c]
+
+# string_to_array: delimiter not found in input
+query ?
+SELECT string_to_array('abc', ',')
+----
+[abc]
+
+# string_to_array: empty string input
+query ?
+SELECT string_to_array('', ',')
+----
+[]
+
+# string_to_array: null_str matching multiple elements
+query ?
+SELECT string_to_array('a,NULL,b,NULL,c', ',', 'NULL')
+----
+[a, NULL, b, NULL, c]
+
+# string_to_array: null_str matching all elements
+query ?
+SELECT string_to_array('x,x,x', ',', 'x')
+----
+[NULL, NULL, NULL]
+
+# string_to_array: null_str with empty-string delimiter
+query ?
+SELECT string_to_array('abc', '', 'abc')
+----
+[NULL]
+
+# string_to_array: NULL string input
+query ?
+SELECT string_to_array(NULL, ',')
+----
+NULL
+
+# string_to_array: columnar delimiter
+query ??
+SELECT string_to_array('a,b,c', col1), string_to_array('a::b::c', col2)
+  FROM (VALUES (',', '::')) AS t(col1, col2)
+----
+[a, b, c] [a, b, c]
+
+# string_to_array: columnar null_str
+query ?
+SELECT string_to_array('a,NULL,b', ',', col1)
+  FROM (VALUES ('NULL')) AS t(col1)
+----
+[a, NULL, b]
+
+# string_to_array: adjacent delimiters produce empty strings
+query ?
+SELECT string_to_array('a,,b', ',')
+----
+[a, , b]
+
+# string_to_array: delimiter at start and end
+query ?
+SELECT string_to_array(',a,b,', ',')
+----
+[, a, b, ]
+
+
+include ./cleanup.slt.part

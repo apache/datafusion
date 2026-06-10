@@ -21,9 +21,11 @@ use std::mem;
 use std::sync::Arc;
 
 use datafusion_catalog::Session;
-use datafusion_common::{HashMap, Result, ScalarValue, assert_or_internal_err};
-use datafusion_datasource::ListingTableUrl;
+use datafusion_common::{
+    HashMap, Result, ScalarValue, TableReference, assert_or_internal_err,
+};
 use datafusion_datasource::PartitionedFile;
+use datafusion_datasource::{FileExtensions, ListingTableUrl};
 use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
 use arrow::{
@@ -85,12 +87,26 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         | Expr::ScalarSubquery(_)
         | Expr::SetComparison(_)
         | Expr::GroupingSet(_)
-        | Expr::Case(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::Case(_)
+        | Expr::Lambda(_)
+        | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
 
         Expr::ScalarFunction(scalar_function) => {
             match scalar_function.func.signature().volatility {
                 Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
                 // TODO: Stable functions could be `applicable`, but that would require access to the context
+                // https://github.com/apache/datafusion/issues/21690
+                Volatility::Stable | Volatility::Volatile => {
+                    is_applicable = false;
+                    Ok(TreeNodeRecursion::Stop)
+                }
+            }
+        }
+        Expr::HigherOrderFunction(hof) => {
+            match hof.func.signature().volatility {
+                Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
+                // TODO: Stable functions could be `applicable`, but that would require access to the context
+                // https://github.com/apache/datafusion/issues/21690
                 Volatility::Stable | Volatility::Volatile => {
                     is_applicable = false;
                     Ok(TreeNodeRecursion::Stop)
@@ -102,6 +118,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
         // - Can `Wildcard` be considered as a `Literal`?
         // - ScalarVariable could be `applicable`, but that would require access to the context
+        //   https://github.com/apache/datafusion/issues/21690
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         Expr::AggregateFunction { .. }
@@ -252,14 +269,15 @@ fn populate_partition_values<'a>(
         match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(Column { name, .. }), Expr::Literal(val, _))
-                | (Expr::Literal(val, _), Expr::Column(Column { name, .. })) => {
+                | (Expr::Literal(val, _), Expr::Column(Column { name, .. }))
                     if partition_values
                         .insert(name, PartitionValue::Single(val.to_string()))
-                        .is_some()
-                    {
-                        partition_values.insert(name, PartitionValue::Multi);
-                    }
+                        .is_some() =>
+                {
+                    partition_values.insert(name, PartitionValue::Multi);
                 }
+                (Expr::Column(Column { .. }), Expr::Literal(_, _))
+                | (Expr::Literal(_, _), Expr::Column(Column { .. })) => {}
                 _ => {}
             },
             Operator::And => {
@@ -340,17 +358,25 @@ fn filter_partitions(
     Ok(None)
 }
 
+/// Returns `Ok(None)` when the file is not inside a valid partition path
+/// (e.g. a stale file in the table root directory). Such files are skipped
+/// because hive-style partition values are never null and there is no valid
+/// value to assign for non-partitioned files.
 fn try_into_partitioned_file(
     object_meta: ObjectMeta,
     partition_cols: &[(String, DataType)],
     table_path: &ListingTableUrl,
-) -> Result<PartitionedFile> {
+) -> Result<Option<PartitionedFile>> {
     let cols = partition_cols.iter().map(|(name, _)| name.as_str());
     let parsed = parse_partitions_for_path(table_path, &object_meta.location, cols);
 
+    let Some(parsed) = parsed else {
+        // parse_partitions_for_path already logs a debug message
+        return Ok(None);
+    };
+
     let partition_values = parsed
         .into_iter()
-        .flatten()
         .zip(partition_cols)
         .map(|(parsed, (_, datatype))| {
             ScalarValue::try_from_string(parsed.to_string(), datatype)
@@ -359,8 +385,9 @@ fn try_into_partitioned_file(
 
     let mut pf: PartitionedFile = object_meta.into();
     pf.partition_values = partition_values;
+    pf.table_reference.clone_from(table_path.get_table_ref());
 
-    Ok(pf)
+    Ok(Some(pf))
 }
 
 /// Discover the partitions on the given path and prune out files
@@ -393,8 +420,15 @@ pub async fn pruned_partition_list<'a>(
             table_path
         );
 
-        // if no partition col => simply list all the files
-        Ok(objects.map_ok(|object_meta| object_meta.into()).boxed())
+        // if no partition col => list all the files
+        Ok(objects
+            .try_filter_map(|object_meta| {
+                futures::future::ready(object_meta_to_partitioned_file(
+                    object_meta,
+                    table_path.get_table_ref(),
+                ))
+            })
+            .boxed())
     } else {
         let df_schema = DFSchema::from_unqualified_fields(
             partition_cols
@@ -405,16 +439,35 @@ pub async fn pruned_partition_list<'a>(
         )?;
 
         Ok(objects
-            .map_ok(|object_meta| {
-                try_into_partitioned_file(object_meta, partition_cols, table_path)
+            .try_filter_map(|object_meta| {
+                futures::future::ready(try_into_partitioned_file(
+                    object_meta,
+                    partition_cols,
+                    table_path,
+                ))
             })
             .try_filter_map(move |pf| {
-                futures::future::ready(
-                    pf.and_then(|pf| filter_partitions(pf, filters, &df_schema)),
-                )
+                futures::future::ready(filter_partitions(pf, filters, &df_schema))
             })
             .boxed())
     }
+}
+
+fn object_meta_to_partitioned_file(
+    object_meta: ObjectMeta,
+    table_ref: &Option<TableReference>,
+) -> Result<Option<PartitionedFile>> {
+    Ok(Some(PartitionedFile {
+        object_meta,
+        arrow_schema: None,
+        partition_values: vec![],
+        range: None,
+        statistics: None,
+        ordering: None,
+        extensions: FileExtensions::new(),
+        metadata_size_hint: None,
+        table_reference: table_ref.clone(),
+    }))
 }
 
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
@@ -462,7 +515,7 @@ mod tests {
     use std::ops::Not;
 
     use super::*;
-    use datafusion_expr::{Expr, case, col, lit};
+    use datafusion_expr::{case, col};
 
     #[test]
     fn test_split_files() {
@@ -571,6 +624,130 @@ mod tests {
                 &Path::from("bucket/mytable/mypartition=v1/otherpartition=v2/file.csv"),
                 vec!["mypartition"]
             )
+        );
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_valid_partition() {
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        let partition_cols = vec![("year_month".to_string(), DataType::Utf8)];
+        let meta = ObjectMeta {
+            location: Path::from("bucket/mytable/year_month=2024-01/data.parquet"),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+
+        let result =
+            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        assert!(result.is_some());
+        let pf = result.unwrap();
+        assert_eq!(pf.partition_values.len(), 1);
+        assert_eq!(
+            pf.partition_values[0],
+            ScalarValue::Utf8(Some("2024-01".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_root_file_skipped() {
+        // File in root directory (not inside any partition path) should be
+        // skipped — this is the case where a stale file exists from before
+        // hive partitioning was added.
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        let partition_cols = vec![("year_month".to_string(), DataType::Utf8)];
+        let meta = ObjectMeta {
+            location: Path::from("bucket/mytable/data.parquet"),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+
+        let result =
+            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        assert!(
+            result.is_none(),
+            "Files outside partition structure should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_wrong_partition_name() {
+        // File in a directory that doesn't match the expected partition column
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        let partition_cols = vec![("year_month".to_string(), DataType::Utf8)];
+        let meta = ObjectMeta {
+            location: Path::from("bucket/mytable/wrong_col=2024-01/data.parquet"),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+
+        let result =
+            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        assert!(
+            result.is_none(),
+            "Files with wrong partition column name should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_multiple_partitions() {
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        let partition_cols = vec![
+            ("year".to_string(), DataType::Utf8),
+            ("month".to_string(), DataType::Utf8),
+        ];
+        let meta = ObjectMeta {
+            location: Path::from("bucket/mytable/year=2024/month=01/data.parquet"),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+
+        let result =
+            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        assert!(result.is_some());
+        let pf = result.unwrap();
+        assert_eq!(pf.partition_values.len(), 2);
+        assert_eq!(
+            pf.partition_values[0],
+            ScalarValue::Utf8(Some("2024".to_string()))
+        );
+        assert_eq!(
+            pf.partition_values[1],
+            ScalarValue::Utf8(Some("01".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_partial_partition_skipped() {
+        // File has first partition but not second — should be skipped
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        let partition_cols = vec![
+            ("year".to_string(), DataType::Utf8),
+            ("month".to_string(), DataType::Utf8),
+        ];
+        let meta = ObjectMeta {
+            location: Path::from("bucket/mytable/year=2024/data.parquet"),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+
+        let result =
+            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        // File has year=2024 but no month= directory — parse_partitions_for_path
+        // returns None because the path component "data.parquet" doesn't match
+        // the expected "month=..." pattern.
+        assert!(
+            result.is_none(),
+            "Files with incomplete partition structure should be skipped"
         );
     }
 

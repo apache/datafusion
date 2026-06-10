@@ -45,11 +45,9 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
-use crate::utils::datafusion_strsim::normalized_levenshtein;
+use crate::utils::datafusion_strsim::{levenshtein, normalized_levenshtein};
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, Diagnostic, TableReference};
-#[cfg(feature = "avro")]
-use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
@@ -76,9 +74,6 @@ pub enum DataFusionError {
     /// Error when reading / writing Parquet data.
     #[cfg(feature = "parquet")]
     ParquetError(Box<ParquetError>),
-    /// Error when reading Avro data.
-    #[cfg(feature = "avro")]
-    AvroError(Box<AvroError>),
     /// Error when reading / writing to / from an object_store (e.g. S3 or LocalFile)
     #[cfg(feature = "object_store")]
     ObjectStore(Box<object_store::Error>),
@@ -203,6 +198,77 @@ pub enum SchemaError {
     },
 }
 
+fn case_insensitive_field_match<'a>(
+    field: &Column,
+    valid_fields: &'a [Column],
+) -> Option<&'a Column> {
+    let field_name = field.name();
+    let field_flat_name = field.flat_name();
+    let field_name_lower = field_name.to_lowercase();
+    let field_flat_name_lower = field_flat_name.to_lowercase();
+
+    valid_fields.iter().find(|valid_field| {
+        let valid_field_name = valid_field.name();
+        let valid_field_flat_name = valid_field.flat_name();
+        let valid_field_name_lower = valid_field_name.to_lowercase();
+        let valid_field_flat_name_lower = valid_field_flat_name.to_lowercase();
+
+        let name_differs_only_by_case =
+            field_name_lower == valid_field_name_lower && field_name != valid_field_name;
+        let flat_name_differs_only_by_case = field_flat_name_lower
+            == valid_field_flat_name_lower
+            && field_flat_name != valid_field_flat_name;
+
+        name_differs_only_by_case || flat_name_differs_only_by_case
+    })
+}
+
+/// Find the most similar field name based on edit distance.
+/// Returns `None` if all candidate edit distances are too far away.
+fn closest_valid_field<'a>(
+    field: &Column,
+    valid_fields: &'a [Column],
+) -> Option<&'a Column> {
+    // Find the most similar valid field name.
+    let target_names = [
+        field.name().to_lowercase(),
+        field.flat_name().to_lowercase(),
+    ];
+
+    let mut best_match: Option<(usize, usize, usize, &Column)> = None;
+    for (index, valid_field) in valid_fields.iter().enumerate() {
+        let valid_names = [
+            valid_field.name().to_lowercase(),
+            valid_field.flat_name().to_lowercase(),
+        ];
+        for target in &target_names {
+            for valid_name in &valid_names {
+                let distance = levenshtein(target, valid_name);
+                let max_len = target.chars().count().max(valid_name.chars().count());
+                // If there are no shared characters, or we would have to edit
+                // more than half of the longer name, don't suggest a potential match.
+                if max_len == 0 || distance * 2 > max_len {
+                    continue;
+                }
+
+                let should_replace = best_match.is_none_or(
+                    |(best_distance, best_max_len, best_index, _)| {
+                        distance < best_distance
+                            || distance == best_distance
+                                && (max_len > best_max_len
+                                    || max_len == best_max_len && index < best_index)
+                    },
+                );
+                if should_replace {
+                    best_match = Some((distance, max_len, index, valid_field));
+                }
+            }
+        }
+    }
+
+    best_match.map(|(_, _, _, valid_field)| valid_field)
+}
+
 impl Display for SchemaError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -210,44 +276,39 @@ impl Display for SchemaError {
                 field,
                 valid_fields,
             } => {
-                write!(f, "No field named {}", field.quoted_flat_name())?;
-                let lower_valid_fields = valid_fields
-                    .iter()
-                    .map(|column| column.flat_name().to_lowercase())
-                    .collect::<Vec<String>>();
+                let closest_field = closest_valid_field(field, valid_fields);
+                let case_sensitive_match =
+                    case_insensitive_field_match(field, valid_fields);
 
-                let valid_fields_names = valid_fields
-                    .iter()
-                    .map(|column| column.flat_name())
-                    .collect::<Vec<String>>();
-                if lower_valid_fields.contains(&field.flat_name().to_lowercase()) {
+                write!(f, "No field named {}", field.quoted_flat_name())?;
+                if let Some(matched) = closest_field {
+                    write!(f, ". Did you mean '{}'?", matched.quoted_flat_name())?;
+                } else {
+                    write!(f, ".")?;
+                }
+
+                if let Some(case_sensitive_match) = case_sensitive_match {
                     write!(
                         f,
-                        ". Column names are case sensitive. You can use double quotes to refer to the \"{}\" column \
-                        or set the datafusion.sql_parser.enable_ident_normalization configuration",
-                        field.quoted_flat_name()
+                        "\nColumn names are case sensitive. You can use double quotes to refer to the {} column \
+                        or disable the datafusion.sql_parser.enable_ident_normalization configuration.",
+                        case_sensitive_match.quoted_flat_name()
                     )?;
                 }
-                let field_name = field.name();
-                if let Some(matched) = valid_fields_names
-                    .iter()
-                    .filter(|str| normalized_levenshtein(str, field_name) >= 0.5)
-                    .collect::<Vec<&String>>()
-                    .first()
-                {
-                    write!(f, ". Did you mean '{matched}'?")?;
-                } else if !valid_fields.is_empty() {
+
+                if !valid_fields.is_empty() {
                     write!(
                         f,
-                        ". Valid fields are {}",
+                        "\nValid fields are {}.",
                         valid_fields
                             .iter()
                             .map(|field| field.quoted_flat_name())
                             .collect::<Vec<String>>()
                             .join(", ")
-                    )?;
+                    )
+                } else {
+                    Ok(())
                 }
-                write!(f, ".")
             }
             Self::DuplicateQualifiedField { qualifier, name } => {
                 write!(
@@ -332,13 +393,6 @@ impl From<ParquetError> for DataFusionError {
     }
 }
 
-#[cfg(feature = "avro")]
-impl From<AvroError> for DataFusionError {
-    fn from(e: AvroError) -> Self {
-        DataFusionError::AvroError(Box::new(e))
-    }
-}
-
 #[cfg(feature = "object_store")]
 impl From<object_store::Error> for DataFusionError {
     fn from(e: object_store::Error) -> Self {
@@ -389,8 +443,6 @@ impl Error for DataFusionError {
             DataFusionError::ArrowError(e, _) => Some(e.as_ref()),
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(e) => Some(e.as_ref()),
-            #[cfg(feature = "avro")]
-            DataFusionError::AvroError(e) => Some(e.as_ref()),
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(e) => Some(e.as_ref()),
             DataFusionError::IoError(e) => Some(e),
@@ -520,8 +572,6 @@ impl DataFusionError {
             DataFusionError::ArrowError(_, _) => "Arrow error: ",
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(_) => "Parquet error: ",
-            #[cfg(feature = "avro")]
-            DataFusionError::AvroError(_) => "Avro error: ",
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(_) => "Object Store error: ",
             DataFusionError::IoError(_) => "IO error: ",
@@ -561,8 +611,6 @@ impl DataFusionError {
             }
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(ref desc) => Cow::Owned(desc.to_string()),
-            #[cfg(feature = "avro")]
-            DataFusionError::AvroError(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::IoError(ref desc) => Cow::Owned(desc.to_string()),
             #[cfg(feature = "sql")]
             DataFusionError::SQL(ref desc, ref backtrace) => {
@@ -775,10 +823,10 @@ impl DataFusionErrorBuilder {
 macro_rules! unwrap_or_internal_err {
     ($Value: ident) => {
         $Value.ok_or_else(|| {
-            $crate::DataFusionError::Internal(format!(
+            $crate::error::_internal_datafusion_err!(
                 "{} should not be None",
                 stringify!($Value)
-            ))
+            )
         })?
     };
 }
@@ -796,19 +844,19 @@ macro_rules! unwrap_or_internal_err {
 macro_rules! assert_or_internal_err {
     ($cond:expr) => {
         if !$cond {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {}",
                 stringify!($cond)
-            )));
+            ));
         }
     };
     ($cond:expr, $($arg:tt)+) => {
         if !$cond {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {}: {}",
                 stringify!($cond),
                 format!($($arg)+)
-            )));
+            ));
         }
     };
 }
@@ -828,27 +876,27 @@ macro_rules! assert_eq_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val != right_val {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} == {} (left: {:?}, right: {:?})",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val
-            )));
+            ));
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
         let left_val = &$left;
         let right_val = &$right;
         if left_val != right_val {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} == {} (left: {:?}, right: {:?}): {}",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val,
                 format!($($arg)+)
-            )));
+            ));
         }
     }};
 }
@@ -868,27 +916,27 @@ macro_rules! assert_ne_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val == right_val {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} != {} (left: {:?}, right: {:?})",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val
-            )));
+            ));
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
         let left_val = &$left;
         let right_val = &$right;
         if left_val == right_val {
-            return Err($crate::DataFusionError::Internal(format!(
+            return Err($crate::error::_internal_datafusion_err!(
                 "Assertion failed: {} != {} (left: {:?}, right: {:?}): {}",
                 stringify!($left),
                 stringify!($right),
                 left_val,
                 right_val,
                 format!($($arg)+)
-            )));
+            ));
         }
     }};
 }
@@ -903,76 +951,125 @@ macro_rules! assert_ne_or_internal_err {
 ///     plan_err!("Error {val:?}")
 ///
 /// `NAME_ERR` -  macro name for wrapping Err(DataFusionError::*)
+/// `PREFIXED_NAME_ERR` - underscore-prefixed alias for NAME_ERR (e.g., _plan_err)
+/// (Needed to avoid compiler error when using macro in the same crate: `macros from the current crate cannot be referred to by absolute paths`)
 /// `NAME_DF_ERR` -  macro name for wrapping DataFusionError::*. Needed to keep backtrace opportunity
 /// in construction where DataFusionError::* used directly, like `map_err`, `ok_or_else`, etc
+/// `PREFIXED_NAME_DF_ERR` - underscore-prefixed alias for NAME_DF_ERR (e.g., _plan_datafusion_err).
+/// (Needed to avoid compiler error when using macro in the same crate: `macros from the current crate cannot be referred to by absolute paths`)
 macro_rules! make_error {
-    ($NAME_ERR:ident, $NAME_DF_ERR: ident, $ERR:ident) => { make_error!(@inner ($), $NAME_ERR, $NAME_DF_ERR, $ERR); };
-    (@inner ($d:tt), $NAME_ERR:ident, $NAME_DF_ERR:ident, $ERR:ident) => {
-        ::paste::paste!{
-            /// Macro wraps `$ERR` to add backtrace feature
-            #[macro_export]
-            macro_rules! $NAME_DF_ERR {
-                ($d($d args:expr),* $d(; diagnostic=$d DIAG:expr)?) => {{
-                    let err =$crate::DataFusionError::$ERR(
-                        ::std::format!(
-                            "{}{}",
-                            ::std::format!($d($d args),*),
-                            $crate::DataFusionError::get_back_trace(),
-                        ).into()
-                    );
-                    $d (
-                        let err = err.with_diagnostic($d DIAG);
-                    )?
-                    err
-                }
-            }
+    ($NAME_ERR:ident, $PREFIXED_NAME_ERR:ident, $NAME_DF_ERR:ident, $PREFIXED_NAME_DF_ERR:ident, $ERR:ident) => {
+        make_error!(@inner ($), $NAME_ERR, $PREFIXED_NAME_ERR, $NAME_DF_ERR, $PREFIXED_NAME_DF_ERR, $ERR);
+    };
+    (@inner ($d:tt), $NAME_ERR:ident, $PREFIXED_NAME_ERR:ident, $NAME_DF_ERR:ident, $PREFIXED_NAME_DF_ERR:ident, $ERR:ident) => {
+        /// Macro wraps `$ERR` to add backtrace feature
+        #[macro_export]
+        macro_rules! $NAME_DF_ERR {
+            ($d($d args:expr),* $d(; diagnostic = $d DIAG:expr)?) => {{
+                let err = $crate::DataFusionError::$ERR(
+                    ::std::format!(
+                        "{}{}",
+                        ::std::format!($d($d args),*),
+                        $crate::DataFusionError::get_back_trace(),
+                    ).into()
+                );
+                $d (
+                    let err = err.with_diagnostic($d DIAG);
+                )?
+                err
+            }}
         }
 
-            /// Macro wraps Err(`$ERR`) to add backtrace feature
-            #[macro_export]
-            macro_rules! $NAME_ERR {
-                ($d($d args:expr),* $d(; diagnostic = $d DIAG:expr)?) => {{
-                    let err = $crate::[<_ $NAME_DF_ERR>]!($d($d args),*);
-                    $d (
-                        let err = err.with_diagnostic($d DIAG);
-                    )?
-                    Err(err)
-
-                }}
-            }
-
-
-            #[doc(hidden)]
-            pub use $NAME_ERR as [<_ $NAME_ERR>];
-            #[doc(hidden)]
-            pub use $NAME_DF_ERR as [<_ $NAME_DF_ERR>];
+        /// Macro wraps Err(`$ERR`) to add backtrace feature
+        #[macro_export]
+        macro_rules! $NAME_ERR {
+            ($d($d args:expr),* $d(; diagnostic = $d DIAG:expr)?) => {{
+                let err = $crate::$PREFIXED_NAME_DF_ERR!($d($d args),*);
+                $d (
+                    let err = err.with_diagnostic($d DIAG);
+                )?
+                Err(err)
+            }}
         }
+
+        #[doc(hidden)]
+        pub use $NAME_ERR as $PREFIXED_NAME_ERR;
+        #[doc(hidden)]
+        pub use $NAME_DF_ERR as $PREFIXED_NAME_DF_ERR;
     };
 }
 
 // Exposes a macro to create `DataFusionError::Plan` with optional backtrace
-make_error!(plan_err, plan_datafusion_err, Plan);
+make_error!(
+    plan_err,
+    _plan_err,
+    plan_datafusion_err,
+    _plan_datafusion_err,
+    Plan
+);
 
 // Exposes a macro to create `DataFusionError::Internal` with optional backtrace
-make_error!(internal_err, internal_datafusion_err, Internal);
+make_error!(
+    internal_err,
+    _internal_err,
+    internal_datafusion_err,
+    _internal_datafusion_err,
+    Internal
+);
 
 // Exposes a macro to create `DataFusionError::NotImplemented` with optional backtrace
-make_error!(not_impl_err, not_impl_datafusion_err, NotImplemented);
+make_error!(
+    not_impl_err,
+    _not_impl_err,
+    not_impl_datafusion_err,
+    _not_impl_datafusion_err,
+    NotImplemented
+);
 
 // Exposes a macro to create `DataFusionError::Execution` with optional backtrace
-make_error!(exec_err, exec_datafusion_err, Execution);
+make_error!(
+    exec_err,
+    _exec_err,
+    exec_datafusion_err,
+    _exec_datafusion_err,
+    Execution
+);
 
 // Exposes a macro to create `DataFusionError::Configuration` with optional backtrace
-make_error!(config_err, config_datafusion_err, Configuration);
+make_error!(
+    config_err,
+    _config_err,
+    config_datafusion_err,
+    _config_datafusion_err,
+    Configuration
+);
 
 // Exposes a macro to create `DataFusionError::Substrait` with optional backtrace
-make_error!(substrait_err, substrait_datafusion_err, Substrait);
+make_error!(
+    substrait_err,
+    _substrait_err,
+    substrait_datafusion_err,
+    _substrait_datafusion_err,
+    Substrait
+);
 
 // Exposes a macro to create `DataFusionError::ResourcesExhausted` with optional backtrace
-make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
+make_error!(
+    resources_err,
+    _resources_err,
+    resources_datafusion_err,
+    _resources_datafusion_err,
+    ResourcesExhausted
+);
 
 // Exposes a macro to create `DataFusionError::Ffi` with optional backtrace
-make_error!(ffi_err, ffi_datafusion_err, Ffi);
+make_error!(
+    ffi_err,
+    _ffi_err,
+    ffi_datafusion_err,
+    _ffi_datafusion_err,
+    Ffi
+);
 
 // Exposes a macro to create `DataFusionError::SQL` with optional backtrace
 #[macro_export]
@@ -1107,7 +1204,6 @@ mod test {
     use std::sync::Arc;
 
     use arrow::error::ArrowError;
-    use insta::assert_snapshot;
 
     fn ok_result() -> Result<()> {
         Ok(())
@@ -1126,14 +1222,8 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: 1 == 2 (left: 1, right: 2): expected equality.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        let err = check().unwrap_err().strip_backtrace();
+        assert!(err.starts_with("Internal error: Assertion failed: 1 == 2 (left: 1, right: 2): expected equality"));
     }
 
     #[test]
@@ -1149,14 +1239,8 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: 3 != 3 (left: 3, right: 3): values must differ.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        let err = check().unwrap_err().strip_backtrace();
+        assert!(err.starts_with("Internal error: Assertion failed: 3 != 3 (left: 3, right: 3): values must differ"));
     }
 
     #[test]
@@ -1173,14 +1257,8 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: false.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        let err = check().unwrap_err().strip_backtrace();
+        assert!(err.starts_with("Internal error: Assertion failed: false"));
     }
 
     #[test]
@@ -1190,13 +1268,9 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: false: custom message.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
+        let err = check().unwrap_err().strip_backtrace();
+        assert!(
+            err.starts_with("Internal error: Assertion failed: false: custom message")
         );
     }
 
@@ -1207,14 +1281,8 @@ mod test {
             ok_result()
         }
 
-        let err = check().unwrap_err();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: false: custom 42.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        let err = check().unwrap_err().strip_backtrace();
+        assert!(err.starts_with("Internal error: Assertion failed: false: custom 42"));
     }
 
     #[test]
@@ -1242,30 +1310,23 @@ mod test {
 
     // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
     #[cfg(feature = "backtrace")]
-    #[test]
-    #[expect(clippy::unnecessary_literal_unwrap)]
-    fn test_enabled_backtrace() {
+    fn ensure_rust_backtrace_enabled() {
         match std::env::var("RUST_BACKTRACE") {
             Ok(val) if val == "1" => {}
             _ => panic!("Environment variable RUST_BACKTRACE must be set to 1"),
         };
+    }
+
+    // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace() {
+        ensure_rust_backtrace_enabled();
 
         let res: Result<(), DataFusionError> = plan_err!("Err");
-        let err = res.unwrap_err().to_string();
-        assert!(err.contains(DataFusionError::BACK_TRACE_SEP));
-        assert_eq!(
-            err.split(DataFusionError::BACK_TRACE_SEP)
-                .collect::<Vec<&str>>()
-                .first()
-                .unwrap(),
-            &"Error during planning: Err"
-        );
-        assert!(
-            !err.split(DataFusionError::BACK_TRACE_SEP)
-                .collect::<Vec<&str>>()
-                .get(1)
-                .unwrap()
-                .is_empty()
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Error during planning: Err",
         );
     }
 
@@ -1273,9 +1334,318 @@ mod test {
     #[test]
     fn test_disabled_backtrace() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
-        let res = res.unwrap_err().to_string();
-        assert!(!res.contains(DataFusionError::BACK_TRACE_SEP));
-        assert_eq!(res, "Error during planning: Err");
+        assert_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Error during planning: Err",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    fn assert_err_without_backtrace_and_equal(
+        err: &DataFusionError,
+        expected_message: &str,
+    ) {
+        let err = err.to_string();
+        assert!(!err.contains(DataFusionError::BACK_TRACE_SEP));
+        assert_eq!(err, expected_message);
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    fn assert_internal_err_without_backtrace_and_equal(
+        err: &DataFusionError,
+        expected_message: &str,
+    ) {
+        let expected_message_before_backtrace = format!(
+            "{expected_message}.\nThis issue was likely caused by a bug in DataFusion's code. \
+                    Please help us to resolve this by filing a bug report in our issue tracker: \
+                    https://github.com/apache/datafusion/issues"
+        );
+        assert_err_without_backtrace_and_equal(
+            err,
+            expected_message_before_backtrace.as_str(),
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    fn assert_error_have_message_and_backtrace(
+        err: &DataFusionError,
+        message_before_backtrace: &str,
+    ) {
+        let err = err.to_string();
+        assert!(err.contains(DataFusionError::BACK_TRACE_SEP));
+        assert!(
+            !err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .get(1)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .first()
+                .copied()
+                .unwrap(),
+            message_before_backtrace,
+            "full error is: {err}"
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_unwrap_or_internal_err() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            let item = None::<()>;
+            unwrap_or_internal_err!(item);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: item should not be None",
+        );
+    }
+
+    // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_unwrap_or_internal_err() {
+        fn get_error() -> Result<(), DataFusionError> {
+            let item = None::<()>;
+            unwrap_or_internal_err!(item);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: item should not be None",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_or_internal_err_without_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            assert_or_internal_err!(false);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: false",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_or_internal_err_with_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            assert_or_internal_err!(false, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: false: my cool context",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_or_internal_err_without_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            assert_or_internal_err!(false);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: false",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_or_internal_err_with_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            assert_or_internal_err!(false, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: false: my cool context",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_eq_or_internal_err_without_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 2;
+            assert_eq_or_internal_err!(arg1, arg2);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2)",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_eq_or_internal_err_with_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 2;
+            assert_eq_or_internal_err!(arg1, arg2, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2): my cool context",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_eq_or_internal_err_without_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 2;
+            assert_eq_or_internal_err!(arg1, arg2);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2)",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_eq_or_internal_err_with_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 2;
+            assert_eq_or_internal_err!(arg1, arg2, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2): my cool context",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_ne_or_internal_err_without_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 1;
+            assert_ne_or_internal_err!(arg1, arg2);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1)",
+        );
+    }
+
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace_for_assert_ne_or_internal_err_with_args() {
+        ensure_rust_backtrace_enabled();
+
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 1;
+            assert_ne_or_internal_err!(arg1, arg2, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1): my cool context",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_ne_or_internal_err_without_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 1;
+            assert_ne_or_internal_err!(arg1, arg2);
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1)",
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace_for_assert_ne_or_internal_err_with_args() {
+        fn get_error() -> Result<(), DataFusionError> {
+            let arg1 = 1;
+            let arg2 = 1;
+            assert_ne_or_internal_err!(arg1, arg2, "my cool context");
+
+            unreachable!("should return error");
+        }
+
+        let res: Result<(), DataFusionError> = get_error();
+        assert_internal_err_without_backtrace_and_equal(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1): my cool context",
+        );
     }
 
     #[test]

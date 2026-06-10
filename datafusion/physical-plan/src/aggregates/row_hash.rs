@@ -21,17 +21,19 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use super::AggregateExec;
 use super::order::GroupOrdering;
+use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_id_array,
+    max_duplicate_ordinal,
 };
-use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
+use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
@@ -193,7 +195,7 @@ impl SkipAggregationProbe {
         self.num_groups = num_groups;
         if self.input_rows >= self.probe_rows_threshold {
             self.should_skip = self.num_groups as f64 / self.input_rows as f64
-                >= self.probe_ratio_threshold;
+                > self.probe_ratio_threshold;
             // Set is_locked to true only if we have decided to skip, otherwise we can try to skip
             // during processing the next record_batch.
             self.is_locked = self.should_skip;
@@ -260,7 +262,7 @@ enum OutOfMemoryMode {
 ///
 ///         group_values                             accumulators
 ///
-///  ```
+/// ```
 ///
 /// For example, given a query like `COUNT(x), SUM(y) ... GROUP BY z`,
 /// [`group_values`] will store the distinct values of `z`. There will
@@ -360,6 +362,7 @@ pub(crate) struct GroupedHashAggregateStream {
     // the execution.
     // ========================================================================
     schema: SchemaRef,
+    input_schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
 
@@ -561,7 +564,11 @@ impl GroupedHashAggregateStream {
 
         let agg_fn_names = aggregate_exprs
             .iter()
-            .map(|expr| expr.human_display())
+            .map(|expr| {
+                format_human_display(expr.human_display(), expr.human_display_alias())
+                    .map(|display| display.into_owned())
+                    .unwrap_or_else(|| expr.name().to_string())
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
@@ -613,6 +620,7 @@ impl GroupedHashAggregateStream {
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
+                .with_category(MetricCategory::Bytes)
                 .gauge("peak_mem_used", partition),
             spill_manager,
         };
@@ -636,13 +644,20 @@ impl GroupedHashAggregateStream {
                 options.skip_partial_aggregation_probe_rows_threshold;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
-            let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
-                .counter("skipped_aggregation_rows", partition);
-            Some(SkipAggregationProbe::new(
-                probe_rows_threshold,
-                probe_ratio_threshold,
-                skipped_aggregation_rows,
-            ))
+            // A threshold >= 1.0 means the ratio (num_groups / input_rows) can
+            // never exceed it, so the feature is effectively disabled.
+            if probe_ratio_threshold >= 1.0 {
+                None
+            } else {
+                let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
+                    .with_category(MetricCategory::Rows)
+                    .counter("skipped_aggregation_rows", partition);
+                Some(SkipAggregationProbe::new(
+                    probe_rows_threshold,
+                    probe_ratio_threshold,
+                    skipped_aggregation_rows,
+                ))
+            }
         } else {
             None
         };
@@ -650,7 +665,7 @@ impl GroupedHashAggregateStream {
         let reduction_factor = if agg.mode == AggregateMode::Partial {
             Some(
                 MetricBuilder::new(&agg.metrics)
-                    .with_type(metrics::MetricType::SUMMARY)
+                    .with_type(metrics::MetricType::Summary)
                     .ratio_metrics("reduction_factor", partition),
             )
         } else {
@@ -659,6 +674,7 @@ impl GroupedHashAggregateStream {
 
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
+            input_schema: agg.input().schema(),
             input,
             mode: agg.mode,
             accumulators,
@@ -832,6 +848,10 @@ impl Stream for GroupedHashAggregateStream {
                                     self.group_values.len()
                                 )));
                             }
+                            // Release the input pipeline's resources.
+                            let input_schema = self.input.schema();
+                            self.input =
+                                Box::pin(EmptyRecordBatchStream::new(input_schema));
                             self.exec_state = ExecutionState::Done;
                         }
                     }
@@ -1037,25 +1057,16 @@ impl GroupedHashAggregateStream {
                     self.group_values.len()
                 };
 
-                // Clamp to the sort boundary when using partial group ordering,
-                // otherwise remove_groups panics (#20445).
-                let n = match &self.group_ordering {
-                    GroupOrdering::None => n,
-                    _ => match self.group_ordering.emit_to() {
-                        Some(EmitTo::First(max)) => n.min(max),
-                        _ => 0,
-                    },
-                };
-
-                if n > 0
-                    && let Some(batch) = self.emit(EmitTo::First(n), false)?
+                if let Some(emit_to) = self.group_ordering.oom_emit_to(n)
+                    && let Some(batch) = self.emit(emit_to, false)?
                 {
-                    Ok(Some(ExecutionState::ProducingOutput(batch)))
-                } else {
-                    Err(oom)
+                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
                 }
+                Err(oom)
             }
-            _ => Err(oom),
+            OutOfMemoryMode::EmitEarly
+            | OutOfMemoryMode::Spill
+            | OutOfMemoryMode::ReportError => Err(oom),
         }
     }
 
@@ -1130,6 +1141,104 @@ impl GroupedHashAggregateStream {
         debug_assert!(batch.num_rows() > 0);
 
         Ok(Some(batch))
+    }
+
+    /// Registers groups for empty grouping sets when no input rows were seen.
+    ///
+    /// `GROUP BY GROUPING SETS (())` must always produce one row even when there
+    /// are no input rows (standard SQL semantics for a "grand total" group).
+    /// Mixed grouping sets like `GROUPING SETS (a, ())` also produce one row for
+    /// the empty set `()` on empty input.
+    ///
+    /// This method interns the group keys and primes the accumulators so they
+    /// produce their zero-row aggregate values (e.g. `NULL` for `SUM`,
+    /// `0` for `COUNT`).
+    fn init_empty_grouping_sets(&mut self) -> Result<()> {
+        if !self.group_by.has_grouping_set() || !self.group_values.is_empty() {
+            return Ok(());
+        }
+
+        let max_ordinal = max_duplicate_ordinal(self.group_by.groups());
+        let mut ordinals: std::collections::HashMap<&[bool], usize> =
+            std::collections::HashMap::new();
+        let group_schema = self.group_by.group_schema(&self.input_schema)?;
+        let n_expr = self.group_by.expr().len();
+        let mut any_interned = false;
+
+        for group in self.group_by.groups() {
+            let ordinal = {
+                let entry = ordinals.entry(group.as_slice()).or_insert(0);
+                let o = *entry;
+                *entry += 1;
+                o
+            };
+
+            if !group.iter().all(|&is_null| is_null) {
+                continue;
+            }
+
+            // Build the group key: one NULL per group-by expression, then the grouping_id.
+            let mut cols: Vec<ArrayRef> = group_schema
+                .fields()
+                .iter()
+                .take(n_expr)
+                .map(|f| new_null_array(f.data_type(), 1))
+                .collect();
+            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
+
+            let starting_groups = self.group_values.len();
+            self.group_values
+                .intern(&cols, &mut self.current_group_indices)?;
+            let total_groups = self.group_values.len();
+            if total_groups > starting_groups {
+                self.group_ordering.new_groups(
+                    &cols,
+                    &self.current_group_indices,
+                    total_groups,
+                )?;
+            }
+            any_interned = true;
+        }
+
+        if any_interned {
+            // Prime each accumulator for the registered group count with no data.
+            //
+            // We build 1-row null arrays for each aggregate argument and pass them
+            // with an all-false filter.  The filter ensures no row is accumulated
+            // into any group, which keeps every group in its "zero" initial state
+            // (NULL for SUM/AVG/MIN/MAX, 0 for COUNT).
+            //
+            // Using a 1-row batch rather than 0 rows is required to avoid a fast
+            // path in `NullState::accumulate` that treats "0 nulls in a 0-row
+            // array" as "all groups have been seen", which would cause SUM to
+            // return 0 instead of NULL.
+            //
+            // Argument types are inferred directly from the expression metadata so
+            // we never need to construct a full `RecordBatch`.
+            let total_groups = self.group_values.len();
+            let null_args: Vec<Vec<ArrayRef>> = self
+                .aggregate_arguments
+                .iter()
+                .map(|args| {
+                    args.iter()
+                        .map(|expr| {
+                            let dt = expr.data_type(&self.input_schema)?;
+                            Ok(new_null_array(&dt, 1))
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let false_filter = BooleanArray::from(vec![false]);
+            for (acc, args) in self.accumulators.iter_mut().zip(null_args.iter()) {
+                if self.mode.input_mode() == AggregateInputMode::Raw {
+                    acc.update_batch(args, &[0], Some(&false_filter), total_groups)?;
+                } else {
+                    acc.merge_batch(args, &[0], Some(&false_filter), total_groups)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Emit all intermediate aggregation states, sort them, and store them on disk.
@@ -1226,10 +1335,16 @@ impl GroupedHashAggregateStream {
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
         self.input_done = true;
         self.group_ordering.input_done();
+        // Release the original input pipeline's resources now that we're done
+        // reading from it. In the spill branch below, `self.input` is replaced
+        // again with a stream that merges spill files.
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
             // Input has been entirely processed without spilling to disk.
+            self.init_empty_grouping_sets()?;
 
             // Flush any remaining group values.
             let batch = self.emit(EmitTo::All, false)?;
@@ -1368,12 +1483,10 @@ mod tests {
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {
@@ -1523,11 +1636,11 @@ mod tests {
             ],
         )?;
 
-        // Batch 2: 350 rows with 350 unique NEW groups (starting from group 10)
-        // After batch 2, total: 450 rows, 360 groups
-        // Ratio: 360/450 = 0.8 (80%) >= 0.8 -> SHOULD decide to skip
-        let batch2_rows = 350;
-        let batch2_groups = 350;
+        // Batch 2: 360 rows with 360 unique NEW groups (starting from group 10)
+        // After batch 2, total: 460 rows, 370 groups
+        // Ratio: 370/460 ≈ 0.804 (80.4%) > 0.8 -> SHOULD decide to skip
+        let batch2_rows = 360;
+        let batch2_groups = 360;
         let group_ids_batch2: Vec<i32> = (batch1_groups..(batch1_groups + batch2_groups))
             .map(|x| x as i32)
             .collect();
@@ -1709,5 +1822,26 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_skip_aggregation_probe_equality_does_not_skip() {
+        // When num_groups / input_rows == probe_ratio_threshold, the `>` boundary
+        // means we must NOT skip — equality is not sufficient to trigger skip.
+        let threshold_ratio = 0.5_f64;
+        let threshold_rows = 10_usize;
+        let mut probe = SkipAggregationProbe::new(
+            threshold_rows,
+            threshold_ratio,
+            metrics::Count::new(),
+        );
+
+        // 10 rows, 5 groups → ratio = 5/10 = 0.5 exactly equals threshold
+        probe.update_state(10, 5);
+
+        assert!(
+            !probe.should_skip(),
+            "ratio == threshold should not trigger skip (boundary is exclusive)"
+        );
     }
 }

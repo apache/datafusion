@@ -35,7 +35,8 @@ use datafusion_physical_expr::{PhysicalExpr, physical_exprs_equal};
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
 ///
-/// This rule should be applied after the EnforceDistribution and EnforceSorting rules
+/// This rule should be applied after the `EnsureRequirements` rule (which
+/// handles both distribution and sorting enforcement).
 #[derive(Default, Debug)]
 pub struct CombinePartialFinalAggregate {}
 
@@ -54,7 +55,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(|plan| {
             // Check if the plan is AggregateExec
-            let Some(agg_exec) = plan.as_any().downcast_ref::<AggregateExec>() else {
+            let Some(agg_exec) = plan.downcast_ref::<AggregateExec>() else {
                 return Ok(Transformed::no(plan));
             };
 
@@ -66,8 +67,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
             }
 
             // Check if the input is AggregateExec
-            let Some(input_agg_exec) =
-                agg_exec.input().as_any().downcast_ref::<AggregateExec>()
+            let Some(input_agg_exec) = agg_exec.input().downcast_ref::<AggregateExec>()
             else {
                 return Ok(Transformed::no(plan));
             };

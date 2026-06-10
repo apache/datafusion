@@ -38,6 +38,7 @@ pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
 pub mod memory;
+pub mod morsel;
 pub mod projection;
 pub mod schema_adapter;
 pub mod sink;
@@ -55,20 +56,29 @@ pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;
 use datafusion_common::stats::Precision;
-use datafusion_common::{ColumnStatistics, Result, exec_datafusion_err};
+use datafusion_common::{ColumnStatistics, Result, TableReference, exec_datafusion_err};
 use datafusion_common::{ScalarValue, Statistics};
 use datafusion_physical_expr::LexOrdering;
 use futures::{Stream, StreamExt};
 use object_store::{GetOptions, GetRange, ObjectStore};
 use object_store::{ObjectMeta, path::Path};
-pub use table_schema::TableSchema;
+pub use table_schema::{TableSchema, TableSchemaBuilder};
 // Remove when add_row_stats is remove
+use arrow::datatypes::SchemaRef;
 #[expect(deprecated)]
 pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
+use std::any::Any;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
+
+/// User-defined per-file extension data, keyed by concrete Rust type.
+///
+/// Re-exported from [`datafusion_common::extensions::Extensions`]; the same
+/// type backs `SessionConfig::extensions`, `ExtendedStatistics::extensions`,
+/// and other extension fields throughout DataFusion.
+pub type FileExtensions = datafusion_common::extensions::Extensions;
 
 /// Stream of files get listed from object store
 #[deprecated(
@@ -147,16 +157,30 @@ pub struct PartitionedFile {
     /// underlying format (for example, Parquet `sorting_columns`), but it may also be set
     /// explicitly via [`Self::with_ordering`].
     pub ordering: Option<LexOrdering>,
-    /// An optional field for user defined per object metadata
-    pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    /// User-defined per-file metadata, keyed by Rust type. Multiple
+    /// independent components can each attach their own data here without
+    /// conflict — see [`FileExtensions`].
+    pub extensions: FileExtensions,
     /// The estimated size of the parquet metadata, in bytes
     pub metadata_size_hint: Option<usize>,
+    pub table_reference: Option<TableReference>,
+    /// A user-provided physical Arrow schema for this file.
+    ///
+    /// This schema describes only the columns stored in the file. It must not
+    /// include partition columns; those are represented separately by
+    /// [`Self::partition_values`] and the scan's table partition columns.
+    ///
+    /// When provided, this field will be used by the Parquet reader to avoid
+    /// parsing the Arrow schema from the `ARROW:schema` metadata key. Other
+    /// built-in file sources ignore it for now.
+    pub arrow_schema: Option<SchemaRef>,
 }
 
 impl PartitionedFile {
     /// Create a simple file without metadata or partition
     pub fn new(path: impl Into<String>, size: u64) -> Self {
         Self {
+            arrow_schema: None,
             object_meta: ObjectMeta {
                 location: Path::from(path.into()),
                 last_modified: chrono::Utc.timestamp_nanos(0),
@@ -168,27 +192,31 @@ impl PartitionedFile {
             range: None,
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: FileExtensions::new(),
             metadata_size_hint: None,
+            table_reference: None,
         }
     }
 
     /// Create a file from a known ObjectMeta without partition
     pub fn new_from_meta(object_meta: ObjectMeta) -> Self {
         Self {
+            arrow_schema: None,
             object_meta,
             partition_values: vec![],
             range: None,
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: FileExtensions::new(),
             metadata_size_hint: None,
+            table_reference: None,
         }
     }
 
     /// Create a file range without metadata or partition
     pub fn new_with_range(path: String, size: u64, start: i64, end: i64) -> Self {
         Self {
+            arrow_schema: None,
             object_meta: ObjectMeta {
                 location: Path::from(path),
                 last_modified: chrono::Utc.timestamp_nanos(0),
@@ -200,16 +228,34 @@ impl PartitionedFile {
             range: Some(FileRange { start, end }),
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: FileExtensions::new(),
             metadata_size_hint: None,
+            table_reference: None,
         }
         .with_range(start, end)
+    }
+
+    /// Provide a physical Arrow schema for this file.
+    ///
+    /// The schema must describe only columns stored in the file and must not
+    /// include partition columns. See [`Self::arrow_schema`] for details.
+    pub fn with_arrow_schema(mut self, schema: SchemaRef) -> Self {
+        self.arrow_schema = Some(schema);
+        self
     }
 
     /// Attach partition values to this file.
     /// This replaces any existing partition values.
     pub fn with_partition_values(mut self, partition_values: Vec<ScalarValue>) -> Self {
         self.partition_values = partition_values;
+        self
+    }
+
+    pub fn with_table_reference(
+        mut self,
+        table_reference: Option<TableReference>,
+    ) -> Self {
+        self.table_reference = table_reference;
         self
     }
 
@@ -256,14 +302,34 @@ impl PartitionedFile {
         self
     }
 
-    /// Update the user defined extensions for this file.
+    /// Attach a typed user-defined extension to this file. Multiple
+    /// independent extensions can be attached, each keyed by its concrete
+    /// Rust type. Inserting a value of a type that already has an extension
+    /// replaces the previous one.
     ///
-    /// This can be used to pass reader specific information.
-    pub fn with_extensions(
-        mut self,
-        extensions: Arc<dyn std::any::Any + Send + Sync>,
-    ) -> Self {
-        self.extensions = Some(extensions);
+    /// This can be used to pass reader-specific information (e.g. a
+    /// `ParquetAccessPlan`, or a custom index entry).
+    pub fn with_extension<T: Any + Send + Sync>(mut self, value: T) -> Self {
+        self.extensions.insert(value);
+        self
+    }
+
+    /// Borrow the extension of type `T`, if one is attached.
+    pub fn extension<T: Any + Send + Sync>(&self) -> Option<&T> {
+        self.extensions.get::<T>()
+    }
+
+    /// Attach a type-erased extension to this file.
+    ///
+    /// Kept as a backwards-compatible shim; prefer [`Self::with_extension`]
+    /// which keys the extension by its concrete Rust type at the call site.
+    #[deprecated(
+        since = "54.0.0",
+        note = "use `with_extension`; the extension is keyed by its concrete type"
+    )]
+    pub fn with_extensions(mut self, extensions: Arc<dyn Any + Send + Sync>) -> Self {
+        #[expect(deprecated)]
+        self.extensions.insert_dyn(extensions);
         self
     }
 
@@ -333,12 +399,14 @@ impl From<ObjectMeta> for PartitionedFile {
     fn from(object_meta: ObjectMeta) -> Self {
         PartitionedFile {
             object_meta,
+            arrow_schema: None,
             partition_values: vec![],
             range: None,
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: FileExtensions::new(),
             metadata_size_hint: None,
+            table_reference: None,
         }
     }
 }
@@ -512,6 +580,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
         let max = (base + range_size) as f64;
 
         let file = PartitionedFile {
+            arrow_schema: None,
             object_meta: ObjectMeta {
                 location: Path::from(format!("file_{i}.parquet")),
                 last_modified: chrono::Utc::now(),
@@ -534,8 +603,9 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                 }],
             })),
             ordering: None,
-            extensions: None,
+            extensions: FileExtensions::new(),
             metadata_size_hint: None,
+            table_reference: None,
         };
         files.push(file);
     }

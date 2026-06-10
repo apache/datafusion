@@ -106,11 +106,7 @@ mod test {
             .await
             .unwrap();
         let table = ctx.table_provider(table_name.as_str()).await.unwrap();
-        let listing_table = table
-            .as_any()
-            .downcast_ref::<ListingTable>()
-            .unwrap()
-            .clone();
+        let listing_table = table.downcast_ref::<ListingTable>().unwrap().clone();
         listing_table
             .scan(&ctx.state(), None, &[], None)
             .await
@@ -154,13 +150,16 @@ mod test {
             // - null_count = 0 (partition values from paths are never null)
             // - min/max are the merged partition values across files in the group
             // - byte_size = num_rows * 4 (Date32 is 4 bytes per row)
+            // - distinct_count = Inexact(max_date - min_date + 1), derived from the
+            //   date range via interval analysis for temporal types
             let date32_byte_size = num_rows * 4;
+            let distinct_dates = (max_date - min_date + 1) as usize;
             column_stats.push(ColumnStatistics {
                 null_count: Precision::Exact(0),
                 max_value: Precision::Exact(ScalarValue::Date32(Some(max_date))),
                 min_value: Precision::Exact(ScalarValue::Date32(Some(min_date))),
                 sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
+                distinct_count: Precision::Inexact(distinct_dates),
                 byte_size: Precision::Exact(date32_byte_size),
             });
         }
@@ -382,8 +381,6 @@ mod test {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, scan)?);
         let full_statistics = filter.partition_statistics(None)?;
-        // Filter preserves original total_rows and byte_size from input
-        // (4 total rows = 2 partitions * 2 rows each, byte_size = 4 * 4 = 16 bytes for int32)
         let expected_full_statistic = Statistics {
             num_rows: Precision::Inexact(0),
             total_byte_size: Precision::Inexact(0),
@@ -394,7 +391,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Int32(None)),
                     sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
-                    byte_size: Precision::Exact(16),
+                    byte_size: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
@@ -402,7 +399,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Date32(None)),
                     sum_value: Precision::Exact(ScalarValue::Date32(None)),
                     distinct_count: Precision::Exact(0),
-                    byte_size: Precision::Exact(16), // 4 rows * 4 bytes (Date32)
+                    byte_size: Precision::Exact(0),
                 },
             ],
         };
@@ -412,7 +409,6 @@ mod test {
             .map(|idx| filter.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
-        // Per-partition stats: each partition has 2 rows, byte_size = 2 * 4 = 8
         let expected_partition_statistic = Statistics {
             num_rows: Precision::Inexact(0),
             total_byte_size: Precision::Inexact(0),
@@ -423,7 +419,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Int32(None)),
                     sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
-                    byte_size: Precision::Exact(8),
+                    byte_size: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
@@ -431,7 +427,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Date32(None)),
                     sum_value: Precision::Exact(ScalarValue::Date32(None)),
                     distinct_count: Precision::Exact(0),
-                    byte_size: Precision::Exact(8), // 2 rows * 4 bytes (Date32)
+                    byte_size: Precision::Exact(0),
                 },
             ],
         };
@@ -560,10 +556,10 @@ mod test {
         // Check that we have 2 partitions
         assert_eq!(statistics.len(), 2);
         // Cross join output schema: [left.id, left.date, right.id]
-        // Cross join doesn't propagate Column's byte_size
         let expected_statistic_partition_1 = Statistics {
             num_rows: Precision::Exact(8),
-            total_byte_size: Precision::Exact(512),
+            total_byte_size: Precision::Exact(96),
+            // Cross join doesn't propagate Column's byte_size
             column_statistics: vec![
                 // column 0: left.id (Int32, file column from t1)
                 ColumnStatistics {
@@ -581,7 +577,7 @@ mod test {
                     max_value: Precision::Exact(ScalarValue::Date32(Some(20151))),
                     min_value: Precision::Exact(ScalarValue::Date32(Some(20148))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(4),
                     byte_size: Precision::Absent,
                 },
                 // column 2: right.id (Int32, file column from t2) - right partition 0: ids [3,4]
@@ -597,7 +593,7 @@ mod test {
         };
         let expected_statistic_partition_2 = Statistics {
             num_rows: Precision::Exact(8),
-            total_byte_size: Precision::Exact(512),
+            total_byte_size: Precision::Exact(96),
             column_statistics: vec![
                 // column 0: left.id (Int32, file column from t1)
                 ColumnStatistics {
@@ -615,7 +611,7 @@ mod test {
                     max_value: Precision::Exact(ScalarValue::Date32(Some(20151))),
                     min_value: Precision::Exact(ScalarValue::Date32(Some(20148))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(4),
                     byte_size: Precision::Absent,
                 },
                 // column 2: right.id (Int32, file column from t2) - right partition 1: ids [1,2]
@@ -665,39 +661,36 @@ mod test {
         let full_statistics = nested_loop_join.partition_statistics(None)?;
         // With empty join columns, estimate_join_statistics returns Inexact row count
         // based on the outer side (right side for RightSemi)
-        let mut expected_full_statistics = create_partition_statistics(
+        let expected_full_statistics = create_partition_statistics(
             4,
             32,
             1,
             4,
             Some((DATE_2025_03_01, DATE_2025_03_04)),
-        );
-        expected_full_statistics.num_rows = Precision::Inexact(4);
-        expected_full_statistics.total_byte_size = Precision::Absent;
+        )
+        .to_inexact();
         assert_eq!(*full_statistics, expected_full_statistics);
 
         // Test partition_statistics(Some(idx)) - returns partition-specific statistics
         // Partition 1: ids [3,4], dates [2025-03-01, 2025-03-02]
-        let mut expected_statistic_partition_1 = create_partition_statistics(
+        let expected_statistic_partition_1 = create_partition_statistics(
             2,
             16,
             3,
             4,
             Some((DATE_2025_03_01, DATE_2025_03_02)),
-        );
-        expected_statistic_partition_1.num_rows = Precision::Inexact(2);
-        expected_statistic_partition_1.total_byte_size = Precision::Absent;
+        )
+        .to_inexact();
 
         // Partition 2: ids [1,2], dates [2025-03-03, 2025-03-04]
-        let mut expected_statistic_partition_2 = create_partition_statistics(
+        let expected_statistic_partition_2 = create_partition_statistics(
             2,
             16,
             1,
             2,
             Some((DATE_2025_03_03, DATE_2025_03_04)),
-        );
-        expected_statistic_partition_2.num_rows = Precision::Inexact(2);
-        expected_statistic_partition_2.total_byte_size = Precision::Absent;
+        )
+        .to_inexact();
 
         let statistics = (0..nested_loop_join.output_partitioning().partition_count())
             .map(|idx| nested_loop_join.partition_statistics(Some(idx)))
@@ -933,7 +926,10 @@ mod test {
             num_rows: Precision::Exact(0),
             total_byte_size: Precision::Absent,
             column_statistics: vec![
-                ColumnStatistics::new_unknown(),
+                ColumnStatistics {
+                    distinct_count: Precision::Exact(0),
+                    ..ColumnStatistics::new_unknown()
+                },
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
@@ -985,6 +981,43 @@ mod test {
             empty_table.clone(),
             scan_schema.clone(),
         )?);
+
+        let expect_partial_stat = Statistics {
+            num_rows: Precision::Exact(1),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+        assert_eq!(
+            expect_partial_stat,
+            *agg_partial.partition_statistics(Some(0))?
+        );
+        assert_eq!(
+            expect_partial_stat,
+            *agg_partial.partition_statistics(Some(1))?
+        );
+
+        let expect_partial_overall_stat = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+        assert_eq!(
+            expect_partial_overall_stat,
+            *agg_partial.partition_statistics(None)?
+        );
+
+        // Verify that the partial aggregate emits one accumulator-state row per
+        // output partition, even when the corresponding input partitions are empty.
+        let partitions = execute_stream_partitioned(
+            agg_partial.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(2, partitions.len());
+        for partition_stream in partitions {
+            let result: Vec<RecordBatch> = partition_stream.try_collect().await?;
+            let rows = result.iter().map(|batch| batch.num_rows()).sum::<usize>();
+            assert_eq!(1, rows);
+        }
 
         let coalesce = Arc::new(CoalescePartitionsExec::new(agg_partial.clone()));
 
@@ -1251,7 +1284,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(2),
                     byte_size: Precision::Exact(8),
                 },
                 ColumnStatistics::new_unknown(), // window column
@@ -1279,7 +1312,7 @@ mod test {
                         DATE_2025_03_03,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(2),
                     byte_size: Precision::Exact(8),
                 },
                 ColumnStatistics::new_unknown(), // window column
@@ -1416,6 +1449,7 @@ mod test {
                     byte_size: Precision::Exact(16),
                 },
                 // Left date column: all partitions (2025-03-01..2025-03-04)
+                // NDV is Inexact(4) derived from the date range via interval analysis
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
                     max_value: Precision::Exact(ScalarValue::Date32(Some(
@@ -1425,7 +1459,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(4),
                     byte_size: Precision::Exact(16),
                 },
                 // Right id column: partition 0 only (id 3..4)
@@ -1438,6 +1472,7 @@ mod test {
                     byte_size: Precision::Exact(8),
                 },
                 // Right date column: partition 0 only (2025-03-01..2025-03-02)
+                // NDV is Inexact(2) derived from the date range via interval analysis
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
                     max_value: Precision::Exact(ScalarValue::Date32(Some(
@@ -1447,7 +1482,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(2),
                     byte_size: Precision::Exact(8),
                 },
             ],
@@ -1499,7 +1534,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(2),
                     byte_size: Precision::Exact(8),
                 },
                 // Right id column: partition 0 only (id 3..4)
@@ -1521,7 +1556,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(2),
                     byte_size: Precision::Exact(8),
                 },
             ],
@@ -1573,7 +1608,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(4),
                     byte_size: Precision::Exact(16),
                 },
                 // Right id column: all partitions (id 1..4)
@@ -1595,7 +1630,7 @@ mod test {
                         DATE_2025_03_01,
                     ))),
                     sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
+                    distinct_count: Precision::Inexact(4),
                     byte_size: Precision::Exact(16),
                 },
             ],

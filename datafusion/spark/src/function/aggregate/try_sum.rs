@@ -24,7 +24,6 @@ use datafusion_common::{Result, ScalarValue, downcast_value, exec_err, not_impl_
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::mem::size_of_val;
 
@@ -191,7 +190,7 @@ fn update_decimal128<T: ArrowNumericType>(
     acc: &mut TrySumAccumulator<T>,
     array: &PrimitiveArray<T>,
 ) -> Result<()> {
-    let precision = acc.dec_precision.unwrap_or(38);
+    let precision = acc.dec_precision.unwrap_or(DECIMAL128_MAX_PRECISION);
 
     for v in array.iter().flatten() {
         let v_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&v) };
@@ -248,10 +247,6 @@ fn exceeds_decimal128_precision(sum: i128, p: u8) -> bool {
 }
 
 impl AggregateUDFImpl for SparkTrySum {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "try_sum"
     }
@@ -339,8 +334,8 @@ impl AggregateUDFImpl for SparkTrySum {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{BooleanArray, Decimal128Array, Float64Array, Int64Array};
-    use datafusion_common::{DataFusionError, ScalarValue};
+    use arrow::array::{Decimal128Array, Float64Array, Int64Array};
+    use datafusion_common::DataFusionError;
     use std::sync::Arc;
 
     use super::*;

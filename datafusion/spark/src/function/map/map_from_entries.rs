@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::function::map::utils::{
@@ -25,10 +24,12 @@ use crate::function::map::utils::{
 use arrow::array::{Array, ArrayRef, NullBufferBuilder, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::config::MapKeyDedupPolicy;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -54,10 +55,6 @@ impl MapFromEntries {
 }
 
 impl ScalarUDFImpl for MapFromEntries {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "map_from_entries"
     }
@@ -104,15 +101,17 @@ impl ScalarUDFImpl for MapFromEntries {
         Ok(Arc::new(Field::new(self.name(), map_type, nullable)))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        make_scalar_function(map_from_entries_inner, vec![])(&args.args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let last_value_wins =
+            args.config_options.spark.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+        make_scalar_function(
+            move |args: &[ArrayRef]| map_from_entries_inner(args, last_value_wins),
+            vec![],
+        )(&args.args)
     }
 }
 
-fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn map_from_entries_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
     let [entries] = take_function_args("map_from_entries", args)?;
     let entries_offsets = get_list_offsets(entries)?;
     let entries_values = get_list_values(entries)?;
@@ -155,6 +154,7 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         &entries_offsets,
         None,
         res_nulls.as_ref(),
+        last_value_wins,
     )
 }
 
@@ -162,7 +162,6 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::datatypes::Fields;
-    use datafusion_expr::ReturnFieldArgs;
 
     fn make_entries_field(array_nullable: bool, element_nullable: bool) -> FieldRef {
         let struct_type = DataType::Struct(Fields::from(vec![

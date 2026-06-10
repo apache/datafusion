@@ -63,6 +63,8 @@ See [use cases] for examples. The following related subprojects target end users
 
 - [DataFusion Python](https://github.com/apache/datafusion-python/) offers a Python interface for SQL and DataFrame
   queries.
+- [DataFusion Java](https://github.com/apache/datafusion-java/) offers a Java interface for SQL and DataFrame
+  queries.
 - [DataFusion Comet](https://github.com/apache/datafusion-comet/) is an accelerator for Apache Spark based on
   DataFusion.
 

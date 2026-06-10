@@ -17,16 +17,18 @@
 
 //! Hash computation and hash table lookup expressions for dynamic filtering
 
-use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
+use std::{fmt::Display, hash::Hash, sync::Arc};
 
-use ahash::RandomState;
 use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::Result;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::{create_hashes, with_hashes};
+#[cfg(feature = "proto")]
+use datafusion_common::internal_err;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
     DynHash, PhysicalExpr, PhysicalExprRef,
@@ -34,22 +36,22 @@ use datafusion_physical_expr_common::physical_expr::{
 
 use crate::joins::Map;
 
-/// RandomState wrapper that preserves the seeds used to create it.
+/// RandomState wrapper that preserves the seed used to create it.
 ///
-/// This is needed because ahash's `RandomState` doesn't expose its seeds after creation,
+/// This is needed because `RandomState` doesn't expose its seed after creation,
 /// but we need them for serialization (e.g., protobuf serde).
 #[derive(Clone, Debug)]
 pub struct SeededRandomState {
     random_state: RandomState,
-    seeds: (u64, u64, u64, u64),
+    seed: u64,
 }
 
 impl SeededRandomState {
-    /// Create a new SeededRandomState with the given seeds.
-    pub const fn with_seeds(k0: u64, k1: u64, k2: u64, k3: u64) -> Self {
+    /// Create a new SeededRandomState with the given seed.
+    pub const fn with_seed(k: u64) -> Self {
         Self {
-            random_state: RandomState::with_seeds(k0, k1, k2, k3),
-            seeds: (k0, k1, k2, k3),
+            random_state: RandomState::with_seed(k),
+            seed: k,
         }
     }
 
@@ -58,9 +60,9 @@ impl SeededRandomState {
         &self.random_state
     }
 
-    /// Get the seeds used to create this RandomState.
-    pub fn seeds(&self) -> (u64, u64, u64, u64) {
-        self.seeds
+    /// Get the seed used to create this RandomState.
+    pub fn seed(&self) -> u64 {
+        self.seed
     }
 }
 
@@ -105,9 +107,9 @@ impl HashExpr {
         &self.on_columns
     }
 
-    /// Get the seeds used for hashing.
-    pub fn seeds(&self) -> (u64, u64, u64, u64) {
-        self.random_state.seeds()
+    /// Get the seed used for hashing.
+    pub fn seed(&self) -> u64 {
+        self.random_state.seed()
     }
 
     /// Get the description.
@@ -124,8 +126,8 @@ impl std::fmt::Debug for HashExpr {
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        let (s1, s2, s3, s4) = self.seeds();
-        write!(f, "{}({cols}, [{s1},{s2},{s3},{s4}])", self.description)
+        let seed = self.seed();
+        write!(f, "{}({cols}, [{seed}])", self.description)
     }
 }
 
@@ -133,7 +135,7 @@ impl Hash for HashExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.on_columns.dyn_hash(state);
         self.description.hash(state);
-        self.seeds().hash(state);
+        self.seed().hash(state);
     }
 }
 
@@ -141,7 +143,7 @@ impl PartialEq for HashExpr {
     fn eq(&self, other: &Self) -> bool {
         self.on_columns == other.on_columns
             && self.description == other.description
-            && self.seeds() == other.seeds()
+            && self.seed() == other.seed()
     }
 }
 
@@ -154,10 +156,6 @@ impl Display for HashExpr {
 }
 
 impl PhysicalExpr for HashExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         self.on_columns.iter().collect()
     }
@@ -203,6 +201,55 @@ impl PhysicalExpr for HashExpr {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+        let on_columns = ctx.encode_children_expressions(&self.on_columns)?;
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
+                protobuf::PhysicalHashExprNode {
+                    on_columns,
+                    seed0: self.seed(),
+                    description: self.description.clone(),
+                },
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl HashExpr {
+    /// Reconstruct a [`HashExpr`] from its protobuf representation.
+    ///
+    /// Takes the whole [`PhysicalExprNode`], the exact inverse of what
+    /// [`PhysicalExpr::try_to_proto`] produces, so every expression's
+    /// `try_from_proto` shares one signature. Child sub-expressions are
+    /// decoded recursively via [`PhysicalExprDecodeCtx::decode`].
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    /// [`PhysicalExpr::try_to_proto`]: datafusion_physical_expr_common::physical_expr::PhysicalExpr::try_to_proto
+    /// [`PhysicalExprDecodeCtx::decode`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::decode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_proto_models::protobuf;
+        let hash_expr = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::HashExpr(h)) => h,
+            _ => return internal_err!("PhysicalExprNode is not a HashExpr"),
+        };
+        let on_columns = ctx.decode_children_expressions(&hash_expr.on_columns)?;
+        Ok(Arc::new(HashExpr::new(
+            on_columns,
+            SeededRandomState::with_seed(hash_expr.seed0),
+            hash_expr.description.clone(),
+        )))
+    }
 }
 
 /// Physical expression that checks join keys in a [`Map`] (hash table or array map).
@@ -219,7 +266,6 @@ pub struct HashTableLookupExpr {
     /// Description for display
     description: String,
 }
-
 impl HashTableLookupExpr {
     /// Create a new HashTableLookupExpr
     ///
@@ -245,7 +291,6 @@ impl HashTableLookupExpr {
         }
     }
 }
-
 impl std::fmt::Debug for HashTableLookupExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cols = self
@@ -254,8 +299,8 @@ impl std::fmt::Debug for HashTableLookupExpr {
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        let (s1, s2, s3, s4) = self.random_state.seeds();
-        write!(f, "{}({cols}, [{s1},{s2},{s3},{s4}])", self.description)
+        let seed = self.random_state.seed();
+        write!(f, "{}({cols}, [{seed}])", self.description)
     }
 }
 
@@ -263,7 +308,7 @@ impl Hash for HashTableLookupExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.on_columns.dyn_hash(state);
         self.description.hash(state);
-        self.random_state.seeds().hash(state);
+        self.random_state.seed().hash(state);
         // Note that we compare hash_map by pointer equality.
         // Actually comparing the contents of the hash maps would be expensive.
         // The way these hash maps are used in actuality is that HashJoinExec creates
@@ -286,7 +331,7 @@ impl PartialEq for HashTableLookupExpr {
         // but that seems unlikely and not worth paying the cost of deep comparison all the time.
         self.on_columns == other.on_columns
             && self.description == other.description
-            && self.random_state.seeds() == other.random_state.seeds()
+            && self.random_state.seed() == other.random_state.seed()
             && Arc::ptr_eq(&self.map, &other.map)
     }
 }
@@ -300,10 +345,6 @@ impl Display for HashTableLookupExpr {
 }
 
 impl PhysicalExpr for HashTableLookupExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         self.on_columns.iter().collect()
     }
@@ -345,7 +386,38 @@ impl PhysicalExpr for HashTableLookupExpr {
             }
         }
     }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+        use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 
+        // HashTableLookupExpr holds a runtime Arc<Map> (the build-side hash
+        // table) that cannot be serialized, so it is replaced with lit(true).
+        //
+        // Dynamic filtering is a performance optimisation only — replacing the
+        // lookup with lit(true) preserves correctness by allowing all rows
+        // through.
+        //
+        // If a plan is serialized before execution, HashTableLookupExpr is not
+        // yet present in the dynamic filter expression.
+        //
+        // If a plan is serialized after execution, any runtime-created
+        // HashTableLookupExpr is replaced during serialization. Re-executing
+        // the plan requires reset_state(), after which HashJoinExec rebuilds
+        // fresh dynamic filters at runtime.
+        let value = datafusion_proto_common::ScalarValue {
+            value: Some(datafusion_proto_common::scalar_value::Value::BoolValue(
+                true,
+            )),
+        };
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(ExprType::Literal(value)),
+        }))
+    }
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
     }
@@ -383,13 +455,13 @@ mod tests {
 
         let expr1 = HashExpr::new(
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             "test_hash".to_string(),
         );
 
         let expr2 = HashExpr::new(
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             "test_hash".to_string(),
         );
 
@@ -404,13 +476,13 @@ mod tests {
 
         let expr1 = HashExpr::new(
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             "test_hash".to_string(),
         );
 
         let expr2 = HashExpr::new(
             vec![Arc::clone(&col_a), Arc::clone(&col_c)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             "test_hash".to_string(),
         );
 
@@ -423,13 +495,13 @@ mod tests {
 
         let expr1 = HashExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             "hash_one".to_string(),
         );
 
         let expr2 = HashExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             "hash_two".to_string(),
         );
 
@@ -442,13 +514,13 @@ mod tests {
 
         let expr1 = HashExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             "test_hash".to_string(),
         );
 
         let expr2 = HashExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(5, 6, 7, 8),
+            SeededRandomState::with_seed(5),
             "test_hash".to_string(),
         );
 
@@ -462,19 +534,185 @@ mod tests {
 
         let expr1 = HashExpr::new(
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             "test_hash".to_string(),
         );
 
         let expr2 = HashExpr::new(
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             "test_hash".to_string(),
         );
 
         // Equal expressions should have equal hashes
         assert_eq!(expr1, expr2);
         assert_eq!(compute_hash(&expr1), compute_hash(&expr2));
+    }
+
+    #[cfg(feature = "proto")]
+    mod proto_tests {
+        use super::*;
+        use arrow::datatypes::{DataType, Field};
+        use datafusion_common::internal_datafusion_err;
+        use datafusion_physical_expr_common::physical_expr::proto_decode::{
+            PhysicalExprDecode, PhysicalExprDecodeCtx,
+        };
+        use datafusion_physical_expr_common::physical_expr::proto_encode::{
+            PhysicalExprEncode, PhysicalExprEncodeCtx,
+        };
+        use datafusion_proto_models::protobuf;
+
+        struct TestEncoder;
+
+        impl PhysicalExprEncode for TestEncoder {
+            fn encode(
+                &self,
+                expr: &Arc<dyn PhysicalExpr>,
+            ) -> Result<protobuf::PhysicalExprNode> {
+                let ctx = PhysicalExprEncodeCtx::new(self);
+                expr.try_to_proto(&ctx)?.ok_or_else(|| {
+                    internal_datafusion_err!("test encoder cannot encode {expr:?}")
+                })
+            }
+        }
+
+        struct TestDecoder;
+
+        impl PhysicalExprDecode for TestDecoder {
+            fn decode(
+                &self,
+                node: &protobuf::PhysicalExprNode,
+                schema: &Schema,
+            ) -> Result<Arc<dyn PhysicalExpr>> {
+                let ctx = PhysicalExprDecodeCtx::new(schema, self);
+                match &node.expr_type {
+                    Some(protobuf::physical_expr_node::ExprType::Column(_)) => {
+                        Column::try_from_proto(node, &ctx)
+                    }
+                    _ => internal_err!("test decoder cannot decode {node:?}"),
+                }
+            }
+        }
+
+        fn test_decode_ctx<'a>(
+            schema: &'a Schema,
+            decoder: &'a TestDecoder,
+        ) -> PhysicalExprDecodeCtx<'a> {
+            PhysicalExprDecodeCtx::new(schema, decoder)
+        }
+
+        #[test]
+        fn hash_expr_try_to_proto() {
+            let expr = HashExpr::new(
+                vec![Arc::new(Column::new("a", 0)), Arc::new(Column::new("b", 1))],
+                SeededRandomState::with_seed(42),
+                "hash_join".to_string(),
+            );
+            let encoder = TestEncoder;
+            let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+            let proto = expr.try_to_proto(&ctx).unwrap().unwrap();
+
+            assert_eq!(proto.expr_id, None);
+            let hash_expr = match proto.expr_type.unwrap() {
+                protobuf::physical_expr_node::ExprType::HashExpr(hash_expr) => hash_expr,
+                other => panic!("expected HashExpr, got {other:?}"),
+            };
+            assert_eq!(hash_expr.seed0, 42);
+            assert_eq!(hash_expr.description, "hash_join");
+            assert_eq!(hash_expr.on_columns.len(), 2);
+            assert!(
+                hash_expr
+                    .on_columns
+                    .iter()
+                    .all(|expr| expr.expr_id.is_none())
+            );
+        }
+
+        #[test]
+        fn hash_expr_try_from_proto() {
+            let schema = Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, true),
+            ]);
+            let decoder = TestDecoder;
+            let ctx = test_decode_ctx(&schema, &decoder);
+            let proto = protobuf::PhysicalExprNode {
+                expr_id: None,
+                expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
+                    protobuf::PhysicalHashExprNode {
+                        on_columns: vec![
+                            protobuf::PhysicalExprNode {
+                                expr_id: None,
+                                expr_type: Some(
+                                    protobuf::physical_expr_node::ExprType::Column(
+                                        protobuf::PhysicalColumn {
+                                            name: "a".to_string(),
+                                            index: 0,
+                                        },
+                                    ),
+                                ),
+                            },
+                            protobuf::PhysicalExprNode {
+                                expr_id: None,
+                                expr_type: Some(
+                                    protobuf::physical_expr_node::ExprType::Column(
+                                        protobuf::PhysicalColumn {
+                                            name: "b".to_string(),
+                                            index: 1,
+                                        },
+                                    ),
+                                ),
+                            },
+                        ],
+                        seed0: 42,
+                        description: "hash_join".to_string(),
+                    },
+                )),
+            };
+
+            let expr = HashExpr::try_from_proto(&proto, &ctx).unwrap();
+            let expr = expr.downcast_ref::<HashExpr>().unwrap();
+
+            assert_eq!(expr.seed(), 42);
+            assert_eq!(expr.description(), "hash_join");
+            assert_eq!(expr.on_columns().len(), 2);
+            assert_eq!(
+                expr.on_columns()[0]
+                    .downcast_ref::<Column>()
+                    .map(|col| (col.name(), col.index())),
+                Some(("a", 0))
+            );
+            assert_eq!(
+                expr.on_columns()[1]
+                    .downcast_ref::<Column>()
+                    .map(|col| (col.name(), col.index())),
+                Some(("b", 1))
+            );
+        }
+
+        #[test]
+        fn hash_expr_try_from_proto_rejects_wrong_node_type() {
+            let schema = Schema::empty();
+            let decoder = TestDecoder;
+            let ctx = test_decode_ctx(&schema, &decoder);
+            let proto = protobuf::PhysicalExprNode {
+                expr_id: None,
+                expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
+                    protobuf::PhysicalColumn {
+                        name: "a".to_string(),
+                        index: 0,
+                    },
+                )),
+            };
+
+            let err = HashExpr::try_from_proto(&proto, &ctx).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("PhysicalExprNode is not a HashExpr"),
+                "{err}"
+            );
+        }
     }
 
     #[test]
@@ -485,14 +723,14 @@ mod tests {
 
         let expr1 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
         );
 
         let expr2 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
         );
@@ -510,14 +748,14 @@ mod tests {
 
         let expr1 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
         );
 
         let expr2 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_b)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
         );
@@ -533,14 +771,14 @@ mod tests {
 
         let expr1 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup_one".to_string(),
         );
 
         let expr2 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup_two".to_string(),
         );
@@ -559,14 +797,14 @@ mod tests {
             Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(10))));
         let expr1 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             hash_map1,
             "lookup".to_string(),
         );
 
         let expr2 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             hash_map2,
             "lookup".to_string(),
         );
@@ -583,14 +821,14 @@ mod tests {
 
         let expr1 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
         );
 
         let expr2 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
-            SeededRandomState::with_seeds(1, 2, 3, 4),
+            SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
         );

@@ -36,9 +36,13 @@ name = "datafusion_proto"
 
 [features]
 default = ["parquet"]
-json = ["pbjson", "serde", "serde_json", "datafusion-proto-common/json"]
+json = [
+    "serde_json",
+    "datafusion-proto-common/json",
+    "datafusion-proto-models/json",
+]
 parquet = ["datafusion-datasource-parquet", "datafusion-common/parquet", "datafusion/parquet"]
-avro = ["datafusion-datasource-avro", "datafusion-common/avro"]
+avro = ["datafusion-datasource-avro"]
 
 # Note to developers: do *not* add `datafusion` as a dependency in
 # this crate. See https://github.com/apache/datafusion/issues/17713
@@ -59,15 +63,13 @@ datafusion-datasource-parquet = { workspace = true, optional = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-table = { workspace = true }
-datafusion-physical-expr = { workspace = true }
-datafusion-physical-expr-common = { workspace = true }
-datafusion-physical-plan = { workspace = true }
+datafusion-physical-expr = { workspace = true, features = ["proto"] }
+datafusion-physical-expr-common = { workspace = true, features = ["proto"] }
+datafusion-physical-plan = { workspace = true, features = ["proto"] }
 datafusion-proto-common = { workspace = true }
+datafusion-proto-models = { workspace = true }
 object_store = { workspace = true }
-pbjson = { workspace = true, optional = true }
 prost = { workspace = true }
-rand = { workspace = true }
-serde = { version = "1.0", optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]

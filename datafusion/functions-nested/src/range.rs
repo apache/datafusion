@@ -33,8 +33,7 @@ use arrow::{
 };
 use datafusion_common::internal_err;
 use datafusion_common::{
-    Result, exec_datafusion_err, exec_err, not_impl_datafusion_err,
-    utils::take_function_args,
+    Result, exec_datafusion_err, exec_err, utils::take_function_args,
 };
 use datafusion_common::{
     ScalarValue,
@@ -47,11 +46,10 @@ use datafusion_common::{
     },
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
 use std::cmp::Ordering;
 use std::iter::from_fn;
 use std::str::FromStr;
@@ -212,10 +210,6 @@ impl Range {
 }
 
 impl ScalarUDFImpl for Range {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         if self.include_upper_bound {
             "generate_series"
@@ -252,10 +246,7 @@ impl ScalarUDFImpl for Range {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = &args.args;
 
         if args.iter().any(|arg| arg.data_type().is_null()) {
@@ -297,7 +288,7 @@ impl Range {
     ///
     /// # Arguments
     ///
-    /// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step(step value can not be zero.) values.
+    /// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step (step value can not be zero) values.
     ///
     /// # Examples
     ///
@@ -332,16 +323,13 @@ impl Range {
                     );
                 }
                 Some((start, stop, step)) => {
-                    // Below, we utilize `usize` to represent steps.
-                    // On 32-bit targets, the absolute value of `i64` may fail to fit into `usize`.
-                    let step_abs =
-                        usize::try_from(step.unsigned_abs()).map_err(|_| {
-                            not_impl_datafusion_err!("step {} can't fit into usize", step)
-                        })?;
-                    values.extend(
-                        gen_range_iter(start, stop, step < 0, self.include_upper_bound)
-                            .step_by(step_abs),
-                    );
+                    generate_range_values(
+                        start,
+                        stop,
+                        step,
+                        self.include_upper_bound,
+                        &mut values,
+                    )?;
                     offsets.push(values.len() as i32);
                     valid.append_non_null();
                 }
@@ -550,33 +538,75 @@ fn retrieve_range_args(
     Some((start, stop, step))
 }
 
-/// Returns an iterator of i64 values from start to stop
-fn gen_range_iter(
+/// Reserve space for `count` more elements, returning an error when the
+/// allocation would overflow `Vec`'s capacity limit or the allocator
+/// rejects it, rather than panicking on user-supplied SQL.
+fn reserve_range_capacity(values: &mut Vec<i64>, count: u64) -> Result<()> {
+    let count_usize = usize::try_from(count).map_err(|_| {
+        exec_datafusion_err!(
+            "Range too large to materialize: would produce {count} elements"
+        )
+    })?;
+    values.try_reserve(count_usize).map_err(|e| {
+        exec_datafusion_err!(
+            "Range too large to materialize: failed to allocate {count} elements: {e}"
+        )
+    })
+}
+
+/// Generate integer range values directly into the provided buffer.
+#[inline]
+fn generate_range_values(
     start: i64,
     stop: i64,
-    decreasing: bool,
+    step: i64,
     include_upper: bool,
-) -> Box<dyn Iterator<Item = i64>> {
-    match (decreasing, include_upper) {
-        // Decreasing range, stop is inclusive
-        (true, true) => Box::new((stop..=start).rev()),
-        // Decreasing range, stop is exclusive
-        (true, false) => {
-            if stop == i64::MAX {
-                // start is never greater than stop, and stop is exclusive,
-                // so the decreasing range must be empty.
-                Box::new(std::iter::empty())
-            } else {
-                // Increase the stop value by one to exclude it.
-                // Since stop is not i64::MAX, `stop + 1` will not overflow.
-                Box::new((stop + 1..=start).rev())
+    values: &mut Vec<i64>,
+) -> Result<()> {
+    if !include_upper && start == stop {
+        return Ok(());
+    }
+
+    if step > 0 {
+        let limit = if include_upper {
+            stop
+        } else {
+            stop.saturating_sub(1)
+        };
+        if start > limit {
+            return Ok(());
+        }
+        let count = (start.abs_diff(limit) / step.unsigned_abs()).saturating_add(1);
+        reserve_range_capacity(values, count)?;
+        let mut current = start;
+        while current <= limit {
+            values.push(current);
+            match current.checked_add(step) {
+                Some(next) => current = next,
+                None => break,
             }
         }
-        // Increasing range, stop is inclusive
-        (false, true) => Box::new(start..=stop),
-        // Increasing range, stop is exclusive
-        (false, false) => Box::new(start..stop),
+    } else if step < 0 {
+        let limit = if include_upper {
+            stop
+        } else {
+            stop.saturating_add(1)
+        };
+        if start < limit {
+            return Ok(());
+        }
+        let count = (start.abs_diff(limit) / step.unsigned_abs()).saturating_add(1);
+        reserve_range_capacity(values, count)?;
+        let mut current = start;
+        while current >= limit {
+            values.push(current);
+            match current.checked_add(step) {
+                Some(next) => current = next,
+                None => break,
+            }
+        }
     }
+    Ok(())
 }
 
 fn parse_tz(tz: &Option<&str>) -> Result<Tz> {

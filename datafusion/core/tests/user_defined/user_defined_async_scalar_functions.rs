@@ -129,10 +129,6 @@ impl TestAsyncUDFImpl {
 }
 
 impl ScalarUDFImpl for TestAsyncUDFImpl {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "test_async_udf"
     }

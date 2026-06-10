@@ -159,7 +159,7 @@ next section)
 ## More Debugging Information: `EXPLAIN VERBOSE`
 
 If the plan has to read too many files, not all of them will be shown in the
-`EXPLAIN`. To see them, use `EXPLAIN VEBOSE`. Like `EXPLAIN`, `EXPLAIN VERBOSE`
+`EXPLAIN`. To see them, use `EXPLAIN VERBOSE`. Like `EXPLAIN`, `EXPLAIN VERBOSE`
 does not run the query. Instead it shows the full explain plan, with information
 that is omitted from the default explain, as well as all intermediate physical
 plans DataFusion generates before returning. This mode can be very helpful for
@@ -225,8 +225,10 @@ Again, reading from bottom up:
 
 When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains the following metrics:
 
+- `output_rows_skew`: output skew score derived from per-partition `output_rows`. `0%` is perfectly balanced, `100%` is maximally skewed, and `N/A` means no output rows were produced.
 - `page_index_rows_pruned`: number of rows evaluated by page index filters. The metric reports both how many rows were considered in total and how many matched (were not pruned).
 - `page_index_pages_pruned`: number of pages evaluated by page index filters. The metric reports both how many pages were considered in total and how many matched (were not pruned).
+- `page_index_pages_skipped_by_fully_matched`: number of pages for which page-index pruning was skipped because row-group statistics proved the containing row group was fully matched. These pages are still scanned.
 - `row_groups_pruned_bloom_filter`: number of row groups evaluated by Bloom Filters, reporting both total checked groups and groups that matched.
 - `row_groups_pruned_statistics`: number of row groups evaluated by row-group statistics (min/max), reporting both total checked groups and groups that matched.
 - `limit_pruned_row_groups`: number of row groups pruned by the limit.
@@ -238,6 +240,55 @@ When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains 
 - `statistics_eval_time`: time spent parsing and evaluating row group-level statistics
 - `row_pushdown_eval_time`: time spent evaluating row-level filters
 - `page_index_eval_time`: time required to evaluate the page index filters
+
+## Postgres-style `EXPLAIN (...)` options
+
+In addition to the legacy keyword form (`EXPLAIN ANALYZE VERBOSE FORMAT tree SELECT ...`),
+DataFusion accepts a Postgres-style option list on dialects whose
+[`supports_explain_with_utility_options`](https://docs.rs/sqlparser/latest/sqlparser/dialect/trait.Dialect.html#method.supports_explain_with_utility_options)
+returns `true`. This includes the default `GenericDialect`, `PostgreSqlDialect`, and
+`DuckDbDialect`, among others.
+
+```sql
+EXPLAIN (ANALYZE, VERBOSE, METRICS 'rows,bytes', LEVEL dev)
+SELECT ... ;
+```
+
+The recognized options are:
+
+| Option    | Argument          | Effect                                                                                                                               |
+| --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `ANALYZE` | boolean, optional | Execute the plan and collect metrics. Defaults to `TRUE` when bare. Equivalent to the `ANALYZE` keyword.                             |
+| `VERBOSE` | boolean, optional | Show per-partition metrics and additional detail. Equivalent to the `VERBOSE` keyword.                                               |
+| `FORMAT`  | identifier/string | One of `indent`, `tree`, `pgjson`, `graphviz`. Equivalent to the `FORMAT <format>` clause.                                           |
+| `METRICS` | string            | Filter `ANALYZE` metrics by category. Accepts `'all'`, `'none'`, or any comma-separated subset of `rows,bytes,timing,uncategorized`. |
+| `LEVEL`   | identifier/string | `summary` or `dev`. Controls metric verbosity for `ANALYZE`.                                                                         |
+| `TIMING`  | boolean           | Sugar over `METRICS`: toggles inclusion of the `timing` category.                                                                    |
+| `SUMMARY` | boolean           | Sugar over `LEVEL`: `TRUE` → `summary`, `FALSE` → `dev`.                                                                             |
+| `COSTS`   | boolean           | Include statistics in plain `EXPLAIN` output (equivalent to `SET datafusion.explain.show_statistics`). Not valid with `ANALYZE`.     |
+
+Boolean arguments can be written bare (`ANALYZE` → `true`), as `TRUE`/`FALSE`,
+`ON`/`OFF`, or `0`/`1`.
+
+When combined with `ANALYZE`, `FORMAT` supports `indent` (the default) and
+`pgjson`; `tree` and `graphviz` are rejected. The `pgjson` form emits the
+physical plan with live metrics, which is handy for plan visualizers — see
+[`pgjson` format with `ANALYZE`](sql/explain.md#pgjson-format-with-analyze):
+
+```sql
+EXPLAIN (ANALYZE, FORMAT pgjson) SELECT ...;
+```
+
+The statement-level options take precedence over session config, so you can leave
+the session defaults alone and override just for the current query:
+
+```sql
+EXPLAIN (ANALYZE, LEVEL dev, METRICS 'rows,bytes') SELECT ...;
+```
+
+Postgres options that DataFusion does not model (`BUFFERS`, `WAL`, `SETTINGS`,
+`GENERIC_PLAN`, `MEMORY`) return a clear error rather than being silently
+accepted — use `METRICS` to filter what appears in the output.
 
 ## Partitions and Execution
 

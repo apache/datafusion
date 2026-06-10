@@ -19,8 +19,9 @@
 //! data transfer as much as possible.
 //!
 //! # Plan Limit Absorption
-//! In addition to pushing down [`LimitExec`] in the plan, some operators can
-//! "absorb" a limit and stop early during execution.
+//! In addition to pushing down `GlobalLimitExec` and `LocalLimitExec` nodes in
+//! the plan, some operators can "absorb" a limit and stop early during
+//! execution.
 //!
 //! ## Background: vectorized volcano execution model
 //! DataFusion uses a batched volcano model. For most operators, output is
@@ -33,7 +34,7 @@
 //! ## Example
 //! For a join with an expensive, selective predicate:
 //! ```text
-//! LimitExec(fetch=10)
+//! GlobalLimitExec: skip=0, fetch=10
 //! -- NestedLoopJoinExec(on=expr_expensive_and_selective)
 //! --- DataSourceExec()
 //! --- DataSourceExec()
@@ -66,10 +67,14 @@ use crate::PhysicalOptimizerRule;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::combine_limit;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
@@ -78,14 +83,13 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 pub struct LimitPushdown {}
 
 /// This is a "data class" we use within the [`LimitPushdown`] rule to push
-/// down [`LimitExec`] in the plan. GlobalRequirements are hold as a rule-wide state
+/// down limits in the plan. GlobalRequirements are hold as a rule-wide state
 /// and holds the fetch and skip information. The struct also has a field named
 /// satisfied which means if the "current" plan is valid in terms of limits or not.
 ///
 /// For example: If the plan is satisfied with current fetch info, we decide to not add a LocalLimit
 ///
 /// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
-/// [`LimitExec`]: crate::limit_pushdown::LimitExec
 #[derive(Default, Clone, Debug)]
 pub struct GlobalRequirements {
     fetch: Option<usize>,
@@ -125,51 +129,11 @@ impl PhysicalOptimizerRule for LimitPushdown {
     }
 }
 
-/// This enumeration makes `skip` and `fetch` calculations easier by providing
-/// a single API for both local and global limit operators.
-#[derive(Debug)]
-pub enum LimitExec {
-    Global(GlobalLimitExec),
-    Local(LocalLimitExec),
-}
-
-impl LimitExec {
-    fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        match self {
-            Self::Global(global) => global.input(),
-            Self::Local(local) => local.input(),
-        }
-    }
-
-    fn fetch(&self) -> Option<usize> {
-        match self {
-            Self::Global(global) => global.fetch(),
-            Self::Local(local) => Some(local.fetch()),
-        }
-    }
-
-    fn skip(&self) -> usize {
-        match self {
-            Self::Global(global) => global.skip(),
-            Self::Local(_) => 0,
-        }
-    }
-
-    fn preserve_order(&self) -> bool {
-        match self {
-            Self::Global(global) => global.required_ordering().is_some(),
-            Self::Local(local) => local.required_ordering().is_some(),
-        }
-    }
-}
-
-impl From<LimitExec> for Arc<dyn ExecutionPlan> {
-    fn from(limit_exec: LimitExec) -> Self {
-        match limit_exec {
-            LimitExec::Global(global) => Arc::new(global),
-            LimitExec::Local(local) => Arc::new(local),
-        }
-    }
+struct LimitInfo {
+    input: Arc<dyn ExecutionPlan>,
+    fetch: Option<usize>,
+    skip: usize,
+    preserve_order: bool,
 }
 
 /// This function is the main helper function of the `LimitPushDown` rule.
@@ -184,26 +148,45 @@ pub fn pushdown_limit_helper(
     mut global_state: GlobalRequirements,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
     // Extract limit, if exist, and return child inputs.
-    if let Some(limit_exec) = extract_limit(&pushdown_plan) {
+    if let Some(limit_info) = extract_limit(&pushdown_plan) {
         // If we have fetch/skip info in the global state already, we need to
         // decide which one to continue with:
         let (skip, fetch) = combine_limit(
             global_state.skip,
             global_state.fetch,
-            limit_exec.skip(),
-            limit_exec.fetch(),
+            limit_info.skip,
+            limit_info.fetch,
         );
         global_state.skip = skip;
         global_state.fetch = fetch;
-        global_state.preserve_order = limit_exec.preserve_order();
+        global_state.preserve_order = limit_info.preserve_order;
         global_state.satisfied = false;
 
+        if let Some(fetch) = fetch
+            && limit_satisfied_by_input(&limit_info.input, skip, fetch)?
+        {
+            // The input already produces at most `fetch` rows, so no new limit
+            // node is needed. Mark satisfied so downstream won't re-add one,
+            // but preserve skip/fetch so any nested limit nodes (e.g. an inner
+            // GlobalLimitExec) can still be merged with the outer constraint.
+            global_state.satisfied = true;
+
+            return Ok((
+                Transformed {
+                    data: limit_info.input,
+                    transformed: true,
+                    tnr: TreeNodeRecursion::Stop,
+                },
+                global_state,
+            ));
+        }
+
         // Now the global state has the most recent information, we can remove
-        // the `LimitExec` plan. We will decide later if we should add it again
-        // or not.
+        // the limit node. We will decide later if we should add it again or
+        // not.
         return Ok((
             Transformed {
-                data: Arc::clone(limit_exec.input()),
+                data: limit_info.input,
                 transformed: true,
                 tnr: TreeNodeRecursion::Stop,
             },
@@ -253,7 +236,7 @@ pub fn pushdown_limit_helper(
             Ok((Transformed::no(pushdown_plan), global_state))
         } else if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch) {
             // This plan is combining input partitions, so we need to add the
-            // fetch info to plan if possible. If not, we must add a `LimitExec`
+            // fetch info to plan if possible. If not, we must add a limit node
             // with the information from the global state.
             let mut new_plan = plan_with_fetch;
             // Execution plans can't (yet) handle skip, so if we have one,
@@ -324,6 +307,59 @@ pub fn pushdown_limit_helper(
     }
 }
 
+/// Returns true if exact input statistics prove that applying the limit would
+/// not remove any rows.
+fn limit_satisfied_by_input(
+    plan: &Arc<dyn ExecutionPlan>,
+    skip: usize,
+    fetch: usize,
+) -> Result<bool> {
+    if skip > 0 {
+        return Ok(false);
+    }
+
+    if plan.output_partitioning().partition_count() != 1 {
+        return Ok(false);
+    }
+
+    let Some(num_rows) = limit_eliminable_exact_num_rows(plan)? else {
+        return Ok(false);
+    };
+
+    Ok(num_rows <= fetch)
+}
+
+/// Returns exact row counts only from a conservative whitelist of operators
+/// whose row-count guarantees are strong enough to remove a limit.
+fn limit_eliminable_exact_num_rows(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Result<Option<usize>> {
+    // Unwrap any wrapping ProjectionExec layers; projections preserve row count
+    // but may derive statistics in ways that are not trustworthy, so we peek
+    // through them to the underlying producer.
+    let mut current = plan;
+    while let Some(projection) = current.downcast_ref::<ProjectionExec>() {
+        current = projection.input();
+    }
+
+    if current.is::<EmptyExec>() {
+        return Ok(Some(0));
+    }
+
+    if current.is::<PlaceholderRowExec>() {
+        return Ok(Some(1));
+    }
+
+    if matches!(
+        current.partition_statistics(None)?.num_rows,
+        Precision::Exact(0)
+    ) {
+        return Ok(Some(0));
+    }
+
+    Ok(None)
+}
+
 /// Pushes down the limit through the plan.
 pub(crate) fn pushdown_limits(
     pushdown_plan: Arc<dyn ExecutionPlan>,
@@ -339,41 +375,60 @@ pub(crate) fn pushdown_limits(
         (new_node, global_state) = pushdown_limit_helper(new_node.data, global_state)?;
     }
 
+    // Once a limit has been materialized above the current node, child
+    // subtrees should not inherit its `skip`. Keep `fetch`, but clear
+    // `skip` before recursing so child-local limits are not merged with
+    // an `OFFSET` that has already been applied.
+    if global_state.satisfied {
+        global_state.skip = 0;
+    }
+
     // Apply pushdown limits in children
     let children = new_node.data.children();
+    let mut changed = false;
     let new_children = children
         .into_iter()
-        .map(|child| {
-            pushdown_limits(Arc::<dyn ExecutionPlan>::clone(child), global_state.clone())
+        .map(|child: &Arc<dyn ExecutionPlan>| {
+            let new_child = pushdown_limits(
+                Arc::<dyn ExecutionPlan>::clone(child),
+                global_state.clone(),
+            )?;
+            // Tracking if any of the children changed
+            changed |= !Arc::ptr_eq(child, &new_child);
+            Ok(new_child)
         })
         .collect::<Result<_>>()?;
-    new_node.data.with_new_children(new_children)
+
+    if changed {
+        new_node.data.with_new_children(new_children)
+    } else {
+        Ok(new_node.data)
+    }
 }
 
-/// Transforms the [`ExecutionPlan`] into a [`LimitExec`] if it is a
+/// Extracts limit information from the [`ExecutionPlan`] if it is a
 /// [`GlobalLimitExec`] or a [`LocalLimitExec`].
-fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
-    if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
-        Some(LimitExec::Global(GlobalLimitExec::new(
-            Arc::clone(global_limit.input()),
-            global_limit.skip(),
-            global_limit.fetch(),
-        )))
+fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
+    if let Some(global_limit) = plan.downcast_ref::<GlobalLimitExec>() {
+        Some(LimitInfo {
+            input: Arc::clone(global_limit.input()),
+            fetch: global_limit.fetch(),
+            skip: global_limit.skip(),
+            preserve_order: global_limit.required_ordering().is_some(),
+        })
     } else {
-        plan.as_any()
-            .downcast_ref::<LocalLimitExec>()
-            .map(|local_limit| {
-                LimitExec::Local(LocalLimitExec::new(
-                    Arc::clone(local_limit.input()),
-                    local_limit.fetch(),
-                ))
+        plan.downcast_ref::<LocalLimitExec>()
+            .map(|local_limit| LimitInfo {
+                input: Arc::clone(local_limit.input()),
+                fetch: Some(local_limit.fetch()),
+                skip: 0,
+                preserve_order: local_limit.required_ordering().is_some(),
             })
     }
 }
 
 /// Checks if the given plan combines input partitions.
 fn combines_input_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let plan = plan.as_any();
     plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
 }
 

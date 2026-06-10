@@ -445,7 +445,6 @@ mod tests {
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
     };
-    use std::sync::Arc;
 
     use super::*;
 

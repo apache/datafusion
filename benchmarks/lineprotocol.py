@@ -164,12 +164,12 @@ def lineformat(
 ) -> None:
     baseline = BenchmarkRun.load_from_file(baseline)
     context = baseline.context
-    benchamrk_str = f"benchmark,name={context.name},version={context.benchmark_version},datafusion_version={context.datafusion_version},num_cpus={context.num_cpus}"
+    benchmark_str = f"benchmark,name={context.name},version={context.benchmark_version},datafusion_version={context.datafusion_version},num_cpus={context.num_cpus}"
     for query in baseline.queries:
         query_str = f"query=\"{query.query}\""
         timestamp = f"{query.start_time*10**9}"
         for iter_num, result in enumerate(query.iterations):
-            print(f"{benchamrk_str} {query_str},iteration={iter_num},row_count={result.row_count},elapsed_ms={result.elapsed*1000:.0f} {timestamp}\n")
+            print(f"{benchmark_str} {query_str},iteration={iter_num},row_count={result.row_count},elapsed_ms={result.elapsed*1000:.0f} {timestamp}\n")
     
 def main() -> None:
     parser = ArgumentParser()
