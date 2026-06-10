@@ -589,9 +589,17 @@ async fn run_test(
     result_stream: SendableRecordBatchStream,
 ) -> Result<usize> {
     let number_of_record_batches = args.number_of_record_batches;
+    let output_batch_size = args.task_ctx.session_config().batch_size();
+    let number_of_rows = number_of_record_batches * output_batch_size;
 
     consume_stream_and_simulate_other_running_memory_consumers(args, result_stream)
         .await?;
+    
+    assert_baseline_metrics_for_non_empty_output(
+        plan.metrics().expect("must have metrics"),
+        number_of_rows,
+        output_batch_size
+    );
 
     let spill_count = assert_spill_count_metric(true, plan);
 
@@ -655,4 +663,42 @@ async fn consume_stream_and_simulate_other_running_memory_consumers(
     );
 
     Ok(())
+}
+
+fn assert_baseline_metrics_for_non_empty_output(
+    metrics: &MetricsSet,
+    expected_output_rows: usize,
+    output_batch_size: usize,
+) {
+    let end_time = metrics
+        .iter()
+        .find_map(|item| match item.value() {
+            MetricValue::EndTimestamp(end) => Some(end),
+            _ => None,
+        })
+        .expect("Must have end time metric since it exists in the baseline");
+
+    assert_ne!(end_time.value(), None);
+
+    assert_eq!(metrics.output_rows(), Some(expected_output_rows));
+
+    let output_bytes = metrics
+        .iter()
+        .find_map(|item| match item.value() {
+            MetricValue::OutputBytes(total) => Some(total),
+            _ => None,
+        })
+        .expect("Must have output_bytes metric since it exists in the baseline");
+
+    assert_ne!(output_bytes.value(), 0_usize);
+
+    let output_batches = metrics
+        .iter()
+        .find_map(|item| match item.value() {
+            MetricValue::OutputBatches(total) => Some(total),
+            _ => None,
+        })
+        .expect("Must have output_batches metric since it exists in the baseline");
+
+    assert_eq!(output_batches.value(), expected_output_rows.div_ceil(output_batch_size));
 }
