@@ -45,7 +45,7 @@ use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
-use crate::stream::RecordBatchStreamAdapter;
+use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::stream::ReservationStream;
 use crate::topk::TopK;
 use crate::topk::TopKDynamicFilters;
@@ -373,7 +373,7 @@ impl ExternalSorter {
             // allocation. Only needed for the non-spill path; the spill
             // path transfers the reservation to the merge stream instead.
             self.merge_reservation.free();
-            self.in_mem_sort_stream(self.metrics.baseline.clone())
+            self.in_mem_sort_stream(true)
         }
     }
 
@@ -476,7 +476,7 @@ impl ExternalSorter {
         self.merge_reservation.free();
 
         let mut sorted_stream =
-            self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
+            self.in_mem_sort_stream(false)?;
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
         assert_or_internal_err!(
@@ -585,17 +585,20 @@ impl ExternalSorter {
     /// ```
     fn in_mem_sort_stream(
         &mut self,
-        metrics: BaselineMetrics,
+        is_output_stream: bool,
     ) -> Result<SendableRecordBatchStream> {
         if self.in_mem_batches.is_empty() {
-            return Ok(Box::pin(EmptyRecordBatchStream::new(Arc::clone(
-                &self.schema,
-            ))));
+            let empty_stream = Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
+            if(is_output_stream) {
+                return Ok(Box::pin(ObservedStream::new(empty_stream, self.metrics.baseline.clone(), None)));
+            } else {
+                return Ok(empty_stream);
+            }
         }
 
         // The elapsed compute timer is updated when the value is dropped.
         // There is no need for an explicit call to drop.
-        let elapsed_compute = metrics.elapsed_compute().clone();
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
         let _timer = elapsed_compute.timer();
 
         // Please pay attention that any operation inside of `in_mem_sort_stream` will
@@ -607,7 +610,12 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            return self.sort_batch_stream(batch, &metrics, reservation);
+            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            if(is_output_stream) {
+                return Ok(Box::pin(ObservedStream::new(sorted_stream, self.metrics.baseline.clone(), None)));
+            } else {
+                return Ok(sorted_stream);
+            }
         }
 
         // If less than sort_in_place_threshold_bytes, concatenate and sort in place
@@ -619,17 +627,21 @@ impl ExternalSorter {
                 .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            return self.sort_batch_stream(batch, &metrics, reservation);
+            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            if(is_output_stream) {
+                return Ok(Box::pin(ObservedStream::new(sorted_stream, self.metrics.baseline.clone(), None)));
+            } else {
+                return Ok(sorted_stream);
+            }
         }
 
         let streams = std::mem::take(&mut self.in_mem_batches)
             .into_iter()
             .map(|batch| {
-                let metrics = self.metrics.baseline.intermediate();
                 let reservation = self
                     .reservation
                     .split(get_reserved_bytes_for_record_batch(&batch)?);
-                let input = self.sort_batch_stream(batch, &metrics, reservation)?;
+                let input = self.sort_batch_stream(batch, reservation)?;
                 Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
@@ -638,7 +650,11 @@ impl ExternalSorter {
             .with_streams(streams)
             .with_schema(Arc::clone(&self.schema))
             .with_expressions(&self.expr.clone())
-            .with_metrics(metrics)
+            .with_metrics(if is_output_stream {
+                self.metrics.baseline.clone()
+            } else {
+                self.metrics.baseline.intermediate()
+            })
             .with_batch_size(self.batch_size)
             .with_fetch(None)
             .with_reservation(self.merge_reservation.new_empty())
@@ -657,7 +673,6 @@ impl ExternalSorter {
     fn sort_batch_stream(
         &self,
         batch: RecordBatch,
-        metrics: &BaselineMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(
@@ -668,7 +683,6 @@ impl ExternalSorter {
         let schema = batch.schema();
         let expressions = self.expr.clone();
         let batch_size = self.batch_size;
-        let output_row_metrics = metrics.output_rows().clone();
 
         let stream = futures::stream::once(async move {
             let schema = batch.schema();
@@ -698,14 +712,7 @@ impl ExternalSorter {
                 reservation,
             )) as SendableRecordBatchStream)
         })
-        .try_flatten()
-        .map(move |batch| match batch {
-            Ok(batch) => {
-                output_row_metrics.add(batch.num_rows());
-                Ok(batch)
-            }
-            Err(e) => Err(e),
-        });
+        .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
