@@ -26,13 +26,14 @@
 //! - Always returns Utf8 (Spark's `STRING` type)
 //! - Coerces non-string scalars (numbers, booleans, dates, ...) to Utf8
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericListArray, LargeStringArray, OffsetSizeTrait,
     StringArray, StringBuilder, StringViewArray,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -83,17 +84,28 @@ impl ScalarUDFImpl for SparkConcatWs {
             .enumerate()
             .map(|(i, dt)| match dt {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => dt.clone(),
-                // Non-separator list args expand their elements at runtime;
-                // normalize list variants so the kernel only sees List/LargeList.
+                // Non-separator list args expand their elements at runtime.
+                // Normalize the list variant so the kernel only sees
+                // List/LargeList, AND force the element type to Utf8 so the
+                // planner inserts a cast for non-string children (Spark
+                // coerces them to STRING the same way it does for scalars).
                 DataType::List(f)
                 | DataType::ListView(f)
                 | DataType::FixedSizeList(f, _)
                     if i > 0 =>
                 {
-                    DataType::List(Arc::clone(f))
+                    DataType::List(Arc::new(Field::new(
+                        f.name(),
+                        DataType::Utf8,
+                        f.is_nullable(),
+                    )))
                 }
                 DataType::LargeList(f) | DataType::LargeListView(f) if i > 0 => {
-                    DataType::LargeList(Arc::clone(f))
+                    DataType::LargeList(Arc::new(Field::new(
+                        f.name(),
+                        DataType::Utf8,
+                        f.is_nullable(),
+                    )))
                 }
                 // Spark casts everything else (numbers, booleans, dates,
                 // binary, null...) to STRING.
@@ -137,13 +149,6 @@ fn only_separator(sep: &ColumnarValue) -> Result<ColumnarValue> {
 
 fn spark_concat_ws(args: &[ColumnarValue], num_rows: usize) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(args)?;
-
-    // Untyped-NULL separator → every row is NULL. Returning a scalar is enough;
-    // the framework broadcasts it to `num_rows` nulls when needed.
-    if *arrays[0].data_type() == DataType::Null {
-        return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
-    }
-
     let sep_view = StringView::try_new(&arrays[0])?;
     let arg_views: Vec<ArgView> = arrays[1..]
         .iter()
@@ -151,7 +156,6 @@ fn spark_concat_ws(args: &[ColumnarValue], num_rows: usize) -> Result<ColumnarVa
         .collect::<Result<_>>()?;
 
     let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 16);
-    let mut buf = String::new();
 
     for row_idx in 0..num_rows {
         if sep_view.is_null(row_idx) {
@@ -159,15 +163,15 @@ fn spark_concat_ws(args: &[ColumnarValue], num_rows: usize) -> Result<ColumnarVa
             continue;
         }
 
+        // Write parts directly into the builder via its `fmt::Write` impl;
+        // `append_value("")` then finalises the row (offset + validity) with
+        // no extra copy from an intermediate `String`.
         let separator = sep_view.value(row_idx);
-        buf.clear();
         let mut first = true;
-
         for view in &arg_views {
-            view.write_row(row_idx, separator, &mut buf, &mut first)?;
+            view.write_row(row_idx, separator, &mut builder, &mut first)?;
         }
-
-        builder.append_value(&buf);
+        builder.append_value("");
     }
 
     Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
@@ -208,10 +212,10 @@ impl<'a> StringView<'a> {
     }
 }
 
-/// Per-argument view: a string array, a list of strings, or an all-null
-/// argument. The downcast happens once at construction time.
+/// Per-argument view: a string array or a list of strings. The downcast
+/// happens once at construction time. `DataType::Null` cannot appear here —
+/// `coerce_types` rewrites it to `Utf8` before invocation.
 enum ArgView<'a> {
-    Null,
     Str(StringView<'a>),
     List(&'a GenericListArray<i32>),
     LargeList(&'a GenericListArray<i64>),
@@ -220,7 +224,6 @@ enum ArgView<'a> {
 impl<'a> ArgView<'a> {
     fn try_new(arr: &'a ArrayRef) -> Result<Self> {
         match arr.data_type() {
-            DataType::Null => Ok(Self::Null),
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
                 Ok(Self::Str(StringView::try_new(arr)?))
             }
@@ -238,18 +241,17 @@ impl<'a> ArgView<'a> {
         &self,
         row_idx: usize,
         sep: &str,
-        buf: &mut String,
+        builder: &mut StringBuilder,
         first: &mut bool,
     ) -> Result<()> {
         match self {
-            Self::Null => {}
             Self::Str(view) => {
                 if !view.is_null(row_idx) {
-                    push_part(buf, view.value(row_idx), sep, first);
+                    push_part(builder, view.value(row_idx), sep, first);
                 }
             }
-            Self::List(list) => write_list_row(*list, row_idx, sep, buf, first)?,
-            Self::LargeList(list) => write_list_row(*list, row_idx, sep, buf, first)?,
+            Self::List(list) => write_list_row(*list, row_idx, sep, builder, first)?,
+            Self::LargeList(list) => write_list_row(*list, row_idx, sep, builder, first)?,
         }
         Ok(())
     }
@@ -259,31 +261,37 @@ fn write_list_row<O: OffsetSizeTrait>(
     list: &GenericListArray<O>,
     row_idx: usize,
     sep: &str,
-    buf: &mut String,
+    builder: &mut StringBuilder,
     first: &mut bool,
 ) -> Result<()> {
     if list.is_null(row_idx) {
         return Ok(());
     }
     let values = list.value(row_idx);
-    // An empty array (e.g. `array()`) or an all-null-typed array contributes
-    // nothing — Spark renders it as the empty string, not an error.
-    if values.is_empty() || *values.data_type() == DataType::Null {
+    // An empty array (e.g. `array()`) contributes nothing — Spark renders it
+    // as the empty string, not an error.
+    if values.is_empty() {
         return Ok(());
     }
     let view = StringView::try_new(&values)?;
     for i in 0..values.len() {
         if !view.is_null(i) {
-            push_part(buf, view.value(i), sep, first);
+            push_part(builder, view.value(i), sep, first);
         }
     }
     Ok(())
 }
 
-fn push_part(buf: &mut String, part: &str, sep: &str, first: &mut bool) {
+// `StringBuilder::write_str` only does `extend_from_slice` and never errors;
+// the `.expect(..)` is a documentation hint, not a real failure path.
+fn push_part(builder: &mut StringBuilder, part: &str, sep: &str, first: &mut bool) {
     if !*first {
-        buf.push_str(sep);
+        builder
+            .write_str(sep)
+            .expect("StringBuilder::write_str is infallible");
     }
     *first = false;
-    buf.push_str(part);
+    builder
+        .write_str(part)
+        .expect("StringBuilder::write_str is infallible");
 }

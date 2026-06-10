@@ -354,6 +354,32 @@ NULL
 NULL
 NULL
 
+## ── Non-string list elements (planner-inserted element cast) ─
+
+## Array of integers — elements must be cast to STRING
+query T
+SELECT concat_ws(',', array(1, 2, 3));
+----
+1,2,3
+
+## Array of doubles
+query T
+SELECT concat_ws('-', array(1.5, 2.5, 3.5));
+----
+1.5-2.5-3.5
+
+## Array of booleans
+query T
+SELECT concat_ws(',', array(true, false, true));
+----
+true,false,true
+
+## Mixed: string scalar + int array + string scalar
+query T
+SELECT concat_ws(',', 'x', array(1, 2), 'y');
+----
+x,1,2,y
+
 ## ── Struct rejection ────────────────────────────────────────
 
 ## Struct argument is rejected (not coerced to string)
