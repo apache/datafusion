@@ -190,7 +190,7 @@ Returning `Transformed::yes` tells the optimizer the plan changed, so it knows t
 
 ### The Physical Operator
 
-The logical node only describes *what* to compute. The actual work happens in an [`ExecutionPlan`]. `TopKExec` wraps its input and remembers `k`; its `execute` method returns a stream that scans the input once and keeps a running set of the largest `k` rows:
+The logical node only describes _what_ to compute. The actual work happens in an [`ExecutionPlan`]. `TopKExec` wraps its input and remembers `k`; its `execute` method returns a stream that scans the input once and keeps a running set of the largest `k` rows:
 
 ```rust,ignore
 /// Physical operator that implements TopK. This implementation is
