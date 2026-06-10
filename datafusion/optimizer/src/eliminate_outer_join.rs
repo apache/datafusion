@@ -20,7 +20,7 @@
 //! and `FULL` to `LEFT`/`RIGHT`/`INNER`).
 use crate::push_down_filter::replace_cols_by_name;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{DFSchema, Result, qualified_name};
+use datafusion_common::{Column, DFSchema, Result, qualified_name};
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, Projection};
 use datafusion_expr::{Expr, Filter, Operator};
 
@@ -249,11 +249,7 @@ struct NullRejectingSides {
 }
 
 impl NullRejectingSides {
-    fn for_column(
-        col: &datafusion_common::Column,
-        left_schema: &DFSchema,
-        right_schema: &DFSchema,
-    ) -> Self {
+    fn for_column(col: &Column, left_schema: &DFSchema, right_schema: &DFSchema) -> Self {
         Self {
             left: left_schema.has_column(col),
             right: right_schema.has_column(col),
@@ -394,7 +390,7 @@ mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
     use arrow::datatypes::DataType;
-    use datafusion_common::{Column, ScalarValue};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::{
         Operator::{And, Or},
         binary_expr, cast, col, lit,
