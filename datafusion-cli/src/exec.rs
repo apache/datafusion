@@ -224,7 +224,7 @@ pub(super) async fn exec_and_print(
     let dialect = dialect_from_str(dialect).ok_or_else(|| {
         plan_datafusion_err!(
             "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
-            Dialect::AVAILABLE
+            Dialect::available()
         )
     })?;
 
@@ -613,7 +613,7 @@ mod tests {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
-                Dialect::AVAILABLE
+                Dialect::available()
             )
         })?;
         for location in locations {

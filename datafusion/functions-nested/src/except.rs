@@ -27,7 +27,7 @@ use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::take;
 use arrow::datatypes::{DataType, FieldRef};
 use arrow::row::{RowConverter, SortField};
-use datafusion_common::utils::{ListCoercion, take_function_args};
+use datafusion_common::utils::{ListCoercion, normalize_float_zero, take_function_args};
 use datafusion_common::{HashSet, Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -169,16 +169,21 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
 ) -> Result<GenericListArray<OffsetSize>> {
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
+    // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) groups
+    // ±0 together for both the rhs lookup set and the lhs probe.
+    let l_values_norm = normalize_float_zero(l.values());
+    let r_values_norm = normalize_float_zero(r.values());
+
     // Only convert the visible portion of the values array. For sliced
     // ListArrays, values() returns the full underlying array but only
     // elements between the first and last offset are referenced.
     let l_first = l.offsets()[0].as_usize();
     let l_len = l.offsets()[l.len()].as_usize() - l_first;
-    let l_values = converter.convert_columns(&[l.values().slice(l_first, l_len)])?;
+    let l_values = converter.convert_columns(&[l_values_norm.slice(l_first, l_len)])?;
 
     let r_first = r.offsets()[0].as_usize();
     let r_len = r.offsets()[r.len()].as_usize() - r_first;
-    let r_values = converter.convert_columns(&[r.values().slice(r_first, r_len)])?;
+    let r_values = converter.convert_columns(&[r_values_norm.slice(r_first, r_len)])?;
 
     let mut offsets = Vec::<OffsetSize>::with_capacity(l.len() + 1);
     offsets.push(OffsetSize::usize_as(0));
@@ -223,11 +228,11 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
     } else if OffsetSize::IS_LARGE {
         let indices =
             UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
-        take(l.values().as_ref(), &indices, None)?
+        take(l_values_norm.as_ref(), &indices, None)?
     } else {
         let indices =
             UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
-        take(l.values().as_ref(), &indices, None)?
+        take(l_values_norm.as_ref(), &indices, None)?
     };
 
     Ok(GenericListArray::<OffsetSize>::new(
