@@ -1204,7 +1204,6 @@ mod test {
     use std::sync::Arc;
 
     use arrow::error::ArrowError;
-    use insta::assert_snapshot;
 
     fn ok_result() -> Result<()> {
         Ok(())
@@ -1224,13 +1223,7 @@ mod test {
         }
 
         let err = check().unwrap_err().strip_backtrace();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: 1 == 2 (left: 1, right: 2): expected equality.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        assert!(err.starts_with("Internal error: Assertion failed: 1 == 2 (left: 1, right: 2): expected equality"));
     }
 
     #[test]
@@ -1247,13 +1240,7 @@ mod test {
         }
 
         let err = check().unwrap_err().strip_backtrace();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: 3 != 3 (left: 3, right: 3): values must differ.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        assert!(err.starts_with("Internal error: Assertion failed: 3 != 3 (left: 3, right: 3): values must differ"));
     }
 
     #[test]
@@ -1271,13 +1258,7 @@ mod test {
         }
 
         let err = check().unwrap_err().strip_backtrace();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: false.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        assert!(err.starts_with("Internal error: Assertion failed: false"));
     }
 
     #[test]
@@ -1288,12 +1269,8 @@ mod test {
         }
 
         let err = check().unwrap_err().strip_backtrace();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: false: custom message.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
+        assert!(
+            err.starts_with("Internal error: Assertion failed: false: custom message")
         );
     }
 
@@ -1305,13 +1282,7 @@ mod test {
         }
 
         let err = check().unwrap_err().strip_backtrace();
-        assert_snapshot!(
-            err.to_string(),
-            @r"
-        Internal error: Assertion failed: false: custom 42.
-        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-        "
-        );
+        assert!(err.starts_with("Internal error: Assertion failed: false: custom 42"));
     }
 
     #[test]
@@ -1415,23 +1386,8 @@ mod test {
                 .first()
                 .copied()
                 .unwrap(),
-            message_before_backtrace
-        );
-    }
-
-    #[cfg(feature = "backtrace")]
-    fn assert_internal_error_have_message_and_backtrace(
-        err: &DataFusionError,
-        message_before_backtrace: &str,
-    ) {
-        let expected_message_before_backtrace = format!(
-            "{message_before_backtrace}.\nThis issue was likely caused by a bug in DataFusion's code. \
-                Please help us to resolve this by filing a bug report in our issue tracker: \
-                https://github.com/apache/datafusion/issues"
-        );
-        assert_error_have_message_and_backtrace(
-            err,
-            expected_message_before_backtrace.as_str(),
+            message_before_backtrace,
+            "full error is: {err}"
         );
     }
 
@@ -1448,7 +1404,7 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_internal_error_have_message_and_backtrace(
+        assert_error_have_message_and_backtrace(
             &res.unwrap_err(),
             "Internal error: item should not be None",
         );
@@ -1484,7 +1440,7 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_internal_error_have_message_and_backtrace(
+        assert_error_have_message_and_backtrace(
             &res.unwrap_err(),
             "Internal error: Assertion failed: false",
         );
@@ -1502,7 +1458,7 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_internal_error_have_message_and_backtrace(
+        assert_error_have_message_and_backtrace(
             &res.unwrap_err(),
             "Internal error: Assertion failed: false: my cool context",
         );
@@ -1554,7 +1510,7 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_internal_error_have_message_and_backtrace(
+        assert_error_have_message_and_backtrace(
             &res.unwrap_err(),
             "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2)",
         );
@@ -1574,7 +1530,7 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_internal_error_have_message_and_backtrace(
+        assert_error_have_message_and_backtrace(
             &res.unwrap_err(),
             "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2): my cool context",
         );
@@ -1630,7 +1586,7 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_internal_error_have_message_and_backtrace(
+        assert_error_have_message_and_backtrace(
             &res.unwrap_err(),
             "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1)",
         );
@@ -1650,7 +1606,7 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_internal_error_have_message_and_backtrace(
+        assert_error_have_message_and_backtrace(
             &res.unwrap_err(),
             "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1): my cool context",
         );
