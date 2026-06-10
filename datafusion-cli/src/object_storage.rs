@@ -18,6 +18,8 @@
 pub mod instrumented;
 pub(crate) mod stdin;
 
+pub use stdin::StdinCarriesCommands;
+
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_credential_types::provider::{

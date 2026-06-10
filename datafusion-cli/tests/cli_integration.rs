@@ -222,6 +222,95 @@ fn test_cli_read_from_stdin_twice_reuses_buffer() {
     );
 }
 
+/// A later `/dev/stdin` table declaring a different `STORED AS` format must be
+/// rejected with a clear error: stdin is one-shot, its bytes were already
+/// buffered under the first table's format, and silently reading them as
+/// another format would be wrong.
+#[cfg(unix)]
+#[test]
+fn test_cli_read_from_stdin_mixed_formats_rejected() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = cli()
+        .args([
+            "-q",
+            "--command",
+            "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin' \
+             OPTIONS ('format.has_header' 'true'); \
+             CREATE EXTERNAL TABLE t2 STORED AS JSON LOCATION '/dev/stdin';",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn datafusion-cli");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"a,b\n1,foo\n2,bar\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    // Fatal errors in `--command` mode are reported on stdout.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "expected the mismatched format to fail, stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("must declare the same STORED AS format"),
+        "expected a clear mismatch error, got:\n{stdout}"
+    );
+}
+
+/// When the SQL itself arrives on stdin (the piped REPL, e.g. `cat script.sql
+/// | datafusion-cli`), stdin cannot double as a data source: the statement
+/// must fail with a clear error instead of silently consuming the rest of the
+/// script as table data, and the remaining statements must still run.
+#[cfg(unix)]
+#[test]
+fn test_cli_stdin_location_rejected_when_sql_comes_from_stdin() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = cli()
+        .arg("-q")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn datafusion-cli");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            b"CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin';\n\
+              SELECT 123 + 456;\n",
+        )
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("SQL commands"),
+        "expected a clear error about stdin carrying SQL.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // The statement after the failed CREATE must still execute rather than
+    // being consumed as table data.
+    assert!(
+        stdout.contains("579"),
+        "expected the following statement to still run.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
 /// Spawns the real `datafusion-cli` binary, pipes `stdin` into it, and returns
 /// its stdout after asserting a successful exit.
 #[cfg(unix)]

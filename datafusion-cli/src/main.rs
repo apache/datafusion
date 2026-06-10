@@ -34,6 +34,7 @@ use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::{
     ListFilesCacheFunc, MetadataCacheFunc, ParquetMetadataFunc, StatisticsCacheFunc,
 };
+use datafusion_cli::object_storage::StdinCarriesCommands;
 use datafusion_cli::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
 };
@@ -158,6 +159,14 @@ struct Args {
     object_store_profiling: InstrumentedObjectStoreMode,
 }
 
+impl Args {
+    /// Without -c/-f the CLI enters the REPL, which reads its SQL from
+    /// stdin — interactively or piped.
+    fn repl_mode(&self) -> bool {
+        self.command.is_empty() && self.file.is_empty()
+    }
+}
+
 #[tokio::main]
 /// Calls [`main_inner`], then handles printing errors and returning the correct exit code
 pub async fn main() -> ExitCode {
@@ -268,6 +277,7 @@ async fn main_inner() -> Result<()> {
         instrumented_registry: Arc::clone(&instrumented_registry),
     };
 
+    let repl_mode = args.repl_mode();
     let commands = args.command;
     let files = args.file;
     let rc = match args.rc {
@@ -285,7 +295,7 @@ async fn main_inner() -> Result<()> {
         }
     };
 
-    if commands.is_empty() && files.is_empty() {
+    if repl_mode {
         if !rc.is_empty() {
             exec::exec_from_files(&ctx, rc, &print_options).await?;
         }
@@ -330,8 +340,16 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
         config_options.format.null = String::from("NULL");
     }
 
-    let session_config =
+    let mut session_config =
         SessionConfig::from(config_options).with_information_schema(true);
+
+    if args.repl_mode() {
+        // In the REPL stdin carries the SQL (including for any rc file run
+        // before it), so it cannot also serve as a data source for
+        // `LOCATION '/dev/stdin'`.
+        session_config = session_config.with_extension(Arc::new(StdinCarriesCommands));
+    }
+
     Ok(session_config)
 }
 

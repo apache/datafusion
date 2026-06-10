@@ -19,18 +19,28 @@
 //! piped data (e.g. `cat data.csv | datafusion-cli`) can be queried via
 //! `CREATE EXTERNAL TABLE ... LOCATION '/dev/stdin'`.
 
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::sync::Arc;
 
 use datafusion::common::exec_datafusion_err;
 use datafusion::config::ConfigFileType;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
+use futures::TryStreamExt;
 
 use object_store::memory::InMemory;
 use object_store::path::Path as ObjectStorePath;
 use object_store::{ObjectStore, ObjectStoreExt};
 use url::Url;
+
+/// Marker [`SessionConfig`] extension recording that the session reads its SQL
+/// commands from stdin (the interactive or piped REPL). stdin cannot then also
+/// serve as a data source: reading it for table data would silently consume
+/// the remaining SQL statements.
+///
+/// [`SessionConfig`]: datafusion::execution::context::SessionConfig
+#[derive(Debug)]
+pub struct StdinCarriesCommands;
 
 /// Utilities for exposing the process's standard input as an object store.
 ///
@@ -64,7 +74,10 @@ impl StdinUtils {
     ///
     /// The listing layer filters candidate files by extension, so the canonical
     /// object is named with the extension matching the declared `STORED AS`
-    /// format.
+    /// format. The name thereby also records which format stdin was consumed
+    /// as: a later stdin-backed table declaring a different format resolves to
+    /// a path the buffered store does not contain and is rejected by
+    /// [`Self::get_or_create`].
     pub(crate) fn rewrite_location(
         location: &str,
         format: Option<&ConfigFileType>,
@@ -92,14 +105,38 @@ impl StdinUtils {
     /// LOCATION '/dev/stdin'` would re-read (now-EOF) stdin, build an empty
     /// store, and overwrite the populated one, silently emptying the earlier
     /// table. Reusing the already-registered store avoids that.
+    ///
+    /// A later stdin-backed table declaring a different `STORED AS` format
+    /// resolves to an object the store does not contain (the object name
+    /// records the format stdin was consumed as) and is rejected with a clear
+    /// error — both reading the buffer as another format and re-reading stdin
+    /// would be silently wrong.
     pub(crate) async fn get_or_create(
         state: &SessionState,
         url: &Url,
     ) -> Result<Arc<dyn ObjectStore>> {
-        if let Ok(existing) = state.runtime_env().object_store_registry.get_store(url) {
-            return Ok(existing);
+        let Ok(existing) = state.runtime_env().object_store_registry.get_store(url)
+        else {
+            return Self::object_store(state, url).await;
+        };
+
+        let path = ObjectStorePath::from_url_path(url.path())?;
+        if existing.head(&path).await.is_err() {
+            let buffered = existing
+                .list(None)
+                .try_next()
+                .await
+                .ok()
+                .flatten()
+                .map(|meta| format!(" as '{}'", meta.location))
+                .unwrap_or_default();
+            return Err(exec_datafusion_err!(
+                "stdin was already read{buffered} by an earlier statement; all \
+                 tables backed by stdin in a session must declare the same \
+                 STORED AS format"
+            ));
         }
-        Self::object_store(url).await
+        Ok(existing)
     }
 
     /// Builds the object store backing the `stdin://` scheme by reading all of
@@ -111,7 +148,29 @@ impl StdinUtils {
     /// Buffering the whole input up front sidesteps these limitations and lets
     /// the data be read like any other object, including being scanned more than
     /// once.
-    async fn object_store(url: &Url) -> Result<Arc<dyn ObjectStore>> {
+    async fn object_store(
+        state: &SessionState,
+        url: &Url,
+    ) -> Result<Arc<dyn ObjectStore>> {
+        if state
+            .config()
+            .get_extension::<StdinCarriesCommands>()
+            .is_some()
+        {
+            return Err(exec_datafusion_err!(
+                "stdin is already being read for SQL commands, so it cannot \
+                 also supply table data; pass the query with -c/--command or \
+                 -f/--file so that stdin carries the data, e.g. \
+                 `cat data.csv | datafusion-cli -f query.sql`"
+            ));
+        }
+        if std::io::stdin().is_terminal() {
+            return Err(exec_datafusion_err!(
+                "stdin is connected to a terminal, not piped data; pipe the \
+                 input in, e.g. `cat data.csv | datafusion-cli -f query.sql`"
+            ));
+        }
+
         let mut buffer = Vec::new();
         std::io::stdin()
             .lock()
@@ -138,7 +197,7 @@ impl StdinUtils {
 mod tests {
     use super::*;
 
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{SessionConfig, SessionContext};
 
     #[test]
     fn rewrites_stdin_locations() {
@@ -217,6 +276,50 @@ mod tests {
         let bytes = reused.get(&path).await?.bytes().await?;
         assert_eq!(bytes.as_ref(), b"a\n1\n2\n");
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejects_second_stdin_table_with_different_format() -> Result<()> {
+        // The buffered object's name records the format stdin was consumed
+        // as; a later stdin table declaring a different format must fail with
+        // a clear error rather than a downstream "not found" (or silently
+        // misreading the bytes as another format).
+        let csv_url = Url::parse("stdin:///stdin.csv").unwrap();
+        let store =
+            StdinUtils::in_memory_object_store(&csv_url, b"a\n1\n".to_vec()).await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_object_store(&csv_url, store);
+
+        let json_url = Url::parse("stdin:///stdin.json").unwrap();
+        let err = StdinUtils::get_or_create(&ctx.state(), &json_url)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("must declare the same STORED AS format")
+                && err.contains("stdin.csv"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn errors_when_stdin_carries_commands() {
+        // Once the REPL owns stdin for SQL commands, building the stdin store
+        // must fail with a clear error instead of swallowing the remaining
+        // statements as table data.
+        let config = SessionConfig::new().with_extension(Arc::new(StdinCarriesCommands));
+        let ctx = SessionContext::new_with_config(config);
+
+        let url = Url::parse("stdin:///stdin.csv").unwrap();
+        let err = StdinUtils::get_or_create(&ctx.state(), &url)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("SQL commands"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
