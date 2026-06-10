@@ -180,6 +180,26 @@ impl<'a> MetricBuilder<'a> {
         count
     }
 
+    /// Consume self and create a gauge tracking the size (in bytes) of the
+    /// largest single batch spilled by an operator
+    pub fn max_spilled_batch_size(self, partition: usize) -> Gauge {
+        let gauge = Gauge::new();
+        self.with_category(MetricCategory::Bytes)
+            .with_partition(partition)
+            .build(MetricValue::MaxSpilledBatchSize(gauge.clone()));
+        gauge
+    }
+
+    /// Consume self and create a gauge tracking the estimated size (in bytes) of
+    /// the largest slice produced when an operator splits batches
+    pub fn max_sliced_batch_size(self, partition: usize) -> Gauge {
+        let gauge = Gauge::new();
+        self.with_category(MetricCategory::Bytes)
+            .with_partition(partition)
+            .build(MetricValue::MaxSlicedBatchSize(gauge.clone()));
+        gauge
+    }
+
     /// Consume self and create a new counter for recording total output bytes
     pub fn output_bytes(self, partition: usize) -> Count {
         let count = Count::new();

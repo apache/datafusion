@@ -758,7 +758,10 @@ impl PgJsonExecutionPlanVisitor<'_> {
             MetricValue::SpilledBytes(c) | MetricValue::OutputBytes(c) => {
                 serde_json::Value::from(c.value())
             }
-            MetricValue::CurrentMemoryUsage(g) => serde_json::Value::from(g.value()),
+            MetricValue::CurrentMemoryUsage(g)
+            | MetricValue::MaxOutputBatchSize(g)
+            | MetricValue::MaxSpilledBatchSize(g)
+            | MetricValue::MaxSlicedBatchSize(g) => serde_json::Value::from(g.value()),
             MetricValue::ElapsedCompute(t) => {
                 // Emit as float milliseconds to align with PG's
                 // `"Actual Total Time"` convention. DataFusion tracks compute

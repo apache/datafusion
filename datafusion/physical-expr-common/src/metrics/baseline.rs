@@ -69,9 +69,14 @@ pub struct BaselineMetrics {
     /// Issue: <https://github.com/apache/datafusion/issues/16841>
     output_bytes: Count,
 
-    /// Size of the largest batch output from this operator,
-    /// this can help detect skews in partitions,
-    /// or an exceedingly large batch which caused an error/spill.
+    /// Size (in bytes) of the largest single batch output from this operator.
+    /// This can help detect skew across partitions, or an exceedingly large
+    /// batch which caused an error/spill.
+    ///
+    /// Measured the same way as `output_bytes` (via `get_record_batch_memory_size`),
+    /// so it carries the same caveat: the value may be overestimated, because
+    /// arrays that share underlying memory buffers have those buffers counted
+    /// multiple times.
     max_output_batch_size: Gauge,
 
     /// output batches: the total output batch count
@@ -291,6 +296,15 @@ pub struct SpillMetrics {
 
     /// total spilled rows during the execution of the operator
     pub spilled_rows: Count,
+
+    /// The in-memory size (in bytes) of the largest single batch spilled.
+    ///
+    /// Measured via `get_sliced_size` on the (GC-compacted) batch that is
+    /// written — the same value used for the operator's spill memory
+    /// accounting. Because the batch is GC-compacted first, this is an accurate
+    /// in-memory measure. Note this is the in-memory size, *not* the number of
+    /// bytes written to disk (see `spilled_bytes` for that).
+    pub max_spilled_batch_size: Gauge,
 }
 
 impl SpillMetrics {
@@ -300,6 +314,8 @@ impl SpillMetrics {
             spill_file_count: MetricBuilder::new(metrics).spill_count(partition),
             spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
             spilled_rows: MetricBuilder::new(metrics).spilled_rows(partition),
+            max_spilled_batch_size: MetricBuilder::new(metrics)
+                .max_spilled_batch_size(partition),
         }
     }
 }
@@ -309,6 +325,15 @@ impl SpillMetrics {
 pub struct SplitMetrics {
     /// Number of times an input [`RecordBatch`] was split
     pub batches_split: Count,
+    /// The estimated size (in bytes) of the largest slice produced when
+    /// splitting an oversized input batch.
+    ///
+    /// Like `max_spilled_batch_size`, this is measured via `get_sliced_size`,
+    /// which accounts for the sliced length rather than whole backing buffers.
+    /// Unlike the spill case, the slice is measured *without* GC-compacting it
+    /// first, so buffers shared across columns may be counted multiple times —
+    /// hence this is an estimate rather than an exact value.
+    pub max_sliced_batch_size: Gauge,
 }
 
 impl SplitMetrics {
@@ -318,6 +343,8 @@ impl SplitMetrics {
             batches_split: MetricBuilder::new(metrics)
                 .with_category(super::MetricCategory::Rows)
                 .counter("batches_split", partition),
+            max_sliced_batch_size: MetricBuilder::new(metrics)
+                .max_sliced_batch_size(partition),
         }
     }
 }

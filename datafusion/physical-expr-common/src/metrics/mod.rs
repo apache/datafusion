@@ -308,6 +308,8 @@ impl MetricsSet {
             MetricValue::MaxOutputBatchSize(_) => false,
             MetricValue::OutputBatches(_) => false,
             MetricValue::SpilledRows(_) => false,
+            MetricValue::MaxSpilledBatchSize(_) => false,
+            MetricValue::MaxSlicedBatchSize(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
             MetricValue::Gauge { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,

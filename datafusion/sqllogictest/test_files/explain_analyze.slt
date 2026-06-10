@@ -148,7 +148,7 @@ SELECT a
 FROM generate_series(1, 100) as t1(a);
 ----
 Plan with Metrics
-01)ProjectionExec: expr=[value@0 as a], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=64.0 KB, output_batches=1, expr_0_eval_time=<slt:ignore>]
+01)ProjectionExec: expr=[value@0 as a], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=64.0 KB, max_output_batch_size=64.0 KB, output_batches=1, expr_0_eval_time=<slt:ignore>]
 <slt:ignore>
 
 # 2 exprs
@@ -159,7 +159,7 @@ SELECT a+1, pow(a,2)
 FROM generate_series(1, 100) as t1(a);
 ----
 Plan with Metrics
-01)ProjectionExec: expr=[a@0 + 1 as t1.a + Int64(1), power(CAST(a@0 AS Float64), 2) as pow(t1.a,Int64(2))], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=1632.0 B, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
+01)ProjectionExec: expr=[a@0 + 1 as t1.a + Int64(1), power(CAST(a@0 AS Float64), 2) as pow(t1.a,Int64(2))], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=1632.0 B, max_output_batch_size=1632.0 B, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
 <slt:ignore>
 
 # common expressions
@@ -170,8 +170,8 @@ SELECT a+1, a+1 as another_a_plus_one
 FROM generate_series(1, 100) as t1(a);
 ----
 Plan with Metrics
-01)ProjectionExec: expr=[__common_expr_1@0 as t1.a + Int64(1), __common_expr_1@0 as another_a_plus_one], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=800.0 B, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
-02)--ProjectionExec: expr=[a@0 + 1 as __common_expr_1], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=800.0 B, output_batches=1, expr_0_eval_time=<slt:ignore>]
+01)ProjectionExec: expr=[__common_expr_1@0 as t1.a + Int64(1), __common_expr_1@0 as another_a_plus_one], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=800.0 B, max_output_batch_size=800.0 B, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
+02)--ProjectionExec: expr=[a@0 + 1 as __common_expr_1], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=800.0 B, max_output_batch_size=800.0 B, output_batches=1, expr_0_eval_time=<slt:ignore>]
 <slt:ignore>
 
 statement ok

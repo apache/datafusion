@@ -658,6 +658,11 @@ pub enum MetricValue {
     OutputBatches(Count),
     /// Total size of spilled rows produced: "spilled_rows" metric
     SpilledRows(Count),
+    /// Size (in bytes) of the largest batch spilled: "max_spilled_batch_size" metric
+    MaxSpilledBatchSize(Gauge),
+    /// Estimated size (in bytes) of the largest slice produced when splitting a
+    /// batch: "max_sliced_batch_size" metric
+    MaxSlicedBatchSize(Gauge),
     /// Current memory used
     CurrentMemoryUsage(Gauge),
     /// Operator defined count.
@@ -733,6 +738,14 @@ impl PartialEq for MetricValue {
             (MetricValue::SpilledRows(count), MetricValue::SpilledRows(other)) => {
                 count == other
             }
+            (
+                MetricValue::MaxSpilledBatchSize(gauge),
+                MetricValue::MaxSpilledBatchSize(other),
+            ) => gauge == other,
+            (
+                MetricValue::MaxSlicedBatchSize(gauge),
+                MetricValue::MaxSlicedBatchSize(other),
+            ) => gauge == other,
             (
                 MetricValue::CurrentMemoryUsage(gauge),
                 MetricValue::CurrentMemoryUsage(other),
@@ -814,6 +827,8 @@ impl MetricValue {
             Self::MaxOutputBatchSize(_) => "max_output_batch_size",
             Self::OutputBatches(_) => "output_batches",
             Self::SpilledRows(_) => "spilled_rows",
+            Self::MaxSpilledBatchSize(_) => "max_spilled_batch_size",
+            Self::MaxSlicedBatchSize(_) => "max_sliced_batch_size",
             Self::CurrentMemoryUsage(_) => "mem_used",
             Self::ElapsedCompute(_) => "elapsed_compute",
             Self::Count { name, .. } => name.borrow(),
@@ -838,6 +853,8 @@ impl MetricValue {
             Self::MaxOutputBatchSize(gauge) => gauge.value(),
             Self::OutputBatches(count) => count.value(),
             Self::SpilledRows(count) => count.value(),
+            Self::MaxSpilledBatchSize(gauge) => gauge.value(),
+            Self::MaxSlicedBatchSize(gauge) => gauge.value(),
             Self::CurrentMemoryUsage(used) => used.value(),
             Self::ElapsedCompute(time) => time.value(),
             Self::Count { count, .. } => count.value(),
@@ -874,6 +891,8 @@ impl MetricValue {
             Self::MaxOutputBatchSize(_) => Self::MaxOutputBatchSize(Gauge::new()),
             Self::OutputBatches(_) => Self::OutputBatches(Count::new()),
             Self::SpilledRows(_) => Self::SpilledRows(Count::new()),
+            Self::MaxSpilledBatchSize(_) => Self::MaxSpilledBatchSize(Gauge::new()),
+            Self::MaxSlicedBatchSize(_) => Self::MaxSlicedBatchSize(Gauge::new()),
             Self::CurrentMemoryUsage(_) => Self::CurrentMemoryUsage(Gauge::new()),
             Self::ElapsedCompute(_) => Self::ElapsedCompute(Time::new()),
             Self::Count { name, .. } => Self::Count {
@@ -943,9 +962,16 @@ impl MetricValue {
                     gauge: other_gauge, ..
                 },
             ) => gauge.add(other_gauge.value()),
-            // The largest output batch across partitions is the max of the
-            // per-partition maxima, not their sum.
+            // The largest batch across partitions is the max of the per-partition
+            // maxima, not their sum. This applies to all `max_*_batch_size` gauges.
             (Self::MaxOutputBatchSize(gauge), Self::MaxOutputBatchSize(other_gauge)) => {
+                gauge.set_max(other_gauge.value())
+            }
+            (
+                Self::MaxSpilledBatchSize(gauge),
+                Self::MaxSpilledBatchSize(other_gauge),
+            ) => gauge.set_max(other_gauge.value()),
+            (Self::MaxSlicedBatchSize(gauge), Self::MaxSlicedBatchSize(other_gauge)) => {
                 gauge.set_max(other_gauge.value())
             }
             (Self::ElapsedCompute(time), Self::ElapsedCompute(other_time))
@@ -1035,21 +1061,23 @@ impl MetricValue {
             Self::SpillCount(_) => 11,
             Self::SpilledBytes(_) => 12,
             Self::SpilledRows(_) => 13,
-            Self::CurrentMemoryUsage(_) => 14,
+            Self::MaxSpilledBatchSize(_) => 14,
+            Self::MaxSlicedBatchSize(_) => 15,
+            Self::CurrentMemoryUsage(_) => 16,
             Self::Count { name, .. } => match name.as_ref() {
                 // This Parquet page-index metric is a plain Count because it
                 // records pages that skipped page-index evaluation, not a
                 // pruned/matched pair. Keep it grouped with the other
                 // page-index pruning metrics in EXPLAIN output.
                 "page_index_pages_skipped_by_fully_matched" => 8,
-                _ => 15,
+                _ => 17,
             },
-            Self::Gauge { .. } => 16,
-            Self::Time { .. } => 17,
-            Self::Ratio { .. } => 18,
-            Self::StartTimestamp(_) => 19, // show timestamps last
-            Self::EndTimestamp(_) => 20,
-            Self::Custom { .. } => 21,
+            Self::Gauge { .. } => 18,
+            Self::Time { .. } => 19,
+            Self::Ratio { .. } => 20,
+            Self::StartTimestamp(_) => 21, // show timestamps last
+            Self::EndTimestamp(_) => 22,
+            Self::Custom { .. } => 23,
         }
     }
 
@@ -1081,6 +1109,16 @@ impl Display for MetricValue {
             }
             Self::MaxOutputBatchSize(gauge) => {
                 // MaxOutputBatchSize is in bytes, format like OutputBytes
+                let readable_size = human_readable_size(gauge.value());
+                write!(f, "{readable_size}")
+            }
+            Self::MaxSpilledBatchSize(gauge) => {
+                // MaxSpilledBatchSize is in bytes, format like MaxOutputBatchSize and OutputBytes
+                let readable_size = human_readable_size(gauge.value());
+                write!(f, "{readable_size}")
+            }
+            Self::MaxSlicedBatchSize(gauge) => {
+                // MaxSlicedBatchSize is in bytes, format like the other byte-size gauges
                 let readable_size = human_readable_size(gauge.value());
                 write!(f, "{readable_size}")
             }
@@ -1293,6 +1331,56 @@ mod tests {
         assert_eq!(
             MetricValue::MaxOutputBatchSize(lhs),
             MetricValue::MaxOutputBatchSize(rhs)
+        );
+    }
+
+    /// Shared checks for the byte-size `max_*_batch_size` gauges: byte-formatted
+    /// display, `set_max` semantics (the recorded value never decreases),
+    /// cross-partition aggregation that takes the max of per-partition maxima
+    /// rather than their sum, `new_empty`, and value-based equality.
+    fn check_max_batch_size_metric<F: Fn(Gauge) -> MetricValue>(ctor: F, name: &str) {
+        // Display: human-readable bytes; `set_max` never lowers the value.
+        let gauge = Gauge::new();
+        let value = ctor(gauge.clone());
+        assert_eq!("0.0 B", value.to_string(), "{name}");
+        gauge.set_max((100 * MB) as usize);
+        assert_eq!("100.0 MB", value.to_string(), "{name}");
+        gauge.set_max((50 * MB) as usize);
+        assert_eq!("100.0 MB", value.to_string(), "{name}");
+        assert_eq!(name, value.name());
+
+        // Aggregation across partitions takes the max, not the sum.
+        let p0 = Gauge::new();
+        p0.set_max(400);
+        let mut aggregated = ctor(p0);
+        let p1 = Gauge::new();
+        p1.set_max(250);
+        aggregated.aggregate(&ctor(p1));
+        assert_eq!(400, aggregated.as_usize(), "{name}");
+
+        // `new_empty` produces a zeroed gauge of the same variant.
+        let empty = aggregated.new_empty();
+        assert_eq!(0, empty.as_usize(), "{name}");
+        assert_eq!(name, empty.name());
+
+        // Equality compares the recorded value.
+        let lhs = Gauge::new();
+        lhs.set_max(42);
+        let rhs = Gauge::new();
+        rhs.set_max(42);
+        assert_eq!(ctor(lhs), ctor(rhs), "{name}");
+    }
+
+    #[test]
+    fn test_max_spilled_and_sliced_batch_size() {
+        // Both behave like `max_output_batch_size`.
+        check_max_batch_size_metric(
+            MetricValue::MaxSpilledBatchSize,
+            "max_spilled_batch_size",
+        );
+        check_max_batch_size_metric(
+            MetricValue::MaxSlicedBatchSize,
+            "max_sliced_batch_size",
         );
     }
 
