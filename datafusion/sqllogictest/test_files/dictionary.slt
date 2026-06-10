@@ -515,3 +515,67 @@ DROP TABLE dict_hash_10;
 
 statement ok
 DROP TABLE dict_hash_src;
+
+# Multi-column GROUP BY with mixed key types. Verifies order sensitivity
+statement ok
+CREATE TABLE t_multi_dict_grp AS
+SELECT
+    arrow_cast(column1, 'Dictionary(Int8, Utf8)') AS tag_a,
+    arrow_cast(column2, 'Dictionary(Int32, LargeUtf8)') AS tag_b,
+    column3 AS val
+FROM (VALUES
+    ('alpha', 'X',  10),
+    ('beta',  'Y',  20),
+    ('alpha', 'X',  30),
+    ('beta',  'X',  40),
+    ('alpha', 'Y',  50)
+);
+
+query TTI rowsort
+SELECT tag_a, tag_b, SUM(val)
+FROM t_multi_dict_grp
+GROUP BY tag_a, tag_b;
+----
+alpha X 40
+alpha Y 50
+beta X 40
+beta Y 20
+
+statement ok
+DROP TABLE t_multi_dict_grp;
+
+statement ok
+CREATE TABLE t_dict_three_tag AS
+SELECT
+    arrow_cast(column1, 'Dictionary(Int8, Utf8View)') AS region,
+    arrow_cast(column2, 'Dictionary(Int32, Utf8)') AS tier,
+    arrow_cast(column3, 'Dictionary(Int32, LargeUtf8)') AS env,
+    column4 AS val
+FROM (VALUES
+    ('east', 'gold',   'prod',    1),
+    ('west', 'silver', 'staging', 2),
+    ('east', 'gold',   'prod',    3),
+    ('east', 'gold',   'staging', 4),
+    (NULL,   'gold',   'prod',    5),
+    (NULL,   'gold',   'prod',    6)
+);
+
+query I
+SELECT COUNT(*) FROM (
+    SELECT region, tier, env FROM t_dict_three_tag GROUP BY region, tier, env
+);
+----
+4
+
+query TTTI rowsort
+SELECT region, tier, env, SUM(val)
+FROM t_dict_three_tag
+GROUP BY region, tier, env;
+----
+NULL gold prod 11
+east gold prod 4
+east gold staging 4
+west silver staging 2
+
+statement ok
+DROP TABLE t_dict_three_tag;

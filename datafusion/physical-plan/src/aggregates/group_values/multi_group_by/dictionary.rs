@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 #[cfg(test)]
 mod multi_group_by_dictionary_test {
     use std::sync::Arc;
@@ -95,7 +112,7 @@ mod multi_group_by_dictionary_test {
     mod general_test {
         use super::*;
 
-        // Covers: all-distinct pairs → unique IDs; cross-batch stability (same pair always same ID)
+        // Covers: all-distinct pairs -> unique IDs; cross-batch stability (same pair always same ID)
         #[test]
         fn test_distinct_pairs_and_cross_batch_consistency() {
             let schema = mk_schema(vec![
@@ -163,54 +180,14 @@ mod multi_group_by_dictionary_test {
                 vec![0, 1, 0, 2, 2]
             );
         }
-
-        // Covers: 5 columns (3+), Utf8/Utf8View/LargeUtf8 value types, Int32/Int8 key types,
-        // distinct tuples → unique IDs, repeated tuples → same IDs, null in one column
-        #[test]
-        fn test_five_column_grouping() {
-            let schema = mk_schema(vec![
-                dict(DataType::Int32, DataType::Utf8),
-                dict(DataType::Int32, DataType::Utf8View),
-                dict(DataType::Int32, DataType::LargeUtf8),
-                dict(DataType::Int8, DataType::Utf8),
-                dict(DataType::Int32, DataType::Utf8View),
-            ]);
-            let keys = || int32_keys(vec![Some(0), Some(1), None, Some(0)]);
-            let rep_keys = || int32_keys(vec![Some(0), Some(1), Some(0), Some(0)]);
-            let i8k = || int8_keys(vec![Some(0i8), Some(1i8), Some(0i8), Some(0i8)]);
-            assert_eq!(
-                intern_all(
-                    schema,
-                    &[
-                        make_dict(keys(), StringArray::from(vec!["a0", "a1"])),
-                        make_dict_view(
-                            rep_keys(),
-                            StringViewArray::from(vec!["b0", "b1"])
-                        ),
-                        make_dict_large(
-                            rep_keys(),
-                            LargeStringArray::from(vec!["c0", "c1"])
-                        ),
-                        make_dict(i8k(), StringArray::from(vec!["d0", "d1"])),
-                        make_dict_view(
-                            rep_keys(),
-                            StringViewArray::from(vec!["e0", "e1"])
-                        ),
-                    ],
-                ),
-                // (a0,b0,c0,d0,e0), (a1,b1,c1,d1,e1), (null,b0,c0,d0,e0), (a0,b0,c0,d0,e0) repeat
-                vec![0, 1, 2, 0]
-            );
-        }
     }
 
-    // dictionary_encoding: behavior specific to how dictionary arrays encode values —
+    // dictionary_encoding: behavior specific to how dictionary arrays encode values
     // key-index shuffling, non-normalized value arrays, bloated dictionaries, mixed key types
     mod dictionary_encoding {
         use super::*;
 
         // Covers: (foo,bar) ≠ (bar,foo) order sensitivity; same decoded value at different key
-        // positions cross-batch; non-normalized dict (duplicate entries in values array);
         #[test]
         fn test_order_sensitivity_and_key_shuffling() {
             let schema = mk_schema(vec![
@@ -262,50 +239,46 @@ mod multi_group_by_dictionary_test {
                 vec![0, 1, 4]
             );
         }
-
-        // Covers: mixed key types (Int8 vs Int32), Utf8 vs LargeUtf8 value types
+        // Covers: 5 columns , Utf8/Utf8View/LargeUtf8 value types, Int32/Int8 key types,
         #[test]
-        fn test_different_key_types() {
+        fn test_five_column_grouping() {
             let schema = mk_schema(vec![
-                dict(DataType::Int8, DataType::Utf8),
+                dict(DataType::Int32, DataType::Utf8),
+                dict(DataType::Int32, DataType::Utf8View),
                 dict(DataType::Int32, DataType::LargeUtf8),
+                dict(DataType::Int8, DataType::Utf8),
+                dict(DataType::Int32, DataType::Utf8View),
             ]);
-            let mut group_values = make_gv(schema);
+            let keys = || int32_keys(vec![Some(0), Some(1), None, Some(0)]);
+            let rep_keys = || int32_keys(vec![Some(0), Some(1), Some(0), Some(0)]);
+            let i8k = || int8_keys(vec![Some(0i8), Some(1i8), Some(0i8), Some(0i8)]);
             assert_eq!(
-                intern(
-                    &mut group_values,
+                intern_all(
+                    schema,
                     &[
-                        make_dict(
-                            int8_keys(vec![Some(0i8), Some(1i8)]),
-                            StringArray::from(vec!["alpha", "beta"]),
+                        make_dict(keys(), StringArray::from(vec!["a0", "a1"])),
+                        make_dict_view(
+                            rep_keys(),
+                            StringViewArray::from(vec!["b0", "b1"])
                         ),
                         make_dict_large(
-                            int32_keys(vec![Some(0), Some(1)]),
-                            LargeStringArray::from(vec!["X", "Y"]),
+                            rep_keys(),
+                            LargeStringArray::from(vec!["c0", "c1"])
+                        ),
+                        make_dict(i8k(), StringArray::from(vec!["d0", "d1"])),
+                        make_dict_view(
+                            rep_keys(),
+                            StringViewArray::from(vec!["e0", "e1"])
                         ),
                     ],
                 ),
-                vec![0, 1]
-            );
-            assert_eq!(
-                intern(
-                    &mut group_values,
-                    &[
-                        make_dict(
-                            int8_keys(vec![Some(1i8), Some(3i8)]),
-                            StringArray::from(vec!["a", "beta", "b", "alpha"]),
-                        ),
-                        make_dict_large(
-                            int32_keys(vec![Some(0), Some(1)]),
-                            LargeStringArray::from(vec!["Y", "X"]),
-                        ),
-                    ],
-                ),
-                vec![1, 0]
+                // (a0,b0,c0,d0,e0), (a1,b1,c1,d1,e1), (null,b0,c0,d0,e0), (a0,b0,c0,d0,e0) repeat
+                vec![0, 1, 2, 0]
             );
         }
     }
 
+    #[cfg(test)]
     mod streaming {
         use super::*;
 
