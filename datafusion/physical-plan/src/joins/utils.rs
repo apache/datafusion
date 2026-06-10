@@ -1373,7 +1373,9 @@ pub(crate) fn build_batch_from_indices(
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
 
-/// Returns a new [RecordBatch] resulting of a join where the build/left side is empty.
+/// Returns a new [RecordBatch] for a probe batch when no probe row can find a
+/// match: the build-side map is empty, either because the build side has no
+/// rows or because none of its rows has a matchable (non-NULL) join key.
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_empty_build_side(
     schema: &Schema,
@@ -2104,6 +2106,9 @@ pub fn swap_join_projection(
 /// `fifo_hashmap` sets the order of iteration over `batch` rows while updating hashmap,
 /// which allows to keep either first (if set to true) or last (if set to false) row index
 /// as a chain head for rows with equal hash values.
+///
+/// Under [`NullEquality::NullEqualsNothing`], rows with a NULL in any key
+/// column can never match a probe row, so they are not inserted into the map.
 #[expect(clippy::too_many_arguments)]
 pub fn update_hash(
     on: &[PhysicalExprRef],
@@ -2114,6 +2119,7 @@ pub fn update_hash(
     hashes_buffer: &mut [u64],
     deleted_offset: usize,
     fifo_hashmap: bool,
+    null_equality: NullEquality,
 ) -> Result<()> {
     // evaluate the keys
     let keys_values = evaluate_expressions_to_arrays(on, batch)?;
@@ -2124,10 +2130,14 @@ pub fn update_hash(
     // For usual JoinHashmap, the implementation is void.
     hash_map.extend_zero(batch.num_rows());
 
+    // Unmatchable NULL-key rows are filtered out below.
+    let valid_keys = matchable_join_keys(&keys_values, null_equality);
+
     // Updating JoinHashMap from hash values iterator
     let hash_values_iter = hash_values
         .iter()
         .enumerate()
+        .filter(|(i, _)| valid_keys.as_ref().is_none_or(|nulls| nulls.is_valid(*i)))
         .map(|(i, val)| (i + offset, val));
 
     if fifo_hashmap {
@@ -2137,6 +2147,31 @@ pub fn update_hash(
     }
 
     Ok(())
+}
+
+/// Returns the combined validity of the join key columns `join_key_arrays`: a row
+/// is valid only if every key column is non-NULL at that row.
+///
+/// Returns `None` when no rows need to be filtered: either every row has
+/// fully non-NULL keys, or `null_equality` is
+/// [`NullEquality::NullEqualsNull`], where NULL keys are matchable.
+pub(crate) fn matchable_join_keys(
+    join_key_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Option<NullBuffer> {
+    match null_equality {
+        NullEquality::NullEqualsNothing => {
+            let logical_nulls: Vec<_> = join_key_arrays
+                .iter()
+                .map(|values| values.logical_nulls())
+                .collect();
+            NullBuffer::union_many(logical_nulls.iter().map(Option::as_ref))
+                // An all-valid array can still have a validity buffer; return
+                // `None` in that case, since there is nothing to filter.
+                .filter(|nulls| nulls.null_count() > 0)
+        }
+        NullEquality::NullEqualsNull => None,
+    }
 }
 
 pub(super) fn equal_rows_arr(
@@ -2461,6 +2496,60 @@ mod tests {
         let result = get_anti_indices(2..8, &input);
 
         assert_u32_values(&result, &[2, 4, 6, 7]);
+    }
+
+    #[test]
+    fn update_hash_skips_null_keys_for_null_equals_nothing() -> Result<()> {
+        use crate::joins::join_hash_map::JoinHashMapU32;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(1),
+                None,
+                Some(2),
+                None,
+                Some(1),
+            ]))],
+        )?;
+        let on: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("a", 0))];
+        let random_state = RandomState::with_seed(42);
+        let mut hashes_buffer = vec![0; batch.num_rows()];
+
+        let mut map = JoinHashMapU32::with_capacity(batch.num_rows());
+        update_hash(
+            &on,
+            &batch,
+            &mut map,
+            0,
+            &random_state,
+            &mut hashes_buffer,
+            0,
+            true,
+            NullEquality::NullEqualsNothing,
+        )?;
+        // NULL keys can never match under NullEqualsNothing, so they must not
+        // be inserted into the map: only hash(1) and hash(2) remain.
+        assert_eq!(map.len(), 2);
+
+        let mut map = JoinHashMapU32::with_capacity(batch.num_rows());
+        update_hash(
+            &on,
+            &batch,
+            &mut map,
+            0,
+            &random_state,
+            &mut hashes_buffer,
+            0,
+            true,
+            NullEquality::NullEqualsNull,
+        )?;
+        // Under NullEqualsNull, NULL keys can match and share a single hash:
+        // hash(1), hash(2), and hash(NULL).
+        assert_eq!(map.len(), 3);
+
+        Ok(())
     }
 
     #[test]

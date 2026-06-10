@@ -2015,6 +2015,7 @@ async fn collect_left_input(
                     &mut hashes_buffer,
                     0,
                     true,
+                    null_equality,
                 )?;
                 offset += batch.num_rows();
             }
@@ -3329,6 +3330,153 @@ mod tests {
         Ok(())
     }
 
+    /// Under NullEqualsNothing, NULL join keys are not inserted into the hash
+    /// map, so a build side whose keys are all NULL produces an empty map even
+    /// though it contains rows. Join types that emit unmatched build rows must
+    /// still produce them from the visited bitmap.
+    #[rstest]
+    #[tokio::test]
+    async fn join_all_null_build_keys(
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        partition_mode: PartitionMode,
+    ) -> Result<()> {
+        let left = build_table_two_cols(
+            ("a1", &vec![Some(1), Some(2)]),
+            ("b1", &vec![None, None]), // all build-side join keys are NULL
+        );
+        let right = build_table_two_cols(
+            ("a2", &vec![Some(10), Some(20), Some(30)]),
+            ("b1", &vec![Some(4), None, Some(6)]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        for join_type in [
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::LeftMark,
+            JoinType::RightMark,
+        ] {
+            let (_, batches, _) = join_collect_with_partition_mode(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                &join_type,
+                partition_mode,
+                NullEquality::NullEqualsNothing,
+                Arc::new(TaskContext::default()),
+            )
+            .await?;
+
+            match join_type {
+                JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
+                    let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                    assert_eq!(num_rows, 0, "unexpected rows for {join_type}");
+                }
+                JoinType::Left => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+----+----+
+                        | a1 | b1 | a2 | b1 |
+                        +----+----+----+----+
+                        | 1  |    |    |    |
+                        | 2  |    |    |    |
+                        +----+----+----+----+
+                        ");
+                    }
+                }
+                JoinType::Right => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+----+----+
+                        | a1 | b1 | a2 | b1 |
+                        +----+----+----+----+
+                        |    |    | 10 | 4  |
+                        |    |    | 20 |    |
+                        |    |    | 30 | 6  |
+                        +----+----+----+----+
+                        ");
+                    }
+                }
+                JoinType::Full => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+----+----+
+                        | a1 | b1 | a2 | b1 |
+                        +----+----+----+----+
+                        |    |    | 10 | 4  |
+                        |    |    | 20 |    |
+                        |    |    | 30 | 6  |
+                        | 1  |    |    |    |
+                        | 2  |    |    |    |
+                        +----+----+----+----+
+                        ");
+                    }
+                }
+                JoinType::LeftAnti => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+
+                        | a1 | b1 |
+                        +----+----+
+                        | 1  |    |
+                        | 2  |    |
+                        +----+----+
+                        ");
+                    }
+                }
+                JoinType::RightAnti => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+
+                        | a2 | b1 |
+                        +----+----+
+                        | 10 | 4  |
+                        | 20 |    |
+                        | 30 | 6  |
+                        +----+----+
+                        ");
+                    }
+                }
+                JoinType::LeftMark => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+-------+
+                        | a1 | b1 | mark  |
+                        +----+----+-------+
+                        | 1  |    | false |
+                        | 2  |    | false |
+                        +----+----+-------+
+                        ");
+                    }
+                }
+                JoinType::RightMark => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+-------+
+                        | a2 | b1 | mark  |
+                        +----+----+-------+
+                        | 10 | 4  | false |
+                        | 20 |    | false |
+                        | 30 | 6  | false |
+                        +----+----+-------+
+                        ");
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn partitioned_join_left_one(
@@ -4459,6 +4607,7 @@ mod tests {
             &[right_keys_values],
             NullEquality::NullEqualsNothing,
             &hashes_buffer,
+            None,
             8192,
             (0, None),
             &mut probe_indices_buffer,
@@ -4520,6 +4669,7 @@ mod tests {
             &[right_keys_values],
             NullEquality::NullEqualsNothing,
             &hashes_buffer,
+            None,
             8192,
             (0, None),
             &mut probe_indices_buffer,
