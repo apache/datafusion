@@ -58,6 +58,7 @@ github:
           - "Check Markdown Links"
           - "Validate required_status_checks in .asf.yaml"
           - "Spell Check with Typos"
+          - "Detect changes"
           - "Circular Dependency Check"
           - "Detect Unused Dependencies"
           - "linux build test"

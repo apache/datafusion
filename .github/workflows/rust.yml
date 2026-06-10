@@ -43,9 +43,65 @@ permissions:
   contents: read
 
 jobs:
+  # Detect whether the PR contains any non-doc changes; gate every other
+  # job in this workflow so md-only PRs report all required checks as
+  # `skipped` instead of leaving them in "Expected"/pending and blocking merge.
+  detect-changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      has_code: ${{ steps.filter.outputs.has_code }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Skip code CI on PRs whose changed files all match one of these
+          # globs (only dev.yml / docs*.yaml jobs run in that case).
+          #
+          # To add a new entry: append a line below with a glob pattern.
+          # Syntax matches `pull_request: paths-ignore:` — `**` = any depth,
+          # `*` = any chars within one path segment. Examples:
+          #     foo/bar.txt          a single specific file
+          #     subdir/**            everything under subdir/
+          #     **.png               any .png file at any depth
+          #     **/CHANGELOG.md      CHANGELOG.md in any directory
+          IGNORE_CODE_CI_FOR_PATHS: |
+            docs/**
+            **.md
+            .github/ISSUE_TEMPLATE/**
+            .github/pull_request_template.md
+        run: |
+          # Fail-open: if anything goes wrong, default to running every job
+          # rather than silently skipping (which would let broken CI merge).
+          set +e
+          if [ -z "$BASE_SHA" ]; then
+            echo "has_code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Translate IGNORE_CODE_CI_FOR_PATHS (one glob per line) into git
+          # pathspec excludes; `:(exclude,glob)` activates ** globbing.
+          excludes=()
+          while IFS= read -r pattern; do
+            [ -n "$pattern" ] && excludes+=( ":(exclude,glob)$pattern" )
+          done <<< "$IGNORE_CODE_CI_FOR_PATHS"
+          # If anything remains after stripping ignored paths, the PR has
+          # real code changes and code CI should run.
+          diff_output=$(git diff --name-only "$BASE_SHA..$HEAD_SHA" -- "${excludes[@]}")
+          if [ -n "$diff_output" ]; then
+            echo "has_code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_code=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -74,7 +130,8 @@ jobs:
   # subset of the features packages enabled.
   linux-datafusion-common-features:
     name: cargo check datafusion-common features
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -99,7 +156,8 @@ jobs:
   # subset of the features packages enabled.
   linux-datafusion-substrait-features:
     name: cargo check datafusion-substrait features
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -136,7 +194,8 @@ jobs:
   # subset of the features packages enabled.
   linux-datafusion-proto-features:
     name: cargo check datafusion-proto features
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -168,7 +227,8 @@ jobs:
   # subset of the features packages enabled.
   linux-cargo-check-datafusion:
     name: cargo check datafusion features
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -234,7 +294,8 @@ jobs:
   # subset of the features packages enabled.
   linux-cargo-check-datafusion-functions:
     name: cargo check datafusion-functions features
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -269,7 +330,8 @@ jobs:
   # Library and integration tests
   linux-test:
     name: cargo test (amd64)
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -319,7 +381,8 @@ jobs:
   # datafusion-cli tests
   linux-test-datafusion-cli:
     name: cargo test datafusion-cli (amd64)
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     steps:
       - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
@@ -349,7 +412,8 @@ jobs:
 
   linux-test-example:
     name: cargo examples (amd64)
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -380,7 +444,8 @@ jobs:
   # Run `cargo test doc` (test documentation examples)
   linux-test-doc:
     name: cargo test doc (amd64)
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -402,7 +467,8 @@ jobs:
   # Run `cargo doc` to ensure the rustdoc is clean
   linux-rustdoc:
     name: cargo doc
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -418,6 +484,8 @@ jobs:
 
   linux-wasm-pack:
     name: build and run with wasm-pack
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
@@ -443,7 +511,8 @@ jobs:
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
     name: verify benchmark results (amd64)
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -477,7 +546,8 @@ jobs:
 
   sqllogictest-postgres:
     name: "Run sqllogictest with Postgres runner"
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -516,7 +586,8 @@ jobs:
 
   sqllogictest-substrait:
     name: "Run sqllogictest in Substrait round-trip mode"
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -563,6 +634,8 @@ jobs:
   # flaky sqllogictest metrics.
   macos-aarch64:
     name: cargo test (macos-aarch64)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
@@ -577,6 +650,8 @@ jobs:
 
   vendor:
     name: Verify Vendored Code
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -594,6 +669,8 @@ jobs:
 
   check-fmt:
     name: Check cargo fmt
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -651,7 +728,8 @@ jobs:
 
   clippy:
     name: clippy
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -677,7 +755,8 @@ jobs:
 
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -698,7 +777,8 @@ jobs:
 
   config-docs-check:
     name: check configs.md and ***_functions.md is up-to-date
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -733,7 +813,8 @@ jobs:
 # 3. Compares the result against the committed README.md and fails if out-of-date
   examples-docs-check:
     name: check example README is up-to-date
-    needs: linux-build-lib
+    needs: [linux-build-lib, detect-changes]
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -765,6 +846,8 @@ jobs:
   # - datafusion-cli
   msrv:
     name: Verify MSRV (Min Supported Rust Version)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
