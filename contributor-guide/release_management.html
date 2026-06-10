@@ -481,6 +481,81 @@ and any additional release-specific fixes via the
 <li><p>After approval, publish to crates.io, ASF distribution servers, and Git tags</p></li>
 </ul>
 </section>
+<section id="backport-criteria">
+<h2>Backport Criteria<a class="headerlink" href="#backport-criteria" title="Link to this heading">#</a></h2>
+<p>A release branch is a stabilization branch for an imminent or recent patch
+release. The bar for landing a change on a release branch is therefore
+<em>higher</em> than the bar for landing on <code class="docutils literal notranslate"><span class="pre">main</span></code>, not lower. These criteria define
+what is eligible for backport; the <a class="reference internal" href="#backport-workflow">Backport Workflow</a>
+below describes the mechanics.</p>
+<p>DataFusion follows Cargo SemVer, with breaking changes allowed at major
+version boundaries — see the <a class="reference internal" href="api-health.html"><span class="std std-doc">API health policy</span></a> for the full framing of
+public Rust and SQL API stability. Patch releases (<code class="docutils literal notranslate"><span class="pre">x.y.z</span></code>, <code class="docutils literal notranslate"><span class="pre">z</span> <span class="pre">≥</span> <span class="pre">1</span></code>) carry
+fixes only and never introduce new features or breaking changes.</p>
+<section id="eligible-for-backport">
+<h3>Eligible for backport<a class="headerlink" href="#eligible-for-backport" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><strong>Security fixes.</strong> Fixes for known or reported security issues should be
+backported to every actively maintained release branch.</p></li>
+<li><p><strong>Correctness fixes.</strong> Fixes for queries that produce incorrect results,
+panics, data loss, or crashes. If the fix itself changes user-visible SQL
+semantics to make a wrong result right, follow <a class="reference internal" href="#behavior-changes">Behavior changes</a> below.</p></li>
+<li><p><strong>Stability and regression fixes.</strong> Fixes for regressions introduced in the
+current release line, hangs, deadlocks, memory leaks, or other availability
+issues.</p></li>
+<li><p><strong>Build, CI, and test fixes</strong> required to keep the branch buildable and
+releasable.</p></li>
+<li><p><strong>Documentation fixes</strong> for behavior already in the release. Documentation
+for behavior that exists only on <code class="docutils literal notranslate"><span class="pre">main</span></code> does not belong on a release branch.</p></li>
+</ul>
+</section>
+<section id="not-recommended-for-backport">
+<h3>Not recommended for backport<a class="headerlink" href="#not-recommended-for-backport" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><strong>New features</strong>, including new SQL functions, new optimizer rules, new
+configuration options, new public APIs, and new file-format support. Land
+on <code class="docutils literal notranslate"><span class="pre">main</span></code> and ship in the next major release.</p></li>
+<li><p><strong>Breaking API changes</strong> of any kind, Rust or SQL. DataFusion makes
+breaking changes only at major version boundaries — see <a class="reference internal" href="api-health.html"><span class="std std-doc">API health policy</span></a>.</p></li>
+<li><p><strong>Refactors and cleanup</strong> that do not fix a bug, even if they are correct.</p></li>
+<li><p><strong>Performance improvements</strong> that are not also correctness or stability
+fixes. Land on <code class="docutils literal notranslate"><span class="pre">main</span></code>.</p></li>
+<li><p><strong>Dependency upgrades</strong>, except when the upgrade itself is the security or
+correctness fix and there is no narrower alternative.</p></li>
+</ul>
+</section>
+<section id="behavior-changes">
+<h3>Behavior changes<a class="headerlink" href="#behavior-changes" title="Link to this heading">#</a></h3>
+<p>A “behavior change” is any fix that alters user-visible results: SQL
+semantics (values, ordering, types, null handling), error messages that
+downstream users may rely on, plan output, or default configuration values.</p>
+<p>Behavior-changing fixes need extra scrutiny on a release branch because
+users upgrading between patch versions do not expect their queries to start
+returning different results. When proposing one for backport, state on the
+release tracking issue <em>why</em> the change should ship in this patch release
+rather than wait for the next major. The previous and new behavior should
+already be documented on the original issue or PR — link to that rather
+than restating it.</p>
+<p>If in doubt, default to “land on <code class="docutils literal notranslate"><span class="pre">main</span></code>, ship in the next major.”</p>
+</section>
+<section id="who-decides">
+<h3>Who decides<a class="headerlink" href="#who-decides" title="Link to this heading">#</a></h3>
+<p>The release manager for the active release line is the final reviewer of
+what goes into the patch release. They coordinate via the release tracking
+issue (for example, the <a class="reference external" href="https://github.com/apache/datafusion/issues/18072">release issue for 50.3.0</a>). Anyone may propose a
+backport by opening a backport PR and linking it from the tracking issue;
+inclusion is the release manager’s call.</p>
+</section>
+<section id="active-release-branches">
+<h3>Active release branches<a class="headerlink" href="#active-release-branches" title="Link to this heading">#</a></h3>
+<p>DataFusion does not maintain Long-Term Support branches. In general only the
+most recent <code class="docutils literal notranslate"><span class="pre">branch-NN</span></code> is actively maintained for backports, but if you need
+fixes in older releases, we are open to discussion.</p>
+<p>Security fixes are an exception: a maintainer may choose to backport a
+critical security fix to an older branch even after it would otherwise be
+closed. Discuss on the dev list or in a tracking issue before doing so.</p>
+</section>
+</section>
 <section id="backport-workflow">
 <h2>Backport Workflow<a class="headerlink" href="#backport-workflow" title="Link to this heading">#</a></h2>
 <p>The usual workflow is:</p>
@@ -587,6 +662,14 @@ This PR:
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#overview">Overview</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#backport-criteria">Backport Criteria</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eligible-for-backport">Eligible for backport</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#not-recommended-for-backport">Not recommended for backport</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#behavior-changes">Behavior changes</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#who-decides">Who decides</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#active-release-branches">Active release branches</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#backport-workflow">Backport Workflow</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#inputs">Inputs</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#apply-the-backport">Apply the Backport</a></li>
