@@ -418,7 +418,7 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> Res
 }
 
 fn to_utc_date_time(nanos: i64) -> Result<DateTime<Utc>> {
-    // DateTime::from_timestamp requires a non-negative nanosecond part.
+    // Keep negative sub-second values normalized as seconds + non-negative nanos.
     let secs = nanos.div_euclid(NANOS_PER_SEC);
     let nsec = nanos.rem_euclid(NANOS_PER_SEC) as u32;
     match DateTime::from_timestamp(secs, nsec) {
@@ -438,12 +438,10 @@ fn timestamp_scale<T: ArrowTimestampType>() -> i64 {
 
 // Scale to nanoseconds and report overflow as a normal error.
 fn checked_scale_to_nanos(x: i64, scale: i64) -> Result<i64> {
-    x.checked_mul(scale).ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!(
-            "date_bin timestamp value {x} * scale {scale} overflows i64"
-        ))
-        .into()
-    })
+    match x.checked_mul(scale) {
+        Some(scaled) => Ok(scaled),
+        None => exec_err!("date_bin timestamp value {x} * scale {scale} overflows i64"),
+    }
 }
 
 fn validate_time_stride(stride: &Interval) -> Result<()> {
