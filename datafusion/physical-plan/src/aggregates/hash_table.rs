@@ -338,6 +338,10 @@ impl<Mode> AggregateHashTable<Mode> {
         }
     }
 
+    pub(super) fn building_group_count(&self) -> usize {
+        self.state.building().group_values.len()
+    }
+
     pub(super) fn is_building(&self) -> bool {
         matches!(self.state, AggregateHashTableState::Building(_))
     }
