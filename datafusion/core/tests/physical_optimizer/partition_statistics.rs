@@ -982,6 +982,43 @@ mod test {
             scan_schema.clone(),
         )?);
 
+        let expect_partial_stat = Statistics {
+            num_rows: Precision::Exact(1),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+        assert_eq!(
+            expect_partial_stat,
+            *agg_partial.partition_statistics(Some(0))?
+        );
+        assert_eq!(
+            expect_partial_stat,
+            *agg_partial.partition_statistics(Some(1))?
+        );
+
+        let expect_partial_overall_stat = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+        assert_eq!(
+            expect_partial_overall_stat,
+            *agg_partial.partition_statistics(None)?
+        );
+
+        // Verify that the partial aggregate emits one accumulator-state row per
+        // output partition, even when the corresponding input partitions are empty.
+        let partitions = execute_stream_partitioned(
+            agg_partial.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(2, partitions.len());
+        for partition_stream in partitions {
+            let result: Vec<RecordBatch> = partition_stream.try_collect().await?;
+            let rows = result.iter().map(|batch| batch.num_rows()).sum::<usize>();
+            assert_eq!(1, rows);
+        }
+
         let coalesce = Arc::new(CoalescePartitionsExec::new(agg_partial.clone()));
 
         let agg_final = Arc::new(AggregateExec::try_new(
