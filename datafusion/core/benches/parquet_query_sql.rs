@@ -23,14 +23,14 @@ use arrow::datatypes::{
     SchemaRef,
 };
 use arrow::record_batch::RecordBatch;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::instant::Instant;
 use futures::stream::StreamExt;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
-use rand::distr::uniform::SampleUniform;
 use rand::distr::Alphanumeric;
+use rand::distr::uniform::SampleUniform;
 use rand::prelude::*;
 use rand::rng;
 use std::fs::File;
@@ -45,7 +45,7 @@ const NUM_BATCHES: usize = 2048;
 /// The number of rows in each record batch to write
 const WRITE_RECORD_BATCH_SIZE: usize = 1024;
 /// The number of rows in a row group
-const ROW_GROUP_SIZE: usize = 1024 * 1024;
+const ROW_GROUP_ROW_COUNT: usize = 1024 * 1024;
 /// The number of row groups expected
 const EXPECTED_ROW_GROUPS: usize = 2;
 
@@ -154,7 +154,7 @@ fn generate_file() -> NamedTempFile {
 
     let properties = WriterProperties::builder()
         .set_writer_version(WriterVersion::PARQUET_2_0)
-        .set_max_row_group_size(ROW_GROUP_SIZE)
+        .set_max_row_group_row_count(Some(ROW_GROUP_ROW_COUNT))
         .build();
 
     let mut writer =

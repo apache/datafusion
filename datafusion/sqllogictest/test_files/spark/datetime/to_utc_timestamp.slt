@@ -15,13 +15,143 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT to_utc_timestamp('2016-08-31', 'Asia/Seoul');
-## PySpark 3.5.5 Result: {'to_utc_timestamp(2016-08-31, Asia/Seoul)': datetime.datetime(2016, 8, 30, 15, 0), 'typeof(to_utc_timestamp(2016-08-31, Asia/Seoul))': 'timestamp', 'typeof(2016-08-31)': 'string', 'typeof(Asia/Seoul)': 'string'}
-#query
-#SELECT to_utc_timestamp('2016-08-31'::string, 'Asia/Seoul'::string);
+# String inputs
+query P
+SELECT to_utc_timestamp('2016-08-31'::string, 'UTC'::string);
+----
+2016-08-31T00:00:00
+
+query P
+SELECT to_utc_timestamp('2016-08-31'::string, 'Asia/Seoul'::string);
+----
+2016-08-30T15:00:00
+
+query P
+SELECT to_utc_timestamp('2016-08-31'::string, 'America/New_York'::string);
+----
+2016-08-31T04:00:00
+
+# String inputs with offsets
+query P
+SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'UTC'::string);
+----
+2018-03-13T04:18:23
+
+query P
+SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'Asia/Seoul'::string);
+----
+2018-03-12T19:18:23
+
+query P
+SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::string, 'America/New_York'::string);
+----
+2018-03-13T08:18:23
+
+# Timestamp inputs
+query P
+SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string);
+----
+2018-03-13T04:18:23
+
+query P
+SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string);
+----
+2018-03-12T19:18:23
+
+query P
+SELECT to_utc_timestamp('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string);
+----
+2018-03-13T08:18:23
+
+# Null inputs
+query P
+SELECT to_utc_timestamp(NULL::string, 'Asia/Seoul'::string);
+----
+NULL
+
+query P
+SELECT to_utc_timestamp(NULL::timestamp, 'Asia/Seoul'::string);
+----
+NULL
+
+query P
+SELECT to_utc_timestamp('2016-08-31'::string, NULL::string);
+----
+NULL
+
+query P
+SELECT to_utc_timestamp(column1, column2)
+FROM VALUES
+('2016-08-31'::string, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+02:00'::string, 'Asia/Seoul'::string),
+('2016-08-31'::string, 'UTC'::string),
+('2018-03-13T06:18:23+02:00'::string, 'UTC'::string),
+('2016-08-31'::string, 'America/New_York'::string),
+('2018-03-13T06:18:23+02:00'::string, 'America/New_York'::string),
+(NULL::string, 'Asia/Seoul'::string),
+('2016-08-31'::string, NULL::string);
+----
+2016-08-30T15:00:00
+2018-03-12T19:18:23
+2016-08-31T00:00:00
+2018-03-13T04:18:23
+2016-08-31T04:00:00
+2018-03-13T08:18:23
+NULL
+NULL
+
+query P
+SELECT to_utc_timestamp(column1, column2)
+FROM VALUES
+('2016-08-31'::timestamp, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string),
+('2016-08-31'::timestamp, 'UTC'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string),
+('2016-08-31'::timestamp, 'America/New_York'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string),
+(NULL::timestamp, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+00:00'::timestamp, NULL::string);
+----
+2016-08-30T15:00:00
+2018-03-12T19:18:23
+2016-08-31T00:00:00
+2018-03-13T04:18:23
+2016-08-31T04:00:00
+2018-03-13T08:18:23
+NULL
+NULL
+
+query P
+SELECT to_utc_timestamp(arrow_cast(column1, 'Timestamp(Microsecond, Some("Asia/Seoul"))'), column2)
+FROM VALUES
+('2016-08-31'::timestamp, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'Asia/Seoul'::string),
+('2016-08-31'::timestamp, 'UTC'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'UTC'::string),
+('2016-08-31'::timestamp, 'America/New_York'::string),
+('2018-03-13T06:18:23+02:00'::timestamp, 'America/New_York'::string),
+(NULL::timestamp, 'Asia/Seoul'::string),
+('2018-03-13T06:18:23+00:00'::timestamp, NULL::string);
+----
+2016-08-30T15:00:00+09:00
+2018-03-12T19:18:23+09:00
+2016-08-31T00:00:00+09:00
+2018-03-13T04:18:23+09:00
+2016-08-31T04:00:00+09:00
+2018-03-13T08:18:23+09:00
+NULL
+NULL
+
+
+# DST edge cases
+query P
+SELECT to_utc_timestamp('2020-03-31T13:40:00'::timestamp, 'America/New_York'::string);
+----
+2020-03-31T17:40:00
+
+
+query P
+SELECT to_utc_timestamp('2020-11-04T14:06:40'::timestamp, 'America/New_York'::string);
+----
+2020-11-04T19:06:40

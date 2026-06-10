@@ -97,7 +97,7 @@ fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
     let last_line = &lines[lines.len() - 1]; // bottom border line
 
     let spaces = last_line.len().saturating_sub(4);
-    let dotted_line = format!("| .{:<spaces$}|", "", spaces = spaces);
+    let dotted_line = format!("| .{}|", " ".repeat(spaces));
 
     let mut result = lines[0..(maxrows + 3)].to_vec(); // Keep top border and `maxrows` lines
     result.extend(vec![dotted_line; 3]); // Append ... lines
@@ -247,54 +247,54 @@ mod tests {
             .with_schema(three_column_schema())
             .with_batches(vec![])
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+---+---+
         | a | b | c |
         +---+---+---+
         +---+---+---+
-        "#);
+        ");
     }
 
     #[test]
     fn print_csv_no_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Csv)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::No)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         1,4,7
         2,5,8
         3,6,9
-        "#);
+        ");
     }
 
     #[test]
     fn print_csv_with_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Csv)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Yes)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         a,b,c
         1,4,7
         2,5,8
         3,6,9
-        "#);
+        ");
     }
 
     #[test]
     fn print_tsv_no_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Tsv)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::No)
             .run();
-        assert_snapshot!(output, @"
-        1\t4\t7
-        2\t5\t8
-        3\t6\t9
+        assert_snapshot!(output, @r"
+        1	4	7
+        2	5	8
+        3	6	9
         ")
     }
 
@@ -302,14 +302,14 @@ mod tests {
     fn print_tsv_with_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Tsv)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Yes)
             .run();
-        assert_snapshot!(output, @"
-        a\tb\tc
-        1\t4\t7
-        2\t5\t8
-        3\t6\t9
+        assert_snapshot!(output, @r"
+        a	b	c
+        1	4	7
+        2	5	8
+        3	6	9
         ");
     }
 
@@ -317,10 +317,10 @@ mod tests {
     fn print_table() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Table)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Ignored)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+---+---+
         | a | b | c |
         +---+---+---+
@@ -328,25 +328,23 @@ mod tests {
         | 2 | 5 | 8 |
         | 3 | 6 | 9 |
         +---+---+---+
-        "#);
+        ");
     }
     #[test]
     fn print_json() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Json)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Ignored)
             .run();
-        assert_snapshot!(output, @r#"
-        [{"a":1,"b":4,"c":7},{"a":2,"b":5,"c":8},{"a":3,"b":6,"c":9}]
-        "#);
+        assert_snapshot!(output, @r#"[{"a":1,"b":4,"c":7},{"a":2,"b":5,"c":8},{"a":3,"b":6,"c":9}]"#);
     }
 
     #[test]
     fn print_ndjson() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::NdJson)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Ignored)
             .run();
         assert_snapshot!(output, @r#"
@@ -360,28 +358,28 @@ mod tests {
     fn print_automatic_no_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Automatic)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::No)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         1,4,7
         2,5,8
         3,6,9
-        "#);
+        ");
     }
     #[test]
     fn print_automatic_with_header() {
         let output = PrintBatchesTest::new()
             .with_format(PrintFormat::Automatic)
-            .with_batches(split_batch(three_column_batch()))
+            .with_batches(split_batch(&three_column_batch()))
             .with_header(WithHeader::Yes)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         a,b,c
         1,4,7
         2,5,8
         3,6,9
-        "#);
+        ");
     }
 
     #[test]
@@ -396,7 +394,7 @@ mod tests {
                 .with_maxrows(max_rows)
                 .run();
             allow_duplicates! {
-                assert_snapshot!(output, @r#"
+                assert_snapshot!(output, @r"
                 +---+
                 | a |
                 +---+
@@ -404,7 +402,7 @@ mod tests {
                 | 2 |
                 | 3 |
                 +---+
-                "#);
+                ");
             }
         }
     }
@@ -416,7 +414,7 @@ mod tests {
             .with_batches(vec![one_column_batch()])
             .with_maxrows(MaxRows::Limited(1))
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+
         | a |
         +---+
@@ -425,7 +423,7 @@ mod tests {
         | . |
         | . |
         +---+
-        "#);
+        ");
     }
 
     #[test]
@@ -439,7 +437,7 @@ mod tests {
             ])
             .with_maxrows(MaxRows::Limited(5))
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+
         | a |
         +---+
@@ -452,7 +450,7 @@ mod tests {
         | . |
         | . |
         +---+
-        "#);
+        ");
     }
 
     #[test]
@@ -464,7 +462,7 @@ mod tests {
             .with_format(PrintFormat::Table)
             .with_batches(vec![empty_batch.clone(), batch, empty_batch])
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+
         | a |
         +---+
@@ -472,7 +470,7 @@ mod tests {
         | 2 |
         | 3 |
         +---+
-        "#);
+        ");
     }
 
     #[test]
@@ -486,12 +484,12 @@ mod tests {
             .with_batches(vec![empty_batch])
             .with_header(WithHeader::Yes)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+
         | a |
         +---+
         +---+
-        "#);
+        ");
 
         // No output for empty batch when schema contains no columns
         let empty_batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
@@ -634,8 +632,43 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn print_maxrows_limited_wide_table() {
+        let output = PrintBatchesTest::new()
+            .with_format(PrintFormat::Table)
+            .with_batches(vec![wide_column_batch()])
+            .with_maxrows(MaxRows::Limited(1))
+            .run();
+        assert_snapshot!(output, @r"
+        +----+----+----+----+----+----+----+----+----+----+
+        | c0 | c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 |
+        +----+----+----+----+----+----+----+----+----+----+
+        | 0  | 0  | 0  | 0  | 0  | 0  | 0  | 0  | 0  | 0  |
+        | .                                               |
+        | .                                               |
+        | .                                               |
+        +----+----+----+----+----+----+----+----+----+----+
+        ");
+    }
+
+    /// return a schema with many columns (to exercise wide table formatting)
+    fn wide_column_schema() -> SchemaRef {
+        let fields: Vec<Field> = (0..10)
+            .map(|i| Field::new(format!("c{i}"), DataType::Int32, false))
+            .collect();
+        Arc::new(Schema::new(fields))
+    }
+
+    /// return a batch with many columns and three rows
+    fn wide_column_batch() -> RecordBatch {
+        let arrays: Vec<Arc<dyn arrow::array::Array>> = (0..10)
+            .map(|_| Arc::new(Int32Array::from(vec![0, 1, 2])) as _)
+            .collect();
+        RecordBatch::try_new(wide_column_schema(), arrays).unwrap()
+    }
+
     /// Slice the record batch into 2 batches
-    fn split_batch(batch: RecordBatch) -> Vec<RecordBatch> {
+    fn split_batch(batch: &RecordBatch) -> Vec<RecordBatch> {
         assert!(batch.num_rows() > 1);
         let split = batch.num_rows() / 2;
         vec![

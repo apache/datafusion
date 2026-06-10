@@ -1,0 +1,99 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for DATE_BIN error handling with out-of-range values
+
+# Test case from issue #20219 - should return NULL instead of panicking
+query P
+select date_bin(interval '1637426858 months', to_timestamp_millis(1040292460), timestamp '1984-01-07 00:00:00');
+----
+NULL
+
+# Negative timestamp with month interval - should return NULL instead of panicking  
+query P
+select date_bin(interval '1 month', to_timestamp_millis(-1040292460), timestamp '1984-01-07 00:00:00');
+----
+NULL
+
+# Large stride causing overflow - should return NULL
+query P
+select date_bin(
+  interval '1637426858 months',
+  timestamp '1969-12-31 00:00:00',
+  timestamp '1984-01-07 00:00:00'
+);
+----
+NULL
+
+# Another large stride test
+query P
+select date_bin(
+  interval '1637426858 months',
+  to_timestamp_millis(-1040292000),
+  timestamp '1984-01-07 00:00:00'
+) as b;
+----
+NULL
+
+# Test with 1900-01-01 timestamp
+query P
+select date_bin(
+  interval '1637426858 months',
+  to_timestamp_millis(-2208988800000),
+  timestamp '1984-01-07 00:00:00'
+) as b;
+----
+NULL
+
+# Extreme timestamp overflow: source - origin overflows i64 (should return NULL, not panic)
+query P
+select date_bin(
+  interval '1 nanosecond',
+  arrow_cast(9223372036854775807, 'Timestamp(Nanosecond, None)'),
+  arrow_cast(-9223372036854775808, 'Timestamp(Nanosecond, None)')
+);
+----
+NULL
+
+# compute_distance overflow: source at i64::MIN nanoseconds previously panicked
+# inside compute_distance; it must return NULL through the SQL execution path
+query P
+select date_bin(
+  interval '3 nanoseconds',
+  arrow_cast(-9223372036854775808, 'Timestamp(Nanosecond, None)')
+);
+----
+NULL
+
+# Source timestamp scaling to nanoseconds overflows: should return an error, not panic
+query error DataFusion error: Execution error: DATE_BIN source timestamp 9223372036854775807 cannot be represented in nanoseconds
+select date_bin(
+  interval '1 nanosecond',
+  arrow_cast(9223372036854775807, 'Timestamp(Second, None)'),
+  timestamp '1970-01-01 00:00:00'
+);
+
+# Source timestamp scaling to nanoseconds overflows in array path: should return an error, not panic
+query error DataFusion error: Execution error: DATE_BIN source timestamp 9223372036854775807 cannot be represented in nanoseconds
+select date_bin(
+  interval '1 nanosecond',
+  ts,
+  timestamp '1970-01-01 00:00:00'
+)
+from (
+  values (arrow_cast(9223372036854775807, 'Timestamp(Second, None)'))
+) as t(ts);

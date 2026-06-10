@@ -26,16 +26,32 @@
 
 //! DataFusion sqllogictest driver
 
+#[cfg(feature = "memory-accounting")]
+mod accounting;
+#[cfg(feature = "memory-accounting")]
+mod accounting_pool;
 mod engines;
+mod test_file;
 
-pub use engines::convert_batches;
-pub use engines::convert_schema_to_types;
+#[cfg(feature = "memory-accounting")]
+pub use accounting::{
+    AccountingAllocator, OverdraftPanic, account_balance, current_context_id,
+    default_budget, local_balance, memory_tracker_limit, next_context_id,
+    reset_account_to_default, set_account_balance, set_default_budget,
+    set_memory_tracker_limit, set_thread_context_id, settle_thread_local,
+};
+#[cfg(feature = "memory-accounting")]
+pub use accounting_pool::AccountingMemoryPool;
+
 pub use engines::CurrentlyExecutingSqlTracker;
 pub use engines::DFColumnType;
 pub use engines::DFOutput;
 pub use engines::DFSqlLogicTestError;
 pub use engines::DataFusion;
+#[cfg(feature = "substrait")]
 pub use engines::DataFusionSubstraitRoundTrip;
+pub use engines::convert_batches;
+pub use engines::convert_schema_to_types;
 
 #[cfg(feature = "postgres")]
 pub use engines::Postgres;
@@ -45,5 +61,6 @@ mod test_context;
 mod util;
 
 pub use filters::*;
-pub use test_context::TestContext;
+pub use test_context::{SLT_TARGET_PARTITIONS, TestContext};
+pub use test_file::TestFile;
 pub use util::*;

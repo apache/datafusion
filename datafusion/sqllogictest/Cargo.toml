@@ -45,52 +45,61 @@ async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
-clap = { version = "4.5.50", features = ["derive", "env"] }
+clap = { version = "4.5.60", features = ["derive", "env"] }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
-datafusion-spark = { workspace = true, default-features = true }
-datafusion-substrait = { workspace = true, default-features = true }
+datafusion-datasource = { workspace = true }
+datafusion-spark = { workspace = true, features = ["core"] }
+datafusion-substrait = { workspace = true, default-features = true, optional = true }
 futures = { workspace = true }
 half = { workspace = true, default-features = true }
 indicatif = "0.18"
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
-postgres-protocol = { version = "0.6.7", optional = true }
-postgres-types = { version = "0.2.11", features = ["derive", "with-chrono-0_4"], optional = true }
-rust_decimal = { version = "1.38.0", features = ["tokio-pg"] }
+postgres-types = { version = "0.2.13", features = ["derive", "with-chrono-0_4"], optional = true }
 # When updating the following dependency verify that sqlite test file regeneration works correctly
 # by running the regenerate_sqlite_files.sh script.
-sqllogictest = "0.28.4"
+sqllogictest = "0.29.1"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
-testcontainers = { workspace = true, optional = true }
 testcontainers-modules = { workspace = true, features = ["postgres"], optional = true }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 tokio = { workspace = true }
-tokio-postgres = { version = "0.7.14", optional = true }
+tokio-postgres = { version = "0.7.17", optional = true }
 
 [features]
 avro = ["datafusion/avro"]
 backtrace = ["datafusion/backtrace"]
+# Enable the `AccountingAllocator` `GlobalAlloc` wrapper and its thread-local
+# byte counter. The binary still has to declare `#[global_allocator]` for it
+# to actually take effect — building with this feature on alone is harmless.
+memory-accounting = []
 postgres = [
     "bytes",
     "chrono",
     "postgres-types",
-    "postgres-protocol",
-    "testcontainers",
     "testcontainers-modules",
     "tokio-postgres",
 ]
 parquet_encryption = [
     "datafusion/parquet_encryption",
 ]
+substrait = ["datafusion-substrait"]
 
 [dev-dependencies]
 env_logger = { workspace = true }
 regex = { workspace = true }
+# Required to make sure tests for pg display behaves consistently
+# regardless of feature unification with dependencies
+serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [[test]]
 harness = false
 name = "sqllogictests"
 path = "bin/sqllogictests.rs"
+
+# serde_json is pulled with a feature to get
+# consistent pg display, but is not directly used in this crate.
+[package.metadata.cargo-machete]
+ignored = ["serde_json"]

@@ -23,5 +23,24 @@
 
 ## Original Query: SELECT hour('2009-07-30 12:58:59');
 ## PySpark 3.5.5 Result: {'hour(2009-07-30 12:58:59)': 12, 'typeof(hour(2009-07-30 12:58:59))': 'int', 'typeof(2009-07-30 12:58:59)': 'string'}
-#query
-#SELECT hour('2009-07-30 12:58:59'::string);
+query I
+SELECT hour('2009-07-30 12:58:59'::timestamp);
+----
+12
+
+# Test with different hours
+query I
+SELECT hour('2009-07-30 00:00:00'::timestamp);
+----
+0
+
+query I
+SELECT hour('2009-07-30 23:59:59'::timestamp);
+----
+23
+
+# Test with NULL
+query I
+SELECT hour(NULL::timestamp);
+----
+NULL

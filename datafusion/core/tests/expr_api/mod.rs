@@ -16,17 +16,16 @@
 // under the License.
 
 use arrow::array::{
-    builder::{ListBuilder, StringBuilder},
     ArrayRef, Int64Array, RecordBatch, StringArray, StructArray,
+    builder::{ListBuilder, StringBuilder},
 };
 use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
 use datafusion::prelude::*;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::expr::NullTreatment;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::ExprFunctionExt;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_aggregate::first_last::first_value_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
@@ -36,6 +35,7 @@ use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use std::sync::{Arc, LazyLock};
 
 mod parse_sql_expr;
+#[expect(clippy::needless_pass_by_value)]
 mod simplification;
 
 #[test]
@@ -342,20 +342,26 @@ fn test_create_physical_expr_nvl2() {
 
 #[tokio::test]
 async fn test_create_physical_expr_coercion() {
-    // create_physical_expr does apply type coercion and unwrapping in cast
+    // create_physical_expr applies type coercion (and can unwrap/fold
+    // literal casts). Comparison coercion prefers numeric types, so
+    // string/int comparisons cast the string side to the numeric type.
     //
-    // expect the cast on the literals
-    // compare string function to int  `id = 1`
-    create_expr_test(col("id").eq(lit(1i32)), "id@0 = CAST(1 AS Utf8)");
-    create_expr_test(lit(1i32).eq(col("id")), "CAST(1 AS Utf8) = id@0");
-    // compare int col to string literal `i = '202410'`
-    // Note this casts the column (not the field)
-    create_expr_test(col("i").eq(lit("202410")), "CAST(i@1 AS Utf8) = 202410");
-    create_expr_test(lit("202410").eq(col("i")), "202410 = CAST(i@1 AS Utf8)");
-    // however, when simplified the casts on i should removed
-    // https://github.com/apache/datafusion/issues/14944
-    create_simplified_expr_test(col("i").eq(lit("202410")), "CAST(i@1 AS Utf8) = 202410");
-    create_simplified_expr_test(lit("202410").eq(col("i")), "CAST(i@1 AS Utf8) = 202410");
+    // string column vs int literal: id (Utf8) is cast to Int32
+    create_expr_test(col("id").eq(lit(1i32)), "CAST(id@0 AS Int32) = 1");
+    create_expr_test(lit(1i32).eq(col("id")), "1 = CAST(id@0 AS Int32)");
+    // int column vs string literal: the string literal is cast to Int64
+    create_expr_test(col("i").eq(lit("202410")), "i@1 = CAST(202410 AS Int64)");
+    create_expr_test(lit("202410").eq(col("i")), "CAST(202410 AS Int64) = i@1");
+    // The simplifier operates on the logical expression before type
+    // coercion adds the CAST, so the output is unchanged.
+    create_simplified_expr_test(
+        col("i").eq(lit("202410")),
+        "i@1 = CAST(202410 AS Int64)",
+    );
+    create_simplified_expr_test(
+        lit("202410").eq(col("i")),
+        "i@1 = CAST(202410 AS Int64)",
+    );
 }
 
 /// Evaluates the specified expr as an aggregate and compares the result to the
@@ -384,6 +390,7 @@ async fn evaluate_agg_test(expr: Expr, expected_lines: Vec<&str>) {
 
 /// Converts the `Expr` to a `PhysicalExpr`, evaluates it against the provided
 /// `RecordBatch` and compares the result to the expected result.
+#[expect(clippy::needless_pass_by_value)]
 fn evaluate_expr_test(expr: Expr, expected_lines: Vec<&str>) {
     let batch = &TEST_BATCH;
     let df_schema = DFSchema::try_from(batch.schema()).unwrap();
@@ -420,9 +427,9 @@ fn create_simplified_expr_test(expr: Expr, expected_expr: &str) {
     let df_schema = DFSchema::try_from(batch.schema()).unwrap();
 
     // Simplify the expression first
-    let props = ExecutionProps::new();
-    let simplify_context =
-        SimplifyContext::new(&props).with_schema(df_schema.clone().into());
+    let simplify_context = SimplifyContext::builder()
+        .with_schema(Arc::new(df_schema))
+        .build();
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     let simplified = simplifier.simplify(expr).unwrap();
     create_expr_test(simplified, expected_expr);

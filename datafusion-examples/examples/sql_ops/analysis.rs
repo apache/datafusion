@@ -25,8 +25,8 @@
 
 use std::sync::Arc;
 
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::Result;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::{
     datasource::MemTable,

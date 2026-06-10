@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# For some actions, we use Runs-On to run them on ASF infrastructure: https://datafusion.apache.org/contributor-guide/#ci-runners
+
 name: Rust
 
 concurrency:
@@ -31,31 +33,31 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/pull_request_template.md"
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
-      - ".github/ISSUE_TEMPLATE/**"
-      - ".github/pull_request_template.md"
-  merge_group:
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
+  merge_group:
+
+
+permissions:
+  contents: read
 
 jobs:
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
           save-if: ${{ github.ref_name == 'main' }}
@@ -77,7 +79,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -98,17 +100,17 @@ jobs:
   linux-datafusion-substrait-features:
     name: cargo check datafusion-substrait features
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -135,11 +137,12 @@ jobs:
   linux-datafusion-proto-features:
     name: cargo check datafusion-proto features
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -166,17 +169,18 @@ jobs:
   linux-cargo-check-datafusion:
     name: cargo check datafusion features
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -235,7 +239,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -266,25 +270,14 @@ jobs:
   linux-test:
     name: cargo test (amd64)
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
       volumes:
         - /usr/local:/host/usr/local
     steps:
-      - name: Remove unnecessary preinstalled software
-        run: |
-          echo "Disk space before cleanup:"
-          df -h
-          # remove tool cache: about 8.5GB (github has host /opt/hostedtoolcache mounted as /__t)
-          rm -rf /__t/* || true
-          # remove Haskell runtime: about 6.3GB (host /usr/local/.ghcup)
-          rm -rf /host/usr/local/.ghcup || true
-          # remove Android library: about 7.8GB (host /usr/local/lib/android)
-          rm -rf /host/usr/local/lib/android || true
-          echo "Disk space after cleanup:"
-          df -h
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -293,7 +286,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
          save-if: ${{ github.ref_name == 'main' }}
          shared-key: "amd-ci"
@@ -305,13 +298,12 @@ jobs:
             --profile ci \
             --exclude datafusion-examples \
             --exclude ffi_example_table_provider \
-            --exclude datafusion-benchmarks \
             --exclude datafusion-cli \
             --workspace \
             --lib \
             --tests \
             --bins \
-            --features serde,avro,json,backtrace,integration-tests,parquet_encryption
+            --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait
       - name: Verify Working Directory Clean
         run: git diff --exit-code
         # Check no temporary directories created during test.
@@ -328,16 +320,17 @@ jobs:
   linux-test-datafusion-cli:
     name: cargo test datafusion-cli (amd64)
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -357,11 +350,12 @@ jobs:
   linux-test-example:
     name: cargo examples (amd64)
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -370,23 +364,10 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-linux-test-example"
-      - name: Remove unnecessary preinstalled software
-        run: |
-          echo "Disk space before cleanup:"
-          df -h
-          apt-get clean
-          rm -rf /__t/CodeQL
-          rm -rf /__t/PyPy
-          rm -rf /__t/Java_Temurin-Hotspot_jdk
-          rm -rf /__t/Python
-          rm -rf /__t/go
-          rm -rf /__t/Ruby
-          echo "Disk space after cleanup:"
-          df -h
       - name: Run examples
         run: |
           # test datafusion-sql examples
@@ -400,11 +381,12 @@ jobs:
   linux-test-doc:
     name: cargo test doc (amd64)
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -421,11 +403,12 @@ jobs:
   linux-rustdoc:
     name: cargo doc
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -437,7 +420,7 @@ jobs:
     name: build and run with wasm-pack
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup for wasm32
         run: |
           rustup target add wasm32-unknown-unknown
@@ -446,7 +429,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9  # v2.62.56
+        uses: taiki-e/install-action@0631aa6515c7d545823c67cfae7ef4fc7f490154  # v2.81.8
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -461,11 +444,12 @@ jobs:
   verify-benchmark-results:
     name: verify benchmark results (amd64)
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -487,14 +471,14 @@ jobs:
           export RUST_MIN_STACK=20971520
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
           cargo test plan_q --package datafusion-benchmarks --profile ci --features=ci -- --test-threads=1
-          INCLUDE_TPCH=true cargo test --features backtrace,parquet_encryption --profile ci --package datafusion-sqllogictest --test sqllogictests
+          INCLUDE_TPCH=true cargo test --features backtrace,parquet_encryption,substrait,memory-accounting --profile ci --package datafusion-sqllogictest --test sqllogictests -- --default-pool-size-mb 16384
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
   sqllogictest-postgres:
     name: "Run sqllogictest with Postgres runner"
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     services:
@@ -512,7 +496,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -532,11 +517,12 @@ jobs:
   sqllogictest-substrait:
     name: "Run sqllogictest in Substrait round-trip mode"
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -549,7 +535,7 @@ jobs:
         #  command cannot be run for all the .slt files. Run it for just one that works (limit.slt)
         #  until most of the tickets in https://github.com/apache/datafusion/issues/16248 are addressed
         #  and this command can be run without filters.
-        run: cargo test --test sqllogictests -- --substrait-round-trip limit.slt
+        run: cargo test -p datafusion-sqllogictest --test sqllogictests --features substrait -- --substrait-round-trip limit.slt
 
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner
@@ -570,19 +556,24 @@ jobs:
   #          export PATH=$PATH:$HOME/d/protoc/bin
   #          cargo test --lib --tests --bins --features avro,json,backtrace
 
+  # macOS scope is narrowed to `datafusion-ffi`: the only bug class amd64
+  # cannot reproduce is FFI cdylib loading (`.dylib` vs `.so` resolution in
+  # datafusion/ffi/src/tests/utils.rs). All other macos-only failures
+  # historically came from datafusion-benchmarks (now covered on amd64) or
+  # flaky sqllogictest metrics.
   macos-aarch64:
     name: cargo test (macos-aarch64)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
-      - name: Run tests (excluding doctests)
+      - name: Run datafusion-ffi tests
         shell: bash
-        run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
+        run: cargo test --profile ci -p datafusion-ffi --lib --tests --features integration-tests
 
   vendor:
     name: Verify Vendored Code
@@ -590,7 +581,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -607,14 +598,13 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Run
         run: |
-          echo '' > datafusion/proto/src/generated/datafusion.rs
           ci/scripts/rust_fmt.sh
 
   # Coverage job disabled due to
@@ -662,11 +652,12 @@ jobs:
   clippy:
     name: clippy
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -677,7 +668,7 @@ jobs:
       - name: Install Clippy
         run: rustup component add clippy
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-clippy"
@@ -691,7 +682,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -708,11 +699,12 @@ jobs:
   config-docs-check:
     name: check configs.md and ***_functions.md is up-to-date
     needs: linux-build-lib
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           submodules: true
           fetch-depth: 1
@@ -720,7 +712,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903  # v6.0.0
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
         with:
           node-version: "20"
       - name: Check if configs.md has been modified
@@ -734,6 +726,38 @@ jobs:
           ./dev/update_function_docs.sh
           git diff --exit-code
 
+# This job ensures `datafusion-examples/README.md` stays in sync with the source code:
+# 1. Generates README automatically using the Rust examples docs generator
+#    (parsing documentation from `examples/<group>/main.rs`)
+# 2. Formats the generated Markdown using DataFusion's standard Prettier setup
+# 3. Compares the result against the committed README.md and fails if out-of-date
+  examples-docs-check:
+    name: check example README is up-to-date
+    needs: linux-build-lib
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: Mark repository as safe for git
+        # Required for git commands inside container (avoids "dubious ownership" error)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Node.js (required for prettier)
+        # doc_prettier_check.sh uses npx to run prettier for Markdown formatting
+        uses: actions/setup-node@v6
+        with:
+          node-version: '18'
+
+      - name: Run examples docs check script
+        run: |
+          bash ci/scripts/check_examples_docs.sh
+
   # Verify MSRV for the crates which are directly used by other projects:
   # - datafusion
   # - datafusion-substrait
@@ -745,11 +769,11 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9  # v2.62.56
+        uses: taiki-e/install-action@0631aa6515c7d545823c67cfae7ef4fc7f490154  # v2.81.8
         with:
           tool: cargo-msrv
 
@@ -787,11 +811,3 @@ jobs:
       - name: Check datafusion-proto
         working-directory: datafusion/proto
         run: cargo msrv --output-format json --log-target stdout verify
-  typos:
-    name: Spell Check with Typos
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
-        with:
-          persist-credentials: false
-      - uses: crate-ci/typos@626c4bedb751ce0b7f03262ca97ddda9a076ae1c  # v1.39.2

@@ -38,8 +38,11 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{NullEquality, ScalarValue};
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_execution::TaskContext;
+use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::expressions::Literal;
 
 use itertools::Itertools;
 use rand::Rng;
@@ -245,14 +248,16 @@ async fn test_right_semi_join_1k() {
 
 #[tokio::test]
 async fn test_right_semi_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches_i32(1000, false),
-        make_staggered_batches_i32(1000, false),
-        JoinType::RightSemi,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::RightSemi,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
@@ -299,14 +304,16 @@ async fn test_right_anti_join_1k() {
 
 #[tokio::test]
 async fn test_right_anti_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches_i32(1000, false),
-        make_staggered_batches_i32(1000, false),
-        JoinType::RightAnti,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::RightAnti,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
@@ -564,26 +571,30 @@ async fn test_left_anti_join_1k_binary_filtered() {
 
 #[tokio::test]
 async fn test_right_anti_join_1k_binary() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches_binary(1000, false),
-        make_staggered_batches_binary(1000, false),
-        JoinType::RightAnti,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::RightAnti,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_right_anti_join_1k_binary_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches_binary(1000, false),
-        make_staggered_batches_binary(1000, false),
-        JoinType::RightAnti,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::RightAnti,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
@@ -841,6 +852,7 @@ impl JoinFuzzTestCase {
                 None,
                 PartitionMode::Partitioned,
                 NullEquality::NullEqualsNothing,
+                false,
             )
             .unwrap(),
         )
@@ -913,7 +925,9 @@ impl JoinFuzzTestCase {
                 std::fs::remove_dir_all(fuzz_debug).unwrap_or(());
                 std::fs::create_dir_all(fuzz_debug).unwrap();
                 let out_dir_name = &format!("{fuzz_debug}/batch_size_{batch_size}");
-                println!("Test result data mismatch found. HJ rows {hj_rows}, SMJ rows {smj_rows}, NLJ rows {nlj_rows}");
+                println!(
+                    "Test result data mismatch found. HJ rows {hj_rows}, SMJ rows {smj_rows}, NLJ rows {nlj_rows}"
+                );
                 println!("The debug is ON. Input data will be saved to {out_dir_name}");
 
                 Self::save_partitioned_batches_as_parquet(
@@ -964,10 +978,18 @@ impl JoinFuzzTestCase {
             }
 
             if join_tests.contains(&NljHj) {
-                let err_msg_rowcnt = format!("NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {batch_size}");
+                let err_msg_rowcnt = format!(
+                    "NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {batch_size}"
+                );
                 assert_eq!(nlj_rows, hj_rows, "{}", err_msg_rowcnt.as_str());
+                if nlj_rows == 0 && hj_rows == 0 {
+                    // both joins returned no rows, skip content comparison
+                    continue;
+                }
 
-                let err_msg_contents = format!("NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {batch_size}");
+                let err_msg_contents = format!(
+                    "NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {batch_size}"
+                );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
                 for (i, (nlj_line, hj_line)) in nlj_formatted_sorted
@@ -985,10 +1007,16 @@ impl JoinFuzzTestCase {
             }
 
             if join_tests.contains(&HjSmj) {
-                let err_msg_row_cnt = format!("HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {}", &batch_size);
+                let err_msg_row_cnt = format!(
+                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {}",
+                    &batch_size
+                );
                 assert_eq!(hj_rows, smj_rows, "{}", err_msg_row_cnt.as_str());
 
-                let err_msg_contents = format!("SortMergeJoinExec and HashJoinExec produced different results, batch_size: {}", &batch_size);
+                let err_msg_contents = format!(
+                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {}",
+                    &batch_size
+                );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
                 if smj_rows > 0 || hj_rows > 0 {
@@ -1062,7 +1090,7 @@ impl JoinFuzzTestCase {
     /// Files can be of different sizes
     /// The method can be useful to read partitions have been saved by `save_partitioned_batches_as_parquet`
     /// for test debugging purposes
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     async fn load_partitioned_batches_from_parquet(
         dir: &str,
     ) -> std::io::Result<Vec<RecordBatch>> {
@@ -1100,6 +1128,138 @@ impl JoinFuzzTestCase {
     }
 }
 
+/// Fuzz test: compare SMJ (with spilling) against HJ (no spill) for filtered
+/// outer joins under memory pressure. This exercises the deferred filtering +
+/// spill read-back path that unit tests can't easily cover with random data.
+#[tokio::test]
+async fn test_filtered_join_spill_fuzz() {
+    let join_types = [JoinType::Left, JoinType::Right, JoinType::Full];
+
+    let runtime_spill = RuntimeEnvBuilder::new()
+        .with_memory_limit(4096, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()
+        .unwrap();
+
+    for join_type in &join_types {
+        for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+            let input1 = make_staggered_batches_i32(1000, left_extra);
+            let input2 = make_staggered_batches_i32(1000, right_extra);
+
+            let schema1 = input1[0].schema();
+            let schema2 = input2[0].schema();
+            let filter = col_lt_col_filter(schema1.clone(), schema2.clone());
+
+            let on = vec![
+                (
+                    Arc::new(Column::new_with_schema("a", &schema1).unwrap()) as _,
+                    Arc::new(Column::new_with_schema("a", &schema2).unwrap()) as _,
+                ),
+                (
+                    Arc::new(Column::new_with_schema("b", &schema1).unwrap()) as _,
+                    Arc::new(Column::new_with_schema("b", &schema2).unwrap()) as _,
+                ),
+            ];
+
+            for batch_size in [2, 49, 100] {
+                let session_config = SessionConfig::new().with_batch_size(batch_size);
+
+                // HJ baseline (no memory limit)
+                let left_hj = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&input1),
+                    schema1.clone(),
+                    None,
+                )
+                .unwrap();
+                let right_hj = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&input2),
+                    schema2.clone(),
+                    None,
+                )
+                .unwrap();
+                let hj = Arc::new(
+                    HashJoinExec::try_new(
+                        left_hj,
+                        right_hj,
+                        on.clone(),
+                        Some(filter.clone()),
+                        join_type,
+                        None,
+                        PartitionMode::Partitioned,
+                        NullEquality::NullEqualsNothing,
+                        false,
+                    )
+                    .unwrap(),
+                );
+                let ctx_hj = SessionContext::new_with_config(session_config.clone());
+                let hj_collected = collect(hj, ctx_hj.task_ctx()).await.unwrap();
+
+                // SMJ with spilling
+                let left_smj = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&input1),
+                    schema1.clone(),
+                    None,
+                )
+                .unwrap();
+                let right_smj = MemorySourceConfig::try_new_exec(
+                    std::slice::from_ref(&input2),
+                    schema2.clone(),
+                    None,
+                )
+                .unwrap();
+                let smj = Arc::new(
+                    SortMergeJoinExec::try_new(
+                        left_smj,
+                        right_smj,
+                        on.clone(),
+                        Some(filter.clone()),
+                        *join_type,
+                        vec![SortOptions::default(); on.len()],
+                        NullEquality::NullEqualsNothing,
+                    )
+                    .unwrap(),
+                );
+                let task_ctx_spill = Arc::new(
+                    TaskContext::default()
+                        .with_session_config(session_config)
+                        .with_runtime(Arc::clone(&runtime_spill)),
+                );
+                let smj_collected = collect(smj, task_ctx_spill).await.unwrap();
+
+                let hj_rows: usize = hj_collected.iter().map(|b| b.num_rows()).sum();
+                let smj_rows: usize = smj_collected.iter().map(|b| b.num_rows()).sum();
+
+                assert_eq!(
+                    hj_rows, smj_rows,
+                    "Row count mismatch for {join_type:?} batch_size={batch_size} \
+                     left_extra={left_extra} right_extra={right_extra}: \
+                     HJ={hj_rows} SMJ={smj_rows}"
+                );
+
+                if hj_rows > 0 {
+                    let hj_fmt =
+                        pretty_format_batches(&hj_collected).unwrap().to_string();
+                    let smj_fmt =
+                        pretty_format_batches(&smj_collected).unwrap().to_string();
+
+                    let mut hj_sorted: Vec<&str> = hj_fmt.trim().lines().collect();
+                    hj_sorted.sort_unstable();
+                    let mut smj_sorted: Vec<&str> = smj_fmt.trim().lines().collect();
+                    smj_sorted.sort_unstable();
+
+                    assert_eq!(
+                        hj_sorted, smj_sorted,
+                        "Content mismatch for {join_type:?} batch_size={batch_size} \
+                         left_extra={left_extra} right_extra={right_extra}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Return randomly sized record batches with:
 /// two sorted int32 columns 'a', 'b' ranged from 0..99 as join columns
 /// two random int32 columns 'x', 'y' as other columns
@@ -1116,7 +1276,14 @@ fn make_staggered_batches_i32(len: usize, with_extra_column: bool) -> Vec<Record
     input12.sort_unstable();
     let input1 = Int32Array::from_iter_values(input12.clone().into_iter().map(|k| k.0));
     let input2 = Int32Array::from_iter_values(input12.clone().into_iter().map(|k| k.1));
-    let input3 = Int32Array::from_iter_values(input3);
+    let input3 = Int32Array::from_iter(input3.into_iter().map(|v| {
+        // ~10% NULLs in filter column to exercise NULL filter handling
+        if rng.random_range(0..10) == 0 {
+            None
+        } else {
+            Some(v)
+        }
+    }));
     let input4 = Int32Array::from_iter_values(input4);
 
     let mut columns = vec![

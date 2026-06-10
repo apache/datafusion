@@ -109,6 +109,10 @@ html_context = {
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
 
+# Copy agent-facing files (llms.txt) verbatim to the site root so they
+# resolve at the conventional URL `https://datafusion.apache.org/llms.txt`.
+html_extra_path = ["llms.txt"]
+
 html_logo = "_static/images/2x_bgwhite_original.png"
 
 html_css_files = ["theme_overrides.css"]
@@ -116,6 +120,8 @@ html_css_files = ["theme_overrides.css"]
 html_sidebars = {
     "**": ["docs-sidebar.html"],
 }
+
+html_favicon = '_static/favicon.svg'
 
 # tell myst_parser to auto-generate anchor links for headers h1, h2, h3
 myst_heading_anchors = 3
@@ -132,4 +138,5 @@ suppress_warnings = ["misc.highlighting_failure"]
 redirects = {
     "library-user-guide/adding-udfs": "functions/index.html",
     "user-guide/runtime_configs": "configs.html",
+    "library-user-guide/upgrading": "/library-user-guide/upgrading/index.html",
 }

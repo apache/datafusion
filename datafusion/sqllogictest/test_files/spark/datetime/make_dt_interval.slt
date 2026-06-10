@@ -63,11 +63,12 @@ SELECT (make_dt_interval(0, 0, 0, null))
 ----
 NULL
 
-# missing params
+# zero arguments - returns default zero duration
 query ?
 SELECT (make_dt_interval()) AS make_dt_interval
 ----
 0 days 0 hours 0 mins 0.000000 secs
+
 
 query ?
 SELECT (make_dt_interval(1)) AS make_dt_interval

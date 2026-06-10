@@ -17,21 +17,26 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{
+    DFSchema, Dependency, Diagnostic, HashSet, Result, Span, datatype::FieldExt,
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    DFSchema, Dependency, Diagnostic, Result, Span,
 };
 use datafusion_expr::{
-    expr,
-    expr::{NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction},
+    Expr, ExprSchemable, LambdaParametersProgress, SortExpr, ValueOrLambda, WindowFrame,
+    WindowFunctionDefinition,
+    arguments::ArgumentName,
+    expr::{
+        self, HigherOrderFunction, Lambda, NullTreatment, ScalarFunction, Unnest,
+        WildcardOptions, WindowFunction,
+    },
     planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
-    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
+    type_coercion::functions::value_fields_with_higher_order_udf,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
-    ObjectName, OrderByExpr, Spanned, WindowType,
+    LambdaFunction, ObjectName, OrderByExpr, Spanned, WindowType,
 };
 
 /// Suggest a valid function based on an invalid input function name
@@ -56,6 +61,7 @@ pub fn suggest_valid_function(
         let mut funcs = Vec::new();
 
         funcs.extend(ctx.udf_names());
+        funcs.extend(ctx.higher_order_function_names());
         funcs.extend(ctx.udaf_names());
 
         funcs
@@ -121,7 +127,7 @@ impl FunctionArgs {
                 null_treatment: null_treatment.map(|v| v.into()),
                 distinct: false,
                 within_group,
-                function_without_parentheses: matches!(args, FunctionArguments::None),
+                function_without_parentheses: args == FunctionArguments::None,
             });
         };
 
@@ -152,42 +158,46 @@ impl FunctionArgs {
                 FunctionArgumentClause::OrderBy(oby) => {
                     if order_by.is_some() {
                         if !within_group.is_empty() {
-                            return plan_err!("ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used");
+                            return plan_err!(
+                                "ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used"
+                            );
                         }
-                        return not_impl_err!("Calling {name}: Duplicated ORDER BY clause in function arguments");
+                        return not_impl_err!(
+                            "Calling {name}: Duplicated ORDER BY clause in function arguments"
+                        );
                     }
                     order_by = Some(oby);
                 }
                 FunctionArgumentClause::Limit(limit) => {
                     return not_impl_err!(
                         "Calling {name}: LIMIT not supported in function arguments: {limit}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::OnOverflow(overflow) => {
                     return not_impl_err!(
                         "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::Having(having) => {
                     return not_impl_err!(
                         "Calling {name}: HAVING not supported in function arguments: {having}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::Separator(sep) => {
                     return not_impl_err!(
                         "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::JsonNullClause(jn) => {
                     return not_impl_err!(
                         "Calling {name}: JSON NULL clause not supported in function arguments: {jn}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::JsonReturningClause(jr) => {
                     return not_impl_err!(
                         "Calling {name}: JSON RETURNING clause not supported in function arguments: {jr}"
-                    )
-                },
+                    );
+                }
             }
         }
 
@@ -214,7 +224,7 @@ impl FunctionArgs {
 }
 
 // Helper type for extracting WITHIN GROUP ordering and prepended args
-type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<String>>);
+type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<ArgumentName>>);
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_function_to_expr(
@@ -237,12 +247,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } = function_args;
 
         if over.is_some() && !within_group.is_empty() {
-            return plan_err!("OVER and WITHIN GROUP clause cannot be used together. \
-                OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions");
+            return plan_err!(
+                "OVER and WITHIN GROUP clause cannot be used together. \
+                OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions"
+            );
         }
 
         if !order_by.is_empty() && !within_group.is_empty() {
-            return plan_err!("ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function");
+            return plan_err!(
+                "ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function"
+            );
         }
 
         // If function is a window function (it has an OVER clause),
@@ -261,14 +275,49 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return plan_err!(
                         "Expected an identifier in function name, but found {:?}",
                         object_name.0[0]
-                    )
+                    );
                 }
             }
         };
 
-        if name.eq("make_map") {
+        // handle make_map and map functions
+        // make_map always uses plan_make_map: make_map(k1, v1, k2, v2, ...)
+        // map has 2 syntaxes:
+        //     1. map([keys], [values]) - two arrays that get zipped
+        //     2. map(k1, v1, k2, v2, ...) - variadic pairs (uses plan_make_map)
+        let use_plan_make_map = match name.as_str() {
+            "make_map" => true,
+            "map" => {
+                // for map, check if this is the first syntax variant (two-array)
+                let args =
+                    self.function_args_to_expr(args.clone(), schema, planner_context)?;
+
+                let is_two_array_syntax = args.len() == 2
+                    && args.iter().all(|arg| {
+                        matches!(
+                            arg.get_type(schema),
+                            Ok(DataType::List(_))
+                                | Ok(DataType::LargeList(_))
+                                | Ok(DataType::FixedSizeList(_, _))
+                        )
+                    });
+
+                // map function with variadic syntax requires non-empty list of arguments
+                if !is_two_array_syntax && args.is_empty() {
+                    return plan_err!(
+                        "Function 'map' expected at least one argument but received 0"
+                    );
+                }
+
+                !is_two_array_syntax
+            }
+            _ => false,
+        };
+
+        if use_plan_make_map {
             let mut fn_args =
                 self.function_args_to_expr(args.clone(), schema, planner_context)?;
+
             for planner in self.context_provider.get_expr_planners().iter() {
                 match planner.plan_make_map(fn_args)? {
                     PlannerResult::Planned(expr) => return Ok(expr),
@@ -316,6 +365,184 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let verbose_alias = format!("{name}({arg_names})");
 
                 return Ok(Expr::ScalarFunction(inner).alias(verbose_alias));
+            }
+        }
+
+        if let Some(fm) = self.context_provider.get_higher_order_meta(&name) {
+            // plan non-lambda arguments first so we can get theirs datatype and call
+            // HigherOrderUDFImpl::lambda_parameters to then plan the lambda arguments with
+            // resolved lambda variables
+            enum ExprOrLambda {
+                Expr(Expr),
+                Lambda(LambdaFunction),
+            }
+
+            let partially_planned = args
+                .into_iter()
+                .map(|a| match a {
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Lambda(
+                        lambda,
+                    ))) => {
+                        if !all_unique(&lambda.params) {
+                            return plan_err!(
+                                "lambda parameters names must be unique, got {}",
+                                lambda.params
+                            );
+                        }
+
+                        Ok(ExprOrLambda::Lambda(lambda))
+                    }
+                    _ => Ok(ExprOrLambda::Expr(self.sql_fn_arg_to_logical_expr(
+                        a,
+                        schema,
+                        planner_context,
+                    )?)),
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let current_fields = partially_planned
+                .iter()
+                .map(|e| match e {
+                    ExprOrLambda::Expr(expr) => {
+                        Ok(ValueOrLambda::Value(expr.to_field(schema)?.1))
+                    }
+                    ExprOrLambda::Lambda(_lambda_function) => {
+                        Ok(ValueOrLambda::Lambda(()))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            // coerce fields because coercion may alter the lambda parameters
+            let mut fields =
+                value_fields_with_higher_order_udf(&current_fields, fm.as_ref())?
+                    .into_iter()
+                    .map(|arg| match arg {
+                        ValueOrLambda::Value(value) => ValueOrLambda::Value(value),
+                        ValueOrLambda::Lambda(_lambda) => ValueOrLambda::Lambda(None),
+                    })
+                    .collect::<Vec<_>>();
+
+            let lambda_count = partially_planned
+                .iter()
+                .filter(|a| matches!(a, ExprOrLambda::Lambda(_)))
+                .count();
+
+            let mut step = 0;
+
+            let args = loop {
+                match fm.lambda_parameters(step, &fields)? {
+                    LambdaParametersProgress::Partial(params) => {
+                        let mut params = params.into_iter();
+
+                        if params.len() != lambda_count {
+                            return plan_err!(
+                                "{} lambda_parameters returned {} lambdas but {lambda_count} expected",
+                                fm.name(),
+                                params.len()
+                            );
+                        }
+
+                        for (arg, field) in
+                            std::iter::zip(&partially_planned, &mut fields)
+                        {
+                            match (arg, field) {
+                                (
+                                    ExprOrLambda::Lambda(lambda),
+                                    ValueOrLambda::Lambda(field),
+                                ) => {
+                                    let params = params.next().ok_or_else(|| {
+                                        internal_datafusion_err!(
+                                            "params len should have been checked above"
+                                        )
+                                    })?;
+                                    if let Some(params) = params {
+                                        let lambda = self.sql_lambda_to_logical_lambda(
+                                            planner_context,
+                                            schema,
+                                            lambda.clone(),
+                                            params,
+                                        )?;
+
+                                        *field = Some(lambda.body.to_field(schema)?.1);
+                                    }
+                                }
+                                (ExprOrLambda::Expr(_), ValueOrLambda::Value(_)) => {} // nothing to do
+                                (ExprOrLambda::Expr(_), ValueOrLambda::Lambda(_)) => {
+                                    return internal_err!(
+                                        "value_fields_with_higher_order_udf returned a value for a lambda argument"
+                                    );
+                                }
+                                (ExprOrLambda::Lambda(_), ValueOrLambda::Value(_)) => {
+                                    return internal_err!(
+                                        "value_fields_with_higher_order_udf returned a lambda for a value argument"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    LambdaParametersProgress::Complete(params) => {
+                        let mut params = params.into_iter();
+
+                        if params.len() != lambda_count {
+                            return plan_err!(
+                                "{} lambda_parameters returned {} lambdas but {lambda_count} expected",
+                                fm.name(),
+                                params.len()
+                            );
+                        }
+
+                        break partially_planned
+                            .into_iter()
+                            .map(|arg| match arg {
+                                ExprOrLambda::Expr(expr) => Ok(expr),
+                                ExprOrLambda::Lambda(lambda) => {
+                                    let params = params.next().ok_or_else(|| {
+                                        internal_datafusion_err!(
+                                            "params len should have been checked above"
+                                        )
+                                    })?;
+
+                                    Ok(Expr::Lambda(self.sql_lambda_to_logical_lambda(
+                                        planner_context,
+                                        schema,
+                                        lambda,
+                                        params,
+                                    )?))
+                                }
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                    }
+                }
+
+                let limit = fm.signature().lambda_parameters_max_iterations;
+
+                step += 1;
+
+                if step > limit {
+                    return plan_err!(
+                        "{} lambda_parameters called {limit} times without completion",
+                        fm.name()
+                    );
+                }
+            };
+
+            let inner = HigherOrderFunction::new(fm, args);
+
+            if name.eq_ignore_ascii_case(inner.name()) {
+                return Ok(Expr::HigherOrderFunction(inner));
+            } else {
+                // If the function is called by an alias, a verbose string representation is created
+                // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
+                // to ensure the output column name matches the user's query.
+                let arg_names = inner
+                    .args
+                    .iter()
+                    .map(|arg| arg.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let verbose_alias = format!("{name}({arg_names})");
+
+                return Ok(Expr::HigherOrderFunction(inner).alias(verbose_alias));
             }
         }
 
@@ -498,32 +725,70 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // accept a WITHIN GROUP clause.
                 let supports_within_group = fm.supports_within_group_clause();
 
-                if !within_group.is_empty() && !supports_within_group {
+                // Built-in ordered-set aggregates must also support WITHIN GROUP
+                let is_builtin_ordered_set = matches!(
+                    name.as_str(),
+                    "percentile_cont"
+                        | "quantile_cont"
+                        | "approx_percentile_cont"
+                        | "approx_percentile_cont_with_weight"
+                );
+
+                let supports_within_group =
+                    supports_within_group || is_builtin_ordered_set;
+
+                let mut within_group = within_group;
+                let mut order_by = order_by;
+
+                if supports_within_group
+                    && within_group.is_empty()
+                    && !order_by.is_empty()
+                {
+                    // Inline ORDER BY syntax:
+                    // quantile_cont(value, percentile ORDER BY value)
+                    if args.len() >= 2 {
+                        args.remove(0);
+                        arg_names.remove(0);
+                    }
+
+                    within_group = order_by;
+                    order_by = vec![];
+                }
+
+                if !supports_within_group && !within_group.is_empty() {
                     return plan_err!(
                         "WITHIN GROUP is only supported for ordered-set aggregate functions"
                     );
                 }
 
-                // If the UDAF supports WITHIN GROUP, convert the ordering into
-                // sort expressions and prepend them as unnamed function args.
-                let order_by = if supports_within_group {
-                    let (within_group_sorts, new_args, new_arg_names) = self
-                        .extract_and_prepend_within_group_args(
+                let order_by: Vec<SortExpr> = if supports_within_group {
+                    if !within_group.is_empty() {
+                        // WITHIN GROUP syntax
+                        let sorts = self.order_by_to_sort_expr(
                             within_group,
-                            args,
-                            arg_names,
                             schema,
                             planner_context,
+                            false,
+                            None,
                         )?;
-                    args = new_args;
-                    arg_names = new_arg_names;
-                    within_group_sorts
-                } else {
-                    let order_by = if !order_by.is_empty() {
-                        order_by
+
+                        if sorts.len() != 1 {
+                            return plan_err!(
+                                "Only a single ordering expression is permitted in WITHIN GROUP clause"
+                            );
+                        }
+
+                        // Prepend ordered value expression to args
+                        let value_expr = sorts[0].expr.clone();
+                        arg_names = std::iter::once(None).chain(arg_names).collect();
+                        args = std::iter::once(value_expr).chain(args).collect();
+
+                        sorts
                     } else {
-                        within_group
-                    };
+                        vec![]
+                    }
+                } else {
+                    // Normal aggregate behavior
                     self.order_by_to_sort_expr(
                         order_by,
                         schema,
@@ -647,6 +912,49 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
     }
 
+    fn sql_lambda_to_logical_lambda(
+        &self,
+        planner_context: &mut PlannerContext,
+        schema: &DFSchema,
+        lambda: LambdaFunction,
+        lambda_params: Vec<FieldRef>,
+    ) -> Result<Lambda> {
+        if lambda.params.len() > lambda_params.len() {
+            return plan_err!(
+                "lambda defined {} params but UDF support only {}",
+                lambda.params.len(),
+                lambda_params.len()
+            );
+        }
+
+        if lambda.params.iter().any(|p| p.data_type.is_some()) {
+            return not_impl_err!(
+                "Lambda parameters with explicit data types are not supported"
+            );
+        }
+        let params = lambda
+            .params
+            .iter()
+            .map(|p| crate::utils::normalize_ident(p.name.clone()))
+            .collect();
+
+        let lambda_parameters = std::iter::zip(lambda_params, &params)
+            .map(|(f, n): (FieldRef, &String)| f.renamed(n.as_str()));
+
+        let mut planner_context = planner_context
+            .clone()
+            .with_lambda_parameters(lambda_parameters);
+
+        Ok(Lambda {
+            params,
+            body: Box::new(self.sql_expr_to_logical_expr(
+                *lambda.body,
+                schema,
+                &mut planner_context,
+            )?),
+        })
+    }
+
     pub(super) fn sql_fn_name_to_expr(
         &self,
         expr: SQLExpr,
@@ -703,7 +1011,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         sql: FunctionArg,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Expr, Option<String>)> {
+    ) -> Result<(Expr, Option<ArgumentName>)> {
         match sql {
             FunctionArg::Named {
                 name,
@@ -711,7 +1019,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 operator: _,
             } => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::Named {
@@ -724,7 +1035,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
@@ -761,7 +1075,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 operator: _,
             } => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::ExprNamed {
@@ -774,7 +1091,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
@@ -797,8 +1117,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         args: Vec<FunctionArg>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Vec<Expr>, Vec<Option<String>>)> {
-        let results: Result<Vec<(Expr, Option<String>)>> = args
+    ) -> Result<(Vec<Expr>, Vec<Option<ArgumentName>>)> {
+        let results: Result<Vec<(Expr, Option<ArgumentName>)>> = args
             .into_iter()
             .map(|a| {
                 self.sql_fn_arg_to_logical_expr_with_name(a, schema, planner_context)
@@ -806,15 +1126,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .collect();
 
         let pairs = results?;
-        let (exprs, names): (Vec<Expr>, Vec<Option<String>>) = pairs.into_iter().unzip();
+        let (exprs, names): (Vec<Expr>, Vec<Option<ArgumentName>>) =
+            pairs.into_iter().unzip();
         Ok((exprs, names))
     }
 
+    #[expect(dead_code)]
     fn extract_and_prepend_within_group_args(
         &self,
         within_group: Vec<OrderByExpr>,
         mut args: Vec<Expr>,
-        mut arg_names: Vec<Option<String>>,
+        mut arg_names: Vec<Option<ArgumentName>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<WithinGroupExtraction> {
@@ -848,6 +1170,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             DataType::List(_)
             | DataType::LargeList(_)
             | DataType::FixedSizeList(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
             | DataType::Struct(_) => Ok(()),
             DataType::Null => {
                 not_impl_err!("unnest() does not support null yet")
@@ -855,6 +1179,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => {
                 plan_err!("unnest() can only be applied to array, struct and null")
             }
+        }
+    }
+}
+
+/// After normalization with [normalize_ident], check whether all params are unique
+///
+/// [normalize_ident]: crate::utils::normalize_ident
+fn all_unique(params: &[sqlparser::ast::LambdaFunctionParameter]) -> bool {
+    match params.len() {
+        0 | 1 => true,
+        2 => {
+            crate::utils::normalize_ident(params[0].name.clone())
+                != crate::utils::normalize_ident(params[1].name.clone())
+        }
+        _ => {
+            let mut set = HashSet::with_capacity(params.len());
+
+            params
+                .iter()
+                .map(|p| crate::utils::normalize_ident(p.name.clone()))
+                .all(|p| set.insert(p))
         }
     }
 }

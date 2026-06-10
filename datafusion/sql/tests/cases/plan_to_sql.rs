@@ -18,30 +18,33 @@
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::{
-    assert_contains, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
-    TableReference,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
+    assert_contains,
 };
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion_expr::test::function_stub::{
-    count_udaf, max_udaf, min_udaf, sum, sum_udaf,
+    count_udaf, max, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
-    cast, col, lit, table_scan, wildcard, EmptyRelation, Expr, Extension, LogicalPlan,
-    LogicalPlanBuilder, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
-    WindowFrame, WindowFunctionDefinition,
+    ColumnarValue, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Union,
+    UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility, WindowFrame,
+    WindowFunctionDefinition, cast, col, exists, in_subquery, lit, scalar_subquery,
+    table_scan, wildcard,
 };
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_window::rank::rank_udwf;
+use datafusion_functions_window::row_number::row_number_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
     BigQueryDialect, CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect,
     DefaultDialect, Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect,
-    PostgreSqlDialect as UnparserPostgreSqlDialect, SqliteDialect,
+    PostgreSqlDialect as UnparserPostgreSqlDialect, SnowflakeDialect, SqliteDialect,
 };
-use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
+use datafusion_sql::unparser::{Unparser, expr_to_sql, plan_to_sql};
 use insta::assert_snapshot;
 use sqlparser::ast::Statement;
 use std::hash::Hash;
@@ -70,26 +73,26 @@ use sqlparser::parser::Parser;
 #[test]
 fn test_roundtrip_expr_1() {
     let expr = roundtrip_expr(TableReference::bare("person"), "age > 35").unwrap();
-    assert_snapshot!(expr, @r#"(age > 35)"#);
+    assert_snapshot!(expr, @"(age > 35)");
 }
 
 #[test]
 fn test_roundtrip_expr_2() {
     let expr = roundtrip_expr(TableReference::bare("person"), "id = '10'").unwrap();
-    assert_snapshot!(expr, @r#"(id = '10')"#);
+    assert_snapshot!(expr, @"(id = '10')");
 }
 
 #[test]
 fn test_roundtrip_expr_3() {
     let expr =
         roundtrip_expr(TableReference::bare("person"), "CAST(id AS VARCHAR)").unwrap();
-    assert_snapshot!(expr, @r#"CAST(id AS VARCHAR)"#);
+    assert_snapshot!(expr, @"CAST(id AS VARCHAR)");
 }
 
 #[test]
 fn test_roundtrip_expr_4() {
     let expr = roundtrip_expr(TableReference::bare("person"), "sum((age * 2))").unwrap();
-    assert_snapshot!(expr, @r#"sum((age * 2))"#);
+    assert_snapshot!(expr, @"sum((age * 2))");
 }
 
 fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
@@ -286,7 +289,7 @@ fn roundtrip_crossjoin() -> Result<()> {
         plan_roundtrip,
         @r"
     Projection: j1.j1_id, j2.j2_string
-      Cross Join: 
+      Cross Join:
         TableScan: j1
         TableScan: j2
     "
@@ -334,9 +337,7 @@ fn roundtrip_statement_with_dialect_1() -> Result<(), DataFusionError> {
         sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
-        // top projection sort gets derived into a subquery
-        // for MySQL, this subquery needs an alias
-        expected: @"SELECT `j1_min` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, min(`ta`.`j1_id`) FROM `j1` AS `ta` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+        expected: @"SELECT min(`ta`.`j1_id`) AS `j1_min` FROM `j1` AS `ta` ORDER BY `j1_min` ASC LIMIT 10",
     );
     Ok(())
 }
@@ -347,9 +348,7 @@ fn roundtrip_statement_with_dialect_2() -> Result<(), DataFusionError> {
         sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        // top projection sort still gets derived into a subquery in default dialect
-        // except for the default dialect, the subquery is left non-aliased
-        expected: @"SELECT j1_min FROM (SELECT min(ta.j1_id) AS j1_min, min(ta.j1_id) FROM j1 AS ta ORDER BY min(ta.j1_id) ASC NULLS LAST) LIMIT 10",
+        expected: @"SELECT min(ta.j1_id) AS j1_min FROM j1 AS ta ORDER BY j1_min ASC NULLS LAST LIMIT 10",
     );
     Ok(())
 }
@@ -360,7 +359,18 @@ fn roundtrip_statement_with_dialect_3() -> Result<(), DataFusionError> {
         sql: "select min(ta.j1_id) as j1_min, max(tb.j1_max) from j1 ta, (select distinct max(ta.j1_id) as j1_max from j1 ta order by max(ta.j1_id)) tb order by min(ta.j1_id) limit 10;",
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
-        expected: @"SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` CROSS JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+        expected: @"SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`) FROM `j1` AS `ta` CROSS JOIN (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `tb` ORDER BY `j1_min` ASC LIMIT 10",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_postgres_any_array_expr() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select left from array where 1 = any(left);",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @r#"SELECT "array"."left" FROM "array" WHERE 1 = ANY("array"."left")"#,
     );
     Ok(())
 }
@@ -404,7 +414,7 @@ fn roundtrip_statement_with_dialect_7() -> Result<(), DataFusionError> {
         sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST LIMIT 10"#,
+        expected: @"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST LIMIT 10",
     );
     Ok(())
 }
@@ -419,7 +429,7 @@ fn roundtrip_statement_with_dialect_8() -> Result<(), DataFusionError> {
                   LIMIT 10;",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT j1.j1_id FROM j1 UNION ALL SELECT tb.j2_id AS j1_id FROM j2 AS tb ORDER BY j1_id ASC NULLS LAST LIMIT 10"#,
+        expected: @"SELECT j1.j1_id FROM j1 UNION ALL SELECT tb.j2_id AS j1_id FROM j2 AS tb ORDER BY j1_id ASC NULLS LAST LIMIT 10",
     );
     Ok(())
 }
@@ -431,7 +441,7 @@ fn roundtrip_statement_with_dialect_9() -> Result<(), DataFusionError> {
         sql: "SELECT j1_string from j1 order by j1_id",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT j1.j1_string FROM j1 ORDER BY j1.j1_id ASC NULLS LAST"#,
+        expected: @"SELECT j1.j1_string FROM j1 ORDER BY j1.j1_id ASC NULLS LAST",
     );
     Ok(())
 }
@@ -442,7 +452,7 @@ fn roundtrip_statement_with_dialect_10() -> Result<(), DataFusionError> {
         sql: "SELECT j1_string AS a from j1 order by j1_id",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT j1.j1_string AS a FROM j1 ORDER BY j1.j1_id ASC NULLS LAST"#,
+        expected: @"SELECT j1.j1_string AS a FROM j1 ORDER BY j1.j1_id ASC NULLS LAST",
     );
     Ok(())
 }
@@ -453,7 +463,7 @@ fn roundtrip_statement_with_dialect_11() -> Result<(), DataFusionError> {
         sql: "SELECT j1_string from j1 join j2 on j1.j1_id = j2.j2_id order by j1_id",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT j1.j1_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id ASC NULLS LAST"#,
+        expected: @"SELECT j1.j1_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id ASC NULLS LAST",
     );
     Ok(())
 }
@@ -483,7 +493,7 @@ fn roundtrip_statement_with_dialect_12() -> Result<(), DataFusionError> {
                   abc.j2_string",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT abc.j1_string, abc.j2_string FROM (SELECT DISTINCT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
+        expected: @"SELECT abc.j1_string, abc.j2_string FROM (SELECT DISTINCT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST",
     );
     Ok(())
 }
@@ -505,7 +515,7 @@ fn roundtrip_statement_with_dialect_13() -> Result<(), DataFusionError> {
             ",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT agg.string_count FROM (SELECT j1.j1_id, min(j2.j2_string) FROM j1 LEFT OUTER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)"#,
+        expected: @"SELECT agg.string_count FROM (SELECT j1.j1_id, min(j2.j2_string) FROM j1 LEFT OUTER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)",
     );
     Ok(())
 }
@@ -539,7 +549,7 @@ fn roundtrip_statement_with_dialect_14() -> Result<(), DataFusionError> {
                   abc.j2_string",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT abc.j1_string, abc.j2_string FROM (SELECT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id, j1.j1_string, j2.j2_string ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
+        expected: @"SELECT abc.j1_string, abc.j2_string FROM (SELECT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id, j1.j1_string, j2.j2_string ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST",
     );
     Ok(())
 }
@@ -569,7 +579,7 @@ fn roundtrip_statement_with_dialect_15() -> Result<(), DataFusionError> {
                   j2_string",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT abc.j1_string FROM (SELECT j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
+        expected: @"SELECT abc.j1_string FROM (SELECT j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST",
     );
     Ok(())
 }
@@ -580,7 +590,7 @@ fn roundtrip_statement_with_dialect_16() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT j1_id from j1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)",
     );
     Ok(())
 }
@@ -591,7 +601,7 @@ fn roundtrip_statement_with_dialect_17() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT j1_id as id from j1) AS c",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT j1.j1_id AS id FROM j1) AS c"#,
+        expected: @"SELECT c.id FROM (SELECT j1.j1_id AS id FROM j1) AS c",
     );
     Ok(())
 }
@@ -603,7 +613,7 @@ fn roundtrip_statement_with_dialect_18() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT j1_id + 1 * 3 from j1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT (j1.j1_id + (1 * 3)) FROM j1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT (j1.j1_id + (1 * 3)) FROM j1) AS c (id)",
     );
     Ok(())
 }
@@ -615,7 +625,7 @@ fn roundtrip_statement_with_dialect_19() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT distinct (j1_id + 1 * 3) FROM j1 LIMIT 1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT DISTINCT (j1.j1_id + (1 * 3)) FROM j1 LIMIT 1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT DISTINCT (j1.j1_id + (1 * 3)) FROM j1 LIMIT 1) AS c (id)",
     );
     Ok(())
 }
@@ -626,7 +636,7 @@ fn roundtrip_statement_with_dialect_20() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT j1_id + 1 FROM j1 ORDER BY j1_id DESC LIMIT 1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT (j1.j1_id + 1) FROM j1 ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT (j1.j1_id + 1) FROM j1 ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 1) AS c (id)",
     );
     Ok(())
 }
@@ -637,7 +647,7 @@ fn roundtrip_statement_with_dialect_21() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT CAST((CAST(j1_id as BIGINT) + 1) as int) * 10 FROM j1 LIMIT 1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT (CAST((CAST(j1.j1_id AS BIGINT) + 1) AS INTEGER) * 10) FROM j1 LIMIT 1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT (CAST((CAST(j1.j1_id AS BIGINT) + 1) AS INTEGER) * 10) FROM j1 LIMIT 1) AS c (id)",
     );
     Ok(())
 }
@@ -648,7 +658,7 @@ fn roundtrip_statement_with_dialect_22() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT CAST(j1_id as BIGINT) + 1 FROM j1 ORDER BY j1_id LIMIT 1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT (CAST(j1.j1_id AS BIGINT) + 1) FROM j1 ORDER BY j1.j1_id ASC NULLS LAST LIMIT 1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT (CAST(j1.j1_id AS BIGINT) + 1) FROM j1 ORDER BY j1.j1_id ASC NULLS LAST LIMIT 1) AS c (id)",
     );
     Ok(())
 }
@@ -659,7 +669,7 @@ fn roundtrip_statement_with_dialect_23() -> Result<(), DataFusionError> {
         sql: "SELECT temp_j.id2 FROM (SELECT j1_id, j1_string FROM j1) AS temp_j(id2, string2)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT temp_j.id2 FROM (SELECT j1.j1_id, j1.j1_string FROM j1) AS temp_j (id2, string2)"#,
+        expected: @"SELECT temp_j.id2 FROM (SELECT j1.j1_id, j1.j1_string FROM j1) AS temp_j (id2, string2)",
     );
     Ok(())
 }
@@ -670,7 +680,7 @@ fn roundtrip_statement_with_dialect_24() -> Result<(), DataFusionError> {
         sql: "SELECT temp_j.id2 FROM (SELECT j1_id, j1_string FROM j1) AS temp_j(id2, string2)",
         parser_dialect: GenericDialect {},
         unparser_dialect: SqliteDialect {},
-        expected: @r#"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2`, `j1`.`j1_string` AS `string2` FROM `j1`) AS `temp_j`"#,
+        expected: @"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2`, `j1`.`j1_string` AS `string2` FROM `j1`) AS `temp_j`",
     );
     Ok(())
 }
@@ -681,7 +691,7 @@ fn roundtrip_statement_with_dialect_25() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM (SELECT j1_id + 1 FROM j1) AS temp_j(id2)",
         parser_dialect: GenericDialect {},
         unparser_dialect: SqliteDialect {},
-        expected: @r#"SELECT `temp_j`.`id2` FROM (SELECT (`j1`.`j1_id` + 1) AS `id2` FROM `j1`) AS `temp_j`"#,
+        expected: @"SELECT `temp_j`.`id2` FROM (SELECT (`j1`.`j1_id` + 1) AS `id2` FROM `j1`) AS `temp_j`",
     );
     Ok(())
 }
@@ -692,7 +702,7 @@ fn roundtrip_statement_with_dialect_26() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM (SELECT j1_id FROM j1 LIMIT 1) AS temp_j(id2)",
         parser_dialect: GenericDialect {},
         unparser_dialect: SqliteDialect {},
-        expected: @r#"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2` FROM `j1` LIMIT 1) AS `temp_j`"#,
+        expected: @"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2` FROM `j1` LIMIT 1) AS `temp_j`",
     );
     Ok(())
 }
@@ -761,7 +771,7 @@ fn roundtrip_statement_with_dialect_32() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3])",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))) FROM UNNEST([1, 2, 3])"#,
+        expected: @"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))) FROM UNNEST([1, 2, 3])",
     );
     Ok(())
 }
@@ -786,7 +796,7 @@ fn roundtrip_statement_with_dialect_34() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+        expected: @"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)",
     );
     Ok(())
 }
@@ -800,7 +810,7 @@ fn roundtrip_statement_with_dialect_35() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]), j1",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))), j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) CROSS JOIN j1"#,
+        expected: @"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))), j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) CROSS JOIN j1",
     );
     Ok(())
 }
@@ -814,7 +824,7 @@ fn roundtrip_statement_with_dialect_36() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT u.c1, j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)"#,
+        expected: @"SELECT u.c1, j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)",
     );
     Ok(())
 }
@@ -828,7 +838,7 @@ fn roundtrip_statement_with_dialect_37() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT u.c1 FROM UNNEST([1, 2, 3]) AS u (c1) UNION ALL SELECT u.c1 FROM UNNEST([4, 5, 6]) AS u (c1)"#,
+        expected: @"SELECT u.c1 FROM UNNEST([1, 2, 3]) AS u (c1) UNION ALL SELECT u.c1 FROM UNNEST([4, 5, 6]) AS u (c1)",
     );
     Ok(())
 }
@@ -842,7 +852,7 @@ fn roundtrip_statement_with_dialect_38() -> Result<(), DataFusionError> {
         sql: "SELECT UNNEST([1,2,3])",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT * FROM UNNEST([1, 2, 3])"#,
+        expected: @"SELECT * FROM UNNEST([1, 2, 3])",
     );
     Ok(())
 }
@@ -856,7 +866,7 @@ fn roundtrip_statement_with_dialect_39() -> Result<(), DataFusionError> {
         sql: "SELECT UNNEST([1,2,3]) as c1",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT UNNEST([1, 2, 3]) AS c1"#,
+        expected: @"SELECT UNNEST([1, 2, 3]) AS c1",
     );
     Ok(())
 }
@@ -870,7 +880,7 @@ fn roundtrip_statement_with_dialect_40() -> Result<(), DataFusionError> {
         sql: "SELECT UNNEST([1,2,3]), 1",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3))), Int64(1)"#,
+        expected: @"SELECT UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3))), Int64(1)",
     );
     Ok(())
 }
@@ -884,7 +894,7 @@ fn roundtrip_statement_with_dialect_41() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT u.array_col, u.struct_col, UNNEST(outer_ref(u.array_col)) FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)"#,
+        expected: @"SELECT u.array_col, u.struct_col, UNNEST(outer_ref(u.array_col)) FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)",
     );
     Ok(())
 }
@@ -898,7 +908,7 @@ fn roundtrip_statement_with_dialect_42() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT u.array_col, u.struct_col, t1.c1 FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS t1 (c1)"#,
+        expected: @"SELECT u.array_col, u.struct_col, t1.c1 FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS t1 (c1)",
     );
     Ok(())
 }
@@ -912,7 +922,7 @@ fn roundtrip_statement_with_dialect_43() -> Result<(), DataFusionError> {
         sql: "SELECT unnest([1, 2, 3, 4]) from unnest([1, 2, 3]);",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT UNNEST([1, 2, 3, 4]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3),Int64(4))) FROM UNNEST([1, 2, 3])"#,
+        expected: @"SELECT UNNEST([1, 2, 3, 4]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3),Int64(4))) FROM UNNEST([1, 2, 3])",
     );
     Ok(())
 }
@@ -934,25 +944,25 @@ fn roundtrip_statement_with_dialect_special_char_alias() -> Result<(), DataFusio
         sql: "select min(a) as \"min(a)\" from (select 1 as a)",
         parser_dialect: GenericDialect {},
         unparser_dialect: BigQueryDialect {},
-        expected: @r#"SELECT min(`a`) AS `min_40a_41` FROM (SELECT 1 AS `a`)"#,
+        expected: @"SELECT min(`a`) AS `min_40a_41` FROM (SELECT 1 AS `a`)",
     );
     roundtrip_statement_with_dialect_helper!(
         sql: "select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)",
         parser_dialect: GenericDialect {},
         unparser_dialect: BigQueryDialect {},
-        expected: @r#"SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)"#,
+        expected: @"SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)",
     );
     roundtrip_statement_with_dialect_helper!(
         sql: "select a as \"a*\", b , c as \"c@\" from (select 1 as a , 2 as b, 3 as c)",
         parser_dialect: GenericDialect {},
         unparser_dialect: BigQueryDialect {},
-        expected: @r#"SELECT `a` AS `a_42`, `b`, `c` AS `c_64` FROM (SELECT 1 AS `a`, 2 AS `b`, 3 AS `c`)"#,
+        expected: @"SELECT `a` AS `a_42`, `b`, `c` AS `c_64` FROM (SELECT 1 AS `a`, 2 AS `b`, 3 AS `c`)",
     );
     roundtrip_statement_with_dialect_helper!(
         sql: "select * from (select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)) where \"a*\" = 1",
         parser_dialect: GenericDialect {},
         unparser_dialect: BigQueryDialect {},
-        expected: @r#"SELECT `a_42`, `b_64` FROM (SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)) WHERE (`a_42` = 1)"#,
+        expected: @"SELECT `a_42`, `b_64` FROM (SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)) WHERE (`a_42` = 1)",
     );
     roundtrip_statement_with_dialect_helper!(
         sql: "select * from (select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)) where \"a*\" = 1",
@@ -979,11 +989,12 @@ fn test_unnest_logical_plan() -> Result<()> {
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-Projection: __unnest_placeholder(unnest_table.struct_col).field1, __unnest_placeholder(unnest_table.struct_col).field2, __unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
-  Unnest: lists[__unnest_placeholder(unnest_table.array_col)|depth=1] structs[__unnest_placeholder(unnest_table.struct_col)]
-    Projection: unnest_table.struct_col AS __unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS __unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
-      TableScan: unnest_table"#
+        @r"
+    Projection: __unnest_placeholder(unnest_table.struct_col).field1 AS unnest_table.struct_col.field1, __unnest_placeholder(unnest_table.struct_col).field2 AS unnest_table.struct_col.field2, __unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+      Unnest: lists[__unnest_placeholder(unnest_table.array_col)|depth=1] structs[__unnest_placeholder(unnest_table.struct_col)]
+        Projection: unnest_table.struct_col AS __unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS __unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+          TableScan: unnest_table
+    "
     );
 
     Ok(())
@@ -1237,6 +1248,84 @@ fn test_table_scan_with_empty_projection_in_plan_to_sql_3() {
     );
 }
 
+#[test]
+fn test_table_scan_with_empty_projection_in_plan_to_sql_postgres() {
+    let schema = test_schema();
+    let table_name = "table";
+    let plan = table_scan_with_empty_projection_and_none_projection_helper(
+        table_name,
+        schema,
+        Some(vec![]),
+    );
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT FROM "table""#
+    );
+}
+
+#[test]
+fn test_table_scan_with_empty_projection_in_plan_to_sql_default_dialect() {
+    let schema = test_schema();
+    let table_name = "table";
+    let plan = table_scan_with_empty_projection_and_none_projection_helper(
+        table_name,
+        schema,
+        Some(vec![]),
+    );
+    let unparser = Unparser::new(&UnparserDefaultDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT 1 FROM "table""#
+    );
+}
+
+#[test]
+fn test_table_scan_with_empty_projection_and_filter_postgres() {
+    let schema = test_schema();
+    let table_name = "table";
+    let plan = table_scan_with_filter_and_fetch(
+        Some(table_name),
+        &schema,
+        Some(vec![]),
+        vec![col("id").gt(lit(10))],
+        None,
+    )
+    .unwrap()
+    .build()
+    .unwrap();
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT FROM "table" WHERE ("table"."id" > 10)"#
+    );
+}
+
+#[test]
+fn test_table_scan_with_empty_projection_and_filter_default_dialect() {
+    let schema = test_schema();
+    let table_name = "table";
+    let plan = table_scan_with_filter_and_fetch(
+        Some(table_name),
+        &schema,
+        Some(vec![]),
+        vec![col("id").gt(lit(10))],
+        None,
+    )
+    .unwrap()
+    .build()
+    .unwrap();
+    let unparser = Unparser::new(&UnparserDefaultDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT 1 FROM "table" WHERE ("table".id > 10)"#
+    );
+}
+
 fn table_scan_with_empty_projection_and_none_projection_helper(
     table_name: &str,
     table_schema: Schema,
@@ -1390,7 +1479,7 @@ fn test_table_scan_alias() -> Result<()> {
     let sql = plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT * FROM (SELECT t1.id FROM t1 WHERE (t1.id > 5)) AS a"#
+        @"SELECT * FROM (SELECT t1.id FROM t1 WHERE (t1.id > 5)) AS a"
     );
 
     let table_scan_with_two_filter = table_scan_with_filters(
@@ -1405,7 +1494,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_two_filter = plan_to_sql(&table_scan_with_two_filter)?;
     assert_snapshot!(
         table_scan_with_two_filter,
-        @r#"SELECT a.id FROM t1 AS a WHERE ((a.id > 1) AND (a.age < 2))"#
+        @"SELECT a.id FROM t1 AS a WHERE ((a.id > 1) AND (a.age < 2))"
     );
 
     let table_scan_with_fetch =
@@ -1416,7 +1505,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_fetch = plan_to_sql(&table_scan_with_fetch)?;
     assert_snapshot!(
         table_scan_with_fetch,
-        @r#"SELECT a.id FROM (SELECT * FROM t1 LIMIT 10) AS a"#
+        @"SELECT a.id FROM (SELECT * FROM t1 LIMIT 10) AS a"
     );
 
     let table_scan_with_pushdown_all = table_scan_with_filter_and_fetch(
@@ -1432,7 +1521,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_pushdown_all = plan_to_sql(&table_scan_with_pushdown_all)?;
     assert_snapshot!(
         table_scan_with_pushdown_all,
-        @r#"SELECT a.id FROM (SELECT a.id, a.age FROM t1 AS a WHERE (a.id > 1) LIMIT 10) AS a"#
+        @"SELECT a.id FROM (SELECT a.id, a.age FROM t1 AS a WHERE (a.id > 1) LIMIT 10) AS a"
     );
     Ok(())
 }
@@ -1448,21 +1537,21 @@ fn test_table_scan_pushdown() -> Result<()> {
     let scan_with_projection = plan_to_sql(&scan_with_projection)?;
     assert_snapshot!(
         scan_with_projection,
-        @r#"SELECT t1.id, t1.age FROM t1"#
+        @"SELECT t1.id, t1.age FROM t1"
     );
 
     let scan_with_projection = table_scan(Some("t1"), &schema, Some(vec![1]))?.build()?;
     let scan_with_projection = plan_to_sql(&scan_with_projection)?;
     assert_snapshot!(
         scan_with_projection,
-        @r#"SELECT t1.age FROM t1"#
+        @"SELECT t1.age FROM t1"
     );
 
     let scan_with_no_projection = table_scan(Some("t1"), &schema, None)?.build()?;
     let scan_with_no_projection = plan_to_sql(&scan_with_no_projection)?;
     assert_snapshot!(
         scan_with_no_projection,
-        @r#"SELECT * FROM t1"#
+        @"SELECT * FROM t1"
     );
 
     let table_scan_with_projection_alias =
@@ -1473,7 +1562,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_alias)?;
     assert_snapshot!(
         table_scan_with_projection_alias,
-        @r#"SELECT ta.id, ta.age FROM t1 AS ta"#
+        @"SELECT ta.id, ta.age FROM t1 AS ta"
     );
 
     let table_scan_with_projection_alias =
@@ -1484,7 +1573,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_alias)?;
     assert_snapshot!(
         table_scan_with_projection_alias,
-        @r#"SELECT ta.age FROM t1 AS ta"#
+        @"SELECT ta.age FROM t1 AS ta"
     );
 
     let table_scan_with_no_projection_alias = table_scan(Some("t1"), &schema, None)?
@@ -1494,7 +1583,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_no_projection_alias)?;
     assert_snapshot!(
         table_scan_with_no_projection_alias,
-        @r#"SELECT * FROM t1 AS ta"#
+        @"SELECT * FROM t1 AS ta"
     );
 
     let query_from_table_scan_with_projection = LogicalPlanBuilder::from(
@@ -1506,7 +1595,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&query_from_table_scan_with_projection)?;
     assert_snapshot!(
         query_from_table_scan_with_projection,
-        @r#"SELECT t1.id, t1.age FROM t1"#
+        @"SELECT t1.id, t1.age FROM t1"
     );
 
     let query_from_table_scan_with_two_projections = LogicalPlanBuilder::from(
@@ -1519,7 +1608,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&query_from_table_scan_with_two_projections)?;
     assert_snapshot!(
         query_from_table_scan_with_two_projections,
-        @r#"SELECT t1.id, t1.age FROM (SELECT t1.id, t1.age FROM t1)"#
+        @"SELECT t1.id, t1.age FROM (SELECT t1.id, t1.age FROM t1)"
     );
 
     let table_scan_with_filter = table_scan_with_filters(
@@ -1532,7 +1621,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_filter = plan_to_sql(&table_scan_with_filter)?;
     assert_snapshot!(
         table_scan_with_filter,
-        @r#"SELECT * FROM t1 WHERE (t1.id > t1.age)"#
+        @"SELECT * FROM t1 WHERE (t1.id > t1.age)"
     );
 
     let table_scan_with_two_filter = table_scan_with_filters(
@@ -1545,7 +1634,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_two_filter = plan_to_sql(&table_scan_with_two_filter)?;
     assert_snapshot!(
         table_scan_with_two_filter,
-        @r#"SELECT * FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))"#
+        @"SELECT * FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))"
     );
 
     let table_scan_with_filter_alias = table_scan_with_filters(
@@ -1559,7 +1648,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_filter_alias = plan_to_sql(&table_scan_with_filter_alias)?;
     assert_snapshot!(
         table_scan_with_filter_alias,
-        @r#"SELECT * FROM t1 AS ta WHERE (ta.id > ta.age)"#
+        @"SELECT * FROM t1 AS ta WHERE (ta.id > ta.age)"
     );
 
     let table_scan_with_projection_and_filter = table_scan_with_filters(
@@ -1573,7 +1662,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_and_filter)?;
     assert_snapshot!(
         table_scan_with_projection_and_filter,
-        @r#"SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age)"#
+        @"SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age)"
     );
 
     let table_scan_with_projection_and_filter = table_scan_with_filters(
@@ -1587,7 +1676,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_and_filter)?;
     assert_snapshot!(
         table_scan_with_projection_and_filter,
-        @r#"SELECT t1.age FROM t1 WHERE (t1.id > t1.age)"#
+        @"SELECT t1.age FROM t1 WHERE (t1.id > t1.age)"
     );
 
     let table_scan_with_inline_fetch =
@@ -1596,7 +1685,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_inline_fetch = plan_to_sql(&table_scan_with_inline_fetch)?;
     assert_snapshot!(
         table_scan_with_inline_fetch,
-        @r#"SELECT * FROM t1 LIMIT 10"#
+        @"SELECT * FROM t1 LIMIT 10"
     );
 
     let table_scan_with_projection_and_inline_fetch = table_scan_with_filter_and_fetch(
@@ -1611,7 +1700,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_and_inline_fetch)?;
     assert_snapshot!(
         table_scan_with_projection_and_inline_fetch,
-        @r#"SELECT t1.id, t1.age FROM t1 LIMIT 10"#
+        @"SELECT t1.id, t1.age FROM t1 LIMIT 10"
     );
 
     let table_scan_with_all = table_scan_with_filter_and_fetch(
@@ -1625,7 +1714,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_all = plan_to_sql(&table_scan_with_all)?;
     assert_snapshot!(
         table_scan_with_all,
-        @r#"SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age) LIMIT 10"#
+        @"SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age) LIMIT 10"
     );
 
     let table_scan_with_additional_filter = table_scan_with_filters(
@@ -1639,7 +1728,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_filter = plan_to_sql(&table_scan_with_additional_filter)?;
     assert_snapshot!(
         table_scan_with_filter,
-        @r#"SELECT * FROM t1 WHERE (t1.id = 5) AND (t1.id > t1.age)"#
+        @"SELECT * FROM t1 WHERE (t1.id = 5) AND (t1.id > t1.age)"
     );
 
     Ok(())
@@ -1660,7 +1749,43 @@ fn test_sort_with_push_down_fetch() -> Result<()> {
     let sql = plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT t1.id, t1.age FROM t1 ORDER BY t1.age ASC NULLS FIRST LIMIT 10"#
+        @"SELECT t1.id, t1.age FROM t1 ORDER BY t1.age ASC NULLS FIRST LIMIT 10"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_sort_with_scalar_fn_and_push_down_fetch() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("search_phrase", DataType::Utf8, false),
+        Field::new("event_time", DataType::Utf8, false),
+    ]);
+
+    let substr_udf = unicode::substr();
+
+    // Build a plan that mimics the DF52 optimizer output:
+    // Projection(search_phrase) → Sort(substr(event_time), fetch=10)
+    //   → Projection(search_phrase, event_time) → Filter → TableScan
+    // This triggers a subquery because the outer projection differs from the inner one.
+    // The ORDER BY scalar function must not reference the inner table qualifier.
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .filter(col("search_phrase").not_eq(lit("")))?
+        .project(vec![col("search_phrase"), col("event_time")])?
+        .sort_with_limit(
+            vec![
+                substr_udf
+                    .call(vec![col("event_time"), lit(1), lit(5)])
+                    .sort(true, true),
+            ],
+            Some(10),
+        )?
+        .project(vec![col("search_phrase")])?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT t1.search_phrase FROM (SELECT t1.search_phrase, t1.event_time FROM t1 WHERE (t1.search_phrase <> '') ORDER BY substr(t1.event_time, 1, 5) ASC NULLS FIRST LIMIT 10)"
     );
     Ok(())
 }
@@ -1706,7 +1831,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     let sql = plan_to_sql(&join_plan_with_filter)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND ("left"."name" LIKE 'some_name' AND (age > 10)))"#
+        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND ("left".id > 5) WHERE "left"."name" LIKE 'some_name' AND (age > 10)"#
     );
 
     let join_plan_no_filter = LogicalPlanBuilder::from(left_plan.clone())
@@ -1721,7 +1846,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     let sql = plan_to_sql(&join_plan_no_filter)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND ("left"."name" LIKE 'some_name' AND (age > 10))"#
+        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id WHERE "left"."name" LIKE 'some_name' AND (age > 10)"#
     );
 
     let right_plan_with_filter = table_scan_with_filters(
@@ -1746,7 +1871,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     let sql = plan_to_sql(&join_plan_multiple_filters)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND (("left"."name" LIKE 'some_name' AND (right_table."name" = 'before_join_filter_val')) AND (age > 10))) WHERE ("left"."name" = 'after_join_filter_val')"#
+        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND ("left".id > 5) WHERE ("left"."name" = 'after_join_filter_val') AND "left"."name" LIKE 'some_name' AND (right_table."name" = 'before_join_filter_val') AND (age > 10)"#
     );
 
     let right_plan_with_filter_schema = table_scan_with_filters(
@@ -1776,7 +1901,103 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     let sql = plan_to_sql(&join_plan_duplicated_filter)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND (("left"."name" LIKE 'some_name' AND (right_table.age > 10)) AND (right_table.age < 11)))"#
+        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND ("left".id > 5) WHERE "left"."name" LIKE 'some_name' AND (right_table.age > 10) AND (right_table.age < 11)"#
+    );
+
+    // Inner join with a scalar subquery in table_scan_filters. The subquery filter should appear in WHERE, not in JOIN ON,
+    // since dialects like BigQuery reject subqueries in join predicates.
+    let schema_subquery = Schema::new(vec![Field::new("id", DataType::Utf8, false)]);
+    let subquery_plan = table_scan(Some("subquery_table"), &schema_subquery, None)?
+        .aggregate(vec![] as Vec<Expr>, vec![max(col("subquery_table.id"))])?
+        .build()?;
+    let right_plan_with_subquery = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![col("right_table.id").eq(scalar_subquery(Arc::new(subquery_plan)))],
+    )?
+    .build()?;
+
+    let left_plan =
+        table_scan(Some("left_table"), &schema_left, Some(vec![0, 1]))?.build()?;
+
+    let join_plan_subquery_filter = LogicalPlanBuilder::from(left_plan)
+        .join(
+            right_plan_with_subquery,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left_table.id"], vec!["right_table.id"]),
+            None,
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_subquery_filter)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT left_table.id, left_table."name" FROM left_table INNER JOIN right_table ON left_table.id = right_table.id WHERE (right_table.id = (SELECT max(subquery_table.id) FROM subquery_table))"#
+    );
+
+    // Inner join with an IN subquery in table_scan_filters.
+    let subquery_plan_in = table_scan(Some("subquery_table"), &schema_subquery, None)?
+        .project(vec![col("subquery_table.id")])?
+        .build()?;
+    let right_plan_with_in = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![in_subquery(
+            col("right_table.id"),
+            Arc::new(subquery_plan_in),
+        )],
+    )?
+    .build()?;
+
+    let left_plan_in =
+        table_scan(Some("left_table"), &schema_left, Some(vec![0, 1]))?.build()?;
+
+    let join_plan_in_subquery = LogicalPlanBuilder::from(left_plan_in)
+        .join(
+            right_plan_with_in,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left_table.id"], vec!["right_table.id"]),
+            None,
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_in_subquery)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT left_table.id, left_table."name" FROM left_table INNER JOIN right_table ON left_table.id = right_table.id WHERE right_table.id IN (SELECT subquery_table.id FROM subquery_table)"#
+    );
+
+    // Inner join with an EXISTS subquery in table_scan_filters.
+    let subquery_plan_exists =
+        table_scan(Some("subquery_table"), &schema_subquery, None)?
+            .filter(col("subquery_table.id").eq(col("right_table.id")))?
+            .build()?;
+    let right_plan_with_exists = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![exists(Arc::new(subquery_plan_exists))],
+    )?
+    .build()?;
+
+    let left_plan_exists =
+        table_scan(Some("left_table"), &schema_left, Some(vec![0, 1]))?.build()?;
+
+    let join_plan_exists = LogicalPlanBuilder::from(left_plan_exists)
+        .join(
+            right_plan_with_exists,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left_table.id"], vec!["right_table.id"]),
+            None,
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_exists)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT left_table.id, left_table."name" FROM left_table INNER JOIN right_table ON left_table.id = right_table.id WHERE EXISTS (SELECT * FROM subquery_table WHERE (subquery_table.id = right_table.id))"#
     );
 
     Ok(())
@@ -1790,7 +2011,7 @@ fn test_interval_lhs_eq() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')"#
+        @"SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')"
     )
 }
 
@@ -1802,7 +2023,7 @@ fn test_interval_lhs_lt() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')"#
+        @"SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')"
     )
 }
 
@@ -1811,8 +2032,30 @@ fn test_without_offset() {
     let statement = generate_round_trip_statement(MySqlDialect {}, "select 1");
     assert_snapshot!(
         statement,
-        @r#"SELECT 1"#
+        @"SELECT 1"
     )
+}
+
+#[test]
+fn test_cast_to_tinyint() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(3 as tinyint)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT CAST(3 AS SMALLINT)",
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cast_to_tinyint_default_dialect() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(3 as tinyint)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT CAST(3 AS TINYINT)",
+    );
+    Ok(())
 }
 
 #[test]
@@ -1820,7 +2063,7 @@ fn test_with_offset0() {
     let statement = generate_round_trip_statement(MySqlDialect {}, "select 1 offset 0");
     assert_snapshot!(
         statement,
-        @r#"SELECT 1 OFFSET 0"#
+        @"SELECT 1 OFFSET 0"
     )
 }
 
@@ -1829,7 +2072,7 @@ fn test_with_offset95() {
     let statement = generate_round_trip_statement(MySqlDialect {}, "select 1 offset 95");
     assert_snapshot!(
         statement,
-        @r#"SELECT 1 OFFSET 95"#
+        @"SELECT 1 OFFSET 95"
     )
 }
 
@@ -1842,7 +2085,7 @@ fn test_order_by_to_sql_1() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT person.id, person.first_name, sum(person.id) FROM person GROUP BY person.id, person.first_name ORDER BY sum(person.id) ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#
+        @"SELECT person.id, person.first_name, sum(person.id) FROM person GROUP BY person.id, person.first_name ORDER BY sum(person.id) ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"
     );
 }
 
@@ -1855,7 +2098,7 @@ fn test_order_by_to_sql_2() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT person.id, person.first_name, sum(person.id) AS total_sum FROM person GROUP BY person.id, person.first_name ORDER BY total_sum ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#
+        @"SELECT person.id, person.first_name, sum(person.id) AS total_sum FROM person GROUP BY person.id, person.first_name ORDER BY total_sum ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"
     );
 }
 
@@ -1867,7 +2110,7 @@ fn test_order_by_to_sql_3() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT person.id, person.first_name, substr(person.first_name, 0, 5) FROM person ORDER BY person.id ASC NULLS LAST, substr(person.first_name, 0, 5) ASC NULLS LAST"#
+        @"SELECT person.id, person.first_name, substr(person.first_name, 0, 5) FROM person ORDER BY person.id ASC NULLS LAST, substr(person.first_name, 0, 5) ASC NULLS LAST"
     );
 }
 
@@ -1909,7 +2152,7 @@ fn test_complex_order_by_with_grouping() -> Result<()> {
     }, {
         assert_snapshot!(
             sql,
-            @r#"SELECT j1.j1_id, j1.j1_string, lochierarchy FROM (SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy, grouping(j1.j1_string), grouping(j1.j1_id) FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY (grouping(j1.j1_id) + grouping(j1.j1_string)) DESC NULLS FIRST, CASE WHEN ((grouping(j1.j1_id) + grouping(j1.j1_string)) = 0) THEN j1.j1_id END ASC NULLS LAST) LIMIT 100"#
+            @"SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY lochierarchy DESC NULLS FIRST, CASE WHEN (lochierarchy = 0) THEN j1.j1_id END ASC NULLS LAST LIMIT 100"
         );
     });
 
@@ -1942,7 +2185,7 @@ fn test_unnest_to_sql_1() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT UNNEST(unnest_table.array_col) AS u1, unnest_table.struct_col, unnest_table.array_col FROM unnest_table WHERE (unnest_table.array_col <> NULL) ORDER BY unnest_table.struct_col ASC NULLS LAST, unnest_table.array_col ASC NULLS LAST"#
+        @"SELECT UNNEST(unnest_table.array_col) AS u1, unnest_table.struct_col, unnest_table.array_col FROM unnest_table WHERE (unnest_table.array_col <> NULL) ORDER BY unnest_table.struct_col ASC NULLS LAST, unnest_table.array_col ASC NULLS LAST"
     );
 }
 
@@ -1954,7 +2197,7 @@ fn test_unnest_to_sql_2() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"#
+        @"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"
     );
 }
 
@@ -1966,7 +2209,7 @@ fn test_join_with_no_conditions() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2"#
+        @"SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2"
     );
 }
 
@@ -2069,13 +2312,14 @@ fn test_unparse_extension_to_statement() -> Result<()> {
     let sql = unparser.plan_to_sql(&extension)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT j1.j1_id, j1.j1_string FROM j1"#
+        @"SELECT j1.j1_id, j1.j1_string FROM j1"
     );
 
     if let Some(err) = plan_to_sql(&extension).err() {
         assert_contains!(
             err.to_string(),
-            "This feature is not implemented: Unsupported extension node: MockUserDefinedLogicalPlan");
+            "This feature is not implemented: Unsupported extension node: MockUserDefinedLogicalPlan"
+        );
     } else {
         panic!("Expected error");
     }
@@ -2134,7 +2378,7 @@ fn test_unparse_extension_to_sql() -> Result<()> {
     let sql = unparser.plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT j1.j1_id AS user_id FROM (SELECT j1.j1_id, j1.j1_string FROM j1)"#
+        @"SELECT j1.j1_id AS user_id FROM (SELECT j1.j1_id, j1.j1_string FROM j1)"
     );
 
     if let Some(err) = plan_to_sql(&plan).err() {
@@ -2175,15 +2419,13 @@ fn test_unparse_optimized_multi_union() -> Result<()> {
     });
     assert_snapshot!(
         unparser.plan_to_sql(&plan)?,
-        @r#"SELECT 1 AS x, 'a' AS y UNION ALL SELECT 1 AS x, 'b' AS y UNION ALL SELECT 2 AS x, 'a' AS y UNION ALL SELECT 2 AS x, 'c' AS y"#
+        @"SELECT 1 AS x, 'a' AS y UNION ALL SELECT 1 AS x, 'b' AS y UNION ALL SELECT 2 AS x, 'a' AS y UNION ALL SELECT 2 AS x, 'c' AS y"
     );
 
     let plan = LogicalPlan::Union(Union {
-        inputs: vec![project(
-            empty.clone(),
-            vec![lit(1).alias("x"), lit("a").alias("y")],
-        )?
-        .into()],
+        inputs: vec![
+            project(empty.clone(), vec![lit(1).alias("x"), lit("a").alias("y")])?.into(),
+        ],
         schema: dfschema.clone(),
     });
 
@@ -2256,7 +2498,7 @@ fn test_unparse_subquery_alias_with_table_pushdown() -> Result<()> {
     let sql = unparser.plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT customer_view.c_custkey, customer_view.c_name, customer_view.custkey_plus FROM (SELECT customer.c_custkey, (CAST(customer.c_custkey AS BIGINT) + 1) AS custkey_plus, customer.c_name FROM (SELECT customer.c_custkey, customer.c_name FROM customer AS customer) AS customer) AS customer_view"#
+        @"SELECT customer_view.c_custkey, customer_view.c_name, customer_view.custkey_plus FROM (SELECT customer.c_custkey, (CAST(customer.c_custkey AS BIGINT) + 1) AS custkey_plus, customer.c_name FROM (SELECT customer.c_custkey, customer.c_name FROM customer AS customer) AS customer) AS customer_view"
     );
     Ok(())
 }
@@ -2567,21 +2809,21 @@ fn test_unparse_window() -> Result<()> {
     let sql = unparser.plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT `test`.`k`, `test`.`v`, `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM (SELECT `test`.`k` AS `k`, `test`.`v` AS `v`, rank() OVER (PARTITION BY `test`.`k` ORDER BY `test`.`v` ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM `test`) AS `test` WHERE (`rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` = 1)"#
+        @"SELECT `test`.`k`, `test`.`v`, `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM (SELECT `test`.`k` AS `k`, `test`.`v` AS `v`, rank() OVER (PARTITION BY `test`.`k` ORDER BY `test`.`v` ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM `test`) AS `test` WHERE (`rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` = 1)"
     );
 
     let unparser = Unparser::new(&SqliteDialect {});
     let sql = unparser.plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT `test`.`k`, `test`.`v`, `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM (SELECT `test`.`k` AS `k`, `test`.`v` AS `v`, rank() OVER (PARTITION BY `test`.`k` ORDER BY `test`.`v` ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM `test`) AS `test` WHERE (`rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` = 1)"#
+        @"SELECT `test`.`k`, `test`.`v`, `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM (SELECT `test`.`k` AS `k`, `test`.`v` AS `v`, rank() OVER (PARTITION BY `test`.`k` ORDER BY `test`.`v` ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM `test`) AS `test` WHERE (`rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` = 1)"
     );
 
     let unparser = Unparser::new(&DefaultDialect {});
     let sql = unparser.plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT test.k, test.v, rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM test QUALIFY (rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) = 1)"#
+        @"SELECT test.k, test.v, rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM test QUALIFY (rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) = 1)"
     );
 
     // without table qualifier
@@ -2604,6 +2846,333 @@ fn test_unparse_window() -> Result<()> {
         @r#"SELECT "k", "v", "rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "k" AS "k", "v" AS "v", rank() OVER (PARTITION BY "k" ORDER BY "v" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS "rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "test"."k" AS "k", "test"."v" AS "v" FROM "test") AS "derived_projection") AS "__qualify_subquery" WHERE ("rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" = 1)"#
     );
 
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window_over_aggregate_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("value", DataType::Float64, true),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("time").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("gas"), &schema, None)?
+        .aggregate(vec![col("time")], vec![sum(col("value")).alias("sum_n")])?
+        .window(vec![window_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT sum(gas."value") AS sum_n, gas."time", row_number() OVER (ORDER BY gas."time" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM gas GROUP BY gas."time""#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_filter_on_window_over_aggregate_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("value", DataType::Float64, true),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("time").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("gas"), &schema, None)?
+        .aggregate(vec![col("time")], vec![sum(col("value")).alias("sum_n")])?
+        .window(vec![window_expr])?
+        .filter(col("row_idx").eq(lit(0i64)))?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT sum(gas."value") AS sum_n, gas."time", row_number() OVER (ORDER BY gas."time" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM gas GROUP BY gas."time" QUALIFY (row_number() OVER (ORDER BY gas."time" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) = 0)"#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_filter_on_aggregate_output_above_window_without_projection() -> Result<()>
+{
+    let schema = Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("value", DataType::Float64, true),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("time").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("gas"), &schema, None)?
+        .aggregate(vec![col("time")], vec![sum(col("value")).alias("sum_n")])?
+        .window(vec![window_expr])?
+        .filter(col("sum_n").eq(lit(0f64)))?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT sum(gas."value") AS sum_n, gas."time", row_number() OVER (ORDER BY gas."time" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM gas GROUP BY gas."time" QUALIFY (sum(gas."value") = 0.0)"#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window_over_table_scan_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![col("k")],
+            order_by: vec![col("v").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("test"), &schema, None)?
+        .window(vec![window_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT *, row_number() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM test"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_stacked_windows_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    let row_number_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![col("k")],
+            order_by: vec![col("v").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let rank_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("v").sort(false, false)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("rank_idx");
+    let plan = table_scan(Some("test"), &schema, None)?
+        .window(vec![row_number_expr])?
+        .window(vec![rank_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT *, row_number() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx, rank() OVER (ORDER BY test.v DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS rank_idx FROM test"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window_over_distinct_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("v").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("test"), &schema, None)?
+        .distinct()?
+        .window(vec![window_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT *, row_number() OVER (ORDER BY derived_window_input.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM (SELECT DISTINCT * FROM test) AS derived_window_input"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window_over_limit_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("v").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("test"), &schema, None)?
+        .limit(0, Some(10))?
+        .window(vec![window_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT *, row_number() OVER (ORDER BY derived_window_input.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM (SELECT * FROM test LIMIT 10) AS derived_window_input"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window_over_projection_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![col("v_alias").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("test"), &schema, None)?
+        .project(vec![col("k"), col("v").alias("v_alias")])?
+        .window(vec![window_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT *, row_number() OVER (ORDER BY derived_window_input.v_alias ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM (SELECT test.k, test.v AS v_alias FROM test) AS derived_window_input"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window_over_derived_aggregate_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("time", DataType::Int64, false),
+        Field::new("value", DataType::Float64, true),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![],
+            order_by: vec![
+                Expr::Column(Column::new(Some(TableReference::bare("agg")), "sum_n"))
+                    .sort(true, true),
+            ],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }))
+    .alias("row_idx");
+    let plan = table_scan(Some("gas"), &schema, None)?
+        .aggregate(vec![col("time")], vec![sum(col("value")).alias("sum_n")])?
+        .alias("agg")?
+        .window(vec![window_expr])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT *, row_number() OVER (ORDER BY agg.sum_n ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS row_idx FROM (SELECT sum(gas."value") AS sum_n, gas."time" FROM gas GROUP BY gas."time") AS agg"#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_array_to_sql_postgres() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT [1, 2, 3, 4, 5]",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT ARRAY[1, 2, 3, 4, 5]",
+    );
     Ok(())
 }
 
@@ -2746,4 +3315,942 @@ fn test_struct_expr3() {
         statement,
         @r#"SELECT test.c1."metadata".product."name" FROM (SELECT {"metadata": {product: {"name": 'Product Name'}}} AS c1) AS test"#
     );
+}
+
+#[test]
+fn test_json_access_1() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT j1_string:field FROM j1"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT (j1.j1_string : 'field') FROM j1"#
+    );
+}
+
+#[test]
+fn test_json_access_2() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT j1_string:field[0] FROM j1"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT (j1.j1_string : 'field[0]') FROM j1"#
+    );
+}
+
+#[test]
+fn test_json_access_3() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT j1_string:field.inner1['inner2'] FROM j1"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT (j1.j1_string : 'field.inner1[''inner2'']') FROM j1"#
+    );
+}
+
+/// Roundtrip test for a subquery aggregate with column aliases.
+/// Ensures that `subquery_alias_inner_query_and_columns` unwrapping
+/// a Projection -> Aggregate still triggers the derived-subquery path.
+#[test]
+fn roundtrip_subquery_aggregate_with_column_alias() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT id FROM (SELECT max(j1_id) FROM j1) AS c(id)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT c.id FROM (SELECT max(j1.j1_id) FROM j1) AS c (id)",
+    );
+    Ok(())
+}
+
+/// Roundtrip: aggregate over a subquery projection with limit.
+#[test]
+fn roundtrip_aggregate_over_subquery() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: r#"SELECT __agg_0 AS "min(j1_id)", __agg_1 AS "max(j1_id)" FROM (SELECT min(j1_rename) AS __agg_0, max(j1_rename) AS __agg_1 FROM (SELECT j1_id AS j1_rename FROM j1) AS bla LIMIT 20)"#,
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT __agg_0 AS "min(j1_id)", __agg_1 AS "max(j1_id)" FROM (SELECT min(bla.j1_rename) AS __agg_0, max(bla.j1_rename) AS __agg_1 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 20)"#,
+    );
+    Ok(())
+}
+
+/// Projection → Limit → Aggregate (aliases inlined into Aggregate, no
+/// intermediate Projection). Verifies the Limit is folded into the outer
+/// SELECT rather than creating a spurious derived subquery.
+#[test]
+fn test_unparse_aggregate_over_subquery_no_inner_proj() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![
+                max(col("bla.j1_rename")).alias("__agg_0"),
+                max(col("bla.j1_rename")).alias("__agg_1"),
+            ],
+        )?
+        .limit(0, Some(20))?
+        .project(vec![
+            col("__agg_0").alias("max1(j1_id)"),
+            col("__agg_1").alias("max2(j1_id)"),
+        ])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)", max(bla.j1_rename) AS "max2(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 20"#);
+    Ok(())
+}
+
+/// Projection → Aggregate (aliases inlined, no rename in outer Projection).
+/// Verifies the aggregate aliases are preserved as output column names.
+#[test]
+fn test_unparse_aggregate_no_outer_rename() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![
+                max(col("bla.j1_rename")).alias("__agg_0"),
+                max(col("bla.j1_rename")).alias("__agg_1"),
+            ],
+        )?
+        .project(vec![col("__agg_0"), col("__agg_1")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @"SELECT max(bla.j1_rename) AS __agg_0, max(bla.j1_rename) AS __agg_1 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla");
+    Ok(())
+}
+
+/// Projection → Sort → Aggregate (aliases inlined into Aggregate).
+/// Verifies the Sort is folded into the outer SELECT rather than creating
+/// a spurious derived subquery.
+#[test]
+fn test_unparse_aggregate_with_sort_no_inner_proj() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .sort(vec![col("__agg_0").sort(true, true)])?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) ASC NULLS FIRST"#);
+    Ok(())
+}
+
+/// Projection → Limit → Sort → Aggregate (aliases inlined into Aggregate).
+/// The Projection claims the Aggregate through the stacked Limit/Sort;
+/// both clauses should fold into the outer SELECT instead of wrapping
+/// the Sort in a derived subquery.
+#[test]
+fn test_unparse_aggregate_with_limit_sort_no_inner_proj() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .sort(vec![col("__agg_0").sort(true, true)])?
+        .limit(0, Some(5))?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) ASC NULLS FIRST LIMIT 5"#);
+    Ok(())
+}
+
+/// Projection → Sort → Limit → Aggregate (aliases inlined into Aggregate).
+/// The Sort sits above the Limit — the logical plan applies Limit first
+/// and Sort second, which a single `ORDER BY … LIMIT` SELECT cannot
+/// express (SQL applies the sort first). The outer Sort folds into the
+/// outer SELECT using passthrough column references, while the Limit
+/// (and the Aggregate it sits over) goes into a derived subquery.
+#[test]
+fn test_unparse_aggregate_with_sort_over_limit_no_inner_proj() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .limit(0, Some(5))?
+        .sort(vec![col("__agg_0").sort(true, true)])?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT __agg_0 AS "max1(j1_id)" FROM (SELECT max(bla.j1_rename) AS __agg_0 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 5) ORDER BY __agg_0 ASC NULLS FIRST"#);
+    Ok(())
+}
+
+/// Projection → Limit(10) → Limit(5) → Aggregate. Two stacked Limits
+/// merge via `combine_limit` (matching the optimizer's `PushDownLimit`):
+/// outer fetch=10, inner fetch=5 → effective fetch=5.
+#[test]
+fn test_unparse_aggregate_with_repeated_limits_combines() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .limit(0, Some(10))?
+        .limit(0, Some(5))?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 5"#);
+    Ok(())
+}
+
+/// Projection → Limit(skip=2, fetch=10) → Limit(skip=3, fetch=20)
+/// → Aggregate. Two stacked Limits merge via `combine_limit`: combined
+/// skip = 3+2=5, combined fetch = min(10, 20-2) = 10.
+#[test]
+fn test_unparse_aggregate_with_repeated_limits_combines_offset() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .limit(3, Some(20))?
+        .limit(2, Some(10))?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla LIMIT 10 OFFSET 5"#);
+    Ok(())
+}
+
+/// Projection → Sort(DESC) → Sort(ASC) → Aggregate. Two stacked Sorts
+/// fold into a single ORDER BY using the outermost (top) Sort's order;
+/// the inner Sort is reordered by the outer one and is therefore
+/// redundant.
+#[test]
+fn test_unparse_aggregate_with_repeated_sorts_keeps_outermost() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .sort(vec![col("__agg_0").sort(false, false)])?
+        .sort(vec![col("__agg_0").sort(true, true)])?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT max(bla.j1_rename) AS "max1(j1_id)" FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) ASC NULLS FIRST"#);
+    Ok(())
+}
+
+/// Projection → Sort(ASC) → Limit(10) → Sort(DESC) → Aggregate. The
+/// inner Sort determines which rows the Limit keeps and the outer Sort
+/// re-orders the kept rows — a single SELECT cannot express that, so
+/// the outer Sort folds into the outer SELECT (passthrough refs) and
+/// the Limit + inner Sort + Aggregate go into a derived subquery.
+#[test]
+fn test_unparse_aggregate_with_sort_limit_sort_uses_derived_subquery() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .sort(vec![col("__agg_0").sort(false, false)])?
+        .limit(0, Some(10))?
+        .sort(vec![col("__agg_0").sort(true, true)])?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT __agg_0 AS "max1(j1_id)" FROM (SELECT max(bla.j1_rename) AS __agg_0 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) DESC NULLS LAST LIMIT 10) ORDER BY __agg_0 ASC NULLS FIRST"#);
+    Ok(())
+}
+
+/// Projection -> Limit(non-literal fetch) -> Sort { fetch = 5 } -> Aggregate.
+/// The outer Limit is non-literal so it can't be combined with the inner
+/// Sort's fetch=5. The walk must stop before absorbing the Sort so its
+/// fetch survives as `LIMIT 5` in the derived subquery, while the
+/// non-literal outer Limit applies on the outer SELECT.
+#[test]
+fn test_unparse_aggregate_with_non_literal_limit_over_sort_with_fetch() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+
+    let scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![col("j1.j1_id").alias("j1_rename")])?
+        .alias("bla")?
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("bla.j1_rename")).alias("__agg_0")],
+        )?
+        .sort_with_limit(vec![col("__agg_0").sort(true, true)], Some(5))?
+        .limit_by_expr(None, Some(cast(lit(7_i64), DataType::Int32)))?
+        .project(vec![col("__agg_0").alias("max1(j1_id)")])?
+        .build()?;
+
+    let sql = Unparser::default().plan_to_sql(&plan)?.to_string();
+    insta::assert_snapshot!(sql, @r#"SELECT __agg_0 AS "max1(j1_id)" FROM (SELECT max(bla.j1_rename) AS __agg_0 FROM (SELECT j1.j1_id AS j1_rename FROM j1) AS bla ORDER BY max(bla.j1_rename) ASC NULLS FIRST LIMIT 5) LIMIT CAST(7 AS INTEGER)"#);
+    Ok(())
+}
+
+/// Test that unparsing a manually constructed join with a subquery aggregate
+/// preserves the MAX aggregate function.
+///
+/// Builds the equivalent of:
+///   SELECT j1.j1_string FROM j1
+///     JOIN (SELECT max(j2_id) AS max_id FROM j2) AS b
+///     ON j1.j1_id = b.max_id
+#[test]
+fn test_unparse_manual_join_with_subquery_aggregate() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let j1_schema = context
+        .get_table_source(TableReference::bare("j1"))?
+        .schema();
+    let j2_schema = context
+        .get_table_source(TableReference::bare("j2"))?
+        .schema();
+
+    // Build the right side: SELECT max(j2_id) AS max_id FROM j2
+    let right_scan = table_scan(Some("j2"), &j2_schema, None)?.build()?;
+    let right_agg = LogicalPlanBuilder::from(right_scan)
+        .aggregate(
+            vec![] as Vec<Expr>,
+            vec![max(col("j2.j2_id")).alias("max_id")],
+        )?
+        .build()?;
+    let right_subquery = subquery_alias(right_agg, "b")?;
+
+    // Build the full plan: SELECT j1.j1_string FROM j1 JOIN (...) AS b ON j1.j1_id = b.max_id
+    let left_scan = table_scan(Some("j1"), &j1_schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(left_scan)
+        .join(
+            right_subquery,
+            datafusion_expr::JoinType::Inner,
+            (
+                vec![Column::from_qualified_name("j1.j1_id")],
+                vec![Column::from_qualified_name("b.max_id")],
+            ),
+            None,
+        )?
+        .project(vec![col("j1.j1_string")])?
+        .build()?;
+
+    let unparser = Unparser::default();
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+    let sql_upper = sql.to_uppercase();
+    assert!(
+        sql_upper.contains("MAX("),
+        "Unparsed SQL should preserve the MAX aggregate function call, got: {sql}"
+    );
+
+    Ok(())
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/21490
+///
+/// When the outer Projection excludes a Sort column whose definition only
+/// exists as an alias in the inner Projection, the Unparser must inline the
+/// underlying expression into ORDER BY rather than emitting the now-missing
+/// alias name.
+#[test]
+fn test_sort_on_aliased_column_dropped_by_outer_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("X", DataType::Utf8, true),
+        Field::new("Y", DataType::Utf8, true),
+        Field::new("Z", DataType::Utf8, true),
+    ]);
+
+    // Build:
+    //   Projection: [a, b]                         -- outer: excludes sort column "c"
+    //     Sort: [c DESC, fetch=1]                   -- references alias "c"
+    //       Projection: [X AS a, Y AS b, Z AS c]    -- defines alias "c"
+    //         SubqueryAlias: t
+    //           TableScan: phys_table [X, Y, Z]
+    let plan = table_scan(Some("phys_table"), &schema, None)?
+        .alias("t")?
+        .project(vec![
+            Expr::Column(Column::new(Some(TableReference::bare("t")), "X")).alias("a"),
+            Expr::Column(Column::new(Some(TableReference::bare("t")), "Y")).alias("b"),
+            Expr::Column(Column::new(Some(TableReference::bare("t")), "Z")).alias("c"),
+        ])?
+        .sort_with_limit(
+            vec![Expr::Column(Column::new_unqualified("c")).sort(false, true)],
+            Some(1),
+        )?
+        .project(vec![
+            Expr::Column(Column::new_unqualified("a")),
+            Expr::Column(Column::new_unqualified("b")),
+        ])?
+        .build()?;
+
+    let unparser = Unparser::default();
+    let sql = unparser.plan_to_sql(&plan)?;
+
+    // ORDER BY must reference the physical column, not the dropped alias.
+    assert_snapshot!(
+        sql,
+        @r#"SELECT t."X" AS a, t."Y" AS b FROM phys_table AS t ORDER BY t."Z" DESC NULLS FIRST LIMIT 1"#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn snowflake_unnest_to_lateral_flatten_simple() -> Result<(), DataFusionError> {
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_unnest_to_lateral_flatten_with_cross_join() -> Result<(), DataFusionError> {
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]), j1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE", "j1"."j1_id", "j1"."j1_string" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "_unnest_1" CROSS JOIN "j1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_unnest_to_lateral_flatten_cross_join_inline() -> Result<(), DataFusionError>
+{
+    // Cross join with two inline UNNEST sources — both produce valid FLATTEN.
+    // NOTE: UNNEST(table.column) is NOT tested with Snowflake because
+    // LATERAL FLATTEN(INPUT => col) requires the column to be a Snowflake
+    // VARIANT/ARRAY type, which cannot be validated at unparse time.
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        // NOTE: SELECT correctly uses VALUE, but the JOIN ON condition
+        // still references the original column alias (c1) because join
+        // filters are rendered outside reconstruct_select_statement.
+        expected: @r#"SELECT "u"."VALUE", "j1"."j1_id", "j1"."j1_string" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "u" INNER JOIN "j1" ON ("u"."c1" = "j1"."j1_id")"#,
+    );
+    Ok(())
+}
+
+// --- Edge case tests for Snowflake FLATTEN ---
+
+#[test]
+fn snowflake_flatten_implicit_from() -> Result<(), DataFusionError> {
+    // UNNEST in SELECT clause (no explicit FROM UNNEST) — implicit table factor
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST([1,2,3])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_string_array() -> Result<(), DataFusionError> {
+    // String array unnest
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST(['a','b','c'])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE" FROM LATERAL FLATTEN(INPUT => ['a', 'b', 'c']) AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_select_unnest_with_alias() -> Result<(), DataFusionError> {
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST([1,2,3]) as c1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE" AS "c1" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_select_unnest_plus_literal() -> Result<(), DataFusionError> {
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST([1,2,3]), 1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE", "Int64(1)" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_from_unnest_with_table_alias() -> Result<(), DataFusionError> {
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "t1"."VALUE" FROM LATERAL FLATTEN(INPUT => [1, 2, 3]) AS "t1""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_unnest_from_subselect() -> Result<(), DataFusionError> {
+    // UNNEST operating on an array column produced by a subselect.
+    // Uses unnest_table which has array_col (List<Int64>).
+    // The filter uses array_col IS NOT NULL — a simple predicate
+    // that doesn't involve struct types (which Snowflake FLATTEN can't handle).
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST(array_col) FROM (SELECT array_col FROM unnest_table WHERE array_col IS NOT NULL LIMIT 3)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "_unnest_1"."VALUE" FROM (SELECT "unnest_table"."array_col" FROM "unnest_table" WHERE "unnest_table"."array_col" IS NOT NULL LIMIT 3) CROSS JOIN LATERAL FLATTEN(INPUT => "unnest_table"."array_col") AS "_unnest_1""#,
+    );
+    Ok(())
+}
+
+/// Dummy scalar UDF for testing — takes a string and returns List<Int64>.
+/// Simulates any UDF that extracts an array from a column (e.g. parsing
+/// JSON, splitting a delimited string, etc.).
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ExtractArrayUdf {
+    signature: Signature,
+}
+
+impl ExtractArrayUdf {
+    fn new() -> Self {
+        Self {
+            signature: Signature::exact(vec![DataType::Utf8], Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for ExtractArrayUdf {
+    fn name(&self) -> &str {
+        "extract_array"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::List(Arc::new(Field::new_list_field(
+            DataType::Int64,
+            true,
+        ))))
+    }
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        unimplemented!("test stub")
+    }
+}
+
+#[test]
+fn snowflake_flatten_unnest_udf_result() -> Result<(), DataFusionError> {
+    // UNNEST on a UDF result: extract_array(col) returns List<Int64>,
+    // then UNNEST flattens it. This exercises the path where the FLATTEN
+    // INPUT is a UDF call rather than a bare column reference.
+    let sql = "SELECT UNNEST(extract_array(j1_string)) AS items FROM j1 LIMIT 5";
+
+    let statement = Parser::new(&GenericDialect {})
+        .try_with_sql(sql)?
+        .parse_statement()?;
+
+    let state = MockSessionState::default()
+        .with_aggregate_function(max_udaf())
+        .with_aggregate_function(min_udaf())
+        .with_scalar_function(Arc::new(ScalarUDF::new_from_impl(ExtractArrayUdf::new())))
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+        .with_expr_planner(Arc::new(NestedFunctionPlanner))
+        .with_expr_planner(Arc::new(FieldAccessPlanner));
+
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel
+        .sql_statement_to_plan(statement)
+        .unwrap_or_else(|e| panic!("Failed to parse sql: {sql}\n{e}"));
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    insta::assert_snapshot!(actual, @r#"SELECT "_unnest_1"."VALUE" AS "items" FROM "j1" CROSS JOIN LATERAL FLATTEN(INPUT => extract_array("j1"."j1_string")) AS "_unnest_1" LIMIT 5"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_limit_between_projection_and_unnest() -> Result<(), DataFusionError>
+{
+    // Build: Projection → Limit → Unnest → Projection → TableScan
+    // The optimizer can insert a Limit between the outer Projection and the
+    // Unnest. The FLATTEN code path must look through transparent nodes
+    // (Limit, Sort) to find the Unnest.
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .limit(0, Some(5))? // Limit BETWEEN outer Projection and Unnest
+        .project(vec![col("__unnest_placeholder(items)").alias("item")])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    // Must contain LATERAL FLATTEN — the Limit must not prevent FLATTEN detection
+    insta::assert_snapshot!(actual, @r#"SELECT "_unnest_1"."VALUE" AS "item" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1" LIMIT 5"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_sort_between_projection_and_unnest() -> Result<(), DataFusionError> {
+    // Build: Projection → Sort → Unnest → Projection → TableScan
+    // Same as Limit test but with Sort instead.
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .sort(vec![col("__unnest_placeholder(items)").sort(true, true)])?
+        .project(vec![col("__unnest_placeholder(items)").alias("item")])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    // Must contain LATERAL FLATTEN — the Sort must not prevent FLATTEN detection
+    insta::assert_snapshot!(actual, @r#"SELECT "_unnest_1"."VALUE" AS "item" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1" ORDER BY "_unnest_1"."VALUE" ASC NULLS FIRST"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_limit_between_projection_and_unnest_with_subquery_alias()
+-> Result<(), DataFusionError> {
+    // Build: Projection → Limit → Unnest → SubqueryAlias → Projection → TableScan
+    // Combines the Limit and SubqueryAlias transparent node patterns.
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .alias("t")?
+        .unnest_column("__unnest_placeholder(items)")?
+        .limit(0, Some(10))?
+        .project(vec![col("__unnest_placeholder(items)").alias("item")])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    insta::assert_snapshot!(actual, @r#"SELECT "_unnest_1"."VALUE" AS "item" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1" LIMIT 10"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_composed_expression_wrapping_unnest() -> Result<(), DataFusionError>
+{
+    // Build: Projection(CAST(placeholder AS Int64) AS item_id) → Unnest → Projection → TableScan
+    // The outer Projection wraps the unnest output in a function call.
+    // The FLATTEN code path must detect the placeholder inside the function
+    // and still emit LATERAL FLATTEN.
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .project(vec![
+            cast(col("__unnest_placeholder(items)"), DataType::Int64).alias("item_id"),
+        ])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    // Must contain LATERAL FLATTEN despite the placeholder being inside CAST
+    insta::assert_snapshot!(actual, @r#"SELECT CAST("_unnest_1"."VALUE" AS BIGINT) AS "item_id" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1""#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_composed_expression_with_limit() -> Result<(), DataFusionError> {
+    // Combines both bugs: composed expression + Limit between Projection and Unnest
+    // Build: Projection(CAST(placeholder AS Int64) AS item_id) → Limit → Unnest → Projection → TableScan
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .limit(0, Some(5))?
+        .project(vec![
+            cast(col("__unnest_placeholder(items)"), DataType::Int64).alias("item_id"),
+        ])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    insta::assert_snapshot!(actual, @r#"SELECT CAST("_unnest_1"."VALUE" AS BIGINT) AS "item_id" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1" LIMIT 5"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_multi_expression_projection() -> Result<(), DataFusionError> {
+    // Build: Projection([CAST(placeholder AS Int64) AS a, CAST(placeholder AS Utf8) AS b])
+    //          → Unnest → Projection → TableScan
+    // The outer Projection has TWO expressions — both reference the placeholder.
+    // The FLATTEN code path must fire even when p.expr.len() > 1.
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .project(vec![
+            cast(col("__unnest_placeholder(items)"), DataType::Int64).alias("a"),
+            cast(col("__unnest_placeholder(items)"), DataType::Utf8).alias("b"),
+        ])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    insta::assert_snapshot!(actual, @r#"SELECT CAST("_unnest_1"."VALUE" AS BIGINT) AS "a", CAST("_unnest_1"."VALUE" AS VARCHAR) AS "b" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1""#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_multi_expression_with_limit() -> Result<(), DataFusionError> {
+    // Multi-expression + Limit between Projection and Unnest
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .unnest_column("__unnest_placeholder(items)")?
+        .limit(0, Some(10))?
+        .project(vec![
+            cast(col("__unnest_placeholder(items)"), DataType::Int64).alias("a"),
+            cast(col("__unnest_placeholder(items)"), DataType::Utf8).alias("b"),
+        ])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let actual = result.to_string();
+
+    insta::assert_snapshot!(actual, @r#"SELECT CAST("_unnest_1"."VALUE" AS BIGINT) AS "a", CAST("_unnest_1"."VALUE" AS VARCHAR) AS "b" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1" LIMIT 10"#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_unnest_through_subquery_alias() -> Result<(), DataFusionError> {
+    // Build: Projection → Unnest → SubqueryAlias → Projection → TableScan
+    // This simulates the plan produced when a virtual/passthrough table
+    // wraps the source in a SubqueryAlias, which sits between the Unnest
+    // and its inner Projection.
+
+    let schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        true,
+    )]);
+
+    let plan = table_scan(Some("source"), &schema, None)?
+        .project(vec![col("items").alias("__unnest_placeholder(items)")])?
+        .alias("t")? // SubqueryAlias — this is what breaks
+        .unnest_column("__unnest_placeholder(items)")?
+        .project(vec![col("__unnest_placeholder(items)").alias("item")])?
+        .build()?;
+
+    let snowflake = SnowflakeDialect::new();
+    let unparser = Unparser::new(&snowflake);
+    let result = unparser.plan_to_sql(&plan)?;
+    let sql_str = result.to_string();
+
+    // Should contain LATERAL FLATTEN, not error
+    insta::assert_snapshot!(sql_str, @r#"SELECT "_unnest_1"."VALUE" AS "item" FROM "source" CROSS JOIN LATERAL FLATTEN(INPUT => "source"."items", OUTER => true) AS "_unnest_1""#);
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_cross_join_unnest_table_column() -> Result<(), DataFusionError> {
+    // Single CROSS JOIN UNNEST from a table column with user-provided alias.
+    // Column references into the FLATTEN alias use .VALUE.
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM multi_array_table CROSS JOIN UNNEST(column_a) AS a (a)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "multi_array_table"."column_a", "multi_array_table"."column_b", "a"."VALUE" FROM "multi_array_table" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_a") AS "a""#,
+    );
+    Ok(())
+}
+
+#[test]
+fn snowflake_flatten_multiple_unnest_cross_join() -> Result<(), DataFusionError> {
+    // Realistic Snowflake pattern:
+    //   SELECT a, b
+    //   FROM multi_array_table
+    //   CROSS JOIN UNNEST(column_a) AS a
+    //   CROSS JOIN UNNEST(column_b) AS b
+    //
+    // Each CROSS JOIN UNNEST should produce a separate LATERAL FLATTEN
+    // with a distinct alias so they don't collide in the same FROM clause.
+    let snowflake = SnowflakeDialect::new();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT a.a, b.b FROM multi_array_table CROSS JOIN UNNEST(column_a) AS a (a) CROSS JOIN UNNEST(column_b) AS b (b)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: snowflake,
+        expected: @r#"SELECT "a"."VALUE", "b"."VALUE" FROM "multi_array_table" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_a") AS "a" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_b") AS "b""#,
+    );
+    Ok(())
 }

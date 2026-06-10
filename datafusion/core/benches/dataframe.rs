@@ -15,13 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
-#[macro_use]
-extern crate criterion;
-extern crate datafusion;
-
 use arrow_schema::{DataType, Field, Schema};
-use criterion::Criterion;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::col;
@@ -45,6 +40,7 @@ fn create_context(field_count: u32) -> datafusion_common::Result<Arc<SessionCont
     Ok(Arc::new(ctx))
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn run(column_count: u32, ctx: Arc<SessionContext>, rt: &Runtime) {
     black_box(rt.block_on(async {
         let mut data_frame = ctx.table("t").await.unwrap();

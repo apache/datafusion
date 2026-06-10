@@ -17,21 +17,19 @@
 
 //! A simplified [`TableProvider`] for streaming partitioned datasets
 
-use std::any::Any;
 use std::sync::Arc;
 
-use crate::Session;
-use crate::TableProvider;
-
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{plan_err, DFSchema, Result};
-use datafusion_expr::{Expr, SortExpr, TableType};
-use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
-use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::ExecutionPlan;
-
 use async_trait::async_trait;
+use datafusion_common::{DFSchema, Result, plan_err};
+use datafusion_expr::{Expr, SortExpr, TableType};
+use datafusion_physical_expr::equivalence::project_ordering;
+use datafusion_physical_expr::{LexOrdering, create_physical_sort_exprs};
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use log::debug;
+
+use crate::{Session, TableProvider};
 
 /// A [`TableProvider`] that streams a set of [`PartitionStream`]
 #[derive(Debug)]
@@ -82,10 +80,6 @@ impl StreamingTable {
 
 #[async_trait]
 impl TableProvider for StreamingTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -105,7 +99,22 @@ impl TableProvider for StreamingTable {
             let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
             let eqp = state.execution_props();
 
-            create_physical_sort_exprs(&self.sort_order, &df_schema, eqp)?
+            let original_sort_exprs =
+                create_physical_sort_exprs(&self.sort_order, &df_schema, eqp)?;
+
+            if let Some(p) = projection {
+                // When performing a projection, the output columns will not match
+                // the original physical sort expression indices. Also the sort columns
+                // may not be in the output projection. To correct for these issues
+                // we need to project the ordering based on the output schema.
+                let schema = Arc::new(self.schema.project(p)?);
+                LexOrdering::new(original_sort_exprs)
+                    .and_then(|lex_ordering| project_ordering(&lex_ordering, &schema))
+                    .map(|lex_ordering| lex_ordering.to_vec())
+                    .unwrap_or_default()
+            } else {
+                original_sort_exprs
+            }
         } else {
             vec![]
         };

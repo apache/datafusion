@@ -45,11 +45,9 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
-use crate::utils::datafusion_strsim::normalized_levenshtein;
+use crate::utils::datafusion_strsim::{levenshtein, normalized_levenshtein};
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, Diagnostic, TableReference};
-#[cfg(feature = "avro")]
-use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
@@ -76,9 +74,6 @@ pub enum DataFusionError {
     /// Error when reading / writing Parquet data.
     #[cfg(feature = "parquet")]
     ParquetError(Box<ParquetError>),
-    /// Error when reading Avro data.
-    #[cfg(feature = "avro")]
-    AvroError(Box<AvroError>),
     /// Error when reading / writing to / from an object_store (e.g. S3 or LocalFile)
     #[cfg(feature = "object_store")]
     ObjectStore(Box<object_store::Error>),
@@ -171,6 +166,10 @@ pub enum DataFusionError {
     /// to multiple receivers. For example, when the source of a repartition
     /// errors and the error is propagated to multiple consumers.
     Shared(Arc<DataFusionError>),
+    /// An error that originated during a foreign function interface call.
+    /// Transferring errors across the FFI boundary is difficult, so the original
+    /// error will be converted to a string.
+    Ffi(String),
 }
 
 #[macro_export]
@@ -199,6 +198,77 @@ pub enum SchemaError {
     },
 }
 
+fn case_insensitive_field_match<'a>(
+    field: &Column,
+    valid_fields: &'a [Column],
+) -> Option<&'a Column> {
+    let field_name = field.name();
+    let field_flat_name = field.flat_name();
+    let field_name_lower = field_name.to_lowercase();
+    let field_flat_name_lower = field_flat_name.to_lowercase();
+
+    valid_fields.iter().find(|valid_field| {
+        let valid_field_name = valid_field.name();
+        let valid_field_flat_name = valid_field.flat_name();
+        let valid_field_name_lower = valid_field_name.to_lowercase();
+        let valid_field_flat_name_lower = valid_field_flat_name.to_lowercase();
+
+        let name_differs_only_by_case =
+            field_name_lower == valid_field_name_lower && field_name != valid_field_name;
+        let flat_name_differs_only_by_case = field_flat_name_lower
+            == valid_field_flat_name_lower
+            && field_flat_name != valid_field_flat_name;
+
+        name_differs_only_by_case || flat_name_differs_only_by_case
+    })
+}
+
+/// Find the most similar field name based on edit distance.
+/// Returns `None` if all candidate edit distances are too far away.
+fn closest_valid_field<'a>(
+    field: &Column,
+    valid_fields: &'a [Column],
+) -> Option<&'a Column> {
+    // Find the most similar valid field name.
+    let target_names = [
+        field.name().to_lowercase(),
+        field.flat_name().to_lowercase(),
+    ];
+
+    let mut best_match: Option<(usize, usize, usize, &Column)> = None;
+    for (index, valid_field) in valid_fields.iter().enumerate() {
+        let valid_names = [
+            valid_field.name().to_lowercase(),
+            valid_field.flat_name().to_lowercase(),
+        ];
+        for target in &target_names {
+            for valid_name in &valid_names {
+                let distance = levenshtein(target, valid_name);
+                let max_len = target.chars().count().max(valid_name.chars().count());
+                // If there are no shared characters, or we would have to edit
+                // more than half of the longer name, don't suggest a potential match.
+                if max_len == 0 || distance * 2 > max_len {
+                    continue;
+                }
+
+                let should_replace = best_match.is_none_or(
+                    |(best_distance, best_max_len, best_index, _)| {
+                        distance < best_distance
+                            || distance == best_distance
+                                && (max_len > best_max_len
+                                    || max_len == best_max_len && index < best_index)
+                    },
+                );
+                if should_replace {
+                    best_match = Some((distance, max_len, index, valid_field));
+                }
+            }
+        }
+    }
+
+    best_match.map(|(_, _, _, valid_field)| valid_field)
+}
+
 impl Display for SchemaError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -206,44 +276,39 @@ impl Display for SchemaError {
                 field,
                 valid_fields,
             } => {
-                write!(f, "No field named {}", field.quoted_flat_name())?;
-                let lower_valid_fields = valid_fields
-                    .iter()
-                    .map(|column| column.flat_name().to_lowercase())
-                    .collect::<Vec<String>>();
+                let closest_field = closest_valid_field(field, valid_fields);
+                let case_sensitive_match =
+                    case_insensitive_field_match(field, valid_fields);
 
-                let valid_fields_names = valid_fields
-                    .iter()
-                    .map(|column| column.flat_name())
-                    .collect::<Vec<String>>();
-                if lower_valid_fields.contains(&field.flat_name().to_lowercase()) {
+                write!(f, "No field named {}", field.quoted_flat_name())?;
+                if let Some(matched) = closest_field {
+                    write!(f, ". Did you mean '{}'?", matched.quoted_flat_name())?;
+                } else {
+                    write!(f, ".")?;
+                }
+
+                if let Some(case_sensitive_match) = case_sensitive_match {
                     write!(
                         f,
-                        ". Column names are case sensitive. You can use double quotes to refer to the \"{}\" column \
-                        or set the datafusion.sql_parser.enable_ident_normalization configuration",
-                        field.quoted_flat_name()
+                        "\nColumn names are case sensitive. You can use double quotes to refer to the {} column \
+                        or disable the datafusion.sql_parser.enable_ident_normalization configuration.",
+                        case_sensitive_match.quoted_flat_name()
                     )?;
                 }
-                let field_name = field.name();
-                if let Some(matched) = valid_fields_names
-                    .iter()
-                    .filter(|str| normalized_levenshtein(str, field_name) >= 0.5)
-                    .collect::<Vec<&String>>()
-                    .first()
-                {
-                    write!(f, ". Did you mean '{matched}'?")?;
-                } else if !valid_fields.is_empty() {
+
+                if !valid_fields.is_empty() {
                     write!(
                         f,
-                        ". Valid fields are {}",
+                        "\nValid fields are {}.",
                         valid_fields
                             .iter()
                             .map(|field| field.quoted_flat_name())
                             .collect::<Vec<String>>()
                             .join(", ")
-                    )?;
+                    )
+                } else {
+                    Ok(())
                 }
-                write!(f, ".")
             }
             Self::DuplicateQualifiedField { qualifier, name } => {
                 write!(
@@ -328,13 +393,6 @@ impl From<ParquetError> for DataFusionError {
     }
 }
 
-#[cfg(feature = "avro")]
-impl From<AvroError> for DataFusionError {
-    fn from(e: AvroError) -> Self {
-        DataFusionError::AvroError(Box::new(e))
-    }
-}
-
 #[cfg(feature = "object_store")]
 impl From<object_store::Error> for DataFusionError {
     fn from(e: object_store::Error) -> Self {
@@ -385,8 +443,6 @@ impl Error for DataFusionError {
             DataFusionError::ArrowError(e, _) => Some(e.as_ref()),
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(e) => Some(e.as_ref()),
-            #[cfg(feature = "avro")]
-            DataFusionError::AvroError(e) => Some(e.as_ref()),
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(e) => Some(e.as_ref()),
             DataFusionError::IoError(e) => Some(e),
@@ -413,6 +469,7 @@ impl Error for DataFusionError {
             // can't be executed.
             DataFusionError::Collection(errs) => errs.first().map(|e| e as &dyn Error),
             DataFusionError::Shared(e) => Some(e.as_ref()),
+            DataFusionError::Ffi(_) => None,
         }
     }
 }
@@ -515,8 +572,6 @@ impl DataFusionError {
             DataFusionError::ArrowError(_, _) => "Arrow error: ",
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(_) => "Parquet error: ",
-            #[cfg(feature = "avro")]
-            DataFusionError::AvroError(_) => "Avro error: ",
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(_) => "Object Store error: ",
             DataFusionError::IoError(_) => "IO error: ",
@@ -544,6 +599,7 @@ impl DataFusionError {
                 errs.first().expect("cannot construct DataFusionError::Collection with 0 errors, but got one such case").error_prefix()
             }
             DataFusionError::Shared(_) => "",
+            DataFusionError::Ffi(_) => "FFI error: ",
         }
     }
 
@@ -555,8 +611,6 @@ impl DataFusionError {
             }
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(ref desc) => Cow::Owned(desc.to_string()),
-            #[cfg(feature = "avro")]
-            DataFusionError::AvroError(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::IoError(ref desc) => Cow::Owned(desc.to_string()),
             #[cfg(feature = "sql")]
             DataFusionError::SQL(ref desc, ref backtrace) => {
@@ -596,6 +650,7 @@ impl DataFusionError {
                 .expect("cannot construct DataFusionError::Collection with 0 errors")
                 .message(),
             DataFusionError::Shared(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::Ffi(ref desc) => Cow::Owned(desc.to_string()),
         }
     }
 
@@ -896,84 +951,131 @@ macro_rules! assert_ne_or_internal_err {
 ///     plan_err!("Error {val:?}")
 ///
 /// `NAME_ERR` -  macro name for wrapping Err(DataFusionError::*)
+/// `PREFIXED_NAME_ERR` - underscore-prefixed alias for NAME_ERR (e.g., _plan_err)
+/// (Needed to avoid compiler error when using macro in the same crate: `macros from the current crate cannot be referred to by absolute paths`)
 /// `NAME_DF_ERR` -  macro name for wrapping DataFusionError::*. Needed to keep backtrace opportunity
 /// in construction where DataFusionError::* used directly, like `map_err`, `ok_or_else`, etc
+/// `PREFIXED_NAME_DF_ERR` - underscore-prefixed alias for NAME_DF_ERR (e.g., _plan_datafusion_err).
+/// (Needed to avoid compiler error when using macro in the same crate: `macros from the current crate cannot be referred to by absolute paths`)
 macro_rules! make_error {
-    ($NAME_ERR:ident, $NAME_DF_ERR: ident, $ERR:ident) => { make_error!(@inner ($), $NAME_ERR, $NAME_DF_ERR, $ERR); };
-    (@inner ($d:tt), $NAME_ERR:ident, $NAME_DF_ERR:ident, $ERR:ident) => {
-        ::paste::paste!{
-            /// Macro wraps `$ERR` to add backtrace feature
-            #[macro_export]
-            macro_rules! $NAME_DF_ERR {
-                ($d($d args:expr),* $d(; diagnostic=$d DIAG:expr)?) => {{
-                    let err =$crate::DataFusionError::$ERR(
-                        ::std::format!(
-                            "{}{}",
-                            ::std::format!($d($d args),*),
-                            $crate::DataFusionError::get_back_trace(),
-                        ).into()
-                    );
-                    $d (
-                        let err = err.with_diagnostic($d DIAG);
-                    )?
-                    err
-                }
-            }
+    ($NAME_ERR:ident, $PREFIXED_NAME_ERR:ident, $NAME_DF_ERR:ident, $PREFIXED_NAME_DF_ERR:ident, $ERR:ident) => {
+        make_error!(@inner ($), $NAME_ERR, $PREFIXED_NAME_ERR, $NAME_DF_ERR, $PREFIXED_NAME_DF_ERR, $ERR);
+    };
+    (@inner ($d:tt), $NAME_ERR:ident, $PREFIXED_NAME_ERR:ident, $NAME_DF_ERR:ident, $PREFIXED_NAME_DF_ERR:ident, $ERR:ident) => {
+        /// Macro wraps `$ERR` to add backtrace feature
+        #[macro_export]
+        macro_rules! $NAME_DF_ERR {
+            ($d($d args:expr),* $d(; diagnostic = $d DIAG:expr)?) => {{
+                let err = $crate::DataFusionError::$ERR(
+                    ::std::format!(
+                        "{}{}",
+                        ::std::format!($d($d args),*),
+                        $crate::DataFusionError::get_back_trace(),
+                    ).into()
+                );
+                $d (
+                    let err = err.with_diagnostic($d DIAG);
+                )?
+                err
+            }}
         }
 
-            /// Macro wraps Err(`$ERR`) to add backtrace feature
-            #[macro_export]
-            macro_rules! $NAME_ERR {
-                ($d($d args:expr),* $d(; diagnostic = $d DIAG:expr)?) => {{
-                    let err = $crate::[<_ $NAME_DF_ERR>]!($d($d args),*);
-                    $d (
-                        let err = err.with_diagnostic($d DIAG);
-                    )?
-                    Err(err)
-
-                }}
-            }
-
-
-            // Note: Certain macros are used in this  crate, but not all.
-            // This macro generates a use or all of them in case they are needed
-            // so we allow unused code to avoid warnings when they are not used
-            #[doc(hidden)]
-            #[allow(unused)]
-            pub use $NAME_ERR as [<_ $NAME_ERR>];
-            #[doc(hidden)]
-            #[allow(unused)]
-            pub use $NAME_DF_ERR as [<_ $NAME_DF_ERR>];
+        /// Macro wraps Err(`$ERR`) to add backtrace feature
+        #[macro_export]
+        macro_rules! $NAME_ERR {
+            ($d($d args:expr),* $d(; diagnostic = $d DIAG:expr)?) => {{
+                let err = $crate::$PREFIXED_NAME_DF_ERR!($d($d args),*);
+                $d (
+                    let err = err.with_diagnostic($d DIAG);
+                )?
+                Err(err)
+            }}
         }
+
+        #[doc(hidden)]
+        pub use $NAME_ERR as $PREFIXED_NAME_ERR;
+        #[doc(hidden)]
+        pub use $NAME_DF_ERR as $PREFIXED_NAME_DF_ERR;
     };
 }
 
 // Exposes a macro to create `DataFusionError::Plan` with optional backtrace
-make_error!(plan_err, plan_datafusion_err, Plan);
+make_error!(
+    plan_err,
+    _plan_err,
+    plan_datafusion_err,
+    _plan_datafusion_err,
+    Plan
+);
 
 // Exposes a macro to create `DataFusionError::Internal` with optional backtrace
-make_error!(internal_err, internal_datafusion_err, Internal);
+make_error!(
+    internal_err,
+    _internal_err,
+    internal_datafusion_err,
+    _internal_datafusion_err,
+    Internal
+);
 
 // Exposes a macro to create `DataFusionError::NotImplemented` with optional backtrace
-make_error!(not_impl_err, not_impl_datafusion_err, NotImplemented);
+make_error!(
+    not_impl_err,
+    _not_impl_err,
+    not_impl_datafusion_err,
+    _not_impl_datafusion_err,
+    NotImplemented
+);
 
 // Exposes a macro to create `DataFusionError::Execution` with optional backtrace
-make_error!(exec_err, exec_datafusion_err, Execution);
+make_error!(
+    exec_err,
+    _exec_err,
+    exec_datafusion_err,
+    _exec_datafusion_err,
+    Execution
+);
 
 // Exposes a macro to create `DataFusionError::Configuration` with optional backtrace
-make_error!(config_err, config_datafusion_err, Configuration);
+make_error!(
+    config_err,
+    _config_err,
+    config_datafusion_err,
+    _config_datafusion_err,
+    Configuration
+);
 
 // Exposes a macro to create `DataFusionError::Substrait` with optional backtrace
-make_error!(substrait_err, substrait_datafusion_err, Substrait);
+make_error!(
+    substrait_err,
+    _substrait_err,
+    substrait_datafusion_err,
+    _substrait_datafusion_err,
+    Substrait
+);
 
 // Exposes a macro to create `DataFusionError::ResourcesExhausted` with optional backtrace
-make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
+make_error!(
+    resources_err,
+    _resources_err,
+    resources_datafusion_err,
+    _resources_datafusion_err,
+    ResourcesExhausted
+);
+
+// Exposes a macro to create `DataFusionError::Ffi` with optional backtrace
+make_error!(
+    ffi_err,
+    _ffi_err,
+    ffi_datafusion_err,
+    _ffi_datafusion_err,
+    Ffi
+);
 
 // Exposes a macro to create `DataFusionError::SQL` with optional backtrace
 #[macro_export]
 macro_rules! sql_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::SQL(Box::new($ERR), Some(DataFusionError::get_back_trace()));
+        let err = $crate::DataFusionError::SQL(Box::new($ERR), Some($crate::DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -985,7 +1087,7 @@ macro_rules! sql_datafusion_err {
 #[macro_export]
 macro_rules! sql_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = datafusion_common::sql_datafusion_err!($ERR);
+        let err = $crate::sql_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -997,7 +1099,7 @@ macro_rules! sql_err {
 #[macro_export]
 macro_rules! arrow_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::ArrowError(Box::new($ERR), Some(DataFusionError::get_back_trace()));
+        let err = $crate::DataFusionError::ArrowError(Box::new($ERR), Some($crate::DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -1010,7 +1112,7 @@ macro_rules! arrow_datafusion_err {
 macro_rules! arrow_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {
     {
-        let err = datafusion_common::arrow_datafusion_err!($ERR);
+        let err = $crate::arrow_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -1022,9 +1124,9 @@ macro_rules! arrow_err {
 #[macro_export]
 macro_rules! schema_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = $crate::error::DataFusionError::SchemaError(
+        let err = $crate::DataFusionError::SchemaError(
             Box::new($ERR),
-            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
+            Box::new(Some($crate::DataFusionError::get_back_trace())),
         );
         $(
             let err = err.with_diagnostic($DIAG);
@@ -1037,9 +1139,9 @@ macro_rules! schema_datafusion_err {
 #[macro_export]
 macro_rules! schema_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = $crate::error::DataFusionError::SchemaError(
+        let err = $crate::DataFusionError::SchemaError(
             Box::new($ERR),
-            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
+            Box::new(Some($crate::DataFusionError::get_back_trace())),
         );
         $(
             let err = err.with_diagnostic($DIAG);
@@ -1223,9 +1325,10 @@ mod test {
     #[test]
     fn datafusion_error_to_arrow() {
         let res = return_arrow_error().unwrap_err();
-        assert!(res
-            .to_string()
-            .starts_with("External error: Error during planning: foo"));
+        assert!(
+            res.to_string()
+                .starts_with("External error: Error during planning: foo")
+        );
     }
 
     #[test]
@@ -1237,7 +1340,6 @@ mod test {
     // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
     #[cfg(feature = "backtrace")]
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_enabled_backtrace() {
         match std::env::var("RUST_BACKTRACE") {
             Ok(val) if val == "1" => {}
@@ -1254,17 +1356,17 @@ mod test {
                 .unwrap(),
             &"Error during planning: Err"
         );
-        assert!(!err
-            .split(DataFusionError::BACK_TRACE_SEP)
-            .collect::<Vec<&str>>()
-            .get(1)
-            .unwrap()
-            .is_empty());
+        assert!(
+            !err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .get(1)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[cfg(not(feature = "backtrace"))]
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_disabled_backtrace() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err().to_string();
@@ -1334,7 +1436,6 @@ mod test {
     }
 
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_make_error_parse_input() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err();
@@ -1403,9 +1504,11 @@ mod test {
         let external_error_2: DataFusionError = generic_error_2.into();
 
         println!("{external_error_2}");
-        assert!(external_error_2
-            .to_string()
-            .starts_with("External error: io error"));
+        assert!(
+            external_error_2
+                .to_string()
+                .starts_with("External error: io error")
+        );
     }
 
     /// Model what happens when implementing SendableRecordBatchStream:

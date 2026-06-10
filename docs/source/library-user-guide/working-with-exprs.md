@@ -71,7 +71,7 @@ From DFSchema to Schema: Since the `Into` trait has been implemented for DFSchem
 
 ## Creating and Evaluating `Expr`s
 
-Please see [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs) for well commented code for creating, evaluating, simplifying, and analyzing `Expr`s.
+Please see [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs) for well commented code for creating, evaluating, simplifying, and analyzing `Expr`s.
 
 ## A Scalar UDF Example
 
@@ -123,9 +123,9 @@ If you'd like to learn more about `Expr`s, before we get into the details of cre
 
 There are several examples of rewriting and working with `Expr`s:
 
-- [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs)
-- [analyzer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/analyzer_rule.rs)
-- [optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/optimizer_rule.rs)
+- [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs)
+- [analyzer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/analyzer_rule.rs)
+- [optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/optimizer_rule.rs)
 
 Rewriting Expressions is the process of taking an `Expr` and transforming it into another `Expr`. This is useful for a number of reasons, including:
 
@@ -167,7 +167,7 @@ In DataFusion, an `OptimizerRule` is a trait that supports rewriting `Expr`s tha
 We'll call our rule `AddOneInliner` and implement the `OptimizerRule` trait. The `OptimizerRule` trait has two methods:
 
 - `name` - returns the name of the rule
-- `try_optimize` - takes a `LogicalPlan` and returns an `Option<LogicalPlan>`. If the rule is able to optimize the plan, it returns `Some(LogicalPlan)` with the optimized plan. If the rule is not able to optimize the plan, it returns `None`.
+- `rewrite` - takes a `LogicalPlan` and `&dyn OptimizerConfig`, and returns a `Result<Transformed<LogicalPlan>>`. If the rule is able to optimize the plan, it returns `Transformed::yes` with the optimized plan. If the rule is not able to optimize the plan, it returns `Transformed::no`.
 
 ```rust
 use std::sync::Arc;

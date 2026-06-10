@@ -17,19 +17,18 @@
 
 //! See `main.rs` for how to run it.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, Float32Array, Float64Array,
+    Array, ArrayRef, AsArray, Float32Array, Float64Array, new_null_array,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, Float64Type};
 use arrow::record_batch::RecordBatch;
-use datafusion::common::{exec_err, internal_err, ScalarValue};
+use datafusion::common::{ScalarValue, exec_err, internal_err};
 use datafusion::error::Result;
-use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion::logical_expr::Volatility;
+use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
 };
@@ -66,10 +65,6 @@ impl PowUdf {
 
 impl ScalarUDFImpl for PowUdf {
     /// We implement as_any so that we can downcast the ScalarUDFImpl trait object
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     /// Return the name of this function
     fn name(&self) -> &str {
         "pow"

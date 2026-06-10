@@ -18,9 +18,9 @@
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::DFSchemaRef;
 use datafusion::logical_expr::Case;
+use substrait::proto::Expression;
 use substrait::proto::expression::if_then::IfClause;
 use substrait::proto::expression::{IfThen, RexType};
-use substrait::proto::Expression;
 
 pub fn from_case(
     producer: &mut impl SubstraitProducer,

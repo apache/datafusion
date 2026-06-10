@@ -21,8 +21,8 @@ use insta::assert_snapshot;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    build_group_by, get_optimized_plan, mock_data, parquet_exec_with_sort, schema,
-    TestAggregate,
+    TestAggregate, build_group_by, get_optimized_plan, mock_data, parquet_exec_with_sort,
+    schema,
 };
 
 use arrow::datatypes::DataType;
@@ -34,10 +34,10 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast, col};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::{
-    aggregates::{AggregateExec, AggregateMode},
-    collect,
-    limit::{GlobalLimitExec, LocalLimitExec},
     ExecutionPlan,
+    aggregates::{AggregateExec, AggregateMode},
+    collect, displayable,
+    limit::{GlobalLimitExec, LocalLimitExec},
 };
 
 async fn run_plan_and_format(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
@@ -99,6 +99,121 @@ async fn test_partial_final() -> Result<()> {
     | 4 |
     +---+
     "
+    );
+
+    Ok(())
+}
+
+// Ensure operator respect the soft limit and stops early: `AggregateExec`'s
+// `output_rows` metric should be smaller than then total distinct group count.
+#[tokio::test]
+async fn limited_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
+    // Snapshot for an aggregate operator node from `EXPLAIN ANALYZE`.
+    //
+    // Example: In an `EXPLAIN ANALYZE` output
+    // ```txt
+    // AggregateExec: mode=partial, limit=10, metrics=[output_rows=100, ...]
+    // ```
+    // we get:
+    // ```txt
+    // AggregateRuntimeMetric {
+    //     mode: Partial,
+    //     limit: Some(10),
+    //     output_rows: 100,
+    // }
+    // ```
+    #[derive(Debug)]
+    struct AggregateRuntimeMetric {
+        mode: AggregateMode,
+        limit: Option<usize>,
+        output_rows: usize,
+    }
+
+    fn collect_aggregate_runtime_metrics(
+        plan: &Arc<dyn ExecutionPlan>,
+        metrics: &mut Vec<AggregateRuntimeMetric>,
+    ) {
+        if let Some(agg) = plan.downcast_ref::<AggregateExec>() {
+            let output_rows = agg
+                .metrics()
+                .and_then(|metrics| metrics.aggregate_by_name().output_rows())
+                .expect("AggregateExec should record output_rows after execution");
+
+            metrics.push(AggregateRuntimeMetric {
+                mode: *agg.mode(),
+                limit: agg.limit_options().map(|config| config.limit()),
+                output_rows,
+            });
+        }
+
+        for child in plan.children() {
+            collect_aggregate_runtime_metrics(child, metrics);
+        }
+    }
+
+    fn aggregate_runtime_metrics(
+        plan: &Arc<dyn ExecutionPlan>,
+    ) -> Vec<AggregateRuntimeMetric> {
+        let mut metrics = vec![];
+        collect_aggregate_runtime_metrics(plan, &mut metrics);
+        metrics
+    }
+
+    let cfg = SessionConfig::new()
+        .with_target_partitions(2)
+        .with_batch_size(10)
+        .set_bool("datafusion.execution.enable_migration_aggregate", true);
+    let ctx = SessionContext::new_with_config(cfg);
+
+    let dataframe = ctx
+        .sql(
+            "SELECT DISTINCT value % 100000 AS v \
+             FROM generate_series(1000000) \
+             LIMIT 10",
+        )
+        .await?;
+    let plan = dataframe.create_physical_plan().await?;
+    let formatted_plan = displayable(plan.as_ref()).indent(false).to_string();
+    assert!(
+        formatted_plan.contains("AggregateExec: mode=Partial"),
+        "expected a partial aggregate in plan:\n{formatted_plan}"
+    );
+    assert!(
+        formatted_plan.contains("AggregateExec: mode=FinalPartitioned"),
+        "expected a final partitioned aggregate in plan:\n{formatted_plan}"
+    );
+
+    let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+    assert_eq!(
+        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        10
+    );
+
+    let metrics = aggregate_runtime_metrics(&plan);
+    let partial = metrics
+        .iter()
+        .find(|metric| metric.mode == AggregateMode::Partial)
+        .expect("expected partial aggregate metrics");
+    let final_aggregate = metrics
+        .iter()
+        .find(|metric| {
+            matches!(
+                metric.mode,
+                AggregateMode::Final | AggregateMode::FinalPartitioned
+            )
+        })
+        .expect("expected final aggregate metrics");
+
+    assert_eq!(partial.limit, Some(10));
+    assert_eq!(final_aggregate.limit, Some(10));
+
+    assert!(
+        partial.output_rows <= 100,
+        "partial aggregate should stop before emitting all distinct groups: {metrics:?}"
+    );
+    assert!(
+        final_aggregate.output_rows <= 100,
+        "final aggregate should stop before emitting all distinct groups: {metrics:?}"
     );
 
     Ok(())

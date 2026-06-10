@@ -17,17 +17,17 @@
 
 //! See `main.rs` for how to run it.
 
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
+use datafusion::arrow::array::{UInt8Builder, UInt64Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::datasource::{provider_as_source, TableProvider, TableType};
+use datafusion::common::assert_batches_eq;
+use datafusion::datasource::{TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::logical_expr::LogicalPlanBuilder;
@@ -35,8 +35,8 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
-    project_schema, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream, project_schema,
 };
 use datafusion::prelude::*;
 
@@ -52,6 +52,33 @@ pub async fn custom_datasource() -> Result<()> {
     search_accounts(db.clone(), None, 3).await?;
     search_accounts(db.clone(), Some(col("bank_account").gt(lit(8000u64))), 1).await?;
     search_accounts(db.clone(), Some(col("bank_account").gt(lit(200u64))), 2).await?;
+
+    // exercise SQL paths that push down non-trivial projections:
+    // - `SELECT 1 ...` requests no source columns (projection: Some([]))
+    // - `SELECT COUNT(id) ...` requests a single column (projection: Some([0]))
+    let ctx = SessionContext::new();
+    ctx.register_table("accounts", Arc::new(db))?;
+    let constant_batches = ctx
+        .sql("SELECT 1 AS a FROM accounts")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(
+        [
+            "+---+", "| a |", "+---+", "| 1 |", "| 1 |", "| 1 |", "+---+",
+        ],
+        &constant_batches
+    );
+
+    let count_batches = ctx
+        .sql("SELECT COUNT(id) AS cnt FROM accounts")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(
+        ["+-----+", "| cnt |", "+-----+", "| 3   |", "+-----+",],
+        &count_batches
+    );
 
     Ok(())
 }
@@ -161,10 +188,6 @@ impl Default for CustomDataSource {
 
 #[async_trait]
 impl TableProvider for CustomDataSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         SchemaRef::new(Schema::new(vec![
             Field::new("id", DataType::UInt8, false),
@@ -191,11 +214,13 @@ impl TableProvider for CustomDataSource {
 #[derive(Debug, Clone)]
 struct CustomExec {
     db: CustomDataSource,
+    projection: Option<Vec<usize>>,
     projected_schema: SchemaRef,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CustomExec {
+    #[expect(clippy::needless_pass_by_value)]
     fn new(
         projections: Option<&Vec<usize>>,
         schema: SchemaRef,
@@ -205,8 +230,9 @@ impl CustomExec {
         let cache = Self::compute_properties(projected_schema.clone());
         Self {
             db,
+            projection: projections.cloned(),
             projected_schema,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -233,11 +259,7 @@ impl ExecutionPlan for CustomExec {
         "CustomExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -270,15 +292,25 @@ impl ExecutionPlan for CustomExec {
             account_array.append_value(user.bank_account);
         }
 
+        // Build a batch holding every column the table can produce, then let
+        // Arrow drop the columns the query didn't ask for. `RecordBatch::project`
+        // preserves the row count, which matters when the projection selects
+        // zero columns (e.g. `SELECT 1 FROM t`).
+        let full_batch = RecordBatch::try_new(
+            self.db.schema(),
+            vec![
+                Arc::new(id_array.finish()),
+                Arc::new(account_array.finish()),
+            ],
+        )?;
+        let batch = match &self.projection {
+            Some(indices) => full_batch.project(indices)?,
+            None => full_batch,
+        };
+
         Ok(Box::pin(MemoryStream::try_new(
-            vec![RecordBatch::try_new(
-                self.projected_schema.clone(),
-                vec![
-                    Arc::new(id_array.finish()),
-                    Arc::new(account_array.finish()),
-                ],
-            )?],
-            self.schema(),
+            vec![batch],
+            self.projected_schema.clone(),
             None,
         )?))
     }

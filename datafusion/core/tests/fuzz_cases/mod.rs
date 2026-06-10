@@ -15,20 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[expect(clippy::needless_pass_by_value)]
 mod aggregate_fuzz;
 mod distinct_count_string_fuzz;
+#[expect(clippy::needless_pass_by_value)]
 mod join_fuzz;
 mod merge_fuzz;
+#[expect(clippy::needless_pass_by_value)]
 mod sort_fuzz;
+#[expect(clippy::needless_pass_by_value)]
 mod sort_query_fuzz;
 mod topk_filter_pushdown;
 
 mod aggregation_fuzzer;
+#[expect(clippy::needless_pass_by_value)]
 mod equivalence;
 
 mod pruning;
 
 mod limit_fuzz;
+#[expect(clippy::needless_pass_by_value)]
 mod sort_preserving_repartition_fuzz;
 mod window_fuzz;
 

@@ -1,0 +1,47 @@
+# time - time → interval
+# Subtract times
+# time '05:00' - time '03:00' → 02:00:00
+
+query ?
+SELECT '05:00'::time - '03:00'::time
+----
+2 hours
+
+query T
+SELECT arrow_typeof('05:00'::time - '03:00'::time)
+----
+Interval(MonthDayNano)
+
+query ?
+SELECT '05:00'::time + '03:00'::time
+----
+8 hours
+
+query ?
+SELECT arrow_cast('05:00', 'Time32(Second)') - arrow_cast('03:00', 'Time32(Millisecond)')
+----
+2 hours
+
+query ?
+SELECT arrow_cast('05:00', 'Time32(Second)') - arrow_cast('03:00', 'Time64(Microsecond)')
+----
+2 hours
+
+query ?
+SELECT arrow_cast('05:00', 'Time64(Microsecond)') - arrow_cast('03:00', 'Time32(Millisecond)')
+----
+2 hours
+
+query ?
+SELECT arrow_cast('05:00', 'Time64(Nanosecond)') - arrow_cast('03:00', 'Time32(Second)')
+----
+2 hours
+
+query error Invalid interval arithmetic operation
+SELECT '05:00'::time * '03:00'::time
+
+query error Invalid interval arithmetic operation
+SELECT '05:00'::time / '03:00'::time
+
+query error Invalid interval arithmetic operation
+SELECT '05:00'::time % '03:00'::time

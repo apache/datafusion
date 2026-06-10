@@ -33,17 +33,22 @@ on:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
-  
+
   merge_group:
+
+permissions:
+  contents: read
 
 jobs:
   security_audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Install cargo-audit
-        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9  # v2.62.56
+        uses: taiki-e/install-action@0631aa6515c7d545823c67cfae7ef4fc7f490154  # v2.81.8
         with:
           tool: cargo-audit
       - name: Run audit check
+        # Note: you can ignore specific RUSTSEC issues using the `--ignore` flag ,for example:
+        # run: cargo audit --ignore RUSTSEC-2026-0001
         run: cargo audit

@@ -17,15 +17,15 @@
 
 //! View data source which uses a LogicalPlan as it's input.
 
-use std::{any::Any, borrow::Cow, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 
 use crate::Session;
 use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::error::Result;
 use datafusion_common::Column;
+use datafusion_common::error::Result;
 use datafusion_expr::TableType;
 use datafusion_expr::{Expr, LogicalPlan};
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
@@ -83,10 +83,6 @@ impl ViewTable {
 
 #[async_trait]
 impl TableProvider for ViewTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.logical_plan))
     }

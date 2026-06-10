@@ -24,24 +24,24 @@ use crate::util::{BenchmarkRun, CommonOpt};
 use arrow::array::Array;
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
+use clap::Args;
 use datafusion::common::{Result, ScalarValue};
-use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::TaskContext;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::prelude::*;
 use datafusion_common::instant::Instant;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
-use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
+use parquet::arrow::async_writer::ParquetObjectWriter;
+use rand::Rng;
 use rand::distr::Alphanumeric;
 use rand::rngs::ThreadRng;
-use rand::Rng;
-use structopt::StructOpt;
 use tokio::runtime::Runtime;
 use tokio_util::sync::CancellationToken;
 
@@ -57,31 +57,31 @@ use tokio_util::sync::CancellationToken;
 /// The query is an anonymized version of a real-world query, and the
 /// test starts the query then cancels it and reports how long it takes
 /// for the runtime to fully exit.
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(verbatim_doc_comment)]
+#[derive(Debug, Args, Clone)]
+#[command(verbatim_doc_comment)]
 pub struct RunOpt {
     /// Common options
-    #[structopt(flatten)]
+    #[command(flatten)]
     common: CommonOpt,
 
     /// Path to folder where data will be generated
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
+    #[arg(required = true, short = 'p', long = "path")]
     path: PathBuf,
 
     /// Path to machine readable output file
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 
     /// Number of files to generate
-    #[structopt(long = "num-files", default_value = "7")]
+    #[arg(long = "num-files", default_value = "7")]
     num_files: usize,
 
     /// Number of rows per file to generate
-    #[structopt(long = "num-rows-per-file", default_value = "5000000")]
+    #[arg(long = "num-rows-per-file", default_value = "5000000")]
     num_rows_per_file: usize,
 
     /// How long to wait, in milliseconds, before attempting to cancel
-    #[structopt(long = "wait-time", default_value = "100")]
+    #[arg(long = "wait-time", default_value = "100")]
     wait_time: u64,
 }
 

@@ -15,16 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::array::{as_string_array, create_array, record_batch, Int8Array, UInt64Array};
 use arrow::array::{
-    builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
-    Int32Array, RecordBatch, StringArray,
+    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+    builder::BooleanBuilder, cast::AsArray,
 };
+use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
@@ -38,14 +37,15 @@ use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_datafusion_err,
-    exec_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    DFSchema, DataFusionError, Result, ScalarValue, assert_batches_eq,
+    assert_batches_sorted_eq, assert_contains, exec_datafusion_err, exec_err,
+    not_impl_err, plan_err,
 };
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    lit_with_metadata, Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody,
-    LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
+    OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility, lit_with_metadata,
 };
 use datafusion_expr_common::signature::TypeSignature;
 use datafusion_functions_nested::range::range_udf;
@@ -64,13 +64,13 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
     let actual = plan_and_collect(&ctx, sql).await?;
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +------------------------------------------+
     | avg(custom_sqrt(aggregate_test_100.c11)) |
     +------------------------------------------+
     | 0.6584408483418835                       |
     +------------------------------------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -83,13 +83,13 @@ async fn csv_query_avg_sqrt() -> Result<()> {
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
     let actual = plan_and_collect(&ctx, sql).await?;
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +------------------------------------------+
     | avg(custom_sqrt(aggregate_test_100.c12)) |
     +------------------------------------------+
     | 0.6706002946036459                       |
     +------------------------------------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -154,7 +154,7 @@ async fn scalar_udf() -> Result<()> {
 
     let result = DataFrame::new(ctx.state(), plan).collect().await?;
 
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-----+-----+-----------------+
     | a   | b   | my_add(t.a,t.b) |
     +-----+-----+-----------------+
@@ -163,7 +163,7 @@ async fn scalar_udf() -> Result<()> {
     | 10  | 12  | 22              |
     | 100 | 120 | 220             |
     +-----+-----+-----------------+
-    "###);
+    ");
 
     let batch = &result[0];
     let a = as_int32_array(batch.column(0))?;
@@ -200,10 +200,6 @@ impl std::fmt::Debug for Simple0ArgsScalarUDF {
 }
 
 impl ScalarUDFImpl for Simple0ArgsScalarUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -280,7 +276,7 @@ async fn scalar_udf_zero_params() -> Result<()> {
     ctx.register_udf(ScalarUDF::from(get_100_udf));
 
     let result = plan_and_collect(&ctx, "select get_100() a from t").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-----+
     | a   |
     +-----+
@@ -289,22 +285,22 @@ async fn scalar_udf_zero_params() -> Result<()> {
     | 100 |
     | 100 |
     +-----+
-    "###);
+    ");
 
     let result = plan_and_collect(&ctx, "select get_100() a").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-----+
     | a   |
     +-----+
     | 100 |
     +-----+
-    "###);
+    ");
 
     let result = plan_and_collect(&ctx, "select get_100() from t where a=999").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     ++
     ++
-    "###);
+    ");
 
     Ok(())
 }
@@ -331,13 +327,13 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
 
     // Make sure that the UDF is used instead of the built-in function
     let result = plan_and_collect(&ctx, "select abs(a) a from t").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +---+
     | a |
     +---+
     | 1 |
     +---+
-    "###);
+    ");
 
     Ok(())
 }
@@ -426,20 +422,21 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
         .await
         .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Error during planning: Invalid function \'my_func\'"));
+    assert!(
+        err.to_string()
+            .contains("Error during planning: Invalid function \'my_func\'")
+    );
 
     // Can call it if you put quotes
     let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
 
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +--------------+
     | MY_FUNC(t.i) |
     +--------------+
     | 1            |
     +--------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -470,13 +467,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     ctx.register_udf(udf);
 
     let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +------------+
     | dummy(t.i) |
     +------------+
     | 1          |
     +------------+
-    "###);
+    ");
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
     insta::assert_snapshot!(batches_to_string(&alias_result), @r"
@@ -509,10 +506,6 @@ impl AddIndexToStringVolatileScalarUDF {
 }
 
 impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -676,9 +669,6 @@ impl CastToI64UDF {
 }
 
 impl ScalarUDFImpl for CastToI64UDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "cast_to_i64"
     }
@@ -697,7 +687,7 @@ impl ScalarUDFImpl for CastToI64UDF {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // DataFusion should have ensured the function is called with just a
         // single argument
@@ -713,10 +703,7 @@ impl ScalarUDFImpl for CastToI64UDF {
             arg
         } else {
             // need to use an actual cast to get the correct type
-            Expr::Cast(datafusion_expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Int64,
-            })
+            Expr::Cast(datafusion_expr::Cast::new(Box::new(arg), DataType::Int64))
         };
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))
@@ -801,9 +788,6 @@ impl TakeUDF {
 
 /// Implement a ScalarUDFImpl whose return type is a function of the input values
 impl ScalarUDFImpl for TakeUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "take"
     }
@@ -950,10 +934,6 @@ struct ScalarFunctionWrapper {
 }
 
 impl ScalarUDFImpl for ScalarFunctionWrapper {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -973,7 +953,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let replacement = Self::replacement(&self.expr, &args, &self.defaults)?;
 
@@ -1094,10 +1074,11 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     // Create the `better_add` function dynamically via CREATE FUNCTION statement
     assert!(ctx.sql(sql).await.is_ok());
     // try to `drop function` when sql options have allow ddl disabled
-    assert!(ctx
-        .sql_with_options("drop function better_add", options)
-        .await
-        .is_err());
+    assert!(
+        ctx.sql_with_options("drop function better_add", options)
+            .await
+            .is_err()
+    );
 
     let result = ctx
         .sql("select better_add(2.0, 2.0)")
@@ -1303,19 +1284,14 @@ async fn create_scalar_function_from_sql_statement_default_arguments() -> Result
         "Error during planning: Non-default arguments cannot follow default arguments.";
     assert!(expected.starts_with(&err.strip_backtrace()));
 
-    // FIXME: The `DEFAULT` syntax does not work with positional params
-    let bad_expression_sql = r#"
+    let expression_sql = r#"
     CREATE FUNCTION bad_expression_fun(DOUBLE, DOUBLE DEFAULT 2.0)
         RETURNS DOUBLE
         RETURN $1 + $2
     "#;
-    let err = ctx
-        .sql(bad_expression_sql)
-        .await
-        .expect_err("sqlparser error");
-    let expected =
-        "SQL error: ParserError(\"Expected: ), found: 2.0 at Line: 2, Column: 63\")";
-    assert!(expected.starts_with(&err.strip_backtrace()));
+    let result = ctx.sql(expression_sql).await;
+
+    assert!(result.is_ok());
     Ok(())
 }
 
@@ -1446,10 +1422,6 @@ impl MyRegexUdf {
 }
 
 impl ScalarUDFImpl for MyRegexUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "regex_udf"
     }
@@ -1614,10 +1586,6 @@ impl MetadataBasedUdf {
 }
 
 impl ScalarUDFImpl for MetadataBasedUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -1823,10 +1791,6 @@ impl Default for ExtensionBasedUdf {
     }
 }
 impl ScalarUDFImpl for ExtensionBasedUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -1993,9 +1957,6 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     }
 
     impl ScalarUDFImpl for TestScalarUDF {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn name(&self) -> &str {
             "TestScalarUDF"
         }
@@ -2057,10 +2018,6 @@ async fn test_extension_metadata_preserve_in_sql_values() -> Result<()> {
     }
 
     impl ScalarUDFImpl for MakeExtension {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "make_extension"
         }
@@ -2138,10 +2095,6 @@ async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
     }
 
     impl ScalarUDFImpl for ExtensionScalarPredicate {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "extension_predicate"
         }

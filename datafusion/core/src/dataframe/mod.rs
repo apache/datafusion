@@ -26,22 +26,21 @@ use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::format_as_file_type;
 use crate::datasource::file_format::json::JsonFormatFactory;
 use crate::datasource::{
-    provider_as_source, DefaultTableSource, MemTable, TableProvider,
+    DefaultTableSource, MemTable, TableProvider, provider_as_source,
 };
 use crate::error::Result;
-use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
+use crate::execution::context::{SessionState, TaskContext};
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, ident, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderOptions, Partitioning, TableType,
+    Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
+    Partitioning, TableType, col, ident,
 };
 use crate::physical_plan::{
-    collect, collect_partitioned, execute_stream, execute_stream_partitioned,
-    ExecutionPlan, SendableRecordBatchStream,
+    ExecutionPlan, SendableRecordBatchStream, collect, collect_partitioned,
+    execute_stream, execute_stream_partitioned,
 };
 use crate::prelude::SessionContext;
-use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -49,28 +48,28 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::util::display::{ArrayFormatter, FormatOptions};
+use arrow_schema::FieldRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    unqualified_field_not_found, Column, DFSchema, DataFusionError, ParamValues,
-    ScalarValue, SchemaError, TableReference, UnnestOptions,
+    Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
+    TableReference, UnnestOptions, exec_err, internal_datafusion_err, not_impl_err,
+    plan_datafusion_err, plan_err, unqualified_field_not_found,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    case,
-    dml::InsertOp,
-    expr::{Alias, ScalarFunction},
-    is_null, lit,
-    utils::COUNT_STAR_EXPANSION,
-    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
+    ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
+    dml::InsertOp, is_null, lit, utils::COUNT_STAR_EXPANSION,
 };
 use datafusion_functions::core::coalesce;
+use datafusion_functions::math::nanvl;
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::extension_types::DFArrayFormatterFactory;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -78,9 +77,11 @@ pub struct DataFrameWriteOptions {
     /// Controls how new data should be written to the table, determining whether
     /// to append, overwrite, or replace existing data.
     insert_op: InsertOp,
-    /// Controls if all partitions should be coalesced into a single output file
-    /// Generally will have slower performance when set to true.
-    single_file_output: bool,
+    /// Controls if all partitions should be coalesced into a single output file.
+    /// - `None`: Use automatic mode (extension-based heuristic)
+    /// - `Some(true)`: Force single file output at exact path
+    /// - `Some(false)`: Force directory output with generated filenames
+    single_file_output: Option<bool>,
     /// Sets which columns should be used for hive-style partitioned writes by name.
     /// Can be set to empty vec![] for non-partitioned writes.
     partition_by: Vec<String>,
@@ -94,7 +95,7 @@ impl DataFrameWriteOptions {
     pub fn new() -> Self {
         DataFrameWriteOptions {
             insert_op: InsertOp::Append,
-            single_file_output: false,
+            single_file_output: None,
             partition_by: vec![],
             sort_by: vec![],
         }
@@ -107,8 +108,14 @@ impl DataFrameWriteOptions {
     }
 
     /// Set the single_file_output value to true or false
+    ///
+    /// - `true`: Force single file output at the exact path specified
+    /// - `false`: Force directory output with generated filenames
+    ///
+    /// When not called, automatic mode is used (extension-based heuristic).
+    /// When set to true, an output file will always be created even if the DataFrame is empty.
     pub fn with_single_file_output(mut self, single_file_output: bool) -> Self {
-        self.single_file_output = single_file_output;
+        self.single_file_output = Some(single_file_output);
         self
     }
 
@@ -122,6 +129,15 @@ impl DataFrameWriteOptions {
     pub fn with_sort_by(mut self, sort_by: Vec<SortExpr>) -> Self {
         self.sort_by = sort_by;
         self
+    }
+
+    /// Build the options HashMap to pass to CopyTo for sink configuration.
+    fn build_sink_options(&self) -> HashMap<String, String> {
+        let mut options = HashMap::new();
+        if let Some(single_file) = self.single_file_output {
+            options.insert("single_file_output".to_string(), single_file.to_string());
+        }
+        options
     }
 }
 
@@ -277,8 +293,11 @@ impl DataFrame {
         self.session_state.create_logical_expr(sql, df_schema)
     }
 
-    /// Consume the DataFrame and produce a physical plan
-    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
+    /// Create a physical plan from this DataFrame.
+    ///
+    /// The `DataFrame` remains accessible after this call, so you can inspect
+    /// the plan and still call [`DataFrame::collect`] or other execution methods.
+    pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
 
@@ -445,15 +464,31 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn drop_columns(self, columns: &[&str]) -> Result<DataFrame> {
+    pub fn drop_columns<T>(self, columns: &[T]) -> Result<DataFrame>
+    where
+        T: Into<Column> + Clone,
+    {
         let fields_to_drop = columns
             .iter()
-            .flat_map(|name| {
-                self.plan
-                    .schema()
-                    .qualified_fields_with_unqualified_name(name)
+            .flat_map(|col| {
+                let column: Column = col.clone().into();
+                match column.relation.as_ref() {
+                    Some(_) => {
+                        // qualified_field_from_column returns Result<(Option<&TableReference>, &FieldRef)>
+                        vec![self.plan.schema().qualified_field_from_column(&column)]
+                    }
+                    None => {
+                        // qualified_fields_with_unqualified_name returns Vec<(Option<&TableReference>, &FieldRef)>
+                        self.plan
+                            .schema()
+                            .qualified_fields_with_unqualified_name(&column.name)
+                            .into_iter()
+                            .map(Ok)
+                            .collect::<Vec<_>>()
+                    }
+                }
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
         let expr: Vec<Expr> = self
             .plan
             .schema()
@@ -479,7 +514,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_json("tests/data/unnest.json", NdJsonReadOptions::default()).await?;
+    /// let df = ctx.read_json("tests/data/unnest.json", JsonReadOptions::default()).await?;
     /// // expand into multiple columns if it's json array, flatten field name if it's nested structure
     /// let df = df.unnest_columns(&["b","c","d"])?;
     /// let expected = vec![
@@ -943,8 +978,13 @@ impl DataFrame {
 
     /// Return a new `DataFrame` that has statistics for a DataFrame.
     ///
-    /// Only summarizes numeric datatypes at the moment and returns nulls for
-    /// non numeric datatypes. The output format is modeled after pandas
+    /// The summary contains the `count`, `null_count`, `mean`, `std`, `min`,
+    /// `max`, and `median` of each column. `count` and `null_count` are
+    /// computed for every column; `min` and `max` for every column except
+    /// `Boolean`; and `mean`, `std`, and `median` only for numeric columns
+    /// (other columns report `null` for these). `min`/`max` of binary columns
+    /// (`Binary`, `LargeBinary`, `BinaryView`, `FixedSizeBinary`) are rendered
+    /// as lowercase hex. The output format is modeled after pandas
     ///
     /// # Example
     /// ```
@@ -1038,9 +1078,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| {
-                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                    })
+                    .filter(|f| !matches!(f.data_type(), DataType::Boolean))
                     .map(|f| min(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
@@ -1049,9 +1087,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .filter(|f| {
-                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                    })
+                    .filter(|f| !matches!(f.data_type(), DataType::Boolean))
                     .map(|f| max(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
@@ -1090,6 +1126,22 @@ impl DataFrame {
                                     Arc::new(StringArray::from(vec!["null"]))
                                 } else if field.data_type().is_numeric() {
                                     cast(column, &DataType::Float64)?
+                                } else if field.data_type().is_binary() {
+                                    let formatter = ArrayFormatter::try_new(
+                                        column.as_ref(),
+                                        &FormatOptions::default(),
+                                    )?;
+                                    let values: Vec<Option<String>> = (0..column.len())
+                                        .map(|i| {
+                                            if column.is_null(i) {
+                                                None
+                                            } else {
+                                                let value = formatter.value(i);
+                                                Some(value.to_string())
+                                            }
+                                        })
+                                        .collect();
+                                    Arc::new(StringArray::from(values))
                                 } else {
                                     cast(column, &DataType::Utf8)?
                                 }
@@ -1097,7 +1149,8 @@ impl DataFrame {
                             _ => Arc::new(StringArray::from(vec!["null"])),
                         }
                     }
-                    //Handling error when only boolean/binary column, and in other cases
+                    // Handles the case where all columns were filtered out
+                    // (e.g. only boolean columns for mean/std/min/max/median)
                     Err(err)
                         if err.to_string().contains(
                             "Error during planning: \
@@ -1481,7 +1534,12 @@ impl DataFrame {
     /// # }
     pub async fn to_string(self) -> Result<String> {
         let options = self.session_state.config().options().format.clone();
-        let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
+        let arrow_options: FormatOptions = (&options).try_into()?;
+
+        let registry = self.session_state.extension_type_registry();
+        let formatter_factory = DFArrayFormatterFactory::new(Arc::clone(registry));
+        let arrow_options =
+            arrow_options.with_formatter_factory(Some(&formatter_factory));
 
         let results = self.collect().await?;
         Ok(
@@ -2022,6 +2080,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.build_sink_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -2034,7 +2094,7 @@ impl DataFrame {
             plan,
             path.into(),
             file_type,
-            HashMap::new(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;
@@ -2090,6 +2150,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.build_sink_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -2102,7 +2164,7 @@ impl DataFrame {
             plan,
             path.into(),
             file_type,
-            Default::default(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;
@@ -2241,7 +2303,7 @@ impl DataFrame {
             .schema()
             .iter()
             .map(|(qualifier, field)| {
-                if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
+                if qualifier.eq(&qualifier_rename) && field == field_rename {
                     (
                         col(Column::from((qualifier, field)))
                             .alias_qualified(qualifier.cloned(), new_name),
@@ -2330,6 +2392,10 @@ impl DataFrame {
 
     /// Cache DataFrame as a memory table.
     ///
+    /// Default behavior could be changed using
+    /// a [`crate::execution::session_state::CacheFactory`]
+    /// configured via [`SessionState`].
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -2344,14 +2410,20 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
-        let context = SessionContext::new_with_state((*self.session_state).clone());
-        // The schema is consistent with the output
-        let plan = self.clone().create_physical_plan().await?;
-        let schema = plan.schema();
-        let task_ctx = Arc::new(self.task_ctx());
-        let partitions = collect_partitioned(plan, task_ctx).await?;
-        let mem_table = MemTable::try_new(schema, partitions)?;
-        context.read_table(Arc::new(mem_table))
+        if let Some(cache_factory) = self.session_state.cache_factory() {
+            let new_plan =
+                cache_factory.create(self.plan, self.session_state.as_ref())?;
+            Ok(Self::new(*self.session_state, new_plan))
+        } else {
+            let context = SessionContext::new_with_state((*self.session_state).clone());
+            // The schema is consistent with the output
+            let plan = self.create_physical_plan().await?;
+            let schema = plan.schema();
+            let task_ctx = Arc::new(self.task_ctx());
+            let partitions = collect_partitioned(plan, task_ctx).await?;
+            let mem_table = MemTable::try_new(schema, partitions)?;
+            context.read_table(Arc::new(mem_table))
+        }
     }
 
     /// Apply an alias to the DataFrame.
@@ -2398,36 +2470,87 @@ impl DataFrame {
         value: ScalarValue,
         columns: Vec<String>,
     ) -> Result<DataFrame> {
+        self.fill_columns(&value, &columns, &coalesce(), |_| true)
+    }
+
+    // Helper to find columns from names
+    fn find_columns(&self, names: &[impl AsRef<str>]) -> Result<Vec<FieldRef>> {
+        let schema = self.logical_plan().schema();
+        names
+            .iter()
+            .map(|name| {
+                let name = name.as_ref();
+                schema
+                    .field_with_name(None, name)
+                    .cloned()
+                    .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
+            })
+            .collect()
+    }
+
+    /// Fill NaN values in specified floating-point columns with a given value
+    /// If no columns are specified (empty slice), applies to all columns
+    /// Only floating-point columns are affected; other columns are left unchanged
+    /// Only fills if the value can be cast to the column's type
+    ///
+    /// # Arguments
+    /// * `value` - Value to fill NaNs with
+    /// * `columns` - List of column names to fill. If empty, fills all columns.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::ScalarValue;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// // Fill NaN in only columns "a" and "c":
+    /// let df = df.fill_nan(&ScalarValue::from(0.0), &["a", "c"])?;
+    /// // Fill NaN across all columns:
+    /// let df = df.fill_nan(&ScalarValue::from(0.0), &[])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn fill_nan(&self, value: &ScalarValue, columns: &[&str]) -> Result<DataFrame> {
+        self.fill_columns(value, columns, &nanvl(), |field| {
+            field.data_type().is_floating()
+        })
+    }
+
+    fn fill_columns(
+        &self,
+        value: &ScalarValue,
+        columns: &[impl AsRef<str>],
+        func: &Arc<ScalarUDF>,
+        applies: impl Fn(&FieldRef) -> bool,
+    ) -> Result<DataFrame> {
         let cols = if columns.is_empty() {
             self.logical_plan()
                 .schema()
                 .fields()
                 .iter()
-                .map(|f| f.as_ref().clone())
+                .map(Arc::clone)
                 .collect()
         } else {
-            self.find_columns(&columns)?
+            self.find_columns(columns)?
         };
 
-        // Create projections for each column
         let projections = self
             .logical_plan()
             .schema()
             .fields()
             .iter()
             .map(|field| {
-                if cols.contains(field) {
+                if cols.contains(field) && applies(field) {
                     // Try to cast fill value to column type. If the cast fails, fallback to the original column.
                     match value.clone().cast_to(field.data_type()) {
-                        Ok(fill_value) => Expr::Alias(Alias {
-                            expr: Box::new(Expr::ScalarFunction(ScalarFunction {
-                                func: coalesce(),
-                                args: vec![col(field.name()), lit(fill_value)],
-                            })),
-                            relation: None,
-                            name: field.name().to_string(),
-                            metadata: None,
-                        }),
+                        Ok(fill_value) => func
+                            .call(vec![col(field.name()), lit(fill_value)])
+                            .alias(field.name()),
                         Err(_) => col(field.name()),
                     }
                 } else {
@@ -2439,15 +2562,43 @@ impl DataFrame {
         self.clone().select(projections)
     }
 
-    // Helper to find columns from names
-    fn find_columns(&self, names: &[String]) -> Result<Vec<Field>> {
+    /// Find qualified columns for this dataframe from names
+    ///
+    /// # Arguments
+    /// * `names` - Unqualified names to find.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::ScalarValue;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// ctx.register_csv("first_table", "tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// let df = ctx.table("first_table").await?;
+    /// ctx.register_csv("second_table", "tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// let df2 = ctx.table("second_table").await?;
+    /// let join_expr = df.find_qualified_columns(&["a"])?.iter()
+    ///     .zip(df2.find_qualified_columns(&["a"])?.iter())
+    ///     .map(|(col1, col2)| col(*col1).eq(col(*col2)))
+    ///     .collect::<Vec<Expr>>();
+    /// let df3 = df.join_on(df2, JoinType::Inner, join_expr)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn find_qualified_columns(
+        &self,
+        names: &[&str],
+    ) -> Result<Vec<(Option<&TableReference>, &FieldRef)>> {
         let schema = self.logical_plan().schema();
         names
             .iter()
             .map(|name| {
                 schema
-                    .field_with_name(None, name)
-                    .cloned()
+                    .qualified_field_from_column(&Column::from_name(*name))
                     .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
             })
             .collect()
@@ -2550,10 +2701,6 @@ struct DataFrameTableProvider {
 
 #[async_trait]
 impl TableProvider for DataFrameTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.plan))
     }

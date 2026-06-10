@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_err};
 use datafusion_common::{DFSchema, Result, ScalarValue};
-use datafusion_expr::{planner::PlannerResult, Expr};
+use datafusion_common::{not_impl_err, plan_err};
+use datafusion_expr::{Expr, planner::PlannerResult};
 
 use sqlparser::ast::Expr as SQLExpr;
 
@@ -79,7 +79,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        not_impl_err!("Substring could not be planned by registered expr planner. \
-                        Hint: Please try with `unicode_expressions` DataFusion feature enabled")
+        not_impl_err!(
+            "Substring could not be planned by registered expr planner. \
+                        Hint: Please try with `unicode_expressions` DataFusion feature enabled"
+        )
     }
 }

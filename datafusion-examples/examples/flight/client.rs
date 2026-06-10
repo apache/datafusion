@@ -19,21 +19,26 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tonic::transport::Endpoint;
-
-use datafusion::arrow::datatypes::Schema;
 
 use arrow_flight::flight_descriptor;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::utils::flight_data_to_arrow_batch;
 use arrow_flight::{FlightDescriptor, Ticket};
+use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::util::pretty;
+use datafusion::prelude::SessionContext;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
+use tonic::transport::Endpoint;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
 /// Parquet files and executing SQL queries against them on a remote server.
 /// This example is run along-side the example `flight_server`.
 pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
-    let testdata = datafusion::test_util::parquet_test_data();
+    let ctx = SessionContext::new();
+
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // Create Flight client
     let endpoint = Endpoint::new("http://localhost:50051")?;
@@ -44,7 +49,7 @@ pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
     let request = tonic::Request::new(FlightDescriptor {
         r#type: flight_descriptor::DescriptorType::Path as i32,
         cmd: Default::default(),
-        path: vec![format!("{testdata}/alltypes_plain.parquet")],
+        path: vec![format!("{}", parquet_temp.path_str()?)],
     });
 
     let schema_result = client.get_schema(request).await?.into_inner();
@@ -53,7 +58,7 @@ pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
 
     // Call do_get to execute a SQL query and receive results
     let request = tonic::Request::new(Ticket {
-        ticket: "SELECT id FROM alltypes_plain".into(),
+        ticket: "SELECT car FROM cars".into(),
     });
 
     let mut stream = client.do_get(request).await?.into_inner();

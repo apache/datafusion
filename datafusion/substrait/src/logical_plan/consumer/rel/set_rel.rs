@@ -81,7 +81,7 @@ async fn intersect_rels(
             rel,
             consumer.consume_rel(input).await?,
             is_all,
-        )?
+        )?;
     }
 
     Ok(rel)
@@ -95,7 +95,8 @@ async fn except_rels(
     let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
-        rel = LogicalPlanBuilder::except(rel, consumer.consume_rel(input).await?, is_all)?
+        rel =
+            LogicalPlanBuilder::except(rel, consumer.consume_rel(input).await?, is_all)?;
     }
 
     Ok(rel)

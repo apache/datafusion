@@ -59,6 +59,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 - [pow](#pow)
 - [power](#power)
 - [radians](#radians)
+- [rand](#rand)
 - [random](#random)
 - [round](#round)
 - [signum](#signum)
@@ -226,11 +227,11 @@ atan2(expression_y, expression_x)
 
 ```sql
 > SELECT atan2(1, 1);
-+------------+
-| atan2(1,1) |
-+------------+
-| 0.7853982  |
-+------------+
++--------------------+
+| atan2(1,1)         |
++--------------------+
+| 0.7853981633974483 |
++--------------------+
 ```
 
 ### `atanh`
@@ -294,7 +295,7 @@ ceil(numeric_expression)
 #### Example
 
 ```sql
-    > SELECT ceil(3.14);
+> SELECT ceil(3.14);
 +------------+
 | ceil(3.14) |
 +------------+
@@ -419,7 +420,7 @@ exp(numeric_expression)
 
 ### `factorial`
 
-Factorial. Returns 1 if value is less than 2.
+Factorial of a non-negative integer. Errors if the argument is negative or the result overflows.
 
 ```sql
 factorial(numeric_expression)
@@ -739,6 +740,10 @@ radians(numeric_expression)
 +----------------+
 ```
 
+### `rand`
+
+_Alias of [random](#random)._
+
 ### `random`
 
 Returns a random float value in the range [0, 1).
@@ -758,6 +763,10 @@ random()
 | 0.7389238902938  |
 +------------------+
 ```
+
+#### Aliases
+
+- rand
 
 ### `round`
 
@@ -1225,7 +1234,7 @@ bit_length(str)
 
 ### `btrim`
 
-Trims the specified trim string from the start and end of a string. If no trim string is provided, all whitespace is removed from the start and end of the input string.
+Trims the specified trim string from the start and end of a string. If no trim string is provided, all spaces are removed from the start and end of the input string.
 
 ```sql
 btrim(str[, trim_str])
@@ -1234,7 +1243,7 @@ btrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is whitespace characters._
+- **trim_str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is a space._
 
 #### Example
 
@@ -1592,7 +1601,7 @@ lpad(str, n[, padding_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **n**: String length to pad to.
+- **n**: String length to pad to. If the input string is longer than this length, it is truncated (on the right).
 - **padding_str**: Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
 #### Example
@@ -1612,7 +1621,7 @@ lpad(str, n[, padding_str])
 
 ### `ltrim`
 
-Trims the specified trim string from the beginning of a string. If no trim string is provided, all whitespace is removed from the start of the input string.
+Trims the specified trim string from the beginning of a string. If no trim string is provided, spaces are removed from the start of the input string.
 
 ```sql
 ltrim(str[, trim_str])
@@ -1621,7 +1630,7 @@ ltrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._
+- **trim_str**: String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is a space._
 
 #### Example
 
@@ -1820,7 +1829,7 @@ rpad(str, n[, padding_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **n**: String length to pad to.
+- **n**: String length to pad to. If the input string is longer than this length, it is truncated.
 - **padding_str**: String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
 #### Example
@@ -1840,7 +1849,7 @@ rpad(str, n[, padding_str])
 
 ### `rtrim`
 
-Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.
+Trims the specified trim string from the end of a string. If no trim string is provided, all spaces are removed from the end of the input string.
 
 ```sql
 rtrim(str[, trim_str])
@@ -1849,7 +1858,7 @@ rtrim(str[, trim_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **trim_str**: String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._
+- **trim_str**: String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is a space._
 
 #### Example
 
@@ -1891,7 +1900,7 @@ split_part(str, delimiter, pos)
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **delimiter**: String or character to split on.
-- **pos**: Position of the part to return.
+- **pos**: Position of the part to return (counting from 1). Negative values count backward from the end of the string.
 
 #### Example
 
@@ -1974,7 +1983,7 @@ substr(str, start_pos[, length])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **start_pos**: Character position to start the substring at. The first character in the string has a position of 1.
+- **start_pos**: Character position to start the substring at. The first character in the string has a position of 1. If the start position is less than 1, it is treated as if it is before the start of the string and the (absolute) number of characters before position 1 is subtracted from `length` (if given). For example, `substr('abc', -3, 6)` returns `'ab'`.
 - **length**: Number of characters to extract. If not specified, returns the rest of the string after the start position.
 
 #### Example
@@ -2068,17 +2077,17 @@ to_hex(int)
 
 ### `translate`
 
-Translates characters in a string to specified translation characters.
+Performs character-wise substitution based on a mapping.
 
 ```sql
-translate(str, chars, translation)
+translate(str, from, to)
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **chars**: Characters to translate.
-- **translation**: Translation characters. Translation characters replace only characters at the same position in the **chars** string.
+- **from**: The characters to be replaced.
+- **to**: The characters to replace them with. Each character in **from** that is found in **str** is replaced by the character at the same index in **to**. Any characters in **from** that don't have a corresponding character in **to** are removed. If a character appears more than once in **from**, the first occurrence determines the mapping.
 
 #### Example
 
@@ -2125,7 +2134,7 @@ upper(str)
 
 ### `uuid`
 
-Returns [`UUID v4`](<https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)>) string value which is unique per row.
+Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_%28random%29) string value which is unique per row.
 
 ```sql
 uuid()
@@ -2175,7 +2184,7 @@ encode(expression, format)
 #### Arguments
 
 - **expression**: Expression containing string or binary data
-- **format**: Supported formats are: `base64`, `hex`
+- **format**: Supported formats are: `base64`, `base64pad`, `hex`
 
 **Related functions**:
 
@@ -2294,7 +2303,7 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 +--------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 
 ### `regexp_match`
 
@@ -2333,7 +2342,7 @@ regexp_match(str, regexp[, flags])
             +---------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 
 ### `regexp_replace`
 
@@ -2374,7 +2383,7 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 +-------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 
 ## Time and Date Functions
 
@@ -2389,10 +2398,12 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [datetrunc](#datetrunc)
 - [from_unixtime](#from_unixtime)
 - [make_date](#make_date)
+- [make_time](#make_time)
 - [now](#now)
 - [to_char](#to_char)
 - [to_date](#to_date)
 - [to_local_time](#to_local_time)
+- [to_time](#to_time)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_micros](#to_timestamp_micros)
 - [to_timestamp_millis](#to_timestamp_millis)
@@ -2413,6 +2424,26 @@ current_date()
     SELECT current_date();
 ```
 
+#### Example
+
+```sql
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-23     |
++----------------+
+
+-- The current date is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-24     |
++----------------+
+```
+
 #### Aliases
 
 - today
@@ -2429,6 +2460,26 @@ The session time zone can be set using the statement 'SET datafusion.execution.t
 current_time()
     (optional) SET datafusion.execution.time_zone = '+00:00';
     SELECT current_time();
+```
+
+#### Example
+
+```sql
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 06:30:00.123456789 |
++--------------------+
+
+-- The current time is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 15:30:00.123456789 |
++--------------------+
 ```
 
 ### `current_timestamp`
@@ -2487,6 +2538,17 @@ FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
 | 2023-01-03T03:00:00 |
 +---------------------+
 2 row(s) fetched.
+
+-- Bin the time into 15 minute intervals starting at 1 min
+>  SELECT date_bin(interval '15 minutes', time, TIME '00:01:00') as bin
+FROM VALUES (TIME '02:18:18'), (TIME '19:00:03')  t(time);
++----------+
+| bin      |
++----------+
+| 02:16:00 |
+| 18:46:00 |
++----------+
+2 row(s) fetched.
 ```
 
 ### `date_format`
@@ -2506,6 +2568,7 @@ date_part(part, expression)
 - **part**: Part of the date to return. The following date parts are supported:
 
   - year
+  - isoyear (ISO 8601 week-numbering year)
   - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
   - month
   - week (week of the year)
@@ -2518,10 +2581,27 @@ date_part(part, expression)
   - nanosecond
   - dow (day of the week where Sunday is 0)
   - doy (day of the year)
-  - epoch (seconds since Unix epoch)
-  - isodow (day of the week where Monday is 0)
+  - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
+  - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SELECT date_part('year', '2024-05-01T00:00:00');
++-----------------------------------------------------+
+| date_part(Utf8("year"),Utf8("2024-05-01T00:00:00")) |
++-----------------------------------------------------+
+| 2024                                                |
++-----------------------------------------------------+
+> SELECT extract(day FROM timestamp '2024-05-01T00:00:00');
++----------------------------------------------------+
+| date_part(Utf8("DAY"),Utf8("2024-05-01T00:00:00")) |
++----------------------------------------------------+
+| 1                                                  |
++----------------------------------------------------+
+```
 
 #### Alternative Syntax
 
@@ -2535,7 +2615,7 @@ extract(field FROM source)
 
 ### `date_trunc`
 
-Truncates a timestamp value to a specified precision.
+Truncates a timestamp or time value to a specified precision.
 
 ```sql
 date_trunc(precision, expression)
@@ -2544,6 +2624,8 @@ date_trunc(precision, expression)
 #### Arguments
 
 - **precision**: Time precision to truncate to. The following precisions are supported:
+
+  For Timestamp types:
 
   - year / YEAR
   - quarter / QUARTER
@@ -2556,7 +2638,32 @@ date_trunc(precision, expression)
   - millisecond / MILLISECOND
   - microsecond / MICROSECOND
 
-- **expression**: Time expression to operate on. Can be a constant, column, or function.
+  For Time types (hour, minute, second, millisecond, microsecond only):
+
+  - hour / HOUR
+  - minute / MINUTE
+  - second / SECOND
+  - millisecond / MILLISECOND
+  - microsecond / MICROSECOND
+
+- **expression**: Timestamp or time expression to operate on. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SELECT date_trunc('month', '2024-05-15T10:30:00');
++-----------------------------------------------+
+| date_trunc(Utf8("month"),Utf8("2024-05-15T10:30:00")) |
++-----------------------------------------------+
+| 2024-05-01T00:00:00                           |
++-----------------------------------------------+
+> SELECT date_trunc('hour', '2024-05-15T10:30:00');
++----------------------------------------------+
+| date_trunc(Utf8("hour"),Utf8("2024-05-15T10:30:00")) |
++----------------------------------------------+
+| 2024-05-15T10:00:00                          |
++----------------------------------------------+
+```
 
 #### Aliases
 
@@ -2625,7 +2732,40 @@ make_date(year, month, day)
 +-----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
+
+### `make_time`
+
+Make a time from hour/minute/second component parts.
+
+```sql
+make_time(hour, minute, second)
+```
+
+#### Arguments
+
+- **hour**: Hour to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+- **minute**: Minute to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+- **second**: Second to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+
+#### Example
+
+```sql
+> select make_time(13, 23, 1);
++-------------------------------------------+
+| make_time(Int64(13),Int64(23),Int64(1))   |
++-------------------------------------------+
+| 13:23:01                                  |
++-------------------------------------------+
+> select make_time('23', '01', '31');
++-----------------------------------------------+
+| make_time(Utf8("23"),Utf8("01"),Utf8("31"))   |
++-----------------------------------------------+
+| 23:01:31                                      |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `now`
 
@@ -2635,6 +2775,26 @@ The `now()` return value is determined at query time and will return the same ti
 
 ```sql
 now()
+```
+
+#### Example
+
+```sql
+> SELECT now();
++----------------------------------+
+| now()                            |
++----------------------------------+
+| 2024-12-23T06:30:00.123456789    |
++----------------------------------+
+
+-- The timezone of the returned timestamp depends on the session time zone
+> SET datafusion.execution.time_zone = 'America/New_York';
+> SELECT now();
++--------------------------------------+
+| now()                                |
++--------------------------------------+
+| 2024-12-23T01:30:00.123456789-05:00  |
++--------------------------------------+
 ```
 
 #### Aliases
@@ -2666,7 +2826,7 @@ to_char(expression, format)
 +----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 #### Aliases
 
@@ -2675,7 +2835,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 ### `to_date`
 
 Converts a value to a date (`YYYY-MM-DD`).
-Supports strings, integer and double types as input.
+Supports strings, numeric and timestamp types as input.
 Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.
@@ -2710,7 +2870,7 @@ to_date('2017-05-31', '%Y-%m-%d')
 +---------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_local_time`
 
@@ -2773,11 +2933,68 @@ FROM (
 +---------------------------+
 ```
 
+### `to_time`
+
+Converts a value to a time (`HH:MM:SS.nnnnnnnnn`).
+Supports strings and timestamps as input.
+Strings are parsed as `HH:MM:SS`, `HH:MM:SS.nnnnnnnnn`, or `HH:MM` if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
+Timestamps will have the time portion extracted.
+Returns the corresponding time.
+
+Note: `to_time` returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.
+
+```sql
+to_time('12:30:45', '%H:%M:%S')
+```
+
+#### Arguments
+
+- **expression**: String or Timestamp expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.
+
+#### Example
+
+```sql
+> select to_time('12:30:45');
++---------------------------+
+| to_time(Utf8("12:30:45")) |
++---------------------------+
+| 12:30:45                  |
++---------------------------+
+> select to_time('12-30-45', '%H-%M-%S');
++--------------------------------------------+
+| to_time(Utf8("12-30-45"),Utf8("%H-%M-%S")) |
++--------------------------------------------+
+| 12:30:45                                   |
++--------------------------------------------+
+> select to_time('2024-01-15 14:30:45'::timestamp);
++--------------------------------------------------+
+| to_time(Utf8("2024-01-15 14:30:45"))             |
++--------------------------------------------------+
+| 14:30:45                                         |
++--------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
+
 ### `to_timestamp`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`). Supports strings, integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided. Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
+integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
+session time zone, or UTC if no session time zone is set.
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
-Note: `to_timestamp` returns `Timestamp(ns)`. The supported range for integer input is between `-9223372037` and `9223372036`. Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
+Note: `to_timestamp` returns `Timestamp(ns, TimeZone)` where the time zone is the session time zone. The supported range
+for integer input is between`-9223372037` and `9223372036`. Supported range for string input is between
+`1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds`
+for the input outside of supported bounds.
+
+The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
+The time zone can be a value like +00:00, 'Europe/London' etc.
 
 ```sql
 to_timestamp(expression[, ..., format_n])
@@ -2786,7 +3003,11 @@ to_timestamp(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**:
+  Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+  Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  only supported at the end of the string preceded by a space.
 
 #### Example
 
@@ -2805,11 +3026,19 @@ to_timestamp(expression[, ..., format_n])
 +--------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_micros`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`) Returns the corresponding timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
+integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
+session time zone, or UTC if no session time zone is set.
+Integers, unsigned integers, and doubles are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`).
+
+The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
+The time zone can be a value like +00:00, 'Europe/London' etc.
 
 ```sql
 to_timestamp_micros(expression[, ..., format_n])
@@ -2818,7 +3047,11 @@ to_timestamp_micros(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**:
+  Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+  Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  only supported at the end of the string preceded by a space.
 
 #### Example
 
@@ -2837,11 +3070,19 @@ to_timestamp_micros(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_millis`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000<TZ>`) in the session time zone. Supports strings,
+integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
+session time zone, or UTC if no session time zone is set.
+Integers, unsigned integers, and doubles are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`).
+
+The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
+The time zone can be a value like +00:00, 'Europe/London' etc.
 
 ```sql
 to_timestamp_millis(expression[, ..., format_n])
@@ -2850,7 +3091,11 @@ to_timestamp_millis(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**:
+  Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+  Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  only supported at the end of the string preceded by a space.
 
 #### Example
 
@@ -2869,11 +3114,18 @@ to_timestamp_millis(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_nanos`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000<TZ>`) in the session time zone. Supports strings,
+integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
+session time zone. Integers, unsigned integers, and doubles are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`).
+
+The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
+The time zone can be a value like +00:00, 'Europe/London' etc.
 
 ```sql
 to_timestamp_nanos(expression[, ..., format_n])
@@ -2882,7 +3134,11 @@ to_timestamp_nanos(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**:
+  Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+  Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  only supported at the end of the string preceded by a space.
 
 #### Example
 
@@ -2901,11 +3157,19 @@ to_timestamp_nanos(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_seconds`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00<TZ>`) in the session time zone. Supports strings,
+integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
+session time zone, or UTC if no session time zone is set.
+Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
+
+The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
+The time zone can be a value like +00:00, 'Europe/London' etc.
 
 ```sql
 to_timestamp_seconds(expression[, ..., format_n])
@@ -2914,7 +3178,11 @@ to_timestamp_seconds(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**:
+  Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
+  Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
+  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  only supported at the end of the string preceded by a space.
 
 #### Example
 
@@ -2933,11 +3201,15 @@ to_timestamp_seconds(expression[, ..., format_n])
 +----------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_unixtime`
 
-Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`).
+Supports strings, dates, timestamps, integer, unsigned integer, and float types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00`).
 
 ```sql
 to_unixtime(expression[, ..., format_n])
@@ -2971,9 +3243,13 @@ _Alias of [current_date](#current_date)._
 
 ## Array Functions
 
+- [any_match](#any_match)
+- [array_add](#array_add)
+- [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
 - [array_cat](#array_cat)
+- [array_compact](#array_compact)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
@@ -2983,6 +3259,7 @@ _Alias of [current_date](#current_date)._
 - [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
+- [array_filter](#array_filter)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -2993,11 +3270,13 @@ _Alias of [current_date](#current_date)._
 - [array_max](#array_max)
 - [array_min](#array_min)
 - [array_ndims](#array_ndims)
+- [array_normalize](#array_normalize)
 - [array_pop_back](#array_pop_back)
 - [array_pop_front](#array_pop_front)
 - [array_position](#array_position)
 - [array_positions](#array_positions)
 - [array_prepend](#array_prepend)
+- [array_product](#array_product)
 - [array_push_back](#array_push_back)
 - [array_push_front](#array_push_front)
 - [array_remove](#array_remove)
@@ -3009,18 +3288,29 @@ _Alias of [current_date](#current_date)._
 - [array_replace_n](#array_replace_n)
 - [array_resize](#array_resize)
 - [array_reverse](#array_reverse)
+- [array_scale](#array_scale)
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
+- [array_subtract](#array_subtract)
+- [array_sum](#array_sum)
 - [array_to_string](#array_to_string)
+- [array_transform](#array_transform)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
+- [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
+- [cosine_distance](#cosine_distance)
+- [dot_product](#dot_product)
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
+- [inner_product](#inner_product)
+- [list_add](#list_add)
+- [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
+- [list_compact](#list_compact)
 - [list_concat](#list_concat)
 - [list_contains](#list_contains)
 - [list_dims](#list_dims)
@@ -3030,6 +3320,7 @@ _Alias of [current_date](#current_date)._
 - [list_empty](#list_empty)
 - [list_except](#list_except)
 - [list_extract](#list_extract)
+- [list_filter](#list_filter)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
@@ -3039,11 +3330,13 @@ _Alias of [current_date](#current_date)._
 - [list_length](#list_length)
 - [list_max](#list_max)
 - [list_ndims](#list_ndims)
+- [list_normalize](#list_normalize)
 - [list_pop_back](#list_pop_back)
 - [list_pop_front](#list_pop_front)
 - [list_position](#list_position)
 - [list_positions](#list_positions)
 - [list_prepend](#list_prepend)
+- [list_product](#list_product)
 - [list_push_back](#list_push_back)
 - [list_push_front](#list_push_front)
 - [list_remove](#list_remove)
@@ -3055,15 +3348,81 @@ _Alias of [current_date](#current_date)._
 - [list_replace_n](#list_replace_n)
 - [list_resize](#list_resize)
 - [list_reverse](#list_reverse)
+- [list_scale](#list_scale)
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
+- [list_subtract](#list_subtract)
+- [list_sum](#list_sum)
 - [list_to_string](#list_to_string)
+- [list_transform](#list_transform)
 - [list_union](#list_union)
+- [list_zip](#list_zip)
 - [make_array](#make_array)
 - [make_list](#make_list)
 - [range](#range)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
+
+### `any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
+### `array_add`
+
+Returns the element-wise sum of two numeric arrays of equal length, computed as `array1[i] + array2[i]` per position. NULL is propagated per element: if either input element at position `i` is NULL, the corresponding output element is NULL (positions are preserved). Returns NULL if either entire input array is NULL. Errors if the per-row lengths differ. Returns an empty array if both inputs are empty.
+
+```sql
+array_add(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_add([1.0, 2.0, 3.0], [10.0, 20.0, 30.0]);
++---------------------------------------------------------+
+| array_add(List([1.0,2.0,3.0]),List([10.0,20.0,30.0]))   |
++---------------------------------------------------------+
+| [11.0, 22.0, 33.0]                                      |
++---------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_add
+
+### `array_any_match`
+
+Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others.
+
+```sql
+any_match(array, predicate)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **predicate**: Lambda predicate that returns a boolean
+
+#### Example
+
+```sql
+> select any_match([1, 2, 3], x -> x > 2);
++----------------------------------+
+| any_match([1, 2, 3], x -> x > 2) |
++----------------------------------+
+| true                             |
++----------------------------------+
+```
+
+#### Aliases
+
+- any_match
+- list_any_match
 
 ### `array_any_value`
 
@@ -3125,6 +3484,33 @@ array_append(array, element)
 ### `array_cat`
 
 _Alias of [array_concat](#array_concat)._
+
+### `array_compact`
+
+Removes null values from the array.
+
+```sql
+array_compact(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_compact([1, NULL, 2, NULL, 3]) arr;
++-----------+
+| arr       |
++-----------+
+| [1, 2, 3] |
++-----------+
+```
+
+#### Aliases
+
+- list_compact
 
 ### `array_concat`
 
@@ -3314,6 +3700,34 @@ array_except(array1, array2)
 
 _Alias of [array_element](#array_element)._
 
+### `array_filter`
+
+filters the values of an array using a boolean lambda
+
+```sql
+array_filter(array, x -> x > 2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda that returns a boolean. Elements for which the lambda returns true are kept.
+
+#### Example
+
+```sql
+> select array_filter([1, 2, 3, 4, 5], x -> x > 2);
++--------------------------------------------+
+| array_filter([1, 2, 3, 4, 5], x -> x > 2) |
++--------------------------------------------+
+| [3, 4, 5]                                  |
++--------------------------------------------+
+```
+
+#### Aliases
+
+- list_filter
+
 ### `array_has`
 
 Returns true if the array contains the element.
@@ -3374,16 +3788,16 @@ array_has_all(array, sub-array)
 
 ### `array_has_any`
 
-Returns true if any elements exist in both arrays.
+Returns true if the arrays have any elements in common.
 
 ```sql
-array_has_any(array, sub-array)
+array_has_any(array1, array2)
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **sub-array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
@@ -3549,6 +3963,33 @@ array_ndims(array, element)
 
 - list_ndims
 
+### `array_normalize`
+
+Returns the L2-normalized vector for the input numeric array, computed as `array[i] / sqrt(sum(array[i]^2))` per element. Returns NULL if the input is NULL, contains NULL elements, or has zero magnitude (all elements are zero). Returns an empty array for an empty input array.
+
+```sql
+array_normalize(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_normalize([3.0, 4.0]);
++-----------------------------+
+| array_normalize(List([3.0,4.0])) |
++-----------------------------+
+| [0.6, 0.8]                  |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_normalize
+
 ### `array_pop_back`
 
 Returns the array without the last element.
@@ -3605,7 +4046,7 @@ array_pop_front(array)
 
 ### `array_position`
 
-Returns the position of the first occurrence of the specified element in the array, or NULL if not found.
+Returns the position of the first occurrence of the specified element in the array, or NULL if not found. Comparisons are done using `IS DISTINCT FROM` semantics, so NULL is considered to match NULL.
 
 ```sql
 array_position(array, element)
@@ -3615,7 +4056,7 @@ array_position(array, element, index)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 - **index**: Index at which to start searching (1-indexed).
 
 #### Example
@@ -3652,7 +4093,7 @@ array_positions(array, element)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to search for position in the array.
+- **element**: Element to search for in the array.
 
 #### Example
 
@@ -3699,6 +4140,33 @@ array_prepend(element, array)
 - array_push_front
 - list_push_front
 
+### `array_product`
+
+Returns the product of the elements in the input numeric array. NULL elements inside the array are skipped (matching SQL aggregate convention). Returns NULL if the input is NULL, every element is NULL, or the array is empty. The result is always returned as `Float64`.
+
+```sql
+array_product(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_product([1.0, 2.0, 3.0]);
++------------------------------------+
+| array_product(List([1.0,2.0,3.0])) |
++------------------------------------+
+| 6.0                                |
++------------------------------------+
+```
+
+#### Aliases
+
+- list_product
+
 ### `array_push_back`
 
 _Alias of [array_append](#array_append)._
@@ -3709,7 +4177,7 @@ _Alias of [array_prepend](#array_prepend)._
 
 ### `array_remove`
 
-Removes the first element from the array equal to the given value.
+Removes the first element from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
 array_remove(array, element)
@@ -3729,6 +4197,13 @@ array_remove(array, element)
 +----------------------------------------------+
 | [1, 2, 3, 2, 1, 4]                           |
 +----------------------------------------------+
+
+> select array_remove([1, 2, NULL, 2, 4], 2);
++---------------------------------------------------+
+| array_remove(List([1,2,NULL,2,4]),Int64(2)) |
++---------------------------------------------------+
+| [1, NULL, 2, 4]                              |
++---------------------------------------------------+
 ```
 
 #### Aliases
@@ -3737,7 +4212,7 @@ array_remove(array, element)
 
 ### `array_remove_all`
 
-Removes all elements from the array equal to the given value.
+Removes all elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
 array_remove_all(array, element)
@@ -3757,6 +4232,13 @@ array_remove_all(array, element)
 +--------------------------------------------------+
 | [1, 3, 1, 4]                                     |
 +--------------------------------------------------+
+
+> select array_remove_all([1, 2, NULL, 2, 4], 2);
++-----------------------------------------------------+
+| array_remove_all(List([1,2,NULL,2,4]),Int64(2)) |
++-----------------------------------------------------+
+| [1, NULL, 4]                                     |
++-----------------------------------------------------+
 ```
 
 #### Aliases
@@ -3765,10 +4247,10 @@ array_remove_all(array, element)
 
 ### `array_remove_n`
 
-Removes the first `max` elements from the array equal to the given value.
+Removes the first `max` elements from the array equal to the given value. NULL elements already in the array are preserved when removing a non-NULL value. If `element` evaluates to NULL, the result is NULL rather than removing NULL entries.
 
 ```sql
-array_remove_n(array, element, max))
+array_remove_n(array, element, max)
 ```
 
 #### Arguments
@@ -3786,6 +4268,13 @@ array_remove_n(array, element, max))
 +---------------------------------------------------------+
 | [1, 3, 2, 1, 4]                                         |
 +---------------------------------------------------------+
+
+> select array_remove_n([1, 2, NULL, 2, 4], 2, 2);
++----------------------------------------------------------+
+| array_remove_n(List([1,2,NULL,2,4]),Int64(2),Int64(2)) |
++----------------------------------------------------------+
+| [1, NULL, 4]                                            |
++----------------------------------------------------------+
 ```
 
 #### Aliases
@@ -3970,6 +4459,34 @@ array_reverse(array)
 
 - list_reverse
 
+### `array_scale`
+
+Returns a new array with each element of the input array multiplied by a scalar value, computed as `array[i] * scalar`. Returns NULL if the input row is NULL or the scalar is NULL. If a NULL element appears in the input array at position `i`, the result element at position `i` is NULL. Returns an empty array for an empty input array.
+
+```sql
+array_scale(array, scalar)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **scalar**: Numeric scalar to multiply each element by. Can be a constant or column expression.
+
+#### Example
+
+```sql
+> select array_scale([1.0, 2.0, 3.0], 2.0);
++----------------------------------+
+| array_scale(List([1.0,2.0,3.0]),Float64(2.0)) |
++----------------------------------+
+| [2.0, 4.0, 6.0]                  |
++----------------------------------+
+```
+
+#### Aliases
+
+- list_scale
+
 ### `array_slice`
 
 Returns a slice of the array based on 1-indexed start and end positions.
@@ -4011,8 +4528,8 @@ array_sort(array, desc, nulls_first)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **desc**: Whether to sort in descending order(`ASC` or `DESC`).
-- **nulls_first**: Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).
+- **desc**: Whether to sort in ascending (`ASC`) or descending (`DESC`) order. The default is `ASC`.
+- **nulls_first**: Whether to sort nulls first (`NULLS FIRST`) or last (`NULLS LAST`). The default is `NULLS FIRST`.
 
 #### Example
 
@@ -4029,6 +4546,61 @@ array_sort(array, desc, nulls_first)
 
 - list_sort
 
+### `array_subtract`
+
+Returns the element-wise difference of two numeric arrays of equal length, computed as `array1[i] - array2[i]` per position. NULL is propagated per element: if either input element at position `i` is NULL, the corresponding output element is NULL (positions are preserved). Returns NULL if either entire input array is NULL. Errors if the per-row lengths differ. Returns an empty array if both inputs are empty.
+
+```sql
+array_subtract(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_subtract([10.0, 20.0, 30.0], [1.0, 2.0, 3.0]);
++--------------------------------------------------------------+
+| array_subtract(List([10.0,20.0,30.0]),List([1.0,2.0,3.0]))   |
++--------------------------------------------------------------+
+| [9.0, 18.0, 27.0]                                            |
++--------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_subtract
+
+### `array_sum`
+
+Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL, every element is NULL, or the array is empty.
+
+```sql
+array_sum(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_sum([1.0, 2.0, 3.0]);
++----------------------------+
+| array_sum(List([1.0,2.0,3.0])) |
++----------------------------+
+| 6.0                        |
++----------------------------+
+```
+
+#### Aliases
+
+- list_sum
+
 ### `array_to_string`
 
 Converts each element to its text representation.
@@ -4041,7 +4613,7 @@ array_to_string(array, delimiter[, null_string])
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **delimiter**: Array element separator.
-- **null_string**: Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior.
+- **null_string**: Optional. String to use for null values in the output. If not provided, nulls will be omitted.
 
 #### Example
 
@@ -4060,9 +4632,37 @@ array_to_string(array, delimiter[, null_string])
 - array_join
 - list_join
 
+### `array_transform`
+
+transforms the values of an array
+
+```sql
+array_transform(array, x -> x*2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda
+
+#### Example
+
+```sql
+> select array_transform([1, 2, 3, 4, 5], x -> x*2);
++-------------------------------------------+
+| array_transform([1, 2, 3, 4, 5], x -> x*2)       |
++-------------------------------------------+
+| [2, 4, 6, 8, 10]                          |
++-------------------------------------------+
+```
+
+#### Aliases
+
+- list_transform
+
 ### `array_union`
 
-Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.
+Returns an array of elements that are present in both arrays (all elements from both arrays) without duplicates.
 
 ```sql
 array_union(array1, array2)
@@ -4098,6 +4698,40 @@ array_union(array1, array2)
 
 _Alias of [array_has_any](#array_has_any)._
 
+### `arrays_zip`
+
+Returns an array of structs created by combining the elements of each input array at the same index. If the arrays have different lengths, shorter arrays are padded with NULLs.
+
+```sql
+arrays_zip(array1[, ..., array_n])
+```
+
+#### Arguments
+
+- **array1**: First array expression.
+- **array_n**: Optional additional array expressions.
+
+#### Example
+
+```sql
+> select arrays_zip([1, 2, 3]);
++---------------------------------------------------+
+| arrays_zip([1, 2, 3])                             |
++---------------------------------------------------+
+| [{1: 1}, {1: 2}, {1: 3}]                          |
++---------------------------------------------------+
+> select arrays_zip([1, 2], [3, 4, 5]);
++---------------------------------------------------+
+| arrays_zip([1, 2], [3, 4, 5])                     |
++---------------------------------------------------+
+| [{1: 1, 2: 3}, {1: 2, 2: 4}, {1: NULL, 2: 5}]     |
++---------------------------------------------------+
+```
+
+#### Aliases
+
+- list_zip
+
 ### `cardinality`
 
 Returns the total number of elements in the array.
@@ -4120,6 +4754,34 @@ cardinality(array)
 | 8                                    |
 +--------------------------------------+
 ```
+
+### `cosine_distance`
+
+Returns the cosine distance between two input arrays of equal length. The cosine distance is defined as 1 - cosine_similarity, i.e. `1 - dot(a,b) / (||a|| * ||b||)`. Returns NULL if either array is NULL or contains only zeros.
+
+```sql
+cosine_distance(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select cosine_distance([1.0, 0.0], [0.0, 1.0]);
++-----------------------------------------------+
+| cosine_distance(List([1.0,0.0]),List([0.0,1.0])) |
++-----------------------------------------------+
+| 1.0                                           |
++-----------------------------------------------+
+```
+
+### `dot_product`
+
+_Alias of [inner_product](#inner_product)._
 
 ### `empty`
 
@@ -4203,6 +4865,42 @@ generate_series(start, stop[, step])
 +------------------------------------+
 ```
 
+### `inner_product`
+
+Returns the inner product (dot product) of two input arrays of equal length, computed as `sum(array1[i] * array2[i])`. Returns NULL if either array is NULL or contains NULL elements. Returns 0.0 for two empty arrays.
+
+```sql
+inner_product(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select inner_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
++-------------------------------------------------------+
+| inner_product(List([1.0,2.0,3.0]),List([4.0,5.0,6.0])) |
++-------------------------------------------------------+
+| 32.0                                                  |
++-------------------------------------------------------+
+```
+
+#### Aliases
+
+- dot_product
+
+### `list_add`
+
+_Alias of [array_add](#array_add)._
+
+### `list_any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
 ### `list_any_value`
 
 _Alias of [array_any_value](#array_any_value)._
@@ -4214,6 +4912,10 @@ _Alias of [array_append](#array_append)._
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
+
+### `list_compact`
+
+_Alias of [array_compact](#array_compact)._
 
 ### `list_concat`
 
@@ -4251,6 +4953,10 @@ _Alias of [array_except](#array_except)._
 
 _Alias of [array_element](#array_element)._
 
+### `list_filter`
+
+_Alias of [array_filter](#array_filter)._
+
 ### `list_has`
 
 _Alias of [array_has](#array_has)._
@@ -4287,6 +4993,10 @@ _Alias of [array_max](#array_max)._
 
 _Alias of [array_ndims](#array_ndims)._
 
+### `list_normalize`
+
+_Alias of [array_normalize](#array_normalize)._
+
 ### `list_pop_back`
 
 _Alias of [array_pop_back](#array_pop_back)._
@@ -4306,6 +5016,10 @@ _Alias of [array_positions](#array_positions)._
 ### `list_prepend`
 
 _Alias of [array_prepend](#array_prepend)._
+
+### `list_product`
+
+_Alias of [array_product](#array_product)._
 
 ### `list_push_back`
 
@@ -4351,6 +5065,10 @@ _Alias of [array_resize](#array_resize)._
 
 _Alias of [array_reverse](#array_reverse)._
 
+### `list_scale`
+
+_Alias of [array_scale](#array_scale)._
+
 ### `list_slice`
 
 _Alias of [array_slice](#array_slice)._
@@ -4359,13 +5077,29 @@ _Alias of [array_slice](#array_slice)._
 
 _Alias of [array_sort](#array_sort)._
 
+### `list_subtract`
+
+_Alias of [array_subtract](#array_subtract)._
+
+### `list_sum`
+
+_Alias of [array_sum](#array_sum)._
+
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
 
+### `list_transform`
+
+_Alias of [array_transform](#array_transform)._
+
 ### `list_union`
 
 _Alias of [array_union](#array_union)._
+
+### `list_zip`
+
+_Alias of [arrays_zip](#arrays_zip)._
 
 ### `make_array`
 
@@ -4479,6 +5213,8 @@ _Alias of [string_to_array](#string_to_array)._
 ### `named_struct`
 
 Returns an Arrow struct using the specified name and input expressions pairs.
+For information on comparing and ordering struct values (including `NULL` handling),
+see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).
 
 ```sql
 named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])
@@ -4520,6 +5256,8 @@ _Alias of [struct](#struct)._
 Returns an Arrow struct using the specified input expressions optionally named.
 Fields in the returned struct use the optional name or the `cN` naming convention.
 For example: `c0`, `c1`, `c2`, etc.
+For information on comparing and ordering struct values (including `NULL` handling),
+see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).
 
 ```sql
 struct(expression1[, ..., expression_n])
@@ -4678,6 +5416,11 @@ SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
 
 SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
 ----
+[NULL]
+
+-- non-existing key
+SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'a');
+----
 []
 ```
 
@@ -4767,11 +5510,11 @@ digest(expression, algorithm)
 
 ```sql
 > select digest('foo', 'sha256');
-+------------------------------------------+
-| digest(Utf8("foo"), Utf8("sha256"))      |
-+------------------------------------------+
-| <binary_hash_result>                     |
-+------------------------------------------+
++------------------------------------------------------------------+
+| digest(Utf8("foo"),Utf8("sha256"))                               |
++------------------------------------------------------------------+
+| 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae |
++------------------------------------------------------------------+
 ```
 
 ### `md5`
@@ -4790,11 +5533,11 @@ md5(expression)
 
 ```sql
 > select md5('foo');
-+-------------------------------------+
-| md5(Utf8("foo"))                    |
-+-------------------------------------+
-| <md5_checksum_result>               |
-+-------------------------------------+
++----------------------------------+
+| md5(Utf8("foo"))                 |
++----------------------------------+
+| acbd18db4cc2f85cedef654fccc4a4d8 |
++----------------------------------+
 ```
 
 ### `sha224`
@@ -4813,11 +5556,11 @@ sha224(expression)
 
 ```sql
 > select sha224('foo');
-+------------------------------------------+
-| sha224(Utf8("foo"))                      |
-+------------------------------------------+
-| <sha224_hash_result>                     |
-+------------------------------------------+
++----------------------------------------------------------+
+| sha224(Utf8("foo"))                                      |
++----------------------------------------------------------+
+| 0808f64e60d58979fcb676c96ec938270dea42445aeefcd3a4e6f8db |
++----------------------------------------------------------+
 ```
 
 ### `sha256`
@@ -4836,11 +5579,11 @@ sha256(expression)
 
 ```sql
 > select sha256('foo');
-+--------------------------------------+
-| sha256(Utf8("foo"))                  |
-+--------------------------------------+
-| <sha256_hash_result>                 |
-+--------------------------------------+
++------------------------------------------------------------------+
+| sha256(Utf8("foo"))                                              |
++------------------------------------------------------------------+
+| 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae |
++------------------------------------------------------------------+
 ```
 
 ### `sha384`
@@ -4859,11 +5602,11 @@ sha384(expression)
 
 ```sql
 > select sha384('foo');
-+-----------------------------------------+
-| sha384(Utf8("foo"))                     |
-+-----------------------------------------+
-| <sha384_hash_result>                    |
-+-----------------------------------------+
++--------------------------------------------------------------------------------------------------+
+| sha384(Utf8("foo"))                                                                              |
++--------------------------------------------------------------------------------------------------+
+| 98c11ffdfdd540676b1a137cb1a22b2a70350c9a44171d6b1180c6be5cbb2ee3f79d532c8a1dd9ef2e8e08e752a3babb |
++--------------------------------------------------------------------------------------------------+
 ```
 
 ### `sha512`
@@ -4882,11 +5625,11 @@ sha512(expression)
 
 ```sql
 > select sha512('foo');
-+-------------------------------------------+
-| sha512(Utf8("foo"))                       |
-+-------------------------------------------+
-| <sha512_hash_result>                      |
-+-------------------------------------------+
++----------------------------------------------------------------------------------------------------------------------------------+
+| sha512(Utf8("foo"))                                                                                                              |
++----------------------------------------------------------------------------------------------------------------------------------+
+| f7fbba6e0636f890e56fbbf3283e524c6fa3204ae298382d624741d0dc6638326e282c41be5e4254d8820772c5518a2c5a8c0c7f7eda19594a7eb539453e1ed7 |
++----------------------------------------------------------------------------------------------------------------------------------+
 ```
 
 ## Union Functions
@@ -4954,9 +5697,15 @@ union_tag(union_expression)
 ## Other Functions
 
 - [arrow_cast](#arrow_cast)
+- [arrow_field](#arrow_field)
+- [arrow_metadata](#arrow_metadata)
+- [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
+- [cast_to_type](#cast_to_type)
 - [get_field](#get_field)
+- [try_cast_to_type](#try_cast_to_type)
 - [version](#version)
+- [with_metadata](#with_metadata)
 
 ### `arrow_cast`
 
@@ -4996,6 +5745,92 @@ arrow_cast(expression, datatype)
 +---------------------------+---------------------+
 ```
 
+### `arrow_field`
+
+Returns a struct containing the Arrow field information of the expression, including name, data type, nullability, and metadata.
+
+```sql
+arrow_field(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select arrow_field(1);
++-------------------------------------------------------------+
+| arrow_field(Int64(1))                                       |
++-------------------------------------------------------------+
+| {name: lit, data_type: Int64, nullable: false, metadata: {}} |
++-------------------------------------------------------------+
+
+> select arrow_field(1)['data_type'];
++-----------------------------------+
+| arrow_field(Int64(1))[data_type]  |
++-----------------------------------+
+| Int64                             |
++-----------------------------------+
+```
+
+### `arrow_metadata`
+
+Returns the metadata of the input expression. If a key is provided, returns the value for that key. If no key is provided, returns a Map of all metadata.
+
+```sql
+arrow_metadata(expression[, key])
+```
+
+#### Arguments
+
+- **expression**: The expression to retrieve metadata from. Can be a column or other expression.
+- **key**: Optional. The specific metadata key to retrieve.
+
+#### Example
+
+```sql
+> select arrow_metadata(col) from table;
++----------------------------+
+| arrow_metadata(table.col)  |
++----------------------------+
+| {k: v}                     |
++----------------------------+
+> select arrow_metadata(col, 'k') from table;
++-------------------------------+
+| arrow_metadata(table.col, 'k')|
++-------------------------------+
+| v                             |
++-------------------------------+
+```
+
+### `arrow_try_cast`
+
+Casts a value to a specific Arrow data type, returning NULL if the cast fails.
+
+```sql
+arrow_try_cast(expression, datatype)
+```
+
+#### Arguments
+
+- **expression**: Expression to cast. The expression can be a constant, column, or function, and any combination of operators.
+- **datatype**: [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]
+
+#### Example
+
+```sql
+> select arrow_try_cast('123', 'Int64') as a,
+         arrow_try_cast('not_a_number', 'Int64') as b;
+
++-----+------+
+| a   | b    |
++-----+------+
+| 123 | NULL |
++-----+------+
+```
+
 ### `arrow_typeof`
 
 Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression.
@@ -5019,47 +5854,113 @@ arrow_typeof(expression)
 +---------------------------+------------------------+
 ```
 
-### `get_field`
+### `cast_to_type`
 
-Returns a field within a map or a struct with the given key.
-Note: most users invoke `get_field` indirectly via field access
-syntax such as `my_struct_col['field_name']` which results in a call to
-`get_field(my_struct_col, 'field_name')`.
+Casts the first argument to the data type of the second argument. Only the type of the second argument is used; its value is ignored.
 
 ```sql
-get_field(expression1, expression2)
+cast_to_type(expression, reference)
 ```
 
 #### Arguments
 
-- **expression1**: The map or struct to retrieve a field for.
-- **expression2**: The field name in the map or struct to retrieve data for. Must evaluate to a string.
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
+- **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
 
 #### Example
 
 ```sql
-> create table t (idx varchar, v varchar) as values ('data','fusion'), ('apache', 'arrow');
-> select struct(idx, v) from t as c;
-+-------------------------+
-| struct(c.idx,c.v)       |
-+-------------------------+
-| {c0: data, c1: fusion}  |
-| {c0: apache, c1: arrow} |
-+-------------------------+
-> select get_field((select struct(idx, v) from t), 'c0');
-+-----------------------+
-| struct(t.idx,t.v)[c0] |
-+-----------------------+
-| data                  |
-| apache                |
-+-----------------------+
-> select get_field((select struct(idx, v) from t), 'c1');
-+-----------------------+
-| struct(t.idx,t.v)[c1] |
-+-----------------------+
-| fusion                |
-| arrow                 |
-+-----------------------+
+> select cast_to_type('42', NULL::INTEGER) as a;
++----+
+| a  |
++----+
+| 42 |
++----+
+
+> select cast_to_type(1 + 2, NULL::DOUBLE) as b;
++-----+
+| b   |
++-----+
+| 3.0 |
++-----+
+```
+
+### `get_field`
+
+Returns a field within a map or a struct with the given key.
+Supports nested field access by providing multiple field names.
+Note: most users invoke `get_field` indirectly via field access
+syntax such as `my_struct_col['field_name']` which results in a call to
+`get_field(my_struct_col, 'field_name')`.
+Nested access like `my_struct['a']['b']` is optimized to a single call:
+`get_field(my_struct, 'a', 'b')`.
+
+```sql
+get_field(expression, field_name[, field_name2, ...])
+```
+
+#### Arguments
+
+- **expression**: The map or struct to retrieve a field from.
+- **field_name**: The field name(s) to access, in order for nested access. Must evaluate to strings.
+
+#### Example
+
+```sql
+> -- Access a field from a struct column
+> create table test( struct_col) as values
+    ({name: 'Alice', age: 30}),
+    ({name: 'Bob', age: 25});
+> select struct_col from test;
++-----------------------------+
+| struct_col                  |
++-----------------------------+
+| {name: Alice, age: 30}      |
+| {name: Bob, age: 25}        |
++-----------------------------+
+> select struct_col['name'] as name from test;
++-------+
+| name  |
++-------+
+| Alice |
+| Bob   |
++-------+
+
+> -- Nested field access with multiple arguments
+> create table test(struct_col) as values
+    ({outer: {inner_val: 42}});
+> select struct_col['outer']['inner_val'] as result from test;
++--------+
+| result |
++--------+
+| 42     |
++--------+
+```
+
+### `try_cast_to_type`
+
+Casts the first argument to the data type of the second argument, returning NULL if the cast fails. Only the type of the second argument is used; its value is ignored.
+
+```sql
+try_cast_to_type(expression, reference)
+```
+
+#### Arguments
+
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
+- **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
+
+#### Example
+
+```sql
+> select try_cast_to_type('123', NULL::INTEGER) as a,
+         try_cast_to_type('not_a_number', NULL::INTEGER) as b;
+
++-----+------+
+| a   | b    |
++-----+------+
+| 123 | NULL |
++-----+------+
 ```
 
 ### `version`
@@ -5079,4 +5980,33 @@ version()
 +--------------------------------------------+
 | Apache DataFusion 42.0.0, aarch64 on macos |
 +--------------------------------------------+
+```
+
+### `with_metadata`
+
+Attaches Arrow field metadata (key/value pairs) to the input expression. Keys must be non-empty constant strings and values must be constant strings (empty values are allowed). Existing metadata on the input field is preserved; new keys overwrite on collision. This is the inverse of `arrow_metadata`.
+
+```sql
+with_metadata(expression, key1, value1[, key2, value2, ...])
+```
+
+#### Arguments
+
+- **expression**: The expression whose output Arrow field should be annotated. Values flow through unchanged.
+- **key**: Metadata key. Must be a non-empty constant string literal.
+- **value**: Metadata value. Must be a constant string literal (may be empty).
+
+#### Example
+
+```sql
+> select arrow_metadata(with_metadata(column1, 'unit', 'ms'), 'unit') from (values (1));
++---------------------------------------------------------------+
+| arrow_metadata(with_metadata(column1,Utf8("unit"),Utf8("ms")),Utf8("unit")) |
++---------------------------------------------------------------+
+| ms                                                            |
++---------------------------------------------------------------+
+> select arrow_metadata(with_metadata(column1, 'unit', 'ms', 'source', 'sensor')) from (values (1));
++--------------------------+
+| {source: sensor, unit: ms} |
++--------------------------+
 ```

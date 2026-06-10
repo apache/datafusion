@@ -48,9 +48,6 @@ mod optimizer;
 /// Run all tests that are found in the `physical_optimizer` directory
 mod physical_optimizer;
 
-/// Run all tests that are found in the `schema_adapter` directory
-mod schema_adapter;
-
 /// Run all tests that are found in the `serde` directory
 mod serde;
 
@@ -63,8 +60,11 @@ mod catalog_listing;
 /// Run all tests that are found in the `tracing` directory
 mod tracing;
 
+/// Run all tests that are found in the `extension_types` directory
+mod extension_types;
+
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();

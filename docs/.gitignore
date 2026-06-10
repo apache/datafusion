@@ -20,3 +20,7 @@ build/
 venv/
 .python-version
 __pycache__/
+
+# Generated dependency graph artifacts (produced during docs CI)
+source/_static/data/deps.dot
+source/_static/data/deps.svg

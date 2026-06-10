@@ -1,0 +1,36 @@
+# timestamp + interval → timestamp
+# Add an interval to a timestamp
+# timestamp '2001-09-28 01:00' + interval '23 hours' → 2001-09-29 00:00:00
+
+query P
+SELECT '2001-09-28T01:00:00'::timestamp + interval '23 hours'
+----
+2001-09-29T00:00:00
+
+query T
+SELECT arrow_typeof('2001-09-28T01:00:00'::timestamp + interval '23 hours')
+----
+Timestamp(ns)
+
+# timestamp - interval → timestamp
+# Subtract an interval from a timestamp
+# timestamp '2001-09-28 23:00' - interval '23 hours' → 2001-09-28 00:00:00
+
+query P
+SELECT '2001-09-28T23:00:00'::timestamp - interval '23 hours'
+----
+2001-09-28T00:00:00
+
+query T
+SELECT arrow_typeof('2001-09-28T23:00:00'::timestamp - interval '23 hours')
+----
+Timestamp(ns)
+
+query error Cannot coerce arithmetic expression Timestamp\(ns\) \* Interval\(MonthDayNano\) to valid types
+SELECT '2001-09-28T23:00:00'::timestamp * interval '23 hours'
+
+query error Cannot coerce arithmetic expression Timestamp\(ns\) / Interval\(MonthDayNano\) to valid types
+SELECT '2001-09-28T23:00:00'::timestamp / interval '23 hours'
+
+query error Cannot coerce arithmetic expression Timestamp\(ns\) % Interval\(MonthDayNano\) to valid types
+SELECT '2001-09-28T23:00:00'::timestamp % interval '23 hours'

@@ -15,32 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod utils;
+
 /// Add an additional module here for convenience to scope this to only
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-    use datafusion::prelude::SessionContext;
-    use datafusion_common::DataFusionError;
-    use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
-    use datafusion_ffi::catalog_provider_list::ForeignCatalogProviderList;
-    use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
+
+    use datafusion::catalog::{CatalogProvider, CatalogProviderList};
+    use datafusion_ffi::tests::utils::get_module;
 
     #[tokio::test]
     async fn test_catalog() -> datafusion_common::Result<()> {
         let module = get_module()?;
+        let (ctx, codec) = super::utils::ctx_and_codec();
 
-        let ffi_catalog =
-            module
-                .create_catalog()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External catalog provider failed to implement create_catalog"
-                        .to_string(),
-                ))?();
-        let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
+        let ffi_catalog = (module.create_catalog)(codec);
+        let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
 
-        let ctx = SessionContext::default();
-        let _ = ctx.register_catalog("fruit", Arc::new(foreign_catalog));
+        let _ = ctx.register_catalog("fruit", foreign_catalog);
 
         let df = ctx.table("fruit.apple.purchases").await?;
 
@@ -56,18 +50,13 @@ mod tests {
     #[tokio::test]
     async fn test_catalog_list() -> datafusion_common::Result<()> {
         let module = get_module()?;
+        let (ctx, codec) = super::utils::ctx_and_codec();
 
-        let ffi_catalog_list =
-            module
-                .create_catalog_list()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External catalog provider failed to implement create_catalog_list"
-                        .to_string(),
-                ))?();
-        let foreign_catalog_list: ForeignCatalogProviderList = (&ffi_catalog_list).into();
+        let ffi_catalog_list = (module.create_catalog_list)(codec);
+        let foreign_catalog_list: Arc<dyn CatalogProviderList> =
+            (&ffi_catalog_list).into();
 
-        let ctx = SessionContext::default();
-        ctx.register_catalog_list(Arc::new(foreign_catalog_list));
+        ctx.register_catalog_list(foreign_catalog_list);
 
         let df = ctx.table("blue.apple.purchases").await?;
 

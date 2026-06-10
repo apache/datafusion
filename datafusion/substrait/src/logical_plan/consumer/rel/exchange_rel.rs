@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::from_substrait_field_reference;
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::from_substrait_field_reference;
 use datafusion::common::{not_impl_err, substrait_err};
 use datafusion::logical_expr::{LogicalPlan, Partitioning, Repartition};
 use std::sync::Arc;
-use substrait::proto::exchange_rel::ExchangeKind;
 use substrait::proto::ExchangeRel;
+use substrait::proto::exchange_rel::ExchangeKind;
 
 pub async fn from_exchange_rel(
     consumer: &impl SubstraitConsumer,
@@ -42,7 +42,8 @@ pub async fn from_exchange_rel(
             let mut partition_columns = vec![];
             let input_schema = input.schema();
             for field_ref in &scatter_fields.fields {
-                let column = from_substrait_field_reference(field_ref, input_schema)?;
+                let column =
+                    from_substrait_field_reference(consumer, field_ref, input_schema)?;
                 partition_columns.push(column);
             }
             Partitioning::Hash(partition_columns, exchange.partition_count as usize)

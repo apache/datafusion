@@ -17,27 +17,27 @@
 
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use arrow::{
-    array::{make_array, ArrayRef},
-    datatypes::{Schema, SchemaRef},
-    error::ArrowError,
-    ffi::{from_ffi, to_ffi, FFI_ArrowArray, FFI_ArrowSchema},
-};
+use arrow::array::{ArrayRef, make_array};
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::error::ArrowError;
+use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi, to_ffi};
+use datafusion_common::{DataFusionError, ScalarValue};
 use log::error;
 
 /// This is a wrapper struct around FFI_ArrowSchema simply to indicate
-/// to the StableAbi macros that the underlying struct is FFI safe.
+/// that the underlying struct is FFI safe.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
-pub struct WrappedSchema(#[sabi(unsafe_opaque_field)] pub FFI_ArrowSchema);
+#[derive(Debug)]
+pub struct WrappedSchema(pub FFI_ArrowSchema);
 
 impl From<SchemaRef> for WrappedSchema {
     fn from(value: SchemaRef) -> Self {
         let ffi_schema = match FFI_ArrowSchema::try_from(value.as_ref()) {
             Ok(s) => s,
             Err(e) => {
-                error!("Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {e}");
+                error!(
+                    "Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {e}"
+                );
                 FFI_ArrowSchema::empty()
             }
         };
@@ -51,7 +51,9 @@ impl From<SchemaRef> for WrappedSchema {
 /// empty schema.
 #[cfg(not(tarpaulin_include))]
 fn catch_df_schema_error(e: &ArrowError) -> Schema {
-    error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}");
+    error!(
+        "Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}"
+    );
     Schema::empty()
 }
 
@@ -63,15 +65,13 @@ impl From<WrappedSchema> for SchemaRef {
     }
 }
 
-/// This is a wrapper struct for FFI_ArrowArray to indicate to StableAbi
+/// This is a wrapper struct for FFI_ArrowArray to indicate
 /// that the struct is FFI Safe. For convenience, we also include the
 /// schema needed to create a record batch from the array.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct WrappedArray {
-    #[sabi(unsafe_opaque_field)]
     pub array: FFI_ArrowArray,
-
     pub schema: WrappedSchema,
 }
 
@@ -93,5 +93,23 @@ impl TryFrom<&ArrayRef> for WrappedArray {
         let schema = WrappedSchema(schema);
 
         Ok(WrappedArray { array, schema })
+    }
+}
+
+impl TryFrom<&ScalarValue> for WrappedArray {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ScalarValue) -> Result<Self, Self::Error> {
+        let array = value.to_array()?;
+        WrappedArray::try_from(&array).map_err(Into::into)
+    }
+}
+
+impl TryFrom<WrappedArray> for ScalarValue {
+    type Error = DataFusionError;
+
+    fn try_from(value: WrappedArray) -> Result<Self, Self::Error> {
+        let array: ArrayRef = value.try_into()?;
+        ScalarValue::try_from_array(array.as_ref(), 0)
     }
 }

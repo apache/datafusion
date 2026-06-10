@@ -15,42 +15,39 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::{
-    std_types::{ROption, RResult, RStr, RString, RVec},
-    StableAbi,
-};
-use accumulator::{FFI_Accumulator, ForeignAccumulator};
+use accumulator::FFI_Accumulator;
 use accumulator_args::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
 use arrow::datatypes::{DataType, Field};
 use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
-use datafusion::{
-    error::DataFusionError,
-    logical_expr::{
-        function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
-        type_coercion::functions::fields_with_aggregate_udf,
-        utils::AggregateOrderSensitivity,
-        Accumulator, GroupsAccumulator,
-    },
+use datafusion_common::{DataFusionError, Result, ffi_datafusion_err};
+use datafusion_expr::function::AggregateFunctionSimplification;
+use datafusion_expr::type_coercion::functions::fields_with_udf;
+use datafusion_expr::{
+    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
 };
-use datafusion::{
-    error::Result,
-    logical_expr::{AggregateUDF, AggregateUDFImpl, Signature},
+use datafusion_functions_aggregate_common::accumulator::{
+    AccumulatorArgs, StateFieldsArgs,
 };
-use datafusion_common::exec_datafusion_err;
+use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
-use groups_accumulator::{FFI_GroupsAccumulator, ForeignGroupsAccumulator};
-use std::hash::{Hash, Hasher};
-use std::{ffi::c_void, sync::Arc};
-
-use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    df_result, rresult, rresult_return,
-    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
-    volatility::FFI_Volatility,
-};
+use groups_accumulator::FFI_GroupsAccumulator;
 use prost::{DecodeError, Message};
+
+use stabby::str::Str as SStr;
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
+use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use crate::arrow_wrappers::WrappedSchema;
+use crate::util::{
+    FFI_Option, FFI_Result, rvec_wrapped_to_vec_datatype, rvec_wrapped_to_vec_fieldref,
+    vec_datatype_to_rvec_wrapped, vec_fieldref_to_rvec_wrapped,
+};
+use crate::volatility::FFI_Volatility;
+use crate::{df_result, sresult, sresult_return};
 
 mod accumulator;
 mod accumulator_args;
@@ -58,14 +55,13 @@ mod groups_accumulator;
 
 /// A stable struct for sharing a [`AggregateUDF`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
+#[derive(Debug)]
 pub struct FFI_AggregateUDF {
     /// FFI equivalent to the `name` of a [`AggregateUDF`]
-    pub name: RString,
+    pub name: SString,
 
     /// FFI equivalent to the `aliases` of a [`AggregateUDF`]
-    pub aliases: RVec<RString>,
+    pub aliases: SVec<SString>,
 
     /// FFI equivalent to the `volatility` of a [`AggregateUDF`]
     pub volatility: FFI_Volatility,
@@ -74,8 +70,8 @@ pub struct FFI_AggregateUDF {
     /// argument fields.
     pub return_field: unsafe extern "C" fn(
         udaf: &Self,
-        arg_fields: RVec<WrappedSchema>,
-    ) -> RResult<WrappedSchema, RString>,
+        arg_fields: SVec<WrappedSchema>,
+    ) -> FFI_Result<WrappedSchema>,
 
     /// FFI equivalent to the `is_nullable` of a [`AggregateUDF`]
     pub is_nullable: bool,
@@ -88,39 +84,38 @@ pub struct FFI_AggregateUDF {
     pub accumulator: unsafe extern "C" fn(
         udaf: &FFI_AggregateUDF,
         args: FFI_AccumulatorArgs,
-    ) -> RResult<FFI_Accumulator, RString>,
+    ) -> FFI_Result<FFI_Accumulator>,
 
     /// FFI equivalent to [`AggregateUDF::create_sliding_accumulator`]
-    pub create_sliding_accumulator:
-        unsafe extern "C" fn(
-            udaf: &FFI_AggregateUDF,
-            args: FFI_AccumulatorArgs,
-        ) -> RResult<FFI_Accumulator, RString>,
+    pub create_sliding_accumulator: unsafe extern "C" fn(
+        udaf: &FFI_AggregateUDF,
+        args: FFI_AccumulatorArgs,
+    )
+        -> FFI_Result<FFI_Accumulator>,
 
     /// FFI equivalent to [`AggregateUDF::state_fields`]
-    #[allow(clippy::type_complexity)]
     pub state_fields: unsafe extern "C" fn(
         udaf: &FFI_AggregateUDF,
-        name: &RStr,
-        input_fields: RVec<WrappedSchema>,
+        name: &SStr,
+        input_fields: SVec<WrappedSchema>,
         return_field: WrappedSchema,
-        ordering_fields: RVec<RVec<u8>>,
+        ordering_fields: SVec<SVec<u8>>,
         is_distinct: bool,
-    ) -> RResult<RVec<RVec<u8>>, RString>,
+    ) -> FFI_Result<SVec<SVec<u8>>>,
 
     /// FFI equivalent to [`AggregateUDF::create_groups_accumulator`]
     pub create_groups_accumulator:
         unsafe extern "C" fn(
             udaf: &FFI_AggregateUDF,
             args: FFI_AccumulatorArgs,
-        ) -> RResult<FFI_GroupsAccumulator, RString>,
+        ) -> FFI_Result<FFI_GroupsAccumulator>,
 
     /// FFI equivalent to [`AggregateUDF::with_beneficial_ordering`]
     pub with_beneficial_ordering:
         unsafe extern "C" fn(
             udaf: &FFI_AggregateUDF,
             beneficial_ordering: bool,
-        ) -> RResult<ROption<FFI_AggregateUDF>, RString>,
+        ) -> FFI_Result<FFI_Option<FFI_AggregateUDF>>,
 
     /// FFI equivalent to [`AggregateUDF::order_sensitivity`]
     pub order_sensitivity:
@@ -132,8 +127,8 @@ pub struct FFI_AggregateUDF {
     /// appropriate calls on the underlying [`AggregateUDF`]
     pub coerce_types: unsafe extern "C" fn(
         udf: &Self,
-        arg_types: RVec<WrappedSchema>,
-    ) -> RResult<RVec<WrappedSchema>, RString>,
+        arg_types: SVec<WrappedSchema>,
+    ) -> FFI_Result<SVec<WrappedSchema>>,
 
     /// Used to create a clone on the provider of the udaf. This should
     /// only need to be called by the receiver of the udaf.
@@ -145,6 +140,11 @@ pub struct FFI_AggregateUDF {
     /// Internal data. This is only to be accessed by the provider of the udaf.
     /// A [`ForeignAggregateUDF`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_AggregateUDF {}
@@ -156,177 +156,212 @@ pub struct AggregateUDFPrivateData {
 
 impl FFI_AggregateUDF {
     unsafe fn inner(&self) -> &Arc<AggregateUDF> {
-        let private_data = self.private_data as *const AggregateUDFPrivateData;
-        &(*private_data).udaf
+        unsafe {
+            let private_data = self.private_data as *const AggregateUDFPrivateData;
+            &(*private_data).udaf
+        }
     }
 }
 
 unsafe extern "C" fn return_field_fn_wrapper(
     udaf: &FFI_AggregateUDF,
-    arg_fields: RVec<WrappedSchema>,
-) -> RResult<WrappedSchema, RString> {
-    let udaf = udaf.inner();
+    arg_fields: SVec<WrappedSchema>,
+) -> FFI_Result<WrappedSchema> {
+    unsafe {
+        let udaf = udaf.inner();
 
-    let arg_fields = rresult_return!(rvec_wrapped_to_vec_fieldref(&arg_fields));
+        let arg_fields = sresult_return!(rvec_wrapped_to_vec_fieldref(&arg_fields));
 
-    let return_field = udaf
-        .return_field(&arg_fields)
-        .and_then(|v| {
-            FFI_ArrowSchema::try_from(v.as_ref()).map_err(DataFusionError::from)
-        })
-        .map(WrappedSchema);
+        let return_field = udaf
+            .return_field(&arg_fields)
+            .and_then(|v| {
+                FFI_ArrowSchema::try_from(v.as_ref()).map_err(DataFusionError::from)
+            })
+            .map(WrappedSchema);
 
-    rresult!(return_field)
+        sresult!(return_field)
+    }
 }
 
 unsafe extern "C" fn accumulator_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     args: FFI_AccumulatorArgs,
-) -> RResult<FFI_Accumulator, RString> {
-    let udaf = udaf.inner();
+) -> FFI_Result<FFI_Accumulator> {
+    unsafe {
+        let udaf = udaf.inner();
 
-    let accumulator_args = &rresult_return!(ForeignAccumulatorArgs::try_from(args));
+        let accumulator_args = &sresult_return!(ForeignAccumulatorArgs::try_from(args));
 
-    rresult!(udaf
-        .accumulator(accumulator_args.into())
-        .map(FFI_Accumulator::from))
+        sresult!(
+            udaf.accumulator(accumulator_args.into())
+                .map(FFI_Accumulator::from)
+        )
+    }
 }
 
 unsafe extern "C" fn create_sliding_accumulator_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     args: FFI_AccumulatorArgs,
-) -> RResult<FFI_Accumulator, RString> {
-    let udaf = udaf.inner();
+) -> FFI_Result<FFI_Accumulator> {
+    unsafe {
+        let udaf = udaf.inner();
 
-    let accumulator_args = &rresult_return!(ForeignAccumulatorArgs::try_from(args));
+        let accumulator_args = &sresult_return!(ForeignAccumulatorArgs::try_from(args));
 
-    rresult!(udaf
-        .create_sliding_accumulator(accumulator_args.into())
-        .map(FFI_Accumulator::from))
+        sresult!(
+            udaf.create_sliding_accumulator(accumulator_args.into())
+                .map(FFI_Accumulator::from)
+        )
+    }
 }
 
 unsafe extern "C" fn create_groups_accumulator_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     args: FFI_AccumulatorArgs,
-) -> RResult<FFI_GroupsAccumulator, RString> {
-    let udaf = udaf.inner();
+) -> FFI_Result<FFI_GroupsAccumulator> {
+    unsafe {
+        let udaf = udaf.inner();
 
-    let accumulator_args = &rresult_return!(ForeignAccumulatorArgs::try_from(args));
+        let accumulator_args = &sresult_return!(ForeignAccumulatorArgs::try_from(args));
 
-    rresult!(udaf
-        .create_groups_accumulator(accumulator_args.into())
-        .map(FFI_GroupsAccumulator::from))
+        sresult!(
+            udaf.create_groups_accumulator(accumulator_args.into())
+                .map(FFI_GroupsAccumulator::from)
+        )
+    }
 }
 
 unsafe extern "C" fn groups_accumulator_supported_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     args: FFI_AccumulatorArgs,
 ) -> bool {
-    let udaf = udaf.inner();
+    unsafe {
+        let udaf = udaf.inner();
 
-    ForeignAccumulatorArgs::try_from(args)
-        .map(|a| udaf.groups_accumulator_supported((&a).into()))
-        .unwrap_or_else(|e| {
-            log::warn!("Unable to parse accumulator args. {e}");
-            false
-        })
+        ForeignAccumulatorArgs::try_from(args)
+            .map(|a| udaf.groups_accumulator_supported((&a).into()))
+            .unwrap_or_else(|e| {
+                log::warn!("Unable to parse accumulator args. {e}");
+                false
+            })
+    }
 }
 
 unsafe extern "C" fn with_beneficial_ordering_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     beneficial_ordering: bool,
-) -> RResult<ROption<FFI_AggregateUDF>, RString> {
-    let udaf = udaf.inner().as_ref().clone();
+) -> FFI_Result<FFI_Option<FFI_AggregateUDF>> {
+    unsafe {
+        let udaf = udaf.inner().as_ref().clone();
 
-    let result = rresult_return!(udaf.with_beneficial_ordering(beneficial_ordering));
-    let result = rresult_return!(result
-        .map(|func| func.with_beneficial_ordering(beneficial_ordering))
-        .transpose())
-    .flatten()
-    .map(|func| FFI_AggregateUDF::from(Arc::new(func)));
+        let result = sresult_return!(udaf.with_beneficial_ordering(beneficial_ordering));
+        let result = sresult_return!(
+            result
+                .map(|func| func.with_beneficial_ordering(beneficial_ordering))
+                .transpose()
+        )
+        .flatten()
+        .map(|func| FFI_AggregateUDF::from(Arc::new(func)));
 
-    RResult::ROk(result.into())
+        FFI_Result::Ok(result.into())
+    }
 }
 
 unsafe extern "C" fn state_fields_fn_wrapper(
     udaf: &FFI_AggregateUDF,
-    name: &RStr,
-    input_fields: RVec<WrappedSchema>,
+    name: &SStr,
+    input_fields: SVec<WrappedSchema>,
     return_field: WrappedSchema,
-    ordering_fields: RVec<RVec<u8>>,
+    ordering_fields: SVec<SVec<u8>>,
     is_distinct: bool,
-) -> RResult<RVec<RVec<u8>>, RString> {
-    let udaf = udaf.inner();
+) -> FFI_Result<SVec<SVec<u8>>> {
+    unsafe {
+        let udaf = udaf.inner();
 
-    let input_fields = &rresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
-    let return_field = rresult_return!(Field::try_from(&return_field.0)).into();
+        let input_fields = &sresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
+        let return_field = sresult_return!(Field::try_from(&return_field.0)).into();
 
-    let ordering_fields = &rresult_return!(ordering_fields
+        let ordering_fields = &sresult_return!(
+            ordering_fields
+                .into_iter()
+                .map(|field_bytes| datafusion_proto_common::Field::decode(
+                    field_bytes.as_ref()
+                ))
+                .collect::<std::result::Result<Vec<_>, DecodeError>>()
+        );
+
+        let ordering_fields =
+            &sresult_return!(parse_proto_fields_to_fields(ordering_fields))
+                .into_iter()
+                .map(Arc::new)
+                .collect::<Vec<_>>();
+
+        let args = StateFieldsArgs {
+            name: name.as_str(),
+            input_fields,
+            return_field,
+            ordering_fields,
+            is_distinct,
+        };
+
+        let state_fields = sresult_return!(udaf.state_fields(args));
+        let state_fields = sresult_return!(
+            state_fields
+                .iter()
+                .map(|f| f.as_ref())
+                .map(datafusion_proto::protobuf::Field::try_from)
+                .map(|v| v.map_err(DataFusionError::from))
+                .collect::<Result<Vec<_>>>()
+        )
         .into_iter()
-        .map(|field_bytes| datafusion_proto_common::Field::decode(field_bytes.as_ref()))
-        .collect::<std::result::Result<Vec<_>, DecodeError>>());
+        .map(|field| field.encode_to_vec().into_iter().collect())
+        .collect();
 
-    let ordering_fields = &rresult_return!(parse_proto_fields_to_fields(ordering_fields))
-        .into_iter()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-
-    let args = StateFieldsArgs {
-        name: name.as_str(),
-        input_fields,
-        return_field,
-        ordering_fields,
-        is_distinct,
-    };
-
-    let state_fields = rresult_return!(udaf.state_fields(args));
-    let state_fields = rresult_return!(state_fields
-        .iter()
-        .map(|f| f.as_ref())
-        .map(datafusion_proto::protobuf::Field::try_from)
-        .map(|v| v.map_err(DataFusionError::from))
-        .collect::<Result<Vec<_>>>())
-    .into_iter()
-    .map(|field| field.encode_to_vec().into())
-    .collect();
-
-    RResult::ROk(state_fields)
+        FFI_Result::Ok(state_fields)
+    }
 }
 
 unsafe extern "C" fn order_sensitivity_fn_wrapper(
     udaf: &FFI_AggregateUDF,
 ) -> FFI_AggregateOrderSensitivity {
-    udaf.inner().order_sensitivity().into()
+    unsafe { udaf.inner().order_sensitivity().into() }
 }
 
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udaf: &FFI_AggregateUDF,
-    arg_types: RVec<WrappedSchema>,
-) -> RResult<RVec<WrappedSchema>, RString> {
-    let udaf = udaf.inner();
+    arg_types: SVec<WrappedSchema>,
+) -> FFI_Result<SVec<WrappedSchema>> {
+    unsafe {
+        let udaf = udaf.inner();
 
-    let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
+        let arg_types = sresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
 
-    let arg_fields = arg_types
-        .iter()
-        .map(|dt| Field::new("f", dt.clone(), true))
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-    let return_types = rresult_return!(fields_with_aggregate_udf(&arg_fields, udaf))
-        .into_iter()
-        .map(|f| f.data_type().to_owned())
-        .collect::<Vec<_>>();
+        let arg_fields = arg_types
+            .iter()
+            .map(|dt| Field::new("f", dt.clone(), true))
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+        let return_types = sresult_return!(fields_with_udf(&arg_fields, udaf.as_ref()))
+            .into_iter()
+            .map(|f| f.data_type().to_owned())
+            .collect::<Vec<_>>();
 
-    rresult!(vec_datatype_to_rvec_wrapped(&return_types))
+        sresult!(vec_datatype_to_rvec_wrapped(&return_types))
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(udaf: &mut FFI_AggregateUDF) {
-    let private_data = Box::from_raw(udaf.private_data as *mut AggregateUDFPrivateData);
-    drop(private_data);
+    unsafe {
+        debug_assert!(!udaf.private_data.is_null());
+        let private_data =
+            Box::from_raw(udaf.private_data as *mut AggregateUDFPrivateData);
+        drop(private_data);
+        udaf.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udaf: &FFI_AggregateUDF) -> FFI_AggregateUDF {
-    Arc::clone(udaf.inner()).into()
+    unsafe { Arc::clone(udaf.inner()).into() }
 }
 
 impl Clone for FFI_AggregateUDF {
@@ -337,6 +372,10 @@ impl Clone for FFI_AggregateUDF {
 
 impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
     fn from(udaf: Arc<AggregateUDF>) -> Self {
+        if let Some(udaf) = udaf.inner().downcast_ref::<ForeignAggregateUDF>() {
+            return udaf.udaf.clone();
+        }
+
         let name = udaf.name().into();
         let aliases = udaf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let is_nullable = udaf.is_nullable();
@@ -361,6 +400,7 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -400,14 +440,16 @@ impl Hash for ForeignAggregateUDF {
     }
 }
 
-impl TryFrom<&FFI_AggregateUDF> for ForeignAggregateUDF {
-    type Error = DataFusionError;
+impl From<&FFI_AggregateUDF> for Arc<dyn AggregateUDFImpl> {
+    fn from(udaf: &FFI_AggregateUDF) -> Self {
+        if (udaf.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(unsafe { udaf.inner().inner() });
+        }
 
-    fn try_from(udaf: &FFI_AggregateUDF) -> Result<Self, Self::Error> {
         let signature = Signature::user_defined((&udaf.volatility).into());
         let aliases = udaf.aliases.iter().map(|s| s.to_string()).collect();
 
-        Ok(Self {
+        Arc::new(ForeignAggregateUDF {
             udaf: udaf.clone(),
             signature,
             aliases,
@@ -416,10 +458,6 @@ impl TryFrom<&FFI_AggregateUDF> for ForeignAggregateUDF {
 }
 
 impl AggregateUDFImpl for ForeignAggregateUDF {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.udaf.name.as_str()
     }
@@ -453,15 +491,14 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let args = acc_args.try_into()?;
         unsafe {
-            df_result!((self.udaf.accumulator)(&self.udaf, args)).map(|accum| {
-                Box::new(ForeignAccumulator::from(accum)) as Box<dyn Accumulator>
-            })
+            df_result!((self.udaf.accumulator)(&self.udaf, args))
+                .map(<Box<dyn Accumulator>>::from)
         }
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         unsafe {
-            let name = RStr::from_str(args.name);
+            let name = SStr::from(args.name);
             let input_fields = vec_fieldref_to_rvec_wrapped(args.input_fields)?;
             let return_field =
                 WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
@@ -473,7 +510,7 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
                 .map(|v| v.map_err(DataFusionError::from))
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
-                .map(|proto_field| proto_field.encode_to_vec().into())
+                .map(|proto_field| proto_field.encode_to_vec().into_iter().collect())
                 .collect();
 
             let fields = df_result!((self.udaf.state_fields)(
@@ -488,13 +525,13 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
                 .into_iter()
                 .map(|field_bytes| {
                     datafusion_proto_common::Field::decode(field_bytes.as_ref())
-                        .map_err(|e| exec_datafusion_err!("{e}"))
+                        .map_err(|e| ffi_datafusion_err!("{e}"))
                 })
                 .collect::<Result<Vec<_>>>()?;
 
             parse_proto_fields_to_fields(fields.iter())
                 .map(|fields| fields.into_iter().map(Arc::new).collect())
-                .map_err(|e| exec_datafusion_err!("{e}"))
+                .map_err(|e| ffi_datafusion_err!("{e}"))
         }
     }
 
@@ -517,12 +554,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         let args = FFI_AccumulatorArgs::try_from(args)?;
 
         unsafe {
-            df_result!((self.udaf.create_groups_accumulator)(&self.udaf, args)).map(
-                |accum| {
-                    Box::new(ForeignGroupsAccumulator::from(accum))
-                        as Box<dyn GroupsAccumulator>
-                },
-            )
+            df_result!((self.udaf.create_groups_accumulator)(&self.udaf, args))
+                .map(<Box<dyn GroupsAccumulator>>::from)
         }
     }
 
@@ -536,9 +569,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
     ) -> Result<Box<dyn Accumulator>> {
         let args = args.try_into()?;
         unsafe {
-            df_result!((self.udaf.create_sliding_accumulator)(&self.udaf, args)).map(
-                |accum| Box::new(ForeignAccumulator::from(accum)) as Box<dyn Accumulator>,
-            )
+            df_result!((self.udaf.create_sliding_accumulator)(&self.udaf, args))
+                .map(<Box<dyn Accumulator>>::from)
         }
     }
 
@@ -553,11 +585,9 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
             ))?
             .into_option();
 
-            let result = result
-                .map(|func| ForeignAggregateUDF::try_from(&func))
-                .transpose()?;
+            let result = result.map(|func| <Arc<dyn AggregateUDFImpl>>::from(&func));
 
-            Ok(result.map(|func| Arc::new(func) as Arc<dyn AggregateUDFImpl>))
+            Ok(result)
         }
     }
 
@@ -580,8 +610,7 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
 }
 
 #[repr(C)]
-#[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
+#[derive(Debug)]
 pub enum FFI_AggregateOrderSensitivity {
     Insensitive,
     HardRequirement,
@@ -613,14 +642,14 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::Schema;
-    use datafusion::{
-        common::create_array, functions_aggregate::sum::Sum,
-        physical_expr::PhysicalSortExpr, physical_plan::expressions::col,
-        scalar::ScalarValue,
-    };
-    use std::any::Any;
     use std::collections::HashMap;
+
+    use arrow::datatypes::Schema;
+    use datafusion::common::create_array;
+    use datafusion::functions_aggregate::sum::Sum;
+    use datafusion::physical_expr::PhysicalSortExpr;
+    use datafusion::physical_plan::expressions::col;
+    use datafusion::scalar::ScalarValue;
 
     use super::*;
 
@@ -630,10 +659,6 @@ mod tests {
     }
 
     impl AggregateUDFImpl for SumWithCopiedMetadata {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn name(&self) -> &str {
             self.inner.name()
         }
@@ -661,10 +686,11 @@ mod tests {
     ) -> Result<AggregateUDF> {
         let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
 
-        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        let mut local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        local_udaf.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-        Ok(foreign_udaf.into())
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).into();
+        Ok(AggregateUDF::new_from_shared_impl(foreign_udaf))
     }
 
     #[test]
@@ -674,11 +700,12 @@ mod tests {
         let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
 
         // Convert to FFI format
-        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        let mut local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        local_udaf.library_marker_id = crate::mock_foreign_marker_id;
 
         // Convert back to native format
-        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-        let foreign_udaf: AggregateUDF = foreign_udaf.into();
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).into();
+        let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
         assert_eq!(original_name, foreign_udaf.name());
         Ok(())
@@ -731,8 +758,8 @@ mod tests {
         let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
 
         // Convert back to native format
-        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-        let foreign_udaf: AggregateUDF = foreign_udaf.into();
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).into();
+        let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
         let metadata: HashMap<String, String> =
             [("a_key".to_string(), "a_value".to_string())]
@@ -814,5 +841,24 @@ mod tests {
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::HardRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::SoftRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::Beneficial);
+    }
+
+    #[test]
+    fn test_ffi_udaf_local_bypass() -> Result<()> {
+        let original_udaf = Sum::new();
+        let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
+
+        let mut ffi_udaf = FFI_AggregateUDF::from(original_udaf);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&ffi_udaf).into();
+        assert!(foreign_udaf.is::<Sum>());
+
+        // Verify different library markers generate foreign providers
+        ffi_udaf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&ffi_udaf).into();
+        assert!(foreign_udaf.is::<ForeignAggregateUDF>());
+
+        Ok(())
     }
 }

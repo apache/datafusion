@@ -22,16 +22,21 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
-    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
     CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
+    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
+    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up,
+    rewrite_recursive_unnests_bottom_up, substitute_top_level_alias,
+    substitute_top_level_aliases_in_sorts,
 };
 
+use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
-use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
+use datafusion_expr::ExprSchemable;
+use datafusion_expr::builder::get_struct_unnested_columns;
+use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
@@ -41,15 +46,49 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderOptions, Partitioning,
+    LogicalPlanBuilderOptions, Partitioning, SortExpr,
 };
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr,
-    OrderBy, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
+    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    visit_expressions_mut,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
+
+/// Result of the `aggregate` function, containing the aggregate plan and
+/// rewritten expressions that reference the aggregate output columns.
+struct AggregatePlanResult {
+    /// The aggregate logical plan
+    plan: LogicalPlan,
+    /// SELECT expressions rewritten to reference aggregate output columns
+    select_exprs: Vec<Expr>,
+    /// HAVING expression rewritten to reference aggregate output columns
+    having_expr: Option<Expr>,
+    /// QUALIFY expression rewritten to reference aggregate output columns
+    qualify_expr: Option<Expr>,
+    /// ORDER BY expressions rewritten to reference aggregate output columns
+    order_by_exprs: Vec<SortExpr>,
+    /// DISTINCT ON expressions rewritten to reference aggregate output columns
+    on_exprs: Vec<Expr>,
+}
+
+struct DistinctOnUnnestPlanResult {
+    plan: LogicalPlan,
+    select_exprs: Vec<Expr>,
+    on_exprs: Vec<Expr>,
+    order_by_exprs: Vec<SortExpr>,
+}
+
+struct RewrittenUnnestExprGroups {
+    plan: LogicalPlan,
+    expr_groups: Vec<Vec<Expr>>,
+}
+
+fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
+    expr_groups.into_iter().flatten().collect()
+}
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
@@ -74,6 +113,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("SORT BY");
         }
 
+        // Capture and clear set expression schema so it doesn't leak
+        // into subqueries planned during FROM clause handling.
+        let set_expr_left_schema = planner_context.set_set_expr_left_schema(None);
+
         // Process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
@@ -94,7 +137,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )?;
 
         // Having and group by clause may reference aliases defined in select projection
-        let projected_plan = self.project(base_plan.clone(), select_exprs)?;
+        let projected_plan =
+            self.project(base_plan.clone(), select_exprs, set_expr_left_schema)?;
         let select_exprs = projected_plan.expressions();
 
         let order_by =
@@ -119,6 +163,36 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // This alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
+
+        // DISTINCT ON expressions are parsed alongside HAVING / QUALIFY so
+        // they participate in aggregate / window discovery and get rebased
+        // through the same pipeline. The SQL nodes are taken out of
+        // `select.distinct` so the later match on `Distinct::On` still fires
+        // but does not move the original Vec.
+        //
+        // Resolution precedence matches PostgreSQL and ORDER BY: SELECT
+        // aliases win over input columns. For example,
+        //   SELECT DISTINCT ON (b) a AS b ... GROUP BY a
+        // resolves `b` to the alias for `a`, not to a same-named input
+        // column.
+        let on_exprs_sql: Vec<SQLExpr> = match &mut select.distinct {
+            Some(Distinct::On(exprs)) => std::mem::take(exprs),
+            _ => Vec::new(),
+        };
+        let mut on_expr_schema = projected_plan.schema().as_ref().clone();
+        on_expr_schema.merge(base_plan.schema());
+        let on_exprs_pre_aggr: Vec<Expr> = on_exprs_sql
+            .into_iter()
+            .map(|e| {
+                let expr =
+                    self.sql_expr_to_logical_expr(e, &on_expr_schema, planner_context)?;
+                // PostgreSQL only substitutes an output alias when the whole
+                // ON expression is a bare identifier. `b` resolves to the
+                // alias; `b + 0` keeps `b` as the input column.
+                let expr = substitute_top_level_alias(expr, &alias_map);
+                normalize_col(expr, &projected_plan)
+            })
+            .collect::<Result<Vec<Expr>>>()?;
 
         // Optionally the HAVING expression.
         let having_expr_opt = select
@@ -177,15 +251,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .collect::<Result<Vec<Expr>>>()?
         } else {
             // 'group by all' groups wrt. all select expressions except 'AggregateFunction's.
-            // Filter and collect non-aggregate select expressions
+            // Filter and collect non-aggregate select expressions.
             select_exprs
                 .iter()
-                .filter(|select_expr| match select_expr {
-                    Expr::AggregateFunction(_) => false,
-                    Expr::Alias(Alias { expr, name: _, .. }) => {
-                        !matches!(**expr, Expr::AggregateFunction(_))
-                    }
-                    _ => true,
+                .filter(|select_expr| {
+                    find_aggregate_exprs(std::iter::once(*select_expr)).is_empty()
                 })
                 .cloned()
                 .collect()
@@ -219,33 +289,63 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .transpose()?;
 
         // The outer expressions we will search through for aggregates.
-        // Aggregates may be sourced from the SELECT list or from the HAVING expression.
-        let aggr_expr_haystack = select_exprs
-            .iter()
-            .chain(having_expr_opt.iter())
-            .chain(qualify_expr_opt.iter());
-        // All of the aggregate expressions (deduplicated).
-        let aggr_exprs = find_aggregate_exprs(aggr_expr_haystack);
+        // First, find aggregates in SELECT, HAVING, and QUALIFY
+        let select_having_qualify_aggrs = find_aggregate_exprs(
+            select_exprs
+                .iter()
+                .chain(having_expr_opt.iter())
+                .chain(qualify_expr_opt.iter()),
+        );
+
+        // Find aggregates in ORDER BY
+        let order_by_aggrs = find_aggregate_exprs(order_by_rex.iter().map(|s| &s.expr));
+
+        // Find aggregates in DISTINCT ON
+        let on_aggrs = find_aggregate_exprs(on_exprs_pre_aggr.iter());
+
+        // Combine: all aggregates from SELECT/HAVING/QUALIFY, plus ORDER BY
+        // and DISTINCT ON aggregates that aren't already covered.
+        let mut aggr_exprs = select_having_qualify_aggrs;
+        for extra_aggr in order_by_aggrs.into_iter().chain(on_aggrs) {
+            if !aggr_exprs.iter().any(|e| e == &extra_aggr) {
+                aggr_exprs.push(extra_aggr);
+            }
+        }
 
         // Process group by, aggregation or having
-        let (
+        let AggregatePlanResult {
             plan,
-            mut select_exprs_post_aggr,
-            having_expr_post_aggr,
-            qualify_expr_post_aggr,
-        ) = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
+            select_exprs: mut select_exprs_post_aggr,
+            having_expr: having_expr_post_aggr,
+            qualify_expr: qualify_expr_post_aggr,
+            order_by_exprs: mut order_by_rex,
+            on_exprs: mut on_exprs_post_aggr,
+        } = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
             self.aggregate(
                 &base_plan,
                 &select_exprs,
                 having_expr_opt.as_ref(),
                 qualify_expr_opt.as_ref(),
+                &order_by_rex,
+                &on_exprs_pre_aggr,
                 &group_by_exprs,
                 &aggr_exprs,
             )?
         } else {
             match having_expr_opt {
-                Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
-                None => (base_plan.clone(), select_exprs.clone(), having_expr_opt, qualify_expr_opt)
+                Some(having_expr) => {
+                    return plan_err!(
+                        "HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"
+                    );
+                }
+                None => AggregatePlanResult {
+                    plan: base_plan.clone(),
+                    select_exprs: select_exprs.clone(),
+                    having_expr: having_expr_opt,
+                    qualify_expr: qualify_expr_opt,
+                    order_by_exprs: order_by_rex,
+                    on_exprs: on_exprs_pre_aggr,
+                },
             }
         };
 
@@ -257,14 +357,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        // The outer expressions we will search through for window functions.
-        // Window functions may be sourced from the SELECT list or from the QUALIFY expression.
-        let windows_expr_haystack = select_exprs_post_aggr
-            .iter()
-            .chain(qualify_expr_post_aggr.iter());
         // All of the window expressions (deduplicated and rewritten to reference aggregates as
-        // columns from input).
-        let window_func_exprs = find_window_exprs(windows_expr_haystack);
+        // columns from input). Window functions may be sourced from the SELECT list, QUALIFY
+        // expression, ORDER BY, or DISTINCT ON.
+        let window_func_exprs = find_window_exprs(
+            select_exprs_post_aggr
+                .iter()
+                .chain(qualify_expr_post_aggr.iter())
+                .chain(order_by_rex.iter().map(|s| &s.expr))
+                .chain(on_exprs_post_aggr.iter()),
+        );
 
         // Process window functions after aggregation as they can reference
         // aggregate functions in their body
@@ -279,14 +381,35 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|expr| rebase_expr(expr, &window_func_exprs, &plan))
                 .collect::<Result<Vec<Expr>>>()?;
 
+            order_by_rex = order_by_rex
+                .into_iter()
+                .map(|sort_expr| {
+                    Ok(sort_expr.with_expr(rebase_expr(
+                        &sort_expr.expr,
+                        &window_func_exprs,
+                        &plan,
+                    )?))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            on_exprs_post_aggr = on_exprs_post_aggr
+                .iter()
+                .map(|expr| rebase_expr(expr, &window_func_exprs, &plan))
+                .collect::<Result<Vec<Expr>>>()?;
+
             plan
         };
 
         // Process QUALIFY clause after window functions
         // QUALIFY filters the results of window functions, similar to how HAVING filters aggregates
         let plan = if let Some(qualify_expr) = qualify_expr_post_aggr {
-            // Validate that QUALIFY is used with window functions
-            if window_func_exprs.is_empty() {
+            // Validate that QUALIFY is used with window functions in SELECT or QUALIFY
+            let qualify_window_func_exprs = find_window_exprs(
+                select_exprs_post_aggr
+                    .iter()
+                    .chain(std::iter::once(&qualify_expr)),
+            );
+            if qualify_window_func_exprs.is_empty() {
                 return plan_err!(
                     "QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"
                 );
@@ -315,36 +438,74 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        // Try processing unnest expression or do the final projection
-        let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
-
-        // Process distinct clause
+        // Process distinct clause. For `DISTINCT ON` combined with
+        // aggregation, GROUP BY, or window functions we apply DistinctOn
+        // *before* the final projection so grouping columns and ORDER BY
+        // tie-breakers that aren't in the user SELECT stay in scope.
+        // DistinctOn provides the projection in that case (its select_expr
+        // list is wrapped in FIRST_VALUE during lowering).
         let plan = match select.distinct {
-            None => Ok(plan),
+            None | Some(Distinct::All) => {
+                self.try_process_unnest(plan, select_exprs_post_aggr)?
+            }
             Some(Distinct::Distinct) => {
-                LogicalPlanBuilder::from(plan).distinct()?.build()
+                let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
+                LogicalPlanBuilder::from(plan).distinct()?.build()?
             }
-            Some(Distinct::On(on_expr)) => {
-                if !aggr_exprs.is_empty()
-                    || !group_by_exprs.is_empty()
-                    || !window_func_exprs.is_empty()
+            Some(Distinct::On(_)) => {
+                if aggr_exprs.is_empty()
+                    && group_by_exprs.is_empty()
+                    && window_func_exprs.is_empty()
                 {
-                    return not_impl_err!("DISTINCT ON expressions with GROUP BY, aggregation or window functions are not supported ");
+                    // Fast path: no aggregation context. Fuse projection
+                    // and deduplication into a single DistinctOn over
+                    // `base_plan`. The sort attached to DistinctOn via
+                    // `with_sort_expr` later normalizes against base_plan,
+                    // so a bare ORDER BY alias (e.g. `ORDER BY x` where
+                    // SELECT has `a AS x`) must be swapped back to the
+                    // underlying input expression first.
+                    order_by_rex =
+                        substitute_top_level_aliases_in_sorts(order_by_rex, &alias_map);
+                    LogicalPlanBuilder::from(base_plan)
+                        .distinct_on(on_exprs_post_aggr, select_exprs, None)?
+                        .build()?
+                } else {
+                    // General path: DistinctOn layered over the post-
+                    // aggregate / post-window plan (no extra Projection
+                    // node — DistinctOn's lowering wraps each select_expr
+                    // in FIRST_VALUE, which acts as the projection).
+                    //
+                    // The DistinctOn input has the post-aggregate raw
+                    // column names (e.g. `max(t.c4)`), not the user-facing
+                    // SELECT aliases (`agg2`). ORDER BY may reference
+                    // those aliases — substitute them back to the
+                    // underlying post-aggregate expression so they
+                    // resolve against the DistinctOn input.
+                    let select_alias_map = extract_aliases(&select_exprs_post_aggr);
+                    order_by_rex = substitute_top_level_aliases_in_sorts(
+                        order_by_rex,
+                        &select_alias_map,
+                    );
+
+                    let DistinctOnUnnestPlanResult {
+                        plan,
+                        select_exprs: select_exprs_post_aggr,
+                        on_exprs: on_exprs_post_aggr,
+                        order_by_exprs: rewritten_order_by_rex,
+                    } = self.try_process_distinct_on_unnest(
+                        plan,
+                        select_exprs_post_aggr,
+                        on_exprs_post_aggr,
+                        order_by_rex,
+                    )?;
+                    order_by_rex = rewritten_order_by_rex;
+
+                    LogicalPlanBuilder::from(plan)
+                        .distinct_on(on_exprs_post_aggr, select_exprs_post_aggr, None)?
+                        .build()?
                 }
-
-                let on_expr = on_expr
-                    .into_iter()
-                    .map(|e| {
-                        self.sql_expr_to_logical_expr(e, plan.schema(), planner_context)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                // Build the final plan
-                LogicalPlanBuilder::from(base_plan)
-                    .distinct_on(on_expr, select_exprs, None)?
-                    .build()
             }
-        }?;
+        };
 
         // DISTRIBUTE BY
         let plan = if !select.distribute_by.is_empty() {
@@ -366,7 +527,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        self.order_by(plan, order_by_rex)
+        let plan = self.order_by(plan, order_by_rex)?;
+        Ok(plan)
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
@@ -375,83 +537,188 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
+        let RewrittenUnnestExprGroups { plan, expr_groups } = self
+            .rewrite_unnest_expr_groups(
+                input,
+                select_exprs.into_iter().map(|expr| vec![expr]).collect(),
+            )?;
+
+        LogicalPlanBuilder::from(plan)
+            .project(flatten_expr_groups(expr_groups))?
+            .build()
+    }
+
+    /// Rewrites SELECT-list UNNESTs while keeping hidden DISTINCT ON / ORDER
+    /// BY inputs available to the DistinctOn node.
+    fn try_process_distinct_on_unnest(
+        &self,
+        input: LogicalPlan,
+        select_exprs: Vec<Expr>,
+        on_exprs: Vec<Expr>,
+        order_by_exprs: Vec<SortExpr>,
+    ) -> Result<DistinctOnUnnestPlanResult> {
+        let select_len = select_exprs.len();
+        let on_len = on_exprs.len();
+        let mut expr_groups = select_exprs
+            .into_iter()
+            .map(|expr| vec![expr])
+            .collect::<Vec<_>>();
+        expr_groups.extend(on_exprs.into_iter().map(|expr| vec![expr]));
+        expr_groups.extend(
+            order_by_exprs
+                .iter()
+                .map(|sort_expr| vec![sort_expr.expr.clone()]),
+        );
+
+        let RewrittenUnnestExprGroups {
+            plan,
+            mut expr_groups,
+        } = self.rewrite_unnest_expr_groups(input, expr_groups)?;
+
+        let rewritten_select_exprs =
+            flatten_expr_groups(expr_groups.drain(..select_len).collect());
+        let rewritten_on_exprs = expr_groups
+            .drain(..on_len)
+            .map(|exprs| self.expect_single_distinct_on_expr(exprs, "DISTINCT ON"))
+            .collect::<Result<Vec<_>>>()?;
+        let rewritten_order_by_exprs = order_by_exprs
+            .into_iter()
+            .zip(expr_groups)
+            .map(|(sort_expr, exprs)| {
+                Ok(sort_expr
+                    .with_expr(self.expect_single_distinct_on_expr(exprs, "ORDER BY")?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(DistinctOnUnnestPlanResult {
+            plan,
+            select_exprs: rewritten_select_exprs,
+            on_exprs: rewritten_on_exprs,
+            order_by_exprs: rewritten_order_by_exprs,
+        })
+    }
+
+    fn expect_single_distinct_on_expr(
+        &self,
+        exprs: Vec<Expr>,
+        clause: &str,
+    ) -> Result<Expr> {
+        if exprs.len() == 1 {
+            return Ok(exprs.into_iter().next().expect("len checked above"));
+        }
+
+        not_impl_err!(
+            "{clause} expressions that expand to multiple columns are not supported with DISTINCT ON"
+        )
+    }
+
+    fn rewrite_unnest_expr_groups(
+        &self,
+        input: LogicalPlan,
+        expr_groups: Vec<Vec<Expr>>,
+    ) -> Result<RewrittenUnnestExprGroups> {
         // Try process group by unnest
         let input = self.try_process_aggregate_unnest(input)?;
 
         let mut intermediate_plan = input;
-        let mut intermediate_select_exprs = select_exprs;
-        // Fast path: If there is are no unnests in the select_exprs, wrap the plan in a projection
-        if !intermediate_select_exprs
-            .iter()
-            .any(has_unnest_expr_recursively)
-        {
-            return LogicalPlanBuilder::from(intermediate_plan)
-                .project(intermediate_select_exprs)?
-                .build();
-        }
+        let mut intermediate_expr_groups = expr_groups;
 
-        // Each expr in select_exprs can contains multiple unnest stage
-        // The transformation happen bottom up, one at a time for each iteration
-        // Only exhaust the loop if no more unnest transformation is found
-        for i in 0.. {
+        loop {
             let mut unnest_columns = IndexMap::new();
-            // from which column used for projection, before the unnest happen
-            // including non unnest column and unnest column
+            // from which columns used for projection, before the unnest happen
+            // including non unnest columns and unnest columns
             let mut inner_projection_exprs = vec![];
+            let mut outer_expr_groups =
+                Vec::with_capacity(intermediate_expr_groups.len());
 
-            // expr returned here maybe different from the originals in inner_projection_exprs
-            // for example:
-            // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
-            // - unnest(array_col) will be transformed into unnest(array_col).element
-            // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
-            let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
-                &intermediate_plan,
-                &mut unnest_columns,
-                &mut inner_projection_exprs,
-                &intermediate_select_exprs,
-            )?;
+            for expr_group in &intermediate_expr_groups {
+                let mut outer_expr_group = vec![];
+                for expr in expr_group {
+                    let mut rewritten_exprs = rewrite_recursive_unnest_bottom_up(
+                        &intermediate_plan,
+                        &mut unnest_columns,
+                        &mut inner_projection_exprs,
+                        expr,
+                    )?;
+
+                    if let Some(columns) =
+                        self.get_struct_unnest_columns(&intermediate_plan, expr)?
+                    {
+                        rewritten_exprs = rewritten_exprs
+                            .into_iter()
+                            .zip(columns)
+                            .map(|(expr, column)| expr.alias(column.flat_name()))
+                            .collect();
+                    }
+
+                    outer_expr_group.extend(rewritten_exprs);
+                }
+                outer_expr_groups.push(outer_expr_group);
+            }
 
             // No more unnest is possible
             if unnest_columns.is_empty() {
-                // The original expr does not contain any unnest
-                if i == 0 {
-                    return LogicalPlanBuilder::from(intermediate_plan)
-                        .project(intermediate_select_exprs)?
-                        .build();
-                }
-                break;
-            } else {
-                // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
-                let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-                let mut unnest_col_vec = vec![];
-
-                for (col, maybe_list_unnest) in unnest_columns.into_iter() {
-                    if let Some(list_unnest) = maybe_list_unnest {
-                        unnest_options = list_unnest.into_iter().fold(
-                            unnest_options,
-                            |options, unnest_list| {
-                                options.with_recursions(RecursionUnnestOption {
-                                    input_column: col.clone(),
-                                    output_column: unnest_list.output_column,
-                                    depth: unnest_list.depth,
-                                })
-                            },
-                        );
-                    }
-                    unnest_col_vec.push(col);
-                }
-                let plan = LogicalPlanBuilder::from(intermediate_plan)
-                    .project(inner_projection_exprs)?
-                    .unnest_columns_with_options(unnest_col_vec, unnest_options)?
-                    .build()?;
-                intermediate_plan = plan;
-                intermediate_select_exprs = outer_projection_exprs;
+                return Ok(RewrittenUnnestExprGroups {
+                    plan: intermediate_plan,
+                    expr_groups: intermediate_expr_groups,
+                });
             }
-        }
 
-        LogicalPlanBuilder::from(intermediate_plan)
-            .project(intermediate_select_exprs)?
-            .build()
+            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
+            let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+            let mut unnest_col_vec = vec![];
+
+            for (col, maybe_list_unnest) in unnest_columns.into_iter() {
+                if let Some(list_unnest) = maybe_list_unnest {
+                    unnest_options = list_unnest.into_iter().fold(
+                        unnest_options,
+                        |options, unnest_list| {
+                            options.with_recursions(RecursionUnnestOption {
+                                input_column: col.clone(),
+                                output_column: unnest_list.output_column,
+                                depth: unnest_list.depth,
+                            })
+                        },
+                    );
+                }
+                unnest_col_vec.push(col);
+            }
+
+            intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
+                .project(inner_projection_exprs)?
+                .unnest_columns_with_options(unnest_col_vec, unnest_options)?
+                .build()?;
+            intermediate_expr_groups = outer_expr_groups;
+        }
+    }
+
+    fn get_struct_unnest_columns(
+        &self,
+        input: &LogicalPlan,
+        expr: &Expr,
+    ) -> Result<Option<Vec<Column>>> {
+        let unnest_expr = match expr {
+            Expr::Unnest(unnest_expr) => Some(unnest_expr),
+            Expr::Alias(alias) => match alias.expr.as_ref() {
+                Expr::Unnest(unnest_expr) => Some(unnest_expr),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        let Some(unnest_expr) = unnest_expr else {
+            return Ok(None);
+        };
+
+        let field = unnest_expr.expr.to_field(input.schema())?.1;
+        let DataType::Struct(inner_fields) = field.data_type() else {
+            return Ok(None);
+        };
+
+        Ok(Some(get_struct_unnested_columns(
+            &unnest_expr.expr.schema_name().to_string(),
+            inner_fields,
+        )))
     }
 
     fn try_process_aggregate_unnest(&self, input: LogicalPlan) -> Result<LogicalPlan> {
@@ -535,9 +802,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } else {
                 let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
 
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut projection_exprs = match &aggr_expr_using_columns {
                     Some(exprs) => (*exprs).clone(),
                     None => {
+                        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                         let mut columns = HashSet::new();
                         for expr in &aggr_expr {
                             expr.apply(|expr| {
@@ -594,11 +864,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match selection {
             Some(predicate_expr) => {
                 let fallback_schemas = plan.fallback_normalize_schemas();
-                let outer_query_schema = planner_context.outer_query_schema().cloned();
-                let outer_query_schema_vec = outer_query_schema
-                    .as_ref()
-                    .map(|schema| vec![schema])
-                    .unwrap_or_else(Vec::new);
 
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
@@ -614,9 +879,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
+                let mut schema_stack: Vec<Vec<&DFSchema>> =
+                    vec![vec![plan.schema()], fallback_schemas];
+                for sc in planner_context.outer_schemas_iter() {
+                    schema_stack.push(vec![sc.as_ref()]);
+                }
+
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
                     filter_expr,
-                    &[&[plan.schema()], &fallback_schemas, &outer_query_schema_vec],
+                    schema_stack
+                        .iter()
+                        .map(|sc| sc.as_slice())
+                        .collect::<Vec<&[&DFSchema]>>()
+                        .as_slice(),
                     &[using_columns],
                 )?;
 
@@ -721,6 +996,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 Ok(SelectExpr::Expression(expr))
             }
+            SelectItem::ExprWithAliases { .. } => {
+                not_impl_err!("SELECT item with multiple aliases is not supported")
+            }
             SelectItem::Wildcard(options) => {
                 Self::check_wildcard_options(&options)?;
                 if empty_from {
@@ -744,7 +1022,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     SelectItemQualifiedWildcardKind::Expr(_) => {
                         return plan_err!(
                             "Qualified wildcard with expression not supported"
-                        )
+                        );
                     }
                 };
                 let qualifier = self.object_name_to_table_reference(object_name)?;
@@ -768,11 +1046,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             opt_rename,
             opt_replace: _opt_replace,
             opt_ilike: _opt_ilike,
+            opt_alias,
             wildcard_token: _wildcard_token,
         } = options;
 
         if opt_rename.is_some() {
             not_impl_err!("wildcard * with RENAME not supported ")
+        } else if opt_alias.is_some() {
+            not_impl_err!("wildcard * with AS alias not supported")
         } else {
             Ok(())
         }
@@ -830,18 +1111,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         input: LogicalPlan,
         expr: Vec<SelectExpr>,
+        set_expr_left_schema: Option<DFSchemaRef>,
     ) -> Result<LogicalPlan> {
         // convert to Expr for validate_schema_satisfies_exprs
-        let exprs = expr
+        let plain_exprs = expr
             .iter()
             .filter_map(|e| match e {
                 SelectExpr::Expression(expr) => Some(expr.to_owned()),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        self.validate_schema_satisfies_exprs(input.schema(), &exprs)?;
+        self.validate_schema_satisfies_exprs(input.schema(), &plain_exprs)?;
 
-        LogicalPlanBuilder::from(input).project(expr)?.build()
+        // When inside a set expression, pass the left-most schema so
+        // that expressions get aliased to match, avoiding duplicate
+        // name errors from expressions like `count(*), count(*)`.
+        let builder = LogicalPlanBuilder::from(input);
+        if let Some(left_schema) = set_expr_left_schema {
+            builder
+                .project_with_validation_and_schema(expr, &left_schema)?
+                .build()
+        } else {
+            builder.project(expr)?.build()
+        }
     }
 
     /// Create an aggregate plan.
@@ -872,16 +1164,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///   the aggregate
     /// * `qualify_expr_post_aggr`  - The "qualify" expression rewritten to reference a column from
     ///   the aggregate
-    #[allow(clippy::type_complexity)]
+    /// * `order_by_post_aggr`     - The ORDER BY expressions rewritten to reference columns from
+    ///   the aggregate
+    #[expect(clippy::too_many_arguments)]
     fn aggregate(
         &self,
         input: &LogicalPlan,
         select_exprs: &[Expr],
         having_expr_opt: Option<&Expr>,
         qualify_expr_opt: Option<&Expr>,
+        order_by_exprs: &[SortExpr],
+        on_exprs: &[Expr],
         group_by_exprs: &[Expr],
         aggr_exprs: &[Expr],
-    ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>, Option<Expr>)> {
+    ) -> Result<AggregatePlanResult> {
         // create the aggregate plan
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
@@ -988,12 +1284,86 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             None
         };
 
-        Ok((
+        // Rewrite the ORDER BY expressions to use the columns produced by the
+        // aggregation. If an ORDER BY expression matches a SELECT expression
+        // (ignoring aliases), use the SELECT's output column name to avoid
+        // duplication when the SELECT expression has an alias.
+        let order_by_post_aggr = order_by_exprs
+            .iter()
+            .map(|sort_expr| {
+                let rewritten_expr =
+                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, input)?;
+
+                // Check if this ORDER BY expression matches any aliased SELECT expression
+                // If so, use the SELECT's alias instead of the raw expression
+                let final_expr = select_exprs_post_aggr
+                    .iter()
+                    .find_map(|select_expr| {
+                        // Only consider aliased expressions
+                        if let Expr::Alias(alias) = select_expr {
+                            let rewritten_unaliased = match &rewritten_expr {
+                                Expr::Alias(a) => a.expr.as_ref(),
+                                other => other,
+                            };
+                            if alias.expr.as_ref() == rewritten_unaliased {
+                                return Some(Expr::Column(Column::new_unqualified(
+                                    alias.name.clone(),
+                                )));
+                            }
+                        }
+                        None
+                    })
+                    .unwrap_or(rewritten_expr);
+
+                Ok(sort_expr.with_expr(final_expr))
+            })
+            .collect::<Result<Vec<SortExpr>>>()?;
+
+        let all_valid_exprs: Vec<Expr> = column_exprs_post_aggr
+            .iter()
+            .cloned()
+            .chain(select_exprs_post_aggr.iter().filter_map(|e| {
+                if let Expr::Alias(alias) = e {
+                    Some(Expr::Column(Column::new_unqualified(alias.name.clone())))
+                } else {
+                    None
+                }
+            }))
+            .collect();
+
+        let order_by_exprs_only: Vec<Expr> =
+            order_by_post_aggr.iter().map(|s| s.expr.clone()).collect();
+        check_columns_satisfy_exprs(
+            &all_valid_exprs,
+            &order_by_exprs_only,
+            CheckColumnsSatisfyExprsPurpose::Aggregate(
+                CheckColumnsMustReferenceAggregatePurpose::OrderBy,
+            ),
+        )?;
+
+        // Rewrite the DISTINCT ON expressions to use the columns produced by
+        // the aggregation. Same shape as ORDER BY rewriting so a hidden
+        // grouping column or a raw aggregate expression in ON is resolved.
+        let on_exprs_post_aggr = on_exprs
+            .iter()
+            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
+            .collect::<Result<Vec<Expr>>>()?;
+        check_columns_satisfy_exprs(
+            &all_valid_exprs,
+            &on_exprs_post_aggr,
+            CheckColumnsSatisfyExprsPurpose::Aggregate(
+                CheckColumnsMustReferenceAggregatePurpose::DistinctOn,
+            ),
+        )?;
+
+        Ok(AggregatePlanResult {
             plan,
-            select_exprs_post_aggr,
-            having_expr_post_aggr,
-            qualify_expr_post_aggr,
-        ))
+            select_exprs: select_exprs_post_aggr,
+            having_expr: having_expr_post_aggr,
+            qualify_expr: qualify_expr_post_aggr,
+            order_by_exprs: order_by_post_aggr,
+            on_exprs: on_exprs_post_aggr,
+        })
     }
 
     // If the projection is done over a named window, that window
@@ -1013,32 +1383,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             {
                 let mut err = None;
                 let _ = visit_expressions_mut(expr, |expr| {
-                    if let SQLExpr::Function(f) = expr {
+                    if let SQLExpr::Function(f) = expr
+                        && let Some(WindowType::NamedWindow(ident)) = &f.over
+                    {
+                        let normalized_ident =
+                            self.ident_normalizer.normalize(ident.clone());
+                        for (
+                            NamedWindowDefinition(_, window_expr),
+                            normalized_window_ident,
+                        ) in named_windows.iter()
+                        {
+                            if normalized_ident.eq(normalized_window_ident) {
+                                f.over = Some(match window_expr {
+                                    NamedWindowExpr::NamedWindow(ident) => {
+                                        WindowType::NamedWindow(ident.clone())
+                                    }
+                                    NamedWindowExpr::WindowSpec(spec) => {
+                                        WindowType::WindowSpec(spec.clone())
+                                    }
+                                })
+                            }
+                        }
+                        // All named windows must be defined with a WindowSpec.
                         if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                            let normalized_ident =
-                                self.ident_normalizer.normalize(ident.clone());
-                            for (
-                                NamedWindowDefinition(_, window_expr),
-                                normalized_window_ident,
-                            ) in named_windows.iter()
-                            {
-                                if normalized_ident.eq(normalized_window_ident) {
-                                    f.over = Some(match window_expr {
-                                        NamedWindowExpr::NamedWindow(ident) => {
-                                            WindowType::NamedWindow(ident.clone())
-                                        }
-                                        NamedWindowExpr::WindowSpec(spec) => {
-                                            WindowType::WindowSpec(spec.clone())
-                                        }
-                                    })
-                                }
-                            }
-                            // All named windows must be defined with a WindowSpec.
-                            if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                                err =
-                                    Some(plan_err!("The window {ident} is not defined!"));
-                                return ControlFlow::Break(());
-                            }
+                            err = Some(plan_err!("The window {ident} is not defined!"));
+                            return ControlFlow::Break(());
                         }
                     }
                     ControlFlow::Continue(())

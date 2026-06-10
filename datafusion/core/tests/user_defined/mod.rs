@@ -36,5 +36,12 @@ mod user_defined_table_functions;
 /// Tests for Expression Planner
 mod expr_planner;
 
+/// Tests for Relation Planner extensions
+mod relation_planner;
+
 /// Tests for insert operations
 mod insert_operation;
+
+/// Tests for `StatisticsRequest`s flowing from a custom optimizer rule
+/// through the physical planner into a custom `TableProvider`.
+mod statistics_requests;

@@ -15,13 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::StableAbi;
-use datafusion::{datasource::TableType, logical_expr::TableProviderFilterPushDown};
+use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 /// FFI safe version of [`TableProviderFilterPushDown`].
-#[repr(C)]
-#[derive(StableAbi)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
+#[repr(u8)]
 pub enum FFI_TableProviderFilterPushDown {
     Unsupported,
     Inexact,
@@ -58,8 +56,7 @@ impl From<&TableProviderFilterPushDown> for FFI_TableProviderFilterPushDown {
 
 /// FFI safe version of [`TableType`].
 #[repr(C)]
-#[allow(non_camel_case_types)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StableAbi)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FFI_TableType {
     Base,
     View,
@@ -88,8 +85,9 @@ impl From<TableType> for FFI_TableType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion::error::Result;
+
+    use super::*;
 
     fn round_trip_filter_pushdown(pushdown: TableProviderFilterPushDown) -> Result<()> {
         let ffi_pushdown: FFI_TableProviderFilterPushDown = (&pushdown).into();

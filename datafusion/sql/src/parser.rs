@@ -20,9 +20,10 @@
 //! This parser implements DataFusion specific statements such as
 //! `CREATE EXTERNAL TABLE`
 
-use datafusion_common::config::SqlParserOptions;
 use datafusion_common::DataFusionError;
-use datafusion_common::{sql_err, Diagnostic, Span};
+use datafusion_common::config::SqlParserOptions;
+use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
+use datafusion_common::{Diagnostic, Span, sql_err};
 use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
@@ -30,12 +31,13 @@ use sqlparser::{
         ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
         Statement as SQLStatement, TableConstraint, Value,
     },
-    dialect::{keywords::Keyword, Dialect, GenericDialect},
+    dialect::{Dialect, GenericDialect, keywords::Keyword},
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer, Word},
 };
 use std::collections::VecDeque;
 use std::fmt;
+use std::str::FromStr;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -55,18 +57,25 @@ fn parse_file_type(s: &str) -> Result<String, DataFusionError> {
 
 /// DataFusion specific `EXPLAIN`
 ///
-/// Syntax:
+/// Supports both the legacy keyword form and, on dialects whose
+/// [`Dialect::supports_explain_with_utility_options`] returns `true`
+/// (PostgreSQL, DuckDB, etc.), the Postgres-style parenthesized option list:
+///
 /// ```sql
+/// -- Legacy keyword form (any dialect)
 /// EXPLAIN <ANALYZE> <VERBOSE> [FORMAT format] statement
+///
+/// -- Postgres-style option form (dialect-gated)
+/// EXPLAIN (option [arg] [, ...]) statement
 /// ```
+///
+/// See [`ExplainStatementOptions`] for the list of supported options in the
+/// parenthesized form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplainStatement {
-    /// `EXPLAIN ANALYZE ..`
-    pub analyze: bool,
-    /// `EXPLAIN .. VERBOSE ..`
-    pub verbose: bool,
-    /// `EXPLAIN .. FORMAT `
-    pub format: Option<String>,
+    /// Normalized options parsed from either the legacy keyword form or the
+    /// parenthesized option list.
+    pub options: ExplainStatementOptions,
     /// The statement to analyze. Note this is a DataFusion [`Statement`] (not a
     /// [`sqlparser::ast::Statement`] so that we can use `EXPLAIN`, `COPY`, and other
     /// DataFusion specific statements
@@ -75,22 +84,47 @@ pub struct ExplainStatement {
 
 impl fmt::Display for ExplainStatement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            analyze,
-            verbose,
-            format,
-            statement,
-        } = self;
+        let Self { options, statement } = self;
+
+        // If only the legacy-era fields are set, print the legacy keyword
+        // form so existing round-trip tests continue to pass.
+        let uses_parenthesized = options.analyze_level.is_some()
+            || options.analyze_categories.is_some()
+            || options.show_statistics.is_some();
 
         write!(f, "EXPLAIN ")?;
-        if *analyze {
-            write!(f, "ANALYZE ")?;
-        }
-        if *verbose {
-            write!(f, "VERBOSE ")?;
-        }
-        if let Some(format) = format.as_ref() {
-            write!(f, "FORMAT {format} ")?;
+        if uses_parenthesized {
+            // Emit a parenthesized option list.
+            let mut parts: Vec<String> = Vec::new();
+            if options.analyze {
+                parts.push("ANALYZE".to_string());
+            }
+            if options.verbose {
+                parts.push("VERBOSE".to_string());
+            }
+            if let Some(format) = &options.format {
+                parts.push(format!("FORMAT {format}"));
+            }
+            if let Some(level) = options.analyze_level {
+                parts.push(format!("LEVEL {level}"));
+            }
+            if let Some(cats) = &options.analyze_categories {
+                parts.push(format!("METRICS '{cats}'"));
+            }
+            if let Some(stats) = options.show_statistics {
+                parts.push(format!("COSTS {}", if stats { "ON" } else { "OFF" }));
+            }
+            write!(f, "({}) ", parts.join(", "))?;
+        } else {
+            if options.analyze {
+                write!(f, "ANALYZE ")?;
+            }
+            if options.verbose {
+                write!(f, "VERBOSE ")?;
+            }
+            if let Some(format) = &options.format {
+                write!(f, "FORMAT {format} ")?;
+            }
         }
 
         write!(f, "{statement}")
@@ -325,6 +359,10 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionErro
 pub struct DFParser<'a> {
     pub parser: Parser<'a>,
     options: SqlParserOptions,
+    /// Whether the configured dialect supports Postgres-style
+    /// `EXPLAIN (option, ...)` utility-option syntax. Cached here because
+    /// sqlparser's [`Parser::dialect`] field is private.
+    supports_explain_with_utility_options: bool,
 }
 
 /// Same as `sqlparser`
@@ -363,28 +401,49 @@ const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 /// # Ok(())
 /// # }
 /// ```
-pub struct DFParserBuilder<'a> {
-    /// The SQL string to parse
-    sql: &'a str,
+pub struct DFParserBuilder<'a, 'b> {
+    /// Parser input: either raw SQL or tokens
+    input: ParserInput<'a>,
     /// The Dialect to use (defaults to [`GenericDialect`]
-    dialect: &'a dyn Dialect,
+    dialect: &'b dyn Dialect,
     /// The recursion limit while parsing
     recursion_limit: usize,
 }
 
-impl<'a> DFParserBuilder<'a> {
+/// Describes a possible input for parser
+pub enum ParserInput<'a> {
+    /// Raw SQL. Tokenization will be performed automatically as a
+    /// part of [`DFParserBuilder::build`]
+    Sql(&'a str),
+    /// Tokens
+    Tokens(Vec<TokenWithSpan>),
+}
+
+impl<'a> From<&'a str> for ParserInput<'a> {
+    fn from(sql: &'a str) -> Self {
+        Self::Sql(sql)
+    }
+}
+
+impl From<Vec<TokenWithSpan>> for ParserInput<'static> {
+    fn from(tokens: Vec<TokenWithSpan>) -> Self {
+        Self::Tokens(tokens)
+    }
+}
+
+impl<'a, 'b> DFParserBuilder<'a, 'b> {
     /// Create a new parser builder for the specified tokens using the
     /// [`GenericDialect`].
-    pub fn new(sql: &'a str) -> Self {
+    pub fn new(input: impl Into<ParserInput<'a>>) -> Self {
         Self {
-            sql,
+            input: input.into(),
             dialect: &DEFAULT_DIALECT,
             recursion_limit: DEFAULT_RECURSION_LIMIT,
         }
     }
 
     /// Adjust the parser builder's dialect. Defaults to [`GenericDialect`]
-    pub fn with_dialect(mut self, dialect: &'a dyn Dialect) -> Self {
+    pub fn with_dialect(mut self, dialect: &'b dyn Dialect) -> Self {
         self.dialect = dialect;
         self
     }
@@ -395,12 +454,18 @@ impl<'a> DFParserBuilder<'a> {
         self
     }
 
-    pub fn build(self) -> Result<DFParser<'a>, DataFusionError> {
-        let mut tokenizer = Tokenizer::new(self.dialect, self.sql);
-        // Convert TokenizerError -> ParserError
-        let tokens = tokenizer
-            .tokenize_with_location()
-            .map_err(ParserError::from)?;
+    /// Build resulting parser
+    pub fn build(self) -> Result<DFParser<'b>, DataFusionError> {
+        let tokens = match self.input {
+            ParserInput::Tokens(tokens) => tokens,
+            ParserInput::Sql(sql) => {
+                let mut tokenizer = Tokenizer::new(self.dialect, sql);
+                // Convert TokenizerError -> ParserError
+                tokenizer
+                    .tokenize_with_location()
+                    .map_err(ParserError::from)?
+            }
+        };
 
         Ok(DFParser {
             parser: Parser::new(self.dialect)
@@ -410,7 +475,31 @@ impl<'a> DFParserBuilder<'a> {
                 recursion_limit: self.recursion_limit,
                 ..Default::default()
             },
+            supports_explain_with_utility_options: self
+                .dialect
+                .supports_explain_with_utility_options(),
         })
+    }
+}
+
+/// Returns true when `tok` is the start of a query / parenthesized query
+/// group. Used to disambiguate `EXPLAIN (SELECT ...)` (a parenthesized query)
+/// from `EXPLAIN (ANALYZE) SELECT ...` (a Postgres-style option list).
+fn token_starts_query(tok: &Token) -> bool {
+    match tok {
+        Token::LParen => true,
+        Token::Word(Word { keyword, .. }) => matches!(
+            keyword,
+            Keyword::SELECT
+                | Keyword::WITH
+                | Keyword::VALUES
+                | Keyword::TABLE
+                | Keyword::INSERT
+                | Keyword::UPDATE
+                | Keyword::DELETE
+                | Keyword::MERGE
+        ),
+        _ => false,
     }
 }
 
@@ -640,7 +729,9 @@ impl<'a> DFParser<'a> {
                     Keyword::WITH => {
                         self.parser.expect_keyword(Keyword::HEADER)?;
                         self.parser.expect_keyword(Keyword::ROW)?;
-                        return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS ('format.has_header' 'true')")?;
+                        return parser_err!(
+                            "WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS ('format.has_header' 'true')"
+                        )?;
                     }
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
@@ -656,7 +747,7 @@ impl<'a> DFParser<'a> {
                     }
                 }
             } else {
-                let token = self.parser.next_token();
+                let token = self.parser.peek_token();
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
@@ -729,18 +820,46 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parse a SQL `EXPLAIN`
+    ///
+    /// After the `EXPLAIN` keyword, if the dialect supports the Postgres-style
+    /// option list and the next non-whitespace token is `(`, we must
+    /// disambiguate between an option list (`EXPLAIN (ANALYZE) SELECT ...`)
+    /// and a parenthesized query (`EXPLAIN (SELECT ...)` or
+    /// `EXPLAIN (q1 EXCEPT q2) UNION ALL ...`).
     pub fn parse_explain(&mut self) -> Result<Statement, DataFusionError> {
+        if self.supports_explain_with_utility_options
+            && self.parser.peek_token().token == Token::LParen
+            && !token_starts_query(&self.parser.peek_nth_token(1).token)
+        {
+            let raw = self.parser.parse_utility_options()?;
+            let options = ExplainStatementOptions::from_utility_options(&raw)?;
+            let statement = self.parse_statement()?;
+            return Ok(Statement::Explain(ExplainStatement {
+                statement: Box::new(statement),
+                options,
+            }));
+        }
+
+        // Legacy keyword form.
         let analyze = self.parser.parse_keyword(Keyword::ANALYZE);
         let verbose = self.parser.parse_keyword(Keyword::VERBOSE);
-        let format = self.parse_explain_format()?;
+        let format = self
+            .parse_explain_format()?
+            .map(|s| ExplainFormat::from_str(&s))
+            .transpose()?;
 
         let statement = self.parse_statement()?;
 
-        Ok(Statement::Explain(ExplainStatement {
-            statement: Box::new(statement),
+        let options = ExplainStatementOptions {
             analyze,
             verbose,
             format,
+            ..Default::default()
+        };
+
+        Ok(Statement::Explain(ExplainStatement {
+            statement: Box::new(statement),
+            options,
         }))
     }
 
@@ -1024,15 +1143,21 @@ impl<'a> DFParser<'a> {
                         } else {
                             self.parser.expect_keyword(Keyword::HEADER)?;
                             self.parser.expect_keyword(Keyword::ROW)?;
-                            return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS (format.has_header true)")?;
+                            return parser_err!(
+                                "WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS (format.has_header true)"
+                            )?;
                         }
                     }
                     Keyword::DELIMITER => {
-                        return parser_err!("DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS (format.delimiter ',')")?;
+                        return parser_err!(
+                            "DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS (format.delimiter ',')"
+                        )?;
                     }
                     Keyword::COMPRESSION => {
                         self.parser.expect_keyword(Keyword::TYPE)?;
-                        return parser_err!("COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS (format.compression gzip)")?;
+                        return parser_err!(
+                            "COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS (format.compression gzip)"
+                        )?;
                     }
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
@@ -1071,7 +1196,7 @@ impl<'a> DFParser<'a> {
                     }
                 }
             } else {
-                let token = self.parser.next_token();
+                let token = self.parser.peek_token();
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
@@ -1154,7 +1279,7 @@ mod tests {
         BinaryOperator, DataType, ExactNumberInfo, Expr, Ident, ValueWithSpan,
     };
     use sqlparser::dialect::SnowflakeDialect;
-    use sqlparser::tokenizer::Span;
+    use sqlparser::tokenizer::{Location, Span, Whitespace};
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), DataFusionError> {
         let statements = DFParser::parse_sql(sql)?;
@@ -1385,8 +1510,7 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for avro files not to have columns specified
-        let sql =
-            "CREATE EXTERNAL TABLE IF NOT EXISTS t STORED AS PARQUET LOCATION 'foo.parquet'";
+        let sql = "CREATE EXTERNAL TABLE IF NOT EXISTS t STORED AS PARQUET LOCATION 'foo.parquet'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: name.clone(),
             columns: vec![],
@@ -1423,8 +1547,7 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // positive case: column definition allowed in 'partition by' clause
-        let sql =
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: name.clone(),
             columns: vec![
@@ -1445,17 +1568,18 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
-        let sql =
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int, c1) LOCATION 'foo.csv'";
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int, c1) LOCATION 'foo.csv'";
         expect_parse_error(
             sql,
             "SQL error: ParserError(\"Expected: a data type name, found: ) at Line: 1, Column: 73\")",
         );
 
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
-        let sql =
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 int) LOCATION 'foo.csv'";
-        expect_parse_error(sql, "SQL error: ParserError(\"Expected: ',' or ')' after partition definition, found: int at Line: 1, Column: 70\")");
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 int) LOCATION 'foo.csv'";
+        expect_parse_error(
+            sql,
+            "SQL error: ParserError(\"Expected: ',' or ')' after partition definition, found: int at Line: 1, Column: 70\")",
+        );
 
         // positive case: additional options (one entry) can be specified
         let sql =
@@ -1477,8 +1601,7 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // positive case: additional options (multiple entries) can be specified
-        let sql =
-            "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2) LOCATION 'blahblah'";
+        let sql = "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2) LOCATION 'blahblah'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: name.clone(),
             columns: vec![],
@@ -1499,15 +1622,17 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // Ordered Col
-        let sqls = ["CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS FIRST) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS LAST) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS FIRST) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS LAST) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS FIRST) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS LAST) LOCATION 'foo.csv'"];
+        let sqls = [
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS FIRST) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS LAST) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS FIRST) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS LAST) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS FIRST) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS LAST) LOCATION 'foo.csv'",
+        ];
         let expected = vec![
             (None, None),
             (None, Some(true)),
@@ -1519,7 +1644,7 @@ mod tests {
             (Some(true), Some(true)),
             (Some(true), Some(false)),
         ];
-        for (sql, (asc, nulls_first)) in sqls.iter().zip(expected.into_iter()) {
+        for (sql, (asc, nulls_first)) in sqls.iter().zip(expected) {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
                 name: name.clone(),
                 columns: vec![make_column_def("c1", DataType::Int(None))],
@@ -1838,9 +1963,14 @@ mod tests {
                 options: vec![],
             });
             let expected = Statement::Explain(ExplainStatement {
-                analyze,
-                verbose,
-                format: None,
+                options: ExplainStatementOptions {
+                    analyze,
+                    verbose,
+                    format: None,
+                    analyze_level: None,
+                    analyze_categories: None,
+                    show_statistics: None,
+                },
                 statement: Box::new(expected_copy),
             });
             assert_eq!(verified_stmt(sql), expected);
@@ -1918,8 +2048,7 @@ mod tests {
     #[test]
     fn copy_to_multi_options() -> Result<(), DataFusionError> {
         // order of options is preserved
-        let sql =
-            "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy, 'execution.keep_partition_by_columns' true)";
+        let sql = "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy, 'execution.keep_partition_by_columns' true)";
 
         let expected_options = vec![
             (
@@ -2019,6 +2148,78 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_multistatement() {
+        let sql = "COPY foo TO bar STORED AS CSV; \
+             CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'; \
+             RESET var;";
+        let statements = DFParser::parse_sql(sql).unwrap();
+        assert_eq!(
+            statements,
+            vec![
+                Statement::CopyTo(CopyToStatement {
+                    source: object_name("foo"),
+                    target: "bar".to_string(),
+                    partitioned_by: vec![],
+                    stored_as: Some("CSV".to_owned()),
+                    options: vec![],
+                }),
+                {
+                    let name = ObjectName::from(vec![Ident::from("t")]);
+                    let display = None;
+                    Statement::CreateExternalTable(CreateExternalTable {
+                        name: name.clone(),
+                        columns: vec![make_column_def("c1", DataType::Int(display))],
+                        file_type: "CSV".to_string(),
+                        location: "foo.csv".into(),
+                        table_partition_cols: vec![],
+                        order_exprs: vec![],
+                        if_not_exists: false,
+                        or_replace: false,
+                        temporary: false,
+                        unbounded: false,
+                        options: vec![],
+                        constraints: vec![],
+                    })
+                },
+                {
+                    let name = ObjectName::from(vec![Ident::from("var")]);
+                    Statement::Reset(ResetStatement::Variable(name))
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn test_custom_tokens() {
+        // Span mock.
+        let span = Span {
+            start: Location { line: 0, column: 0 },
+            end: Location { line: 0, column: 0 },
+        };
+        let tokens = vec![
+            TokenWithSpan {
+                token: Token::make_keyword("SELECT"),
+                span,
+            },
+            TokenWithSpan {
+                token: Token::Whitespace(Whitespace::Space),
+                span,
+            },
+            TokenWithSpan {
+                token: Token::Placeholder("1".to_string()),
+                span,
+            },
+        ];
+
+        let statements = DFParserBuilder::new(tokens)
+            .build()
+            .unwrap()
+            .parse_statements()
+            .unwrap();
+        assert_eq!(statements.len(), 1);
+    }
+
     fn expect_parse_expr_ok(sql: &str, expected: ExprWithAlias) {
         let expr = DFParser::parse_sql_into_expr(sql).unwrap();
         assert_eq!(expr, expected, "actual:\n{expr:#?}");
@@ -2096,5 +2297,165 @@ mod tests {
             "1234 as foo    bar",
             "Expected: end of expression, found: bar",
         )
+    }
+
+    // ------------------------------------------------------------------
+    // Postgres-style `EXPLAIN (option, ...)` tests
+    // ------------------------------------------------------------------
+
+    fn parse_with_pg(sql: &str) -> Result<Statement, DataFusionError> {
+        let dialect = sqlparser::dialect::PostgreSqlDialect {};
+        let mut statements = DFParser::parse_sql_with_dialect(sql, &dialect)?;
+        assert_eq!(statements.len(), 1, "Expected exactly one statement");
+        Ok(statements.pop_front().unwrap())
+    }
+
+    fn parse_with_generic(sql: &str) -> Result<Statement, DataFusionError> {
+        let mut statements = DFParser::parse_sql(sql)?;
+        assert_eq!(statements.len(), 1, "Expected exactly one statement");
+        Ok(statements.pop_front().unwrap())
+    }
+
+    #[test]
+    fn explain_legacy_keyword_form_postgres_dialect() {
+        // The legacy keyword form still works under PostgreSQL dialect.
+        let stmt = parse_with_pg("EXPLAIN ANALYZE VERBOSE SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert!(options.verbose);
+        assert!(options.format.is_none());
+        assert!(options.analyze_level.is_none());
+    }
+
+    #[test]
+    fn explain_paren_form_on_generic_supports_utility_options() {
+        // sqlparser's GenericDialect also declares
+        // `supports_explain_with_utility_options = true`, so DataFusion's
+        // default parser accepts the parenthesized form too.
+        let stmt = parse_with_generic("EXPLAIN (FORMAT TREE) SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert_eq!(options.format, Some(ExplainFormat::Tree));
+    }
+
+    #[test]
+    fn explain_paren_form_on_non_supporting_dialect_is_parse_error() {
+        // Dialects that do NOT declare support for utility options (e.g.
+        // Snowflake) must still error on the parenthesized form — proving
+        // the dialect gate itself works.
+        use sqlparser::dialect::SnowflakeDialect;
+        let dialect = SnowflakeDialect {};
+        let res =
+            DFParser::parse_sql_with_dialect("EXPLAIN (FORMAT TREE) SELECT 1", &dialect);
+        assert!(
+            res.is_err(),
+            "expected parse error under non-supporting dialect"
+        );
+    }
+
+    #[test]
+    fn explain_paren_grouping_query_is_not_mistaken_for_options() {
+        // Historic DataFusion behavior allows parentheses around the
+        // query after EXPLAIN (e.g. `EXPLAIN (SELECT ...)` or
+        // `EXPLAIN (q1 EXCEPT q2) UNION ALL (q3 EXCEPT q4)`). The dialect
+        // gate for Postgres-style options must not swallow these.
+        for sql in [
+            "EXPLAIN (SELECT 1)",
+            "EXPLAIN (WITH t AS (SELECT 1) SELECT * FROM t)",
+            "EXPLAIN (VALUES (1), (2))",
+            "EXPLAIN ((SELECT 1))",
+        ] {
+            let stmt = parse_with_pg(sql).unwrap_or_else(|e| {
+                panic!("{sql} failed under PG dialect: {e}");
+            });
+            let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+                panic!("Expected Statement::Explain for {sql}");
+            };
+            assert!(!options.analyze, "{sql} should not be ANALYZE");
+            assert!(!options.verbose, "{sql} should not be VERBOSE");
+            assert!(options.format.is_none(), "{sql} should have no FORMAT");
+        }
+    }
+
+    #[test]
+    fn explain_paren_form_analyze_verbose() {
+        let stmt = parse_with_pg("EXPLAIN (ANALYZE, VERBOSE) SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert!(options.verbose);
+    }
+
+    #[test]
+    fn explain_paren_form_format_tree() {
+        let stmt = parse_with_pg("EXPLAIN (FORMAT tree) SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(!options.analyze);
+        assert_eq!(options.format, Some(ExplainFormat::Tree));
+    }
+
+    #[test]
+    fn explain_paren_form_metrics_level() {
+        use datafusion_common::format::{
+            ExplainAnalyzeCategories, MetricCategory, MetricType,
+        };
+        let stmt =
+            parse_with_pg("EXPLAIN (ANALYZE, METRICS 'rows,bytes', LEVEL dev) SELECT 1")
+                .unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert_eq!(options.analyze_level, Some(MetricType::Dev));
+        assert_eq!(
+            options.analyze_categories,
+            Some(ExplainAnalyzeCategories::Only(vec![
+                MetricCategory::Rows,
+                MetricCategory::Bytes,
+            ]))
+        );
+    }
+
+    #[test]
+    fn explain_paren_form_bool_spellings() {
+        let stmt =
+            parse_with_pg("EXPLAIN (ANALYZE ON, VERBOSE OFF, COSTS TRUE) SELECT 1")
+                .unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert!(!options.verbose);
+        assert_eq!(options.show_statistics, Some(true));
+    }
+
+    #[test]
+    fn explain_paren_form_buffers_rejected() {
+        let err = parse_with_pg("EXPLAIN (BUFFERS) SELECT 1").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("BUFFERS"),
+            "error should mention BUFFERS: {msg}"
+        );
+        assert!(
+            msg.contains("not supported"),
+            "error should say not supported: {msg}"
+        );
+    }
+
+    #[test]
+    fn explain_paren_form_unknown_option_rejected() {
+        let err = parse_with_pg("EXPLAIN (ASDF) SELECT 1").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown EXPLAIN option"),
+            "error should describe unknown option: {msg}"
+        );
     }
 }

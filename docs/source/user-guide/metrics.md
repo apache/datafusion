@@ -36,4 +36,12 @@ DataFusion operators expose runtime metrics so you can understand where time is 
 
 ## Operator-specific Metrics
 
-TODO
+### FilterExec
+
+| Metric      | Description                                                       |
+| ----------- | ----------------------------------------------------------------- |
+| selectivity | Selectivity of the filter, calculated as output_rows / input_rows |
+
+## TODO
+
+Add metrics for the remaining operators

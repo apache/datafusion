@@ -17,6 +17,7 @@
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::catalog::{CatalogProvider, TableProviderFactory};
+use crate::datasource::file_format::FileFormatFactory;
 use crate::datasource::file_format::arrow::ArrowFormatFactory;
 #[cfg(feature = "avro")]
 use crate::datasource::file_format::avro::AvroFormatFactory;
@@ -24,7 +25,6 @@ use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::json::JsonFormatFactory;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormatFactory;
-use crate::datasource::file_format::FileFormatFactory;
 use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]
@@ -36,7 +36,8 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::registry::ExtensionTypeRegistrationRef;
+use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -103,13 +104,22 @@ impl SessionStateDefaults {
 
     /// returns the list of default [`ScalarUDF`]s
     pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
-        #[cfg_attr(not(feature = "nested_expressions"), allow(unused_mut))]
+        #[cfg_attr(not(feature = "nested_expressions"), expect(unused_mut))]
         let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
 
         #[cfg(feature = "nested_expressions")]
         functions.append(&mut functions_nested::all_default_nested_functions());
 
         functions
+    }
+
+    /// returns the list of default [`HigherOrderUDF`]s
+    pub fn default_higher_order_functions() -> Vec<Arc<HigherOrderUDF>> {
+        #[cfg(feature = "nested_expressions")]
+        return functions_nested::all_default_higher_order_functions();
+
+        #[cfg(not(feature = "nested_expressions"))]
+        return Vec::new();
     }
 
     /// returns the list of default [`AggregateUDF`]s
@@ -120,6 +130,13 @@ impl SessionStateDefaults {
     /// returns the list of default [`WindowUDF`]s
     pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
         functions_window::all_default_window_functions()
+    }
+
+    /// Returns the list of default extension types.
+    ///
+    /// For now, we do not register any extension types by default.
+    pub fn default_extension_types() -> Vec<ExtensionTypeRegistrationRef> {
+        vec![]
     }
 
     /// returns the list of default [`TableFunction`]s
@@ -155,7 +172,7 @@ impl SessionStateDefaults {
     }
 
     /// registers all the builtin array functions
-    #[cfg_attr(not(feature = "nested_expressions"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "nested_expressions"), expect(unused_variables))]
     pub fn register_array_functions(state: &mut SessionState) {
         // register crate of array expressions (if enabled)
         #[cfg(feature = "nested_expressions")]

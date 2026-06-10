@@ -19,7 +19,6 @@
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -42,10 +41,6 @@ impl DynamicFileCatalog {
 }
 
 impl CatalogProviderList for DynamicFileCatalog {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,
@@ -87,10 +82,6 @@ impl DynamicFileCatalogProvider {
 }
 
 impl CatalogProvider for DynamicFileCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.inner.schema_names()
     }
@@ -137,10 +128,6 @@ impl DynamicFileSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for DynamicFileSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.inner.table_names()
     }

@@ -15,14 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-extern crate criterion;
-extern crate arrow;
-extern crate datafusion;
-
 mod data_utils;
 
-use crate::criterion::Criterion;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
@@ -34,6 +29,7 @@ use std::time::Duration;
 use test_utils::AccessLogGenerator;
 use tokio::runtime::Runtime;
 
+#[expect(clippy::needless_pass_by_value)]
 fn load_csv(
     ctx: Arc<Mutex<SessionContext>>,
     rt: &Runtime,

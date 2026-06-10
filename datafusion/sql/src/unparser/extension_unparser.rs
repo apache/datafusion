@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::unparser::ast::{QueryBuilder, RelationBuilder, SelectBuilder};
 use crate::unparser::Unparser;
+use crate::unparser::ast::{QueryBuilder, RelationBuilder, SelectBuilder};
 use datafusion_expr::UserDefinedLogicalNode;
 use sqlparser::ast::Statement;
 
@@ -64,7 +64,7 @@ pub enum UnparseWithinStatementResult {
 }
 
 /// The result of unparsing a custom logical node to a statement.
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum UnparseToStatementResult {
     /// If the custom logical node was successfully unparsed to a statement.
     Modified(Statement),

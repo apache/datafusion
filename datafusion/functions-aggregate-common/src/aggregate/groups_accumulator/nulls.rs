@@ -22,9 +22,9 @@ use arrow::array::{
     BooleanArray, LargeBinaryArray, LargeStringArray, PrimitiveArray, StringArray,
     StringViewArray, StructArray,
 };
-use arrow::buffer::NullBuffer;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use std::sync::Arc;
 
 /// Sets the validity mask for a `PrimitiveArray` to `nulls`
@@ -39,15 +39,24 @@ pub fn set_nulls<T: ArrowNumericType + Send>(
     PrimitiveArray::<T>::new(values, nulls).with_data_type(dt)
 }
 
-/// Converts a `BooleanBuffer` representing a filter to a `NullBuffer.
+/// Converts an aggregate filter expression to a validity bitmap.
+///
+/// The output is `true` for rows where the filter is `Some(true)`, and `false`
+/// for rows where the filter is `Some(false)` or `None`.
+pub(crate) fn filter_to_validity(filter: &BooleanArray) -> BooleanBuffer {
+    let Some(filter_nulls) = filter.nulls() else {
+        return filter.values().clone();
+    };
+    filter.values() & filter_nulls.inner()
+}
+
+/// Converts an aggregate filter expression to a `NullBuffer`.
 ///
 /// The `NullBuffer` is
-/// * `true` (representing valid) for values that were `true` in filter
-/// * `false` (representing null) for values that were `false` or `null` in filter
-fn filter_to_nulls(filter: &BooleanArray) -> Option<NullBuffer> {
-    let (filter_bools, filter_nulls) = filter.clone().into_parts();
-    let filter_bools = NullBuffer::from(filter_bools);
-    NullBuffer::union(Some(&filter_bools), filter_nulls.as_ref())
+/// * `true` (representing valid) for filter values that were `Some(true)`
+/// * `false` (representing null) for filter values that were `Some(false)` or `None`
+pub fn filter_to_nulls(filter: &BooleanArray) -> NullBuffer {
+    NullBuffer::new(filter_to_validity(filter))
 }
 
 /// Compute an output validity mask for an array that has been filtered
@@ -97,7 +106,7 @@ pub fn filtered_null_mask(
     opt_filter: Option<&BooleanArray>,
     input: &dyn Array,
 ) -> Option<NullBuffer> {
-    let opt_filter = opt_filter.and_then(filter_to_nulls);
+    let opt_filter = opt_filter.map(filter_to_nulls);
     NullBuffer::union(opt_filter.as_ref(), input.nulls())
 }
 
@@ -206,7 +215,7 @@ pub fn set_nulls_dyn(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<Arr
             }
         }
         _ => {
-            return not_impl_err!("Applying nulls {:?}", input.data_type());
+            return not_impl_err!("Applying nulls {}", input.data_type());
         }
     };
     assert_eq!(input.len(), output.len());

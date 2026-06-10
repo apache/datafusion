@@ -41,8 +41,15 @@ BENCHMARK=all
 DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
+SQL_CARGO_COMMAND=${SQL_CARGO_COMMAND:-"cargo bench --bench sql"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
-VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
+SIMULATE_LATENCY=${SIMULATE_LATENCY:-false}
+
+# Build latency arg based on SIMULATE_LATENCY setting
+LATENCY_ARG=""
+if [ "$SIMULATE_LATENCY" = "true" ]; then
+    LATENCY_ARG="--simulate-latency"
+fi
 
 usage() {
     echo "
@@ -53,7 +60,6 @@ $0 data [benchmark]
 $0 run [benchmark] [query]
 $0 compare <branch1> <branch2>
 $0 compare_detail <branch1> <branch2>
-$0 venv
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Examples:
@@ -71,7 +77,6 @@ data:            Generates or downloads data needed for benchmarking
 run:             Runs the named benchmark
 compare:         Compares fastest results from benchmark runs
 compare_detail:  Compares minimum, average (±stddev), and maximum results from benchmark runs
-venv:            Creates new venv (unless already exists) and installs compare's requirements into it
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Benchmarks
@@ -87,17 +92,37 @@ tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB),
 tpch_csv10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single csv file per table, hash join
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
 
+# TPC-DS Benchmarks
+tpcds:                  TPCDS inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table, hash join
+
 # Extended TPC-H Benchmarks
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
 sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
 topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H dataset (SF=1)
+push_down_topk:         Benchmark of ORDER BY ... LIMIT over outer joins on TPC-H dataset (SF=1) — exercises pushing TopK through a join
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
+wide_schema:            Small-projection queries on a wide synthetic dataset (1024 cols × 256 files) — measures per-file metadata overhead
+                          (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
+predicate_eval:         Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an
+                          adaptive predicate-ordering system behaves across them (see https://github.com/apache/datafusion/issues/11262)
+                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift)
+                          (toggle a system under test with its native DATAFUSION_* env var; size data with PRED_ROWS, string width with PRED_FILL)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against partitioned (100 files) parquet
 clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
+
+# Sort Pushdown Benchmarks
+sort_pushdown:          Sort pushdown baseline (no WITH ORDER) on TPC-H data (SF=1)
+sort_pushdown_sorted:   Sort pushdown with WITH ORDER — tests sort elimination on non-overlapping files
+sort_pushdown_inexact:  Sort pushdown Inexact path (--sorted DESC) — multi-file with scrambled RGs, tests reverse scan + RG reorder
+sort_pushdown_inexact_unsorted: Sort pushdown Inexact path (no WITH ORDER) — same data, tests Unsupported path + RG reorder
+sort_pushdown_inexact_overlap: Sort pushdown Inexact path — multi-file scrambled RGs (streaming data scenario)
+
+# Sorted Data Benchmarks (ORDER BY Optimization)
+clickbench_sorted:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
 
 # H2O.ai Benchmarks (Group By, Join, Window)
 h2o_small:                      h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
@@ -126,6 +151,8 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 cancellation:           How long cancelling a query takes
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
+smj:                    Benchmark for simple sort merge joins, testing various join scenarios
+dict:                   Benchmark for dictionary-encoded group-by scenarios
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -137,7 +164,7 @@ CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
 PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
-VENV_PATH           Python venv to use for compare and venv commands (default ./venv, override by <your-venv>/bin/activate)
+SIMULATE_LATENCY    Simulate object store latency to mimic S3 (default false)
 DATAFUSION_*        Set the given datafusion configuration
 "
     exit 1
@@ -189,8 +216,8 @@ main() {
             echo "***************************"
             case "$BENCHMARK" in
                 all)
-                    data_tpch "1"
-                    data_tpch "10"
+                    data_tpch "1" "parquet"
+                    data_tpch "10" "parquet"
                     data_h2o "SMALL"
                     data_h2o "MEDIUM"
                     data_h2o "BIG"
@@ -203,18 +230,32 @@ main() {
                     # nlj uses range() function, no data generation needed
                     ;;
                 tpch)
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 tpch_mem)
-                    # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
+                    ;;
+                tpch_csv)
+                    data_tpch "1" "csv"
                     ;;
                 tpch10)
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
                     ;;
                 tpch_mem10)
-                    # same data as for tpch10
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
+                    ;;
+                tpch_csv10)
+                    data_tpch "10" "csv"
+                    ;;
+                wide_schema)
+                    data_wide_schema
+                    ;;
+                predicate_eval)
+                    # Data is generated inline by the suite's load SQL.
+                    echo "predicate_eval: no external data to generate"
+                    ;;
+                tpcds)
+                    data_tpcds
                     ;;
                 clickbench_1)
                     data_clickbench_1
@@ -289,30 +330,50 @@ main() {
                     ;;
                 external_aggr)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
+                    ;;
+                sort_pushdown|sort_pushdown_sorted)
+                    data_sort_pushdown
+                    ;;
+                sort_pushdown_inexact|sort_pushdown_inexact_unsorted|sort_pushdown_inexact_overlap)
+                    data_sort_pushdown_inexact
                     ;;
                 sort_tpch)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 sort_tpch10)
                     # same data as for tpch10
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
                     ;;
                 topk_tpch)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
+                    ;;
+                push_down_topk)
+                    # same data as for tpch
+                    data_tpch "1" "parquet"
                     ;;
                 nlj)
                     # nlj uses range() function, no data generation needed
                     echo "NLJ benchmark does not require data generation"
                     ;;
                 hj)
-                    # hj uses range() function, no data generation needed
-                    echo "HJ benchmark does not require data generation"
+                    data_tpch "10" "parquet"
+                    ;;
+                smj)
+                    # smj uses range() function, no data generation needed
+                    echo "SMJ benchmark does not require data generation"
+                    ;;
+                dict)
+                    # dict generates in-memory data, no data generation needed
+                    echo "DICT benchmark does not require data generation"
                     ;;
                 compile_profile)
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
+                    ;;
+                clickbench_sorted)
+                    clickbench_sorted
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
@@ -355,6 +416,7 @@ main() {
             echo "RESULTS_DIR: ${RESULTS_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
             echo "PREFER_HASH_JOIN: ${PREFER_HASH_JOIN}"
+            echo "SIMULATE_LATENCY: ${SIMULATE_LATENCY}"
             echo "***************************"
 
             # navigate to the appropriate directory
@@ -384,6 +446,9 @@ main() {
                     run_external_aggr
                     run_nlj
                     run_hj
+                    run_tpcds
+                    run_smj
+                    run_dict 
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -402,6 +467,15 @@ main() {
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
+                    ;;
+                wide_schema)
+                    run_wide_schema
+                    ;;
+                predicate_eval)
+                    run_predicate_eval
+                    ;;
+                tpcds)
+                    run_tpcds
                     ;;
                 cancellation)
                     run_cancellation
@@ -445,7 +519,7 @@ main() {
                 h2o_medium_window)
                     run_h2o_window "MEDIUM" "CSV" "window"
                     ;;
-                h2o_big_window) 
+                h2o_big_window)
                     run_h2o_window "BIG" "CSV" "window"
                     ;;
                 h2o_small_parquet)
@@ -479,6 +553,21 @@ main() {
                 external_aggr)
                     run_external_aggr
                     ;;
+                sort_pushdown)
+                    run_sort_pushdown
+                    ;;
+                sort_pushdown_sorted)
+                    run_sort_pushdown_sorted
+                    ;;
+                sort_pushdown_inexact)
+                    run_sort_pushdown_inexact
+                    ;;
+                sort_pushdown_inexact_unsorted)
+                    run_sort_pushdown_inexact_unsorted
+                    ;;
+                sort_pushdown_inexact_overlap)
+                    run_sort_pushdown_inexact_overlap
+                    ;;
                 sort_tpch)
                     run_sort_tpch "1"
                     ;;
@@ -488,14 +577,26 @@ main() {
                 topk_tpch)
                     run_topk_tpch
                     ;;
+                push_down_topk)
+                    run_push_down_topk
+                    ;;
                 nlj)
                     run_nlj
                     ;;
                 hj)
                     run_hj
                     ;;
+                smj)
+                    run_smj
+                    ;;
+                dict)
+                    run_dict
+                    ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
+                    ;;
+                clickbench_sorted)
+                    run_clickbench_sorted
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -510,9 +611,6 @@ main() {
             ;;
         compare_detail)
             compare_benchmarks "$ARG2" "$ARG3" "--detailed"
-            ;;
-        venv)
-            setup_venv
             ;;
         "")
             usage
@@ -529,7 +627,7 @@ main() {
 # Creates TPCH data at a certain scale factor, if it doesn't already
 # exist
 #
-# call like: data_tpch($scale_factor)
+# call like: data_tpch($scale_factor, format)
 #
 # Creates data in $DATA_DIR/tpch_sf1 for scale factor 1
 # Creates data in $DATA_DIR/tpch_sf10 for scale factor 10
@@ -540,20 +638,23 @@ data_tpch() {
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
+    FORMAT=$2
+    if [ -z "$FORMAT" ] ; then
+        echo "Internal error: Format not specified"
+        exit 1
+    fi
 
     TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-    echo "Creating tpch dataset at Scale Factor ${SCALE_FACTOR} in ${TPCH_DIR}..."
+    echo "Creating tpch $FORMAT dataset at Scale Factor ${SCALE_FACTOR} in ${TPCH_DIR}..."
 
     # Ensure the target data directory exists
     mkdir -p "${TPCH_DIR}"
 
-    # Create 'tbl' (CSV format) data into $DATA_DIR if it does not already exist
-    FILE="${TPCH_DIR}/supplier.tbl"
-    if test -f "${FILE}"; then
-        echo " tbl files exist ($FILE exists)."
-    else
-        echo " creating tbl files with tpch_dbgen..."
-        docker run -v "${TPCH_DIR}":/data -it --rm ghcr.io/scalytics/tpch-docker:main -vf -s "${SCALE_FACTOR}"
+    # check if tpchgen-cli is installed
+    if ! command -v tpchgen-cli &> /dev/null
+    then
+        echo "tpchgen-cli could not be found, please install it via 'cargo install tpchgen-cli'"
+        exit 1
     fi
 
     # Copy expected answers into the ./data/answers directory if it does not already exist
@@ -566,27 +667,52 @@ data_tpch() {
         docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
     fi
 
-    # Create 'parquet' files from tbl
-    FILE="${TPCH_DIR}/supplier"
-    if test -d "${FILE}"; then
-        echo " parquet files exist ($FILE exists)."
-    else
-        echo " creating parquet files using benchmark binary ..."
-        pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}" --format parquet
-        popd > /dev/null
+    if [ "$FORMAT" = "parquet" ]; then
+      # Create 'parquet' files, one directory per file
+      FILE="${TPCH_DIR}/supplier"
+      if test -d "${FILE}"; then
+          echo " parquet files exist ($FILE exists)."
+      else
+          echo " creating parquet files using tpchgen-cli ..."
+          tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format parquet --parquet-compression='ZSTD(1)' --parts=1 --output-dir "${TPCH_DIR}"
+      fi
+      return
     fi
 
-    # Create 'csv' files from tbl
-    FILE="${TPCH_DIR}/csv/supplier"
-    if test -d "${FILE}"; then
-        echo " csv files exist ($FILE exists)."
-    else
-        echo " creating csv files using benchmark binary ..."
-        pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}/csv" --format csv
-        popd > /dev/null
+    # Create 'csv' files, one directory per file
+    if [ "$FORMAT" = "csv" ]; then
+      FILE="${TPCH_DIR}/csv/supplier"
+      if test -d "${FILE}"; then
+          echo " csv files exist ($FILE exists)."
+      else
+          echo " creating csv files using tpchgen-cli binary ..."
+          tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format csv --parts=1 --output-dir "${TPCH_DIR}/csv"
+      fi
+      return
     fi
+
+    echo "Error: unknown format '$FORMAT' for tpch data generation, expected 'parquet' or 'csv'"
+    exit 1
+}
+
+# Downloads TPC-DS data
+data_tpcds() {
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
+
+    # Check if `web_site.parquet` exists in the TPCDS data directory to verify data presence
+    echo "Checking TPC-DS data directory: ${TPCDS_DIR}"
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
+        mkdir -p "${TPCDS_DIR}"
+        # Download the DataFusion benchmarks repository zip if it is not already downloaded
+        if [ ! -f "${DATA_DIR}/datafusion-benchmarks.zip" ]; then
+          echo "Downloading DataFusion benchmarks repository zip to: ${DATA_DIR}/datafusion-benchmarks.zip"
+          wget --timeout=30 --tries=3 -O "${DATA_DIR}/datafusion-benchmarks.zip" https://github.com/apache/datafusion-benchmarks/archive/refs/heads/main.zip
+        fi
+        echo "Extracting TPC-DS parquet data to ${TPCDS_DIR}..."
+        unzip -o -j -d "${TPCDS_DIR}" "${DATA_DIR}/datafusion-benchmarks.zip" datafusion-benchmarks-main/tpcds/data/sf1/*
+        echo "TPC-DS data extracted."
+    fi
+    echo "Done."
 }
 
 # Runs the tpch benchmark
@@ -596,30 +722,161 @@ run_tpch() {
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
-    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-
-    RESULTS_FILE="${RESULTS_DIR}/tpch_sf${SCALE_FACTOR}.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    FORMAT=$2
     echo "Running tpch benchmark..."
 
-    FORMAT=$2
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run env BENCH_NAME=tpch \
+      BENCH_SIZE="${SCALE_FACTOR}" \
+      DATA_DIR="${DATA_DIR}" \
+      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
+      TPCH_FILE_TYPE="${FORMAT}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
-# Runs the tpch in memory
+# Synthesizes two parquet datasets used to measure per-file metadata
+# overhead of a wide schema:
+#
+#   - data/wide_schema/wide/    1024-col events × 256 files (~225 MB)
+#   - data/wide_schema/narrow/    8-col events × 256 files (~110 MB)
+#
+# Both share row count, file count, and per-file row-group shape; only
+# schema width differs. No external data source required — gen_wide_data
+# synthesizes everything from scratch in ~60 s.
+data_wide_schema() {
+    NUM_FILES=256
+    ROWS_PER_FILE=50000
+    WIDTH_FACTOR=128
+
+    DST_DIR="${DATA_DIR}/wide_schema"
+    WIDE_DIR="${DST_DIR}/wide"
+    NARROW_DIR="${DST_DIR}/narrow"
+
+    if [ -d "${WIDE_DIR}" ] && [ "$(ls -A "${WIDE_DIR}" 2>/dev/null | wc -l)" -ge ${NUM_FILES} ]; then
+        echo " wide parquet exists (${WIDE_DIR})."
+    else
+        mkdir -p "${WIDE_DIR}"
+        echo " synthesizing wide -> ${WIDE_DIR} (factor ${WIDTH_FACTOR}, ${NUM_FILES} files × ${ROWS_PER_FILE} rows) ..."
+        debug_run $CARGO_COMMAND --bin gen_wide_data -- \
+            --dst-dir "${WIDE_DIR}" \
+            --width-factor ${WIDTH_FACTOR} \
+            --num-files ${NUM_FILES} \
+            --rows-per-file ${ROWS_PER_FILE}
+    fi
+
+    if [ -d "${NARROW_DIR}" ] && [ "$(ls -A "${NARROW_DIR}" 2>/dev/null | wc -l)" -ge ${NUM_FILES} ]; then
+        echo " narrow parquet exists (${NARROW_DIR})."
+    else
+        mkdir -p "${NARROW_DIR}"
+        echo " synthesizing narrow -> ${NARROW_DIR} (8 base cols, ${NUM_FILES} files × ${ROWS_PER_FILE} rows) ..."
+        debug_run $CARGO_COMMAND --bin gen_wide_data -- \
+            --dst-dir "${NARROW_DIR}" \
+            --width-factor 1 \
+            --num-files ${NUM_FILES} \
+            --rows-per-file ${ROWS_PER_FILE}
+    fi
+}
+
+# Runs the wide_schema benchmark. Each query has a `subgroup`
+# directive that picks up BENCH_SUBGROUP, so we invoke the framework
+# twice — once with subgroup=wide (the actual workload) and once with
+# subgroup=narrow (the baseline). The wide-only queries (Q02/Q08/Q11/Q12)
+# hardcode `subgroup wide`, so they're skipped on the narrow pass.
+run_wide_schema() {
+    echo "Running wide_schema benchmark (wide subgroup)..."
+    debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=wide \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+
+    echo "Running wide_schema benchmark (narrow baseline subgroup)..."
+    debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=narrow \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the push_down_topk benchmark (ORDER BY ... LIMIT over outer joins).
+# Reuses the TPC-H parquet data, so it needs `./bench.sh data tpch` (or
+# `data push_down_topk`) first.
+run_push_down_topk() {
+    echo "Running push_down_topk benchmark..."
+
+    debug_run env BENCH_NAME=push_down_topk \
+      BENCH_SIZE="1" \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the predicate_eval benchmark suite: conjunctive (AND) filter-evaluation
+# micro-benchmarks where each subgroup is a different predicate pattern, used to
+# test how an adaptive predicate-ordering system behaves across them (see
+# https://github.com/apache/datafusion/issues/11262). Data is generated inline
+# by the suite's load SQL, so there is no data step.
+#
+# By default the suite measures DataFusion's built-in left-deep AND short-circuit
+# and sets no engine config of its own. To evaluate a system under test, export
+# its native DATAFUSION_* config before invoking bench.sh -- the harness reads
+# SessionConfig::from_env, and that environment is inherited here, e.g.
+#   DATAFUSION_EXECUTION_ADAPTIVE_FILTER_REORDERING=true ./bench.sh run predicate_eval
+# Suite-specific knobs (string-substituted into the load SQL, not engine config):
+#   BENCH_SUBGROUP   run one subgroup (costsel, cost, selectivity, cardinality,
+#                    width, scale, neutral, correlation, drift)
+#   PRED_ROWS        synthetic row count (default 1_000_000; the scale subgroup
+#                    overrides this per query)
+#   PRED_FILL        filler chars per marker = string-column width knob
+run_predicate_eval() {
+    echo "Running predicate_eval benchmark (subgroup=${BENCH_SUBGROUP:-all}, rows=${PRED_ROWS:-1000000})..."
+    debug_run env BENCH_NAME=predicate_eval \
+      ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
+      PRED_ROWS="${PRED_ROWS:-1000000}" \
+      ${PRED_FILL:+PRED_FILL="${PRED_FILL}"} \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the tpch in memory (needs tpch parquet data)
 run_tpch_mem() {
     SCALE_FACTOR=$1
     if [ -z "$SCALE_FACTOR" ] ; then
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
-    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-
-    RESULTS_FILE="${RESULTS_DIR}/tpch_mem_sf${SCALE_FACTOR}.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
-    # -m means in memory
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+
+    debug_run env BENCH_NAME=tpch \
+      BENCH_SIZE="${SCALE_FACTOR}" \
+      DATA_DIR="${DATA_DIR}" \
+      TPCH_FILE_TYPE="mem" \
+      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the tpcds benchmark
+run_tpcds() {
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
+
+    # Check if TPCDS data directory and representative file exists
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
+        echo "" >&2
+        echo "Please prepare TPC-DS data first by following instructions:" >&2
+        echo "  ./bench.sh data tpcds" >&2
+        echo "" >&2
+        exit 1
+    fi
+
+    RESULTS_FILE="${RESULTS_DIR}/tpcds_sf1.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running tpcds benchmark..."
+
+    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the compile profile benchmark helper
@@ -629,7 +886,7 @@ run_compile_profile() {
     local data_path="${DATA_DIR}/tpch_sf1"
 
     echo "Running compile profile benchmark..."
-    local cmd=(python3 "${runner}" --data "${data_path}")
+    local cmd=(uv run python3 "${runner}" --data "${data_path}")
     if [ ${#profiles[@]} -gt 0 ]; then
         cmd+=(--profiles "${profiles[@]}")
     fi
@@ -641,7 +898,7 @@ run_cancellation() {
     RESULTS_FILE="${RESULTS_DIR}/cancellation.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running cancellation benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}" ${LATENCY_ARG}
 }
 
 
@@ -695,7 +952,7 @@ run_clickbench_1() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
  # Runs the clickbench benchmark with the partitioned parquet dataset (100 files)
@@ -703,7 +960,7 @@ run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
@@ -712,7 +969,7 @@ run_clickbench_pushdown() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_pushdown.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark with pushdown_filters=true, reorder_filters=true..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
@@ -721,7 +978,7 @@ run_clickbench_extended() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
@@ -806,7 +1063,7 @@ data_imdb() {
                 if [ "${DOWNLOADED_SIZE}" != "${expected_size}" ]; then
                     echo "Error: Download size mismatch"
                     echo "Expected: ${expected_size}"
-                    echo "Got: ${DOWNLADED_SIZE}"
+                    echo "Got: ${DOWNLOADED_SIZE}"
                     echo "Please re-initiate the download"
                     return 1
                 fi
@@ -836,7 +1093,7 @@ run_imdb() {
     RESULTS_FILE="${RESULTS_DIR}/imdb.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
-    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 data_h2o() {
@@ -844,75 +1101,13 @@ data_h2o() {
     SIZE=${1:-"SMALL"}
     DATA_FORMAT=${2:-"CSV"}
 
-    # Function to compare Python versions
-    version_ge() {
-        [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
-    }
-
-    export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
-
-    # Find the highest available Python version (3.10 or higher)
-    REQUIRED_VERSION="3.10"
-    PYTHON_CMD=$(command -v python3 || true)
-
-    if [ -n "$PYTHON_CMD" ]; then
-        PYTHON_VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-            echo "Found Python version $PYTHON_VERSION, which is suitable."
-        else
-            echo "Python version $PYTHON_VERSION found, but version $REQUIRED_VERSION or higher is required."
-            PYTHON_CMD=""
-        fi
-    fi
-
-   # Search for suitable Python versions if the default is unsuitable
-   if [ -z "$PYTHON_CMD" ]; then
-       # Loop through all available Python3 commands on the system
-       for CMD in $(compgen -c | grep -E '^python3(\.[0-9]+)?$'); do
-           if command -v "$CMD" &> /dev/null; then
-               PYTHON_VERSION=$($CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-               if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-                   PYTHON_CMD="$CMD"
-                   echo "Found suitable Python version: $PYTHON_VERSION ($CMD)"
-                   break
-               fi
-           fi
-       done
-   fi
-
-    # If no suitable Python version found, exit with an error
-    if [ -z "$PYTHON_CMD" ]; then
-        echo "Python 3.10 or higher is required. Please install it."
-        return 1
-    fi
-
-    echo "Using Python command: $PYTHON_CMD"
-
-    # Install falsa and other dependencies
-    echo "Installing falsa..."
-
-    # Set virtual environment directory
-    VIRTUAL_ENV="${PWD}/venv"
-
-    # Create a virtual environment using the detected Python command
-    $PYTHON_CMD -m venv "$VIRTUAL_ENV"
-
-    # Activate the virtual environment and install dependencies
-    source "$VIRTUAL_ENV/bin/activate"
-
-    # Ensure 'falsa' is installed (avoid unnecessary reinstall)
-    pip install --quiet --upgrade falsa
-
     # Create directory if it doesn't exist
     H2O_DIR="${DATA_DIR}/h2o"
     mkdir -p "${H2O_DIR}"
 
     # Generate h2o test data
     echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
-    falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
-
-    # Deactivate virtual environment after completion
-    deactivate
+    uv run falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
 }
 
 data_h2o_join() {
@@ -920,75 +1115,13 @@ data_h2o_join() {
     SIZE=${1:-"SMALL"}
     DATA_FORMAT=${2:-"CSV"}
 
-    # Function to compare Python versions
-    version_ge() {
-        [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
-    }
-
-    export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
-
-    # Find the highest available Python version (3.10 or higher)
-    REQUIRED_VERSION="3.10"
-    PYTHON_CMD=$(command -v python3 || true)
-
-    if [ -n "$PYTHON_CMD" ]; then
-        PYTHON_VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-            echo "Found Python version $PYTHON_VERSION, which is suitable."
-        else
-            echo "Python version $PYTHON_VERSION found, but version $REQUIRED_VERSION or higher is required."
-            PYTHON_CMD=""
-        fi
-    fi
-
-   # Search for suitable Python versions if the default is unsuitable
-   if [ -z "$PYTHON_CMD" ]; then
-       # Loop through all available Python3 commands on the system
-       for CMD in $(compgen -c | grep -E '^python3(\.[0-9]+)?$'); do
-           if command -v "$CMD" &> /dev/null; then
-               PYTHON_VERSION=$($CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-               if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
-                   PYTHON_CMD="$CMD"
-                   echo "Found suitable Python version: $PYTHON_VERSION ($CMD)"
-                   break
-               fi
-           fi
-       done
-   fi
-
-    # If no suitable Python version found, exit with an error
-    if [ -z "$PYTHON_CMD" ]; then
-        echo "Python 3.10 or higher is required. Please install it."
-        return 1
-    fi
-
-    echo "Using Python command: $PYTHON_CMD"
-
-    # Install falsa and other dependencies
-    echo "Installing falsa..."
-
-    # Set virtual environment directory
-    VIRTUAL_ENV="${PWD}/venv"
-
-    # Create a virtual environment using the detected Python command
-    $PYTHON_CMD -m venv "$VIRTUAL_ENV"
-
-    # Activate the virtual environment and install dependencies
-    source "$VIRTUAL_ENV/bin/activate"
-
-    # Ensure 'falsa' is installed (avoid unnecessary reinstall)
-    pip install --quiet --upgrade falsa
-
     # Create directory if it doesn't exist
     H2O_DIR="${DATA_DIR}/h2o"
     mkdir -p "${H2O_DIR}"
 
     # Generate h2o test data
     echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
-    falsa join --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
-
-    # Deactivate virtual environment after completion
-    deactivate
+    uv run falsa join --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
 }
 
 # Runner for h2o groupby benchmark
@@ -1032,7 +1165,7 @@ run_h2o() {
         --path "${H2O_DIR}/${FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
         -o "${RESULTS_FILE}" \
-         ${QUERY_ARG}
+         ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Utility function to run h2o join/window benchmark
@@ -1084,7 +1217,7 @@ h2o_runner() {
         --join-paths "${H2O_DIR}/${X_TABLE_FILE_NAME},${H2O_DIR}/${SMALL_TABLE_FILE_NAME},${H2O_DIR}/${MEDIUM_TABLE_FILE_NAME},${H2O_DIR}/${LARGE_TABLE_FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
         -o "${RESULTS_FILE}" \
-         ${QUERY_ARG}
+         ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runners for h2o join benchmark
@@ -1113,6 +1246,241 @@ run_external_aggr() {
     debug_run $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
+# Runs the sort pushdown benchmark (without WITH ORDER)
+# Generates sort pushdown benchmark data: TPC-H lineitem with 3 parts,
+# renamed so alphabetical order does NOT match sort key order.
+# This forces the sort pushdown optimizer to reorder files by statistics.
+#
+# tpchgen produces 3 sorted, non-overlapping parquet files:
+#   lineitem.1.parquet: l_orderkey 1 ~ 2M        (lowest keys)
+#   lineitem.2.parquet: l_orderkey 2M ~ 4M
+#   lineitem.3.parquet: l_orderkey 4M ~ 6M       (highest keys)
+#
+# We rename them so alphabetical order is reversed:
+#   a_part3.parquet (highest keys, sorts first alphabetically)
+#   b_part2.parquet
+#   c_part1.parquet (lowest keys, sorts last alphabetically)
+data_sort_pushdown() {
+    SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown/lineitem"
+    if [ -d "${SORT_PUSHDOWN_DIR}" ] && [ "$(ls -A ${SORT_PUSHDOWN_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown data already exists at ${SORT_PUSHDOWN_DIR}"
+        return
+    fi
+
+    echo "Generating sort pushdown benchmark data (3 parts with reversed naming)..."
+
+    TEMP_DIR="${DATA_DIR}/sort_pushdown_temp"
+    mkdir -p "${TEMP_DIR}" "${SORT_PUSHDOWN_DIR}"
+
+    tpchgen-cli --scale-factor 1 --format parquet --parquet-compression='ZSTD(1)' --parts=3 --output-dir "${TEMP_DIR}"
+
+    # Rename: reverse alphabetical order vs key order
+    mv "${TEMP_DIR}/lineitem/lineitem.3.parquet" "${SORT_PUSHDOWN_DIR}/a_part3.parquet"
+    mv "${TEMP_DIR}/lineitem/lineitem.2.parquet" "${SORT_PUSHDOWN_DIR}/b_part2.parquet"
+    mv "${TEMP_DIR}/lineitem/lineitem.1.parquet" "${SORT_PUSHDOWN_DIR}/c_part1.parquet"
+
+    rm -rf "${TEMP_DIR}"
+
+    echo "Sort pushdown data generated at ${SORT_PUSHDOWN_DIR}"
+    ls -la "${SORT_PUSHDOWN_DIR}"
+}
+
+run_sort_pushdown() {
+    SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown.json"
+    echo "Running sort pushdown benchmark (no WITH ORDER)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --iterations 5 --path "${SORT_PUSHDOWN_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown benchmark with WITH ORDER (enables sort elimination)
+run_sort_pushdown_sorted() {
+    SORT_PUSHDOWN_DIR="${DATA_DIR}/sort_pushdown"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_sorted.json"
+    echo "Running sort pushdown benchmark (with WITH ORDER)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${SORT_PUSHDOWN_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Generates data for sort pushdown Inexact benchmark.
+#
+# Produces multiple parquet files where each file has MULTIPLE row groups
+# with scrambled RG order. This tests both:
+#   - Row-group-level reorder within each file (reorder_by_statistics)
+#   - TopK threshold initialization from RG statistics
+#
+# Strategy:
+# 1. Write a single sorted file with small (100K-row) RGs (~61 RGs total).
+# 2. Use pyarrow to redistribute RGs into N_FILES files, scrambling the
+#    RG order within each file using a deterministic permutation.
+#    Each file gets ~61/N_FILES RGs with narrow, non-overlapping ranges
+#    but in scrambled order.
+#
+# Writing a single file with ORDER BY scramble does NOT work: the parquet
+# writer merges rows from adjacent chunks at RG boundaries, widening
+# ranges and defeating reorder_by_statistics.
+#
+# Requires pyarrow (pip install pyarrow).
+data_sort_pushdown_inexact() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact/lineitem"
+    if [ -d "${INEXACT_DIR}" ] && [ "$(ls -A ${INEXACT_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown Inexact data already exists at ${INEXACT_DIR}"
+        return
+    fi
+
+    # Check pyarrow dependency (needed to split/scramble RGs)
+    if ! python3 -c "import pyarrow" 2>/dev/null; then
+        echo "Error: pyarrow is required for sort pushdown Inexact data generation."
+        echo "Install with: pip install pyarrow"
+        return 1
+    fi
+
+    echo "Generating sort pushdown Inexact benchmark data (multi-file, scrambled RGs)..."
+
+    # Re-use the sort_pushdown data as the source (generate if missing)
+    data_sort_pushdown
+
+    mkdir -p "${INEXACT_DIR}"
+    SRC_DIR="${DATA_DIR}/sort_pushdown/lineitem"
+
+    # Step 1: Write a single sorted file with small (100K-row) RGs
+    TMPFILE="${INEXACT_DIR}/_sorted_small_rgs.parquet"
+    (cd "${SCRIPT_DIR}/.." && cargo run --release -p datafusion-cli -- -c "
+        CREATE EXTERNAL TABLE src
+        STORED AS PARQUET
+        LOCATION '${SRC_DIR}';
+
+        COPY (SELECT * FROM src ORDER BY l_orderkey)
+        TO '${TMPFILE}'
+        STORED AS PARQUET
+        OPTIONS ('format.max_row_group_size' '100000');
+    ")
+
+    # Step 2: Redistribute RGs into 3 files with scrambled RG order.
+    # Each file gets ~20 RGs. RG assignment: rg_idx % 3 determines file,
+    # permutation (rg_idx * 41 + 7) % n scrambles the order within file.
+    python3 -c "
+import pyarrow.parquet as pq
+
+pf = pq.ParquetFile('${TMPFILE}')
+n = pf.metadata.num_row_groups
+n_files = 3
+
+# Assign each RG to a file, scramble order within each file
+file_rgs = [[] for _ in range(n_files)]
+for rg_idx in range(n):
+    slot = (rg_idx * 41 + 7) % n  # scrambled index
+    file_id = slot % n_files
+    file_rgs[file_id].append(rg_idx)
+
+# Write each file with its assigned RGs (in scrambled order)
+for file_id in range(n_files):
+    rgs = file_rgs[file_id]
+    if not rgs:
+        continue
+    tables = [pf.read_row_group(rg) for rg in rgs]
+    writer = pq.ParquetWriter(
+        '${INEXACT_DIR}/part_%03d.parquet' % file_id,
+        pf.schema_arrow)
+    for t in tables:
+        writer.write_table(t)
+    writer.close()
+    print(f'File part_{file_id:03d}.parquet: {len(rgs)} RGs')
+"
+
+    rm -f "${TMPFILE}"
+    echo "Sort pushdown Inexact data generated at ${INEXACT_DIR}"
+    ls -la "${INEXACT_DIR}"
+
+    # Also generate overlap data: same strategy but with different file count
+    # and permutation. Simulates streaming data with network delays where
+    # chunks arrive out of sequence.
+    #
+    # Requires pyarrow (pip install pyarrow).
+    OVERLAP_DIR="${DATA_DIR}/sort_pushdown_inexact_overlap/lineitem"
+    if [ -d "${OVERLAP_DIR}" ] && [ "$(ls -A ${OVERLAP_DIR}/*.parquet 2>/dev/null)" ]; then
+        echo "Sort pushdown Inexact overlap data already exists at ${OVERLAP_DIR}"
+        return
+    fi
+
+    echo "Generating sort pushdown Inexact overlap data (multi-file, scrambled RGs)..."
+    mkdir -p "${OVERLAP_DIR}"
+
+    # Step 1: Write a single sorted file with small (100K-row) RGs
+    TMPFILE="${OVERLAP_DIR}/_sorted_small_rgs.parquet"
+    (cd "${SCRIPT_DIR}/.." && cargo run --release -p datafusion-cli -- -c "
+        CREATE EXTERNAL TABLE src
+        STORED AS PARQUET
+        LOCATION '${SRC_DIR}';
+
+        COPY (SELECT * FROM src ORDER BY l_orderkey)
+        TO '${TMPFILE}'
+        STORED AS PARQUET
+        OPTIONS ('format.max_row_group_size' '100000');
+    ")
+
+    # Step 2: Redistribute into 5 files with scrambled RG order.
+    python3 -c "
+import pyarrow.parquet as pq
+
+pf = pq.ParquetFile('${TMPFILE}')
+n = pf.metadata.num_row_groups
+n_files = 5
+
+file_rgs = [[] for _ in range(n_files)]
+for rg_idx in range(n):
+    slot = (rg_idx * 37 + 13) % n
+    file_id = slot % n_files
+    file_rgs[file_id].append(rg_idx)
+
+for file_id in range(n_files):
+    rgs = file_rgs[file_id]
+    if not rgs:
+        continue
+    tables = [pf.read_row_group(rg) for rg in rgs]
+    writer = pq.ParquetWriter(
+        '${OVERLAP_DIR}/part_%03d.parquet' % file_id,
+        pf.schema_arrow)
+    for t in tables:
+        writer.write_table(t)
+    writer.close()
+    print(f'File part_{file_id:03d}.parquet: {len(rgs)} RGs')
+"
+
+    rm -f "${TMPFILE}"
+}
+
+# Runs the sort pushdown Inexact benchmark (tests RG reorder by statistics).
+# Enables pushdown_filters so TopK's dynamic filter is pushed to the parquet
+# reader for late materialization (only needed for Inexact path).
+run_sort_pushdown_inexact() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact.json"
+    echo "Running sort pushdown Inexact benchmark (multi-file scrambled RGs, --sorted DESC)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${INEXACT_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown Inexact benchmark WITHOUT declared ordering.
+# Tests the Unsupported path in try_pushdown_sort where RG reorder by
+# statistics can still help TopK queries without any file ordering guarantee.
+run_sort_pushdown_inexact_unsorted() {
+    INEXACT_DIR="${DATA_DIR}/sort_pushdown_inexact"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact_unsorted.json"
+    echo "Running sort pushdown Inexact benchmark (no WITH ORDER, Unsupported path)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --iterations 5 --path "${INEXACT_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact_unsorted" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the sort pushdown benchmark with multi-file scrambled RG order.
+# Simulates streaming data with network delays — multiple files, each with
+# scrambled RGs. Tests both RG-level reorder and TopK stats initialization.
+run_sort_pushdown_inexact_overlap() {
+    OVERLAP_DIR="${DATA_DIR}/sort_pushdown_inexact_overlap"
+    RESULTS_FILE="${RESULTS_DIR}/sort_pushdown_inexact_overlap.json"
+    echo "Running sort pushdown Inexact benchmark (multi-file scrambled RGs, streaming data pattern)..."
+    DATAFUSION_EXECUTION_PARQUET_PUSHDOWN_FILTERS=true \
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-pushdown --sorted --iterations 5 --path "${OVERLAP_DIR}" --queries-path "${SCRIPT_DIR}/queries/sort_pushdown_inexact_overlap" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
 # Runs the sort integration benchmark
 run_sort_tpch() {
     SCALE_FACTOR=$1
@@ -1125,7 +1493,7 @@ run_sort_tpch() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort tpch benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the sort tpch integration benchmark with limit 100 (topk)
@@ -1135,7 +1503,7 @@ run_topk_tpch() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running topk tpch benchmark..."
 
-    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG}
+    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the nlj benchmark
@@ -1143,15 +1511,32 @@ run_nlj() {
     RESULTS_FILE="${RESULTS_DIR}/nlj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running nlj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the hj benchmark
 run_hj() {
+    TPCH_DIR="${DATA_DIR}/tpch_sf10"
     RESULTS_FILE="${RESULTS_DIR}/hj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running hj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the smj benchmark
+run_smj() {
+    RESULTS_FILE="${RESULTS_DIR}/smj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running smj benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the dict benchmark
+run_dict() {
+    RESULTS_FILE="${RESULTS_DIR}/dict.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running dict benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- dict --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 
@@ -1181,7 +1566,7 @@ compare_benchmarks() {
             echo "--------------------"
             echo "Benchmark ${BENCH}"
             echo "--------------------"
-            PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py $OPTS "${RESULTS_FILE1}" "${RESULTS_FILE2}"
+            uv run python3 "${SCRIPT_DIR}"/compare.py $OPTS "${RESULTS_FILE1}" "${RESULTS_FILE2}"
         else
             echo "Note: Skipping ${RESULTS_FILE1} as ${RESULTS_FILE2} does not exist"
         fi
@@ -1189,10 +1574,113 @@ compare_benchmarks() {
 
 }
 
-setup_venv() {
-    python3 -m venv "$VIRTUAL_ENV"
-    PATH=$VIRTUAL_ENV/bin:$PATH python3 -m pip install -r requirements.txt
+# Creates sorted ClickBench data from hits.parquet (full dataset)
+# The data is sorted by EventTime in ascending order
+# Uses datafusion-cli to reduce dependencies
+clickbench_sorted() {
+    SORTED_FILE="${DATA_DIR}/hits_sorted.parquet"
+    ORIGINAL_FILE="${DATA_DIR}/hits.parquet"
+
+    # Default memory limit is 12GB, can be overridden with DATAFUSION_MEMORY_GB env var
+    MEMORY_LIMIT_GB=${DATAFUSION_MEMORY_GB:-12}
+
+    echo "Creating sorted ClickBench dataset from hits.parquet..."
+    echo "Configuration:"
+    echo "  Memory limit: ${MEMORY_LIMIT_GB}G"
+    echo "  Row group size: 64K rows"
+    echo "  Compression: uncompressed"
+
+    if [ ! -f "${ORIGINAL_FILE}" ]; then
+        echo "hits.parquet not found. Running data_clickbench_1 first..."
+        data_clickbench_1
+    fi
+
+    if [ -f "${SORTED_FILE}" ]; then
+        echo "Sorted hits.parquet already exists at ${SORTED_FILE}"
+        return 0
+    fi
+
+    echo "Sorting hits.parquet by EventTime (this may take several minutes)..."
+
+    pushd "${DATAFUSION_DIR}" > /dev/null
+    echo "Building datafusion-cli..."
+    cargo build --release --bin datafusion-cli
+    DATAFUSION_CLI="${DATAFUSION_DIR}/target/release/datafusion-cli"
+    popd > /dev/null
+
+
+    START_TIME=$(date +%s)
+    echo "Start time: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "Using datafusion-cli to create sorted parquet file..."
+    "${DATAFUSION_CLI}" << EOF
+-- Memory and performance configuration
+SET datafusion.runtime.memory_limit = '${MEMORY_LIMIT_GB}G';
+SET datafusion.execution.spill_compression = 'uncompressed';
+SET datafusion.execution.sort_spill_reservation_bytes = 10485760; -- 10MB
+SET datafusion.execution.batch_size = 8192;
+SET datafusion.execution.target_partitions = 1;
+
+-- Parquet output configuration
+SET datafusion.execution.parquet.max_row_group_size = 65536;
+SET datafusion.execution.parquet.compression = 'uncompressed';
+
+-- Execute sort and write
+COPY (SELECT * FROM '${ORIGINAL_FILE}' ORDER BY "EventTime")
+TO '${SORTED_FILE}'
+STORED AS PARQUET;
+EOF
+
+    local result=$?
+
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    echo "End time: $(date '+%Y-%m-%d %H:%M:%S')"
+
+    if [ $result -eq 0 ]; then
+        echo "✓ Successfully created sorted ClickBench dataset"
+
+        INPUT_SIZE=$(stat -f%z "${ORIGINAL_FILE}" 2>/dev/null || stat -c%s "${ORIGINAL_FILE}" 2>/dev/null)
+        OUTPUT_SIZE=$(stat -f%z "${SORTED_FILE}" 2>/dev/null || stat -c%s "${SORTED_FILE}" 2>/dev/null)
+        INPUT_MB=$((INPUT_SIZE / 1024 / 1024))
+        OUTPUT_MB=$((OUTPUT_SIZE / 1024 / 1024))
+
+        echo "  Input:  ${INPUT_MB} MB"
+        echo "  Output: ${OUTPUT_MB} MB"
+
+        echo ""
+        echo "Time Statistics:"
+        echo "  Total duration: ${DURATION} seconds ($(printf '%02d:%02d:%02d' $((DURATION/3600)) $((DURATION%3600/60)) $((DURATION%60))))"
+        echo "  Throughput: $((INPUT_MB / DURATION)) MB/s"
+
+        return 0
+    else
+        echo "✗ Error: Failed to create sorted dataset"
+        echo "💡 Tip: Try increasing memory with: DATAFUSION_MEMORY_GB=16 ./bench.sh data clickbench_sorted"
+        return 1
+    fi
 }
+
+# Runs the sorted data benchmark with prefer_existing_sort configuration
+run_clickbench_sorted() {
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_sorted.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running sorted data benchmark with prefer_existing_sort optimization..."
+
+    # Ensure sorted data exists
+    clickbench_sorted
+
+    # Run benchmark with prefer_existing_sort configuration
+    # This allows DataFusion to optimize away redundant sorts while maintaining parallelism
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench \
+        --iterations 5 \
+        --path "${DATA_DIR}/hits_sorted.parquet" \
+        --queries-path "${SCRIPT_DIR}/queries/clickbench/queries/sorted_data" \
+        --sorted-by "EventTime" \
+        -c datafusion.optimizer.prefer_existing_sort=true \
+        -o "${RESULTS_FILE}" \
+        ${QUERY_ARG} ${LATENCY_ARG}
+}
+
 
 # And start the process up
 main

@@ -19,7 +19,7 @@
 pub fn print_memory_stats() {
     #[cfg(all(feature = "mimalloc", feature = "mimalloc_extended"))]
     {
-        use datafusion::execution::memory_pool::human_readable_size;
+        use datafusion_common::human_readable_size;
         let mut peak_rss = 0;
         let mut peak_commit = 0;
         let mut page_faults = 0;

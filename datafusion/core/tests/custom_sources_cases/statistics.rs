@@ -17,7 +17,7 @@
 
 //! This module contains end to end tests of statistics propagation
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::execution::context::TaskContext;
@@ -45,7 +45,7 @@ use async_trait::async_trait;
 struct StatisticsValidation {
     stats: Statistics,
     schema: Arc<Schema>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl StatisticsValidation {
@@ -59,7 +59,7 @@ impl StatisticsValidation {
         Self {
             stats,
             schema,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -76,10 +76,6 @@ impl StatisticsValidation {
 
 #[async_trait]
 impl TableProvider for StatisticsValidation {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -154,11 +150,7 @@ impl ExecutionPlan for StatisticsValidation {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -181,15 +173,11 @@ impl ExecutionPlan for StatisticsValidation {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self.stats.clone())
-    }
-
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_some() {
-            Ok(Statistics::new_unknown(&self.schema))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema)))
         } else {
-            Ok(self.stats.clone())
+            Ok(Arc::new(self.stats.clone()))
         }
     }
 }
@@ -214,6 +202,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     min_value: Precision::Exact(ScalarValue::Int32(Some(-24))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(13),
@@ -221,6 +210,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-6783))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(5),
+                    byte_size: Precision::Absent,
                 },
             ],
         },
@@ -240,7 +230,7 @@ async fn sql_basic() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
 
     // the statistics should be those of the source
-    assert_eq!(stats, physical_plan.partition_statistics(None)?);
+    assert_eq!(stats, *physical_plan.partition_statistics(None)?);
 
     Ok(())
 }
@@ -257,7 +247,7 @@ async fn sql_filter() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
     let stats = physical_plan.partition_statistics(None)?;
-    assert_eq!(stats.num_rows, Precision::Inexact(1));
+    assert_eq!(stats.num_rows, Precision::Inexact(7));
 
     Ok(())
 }
@@ -270,17 +260,18 @@ async fn sql_limit() -> Result<()> {
     let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").await.unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is smaller than the original number of lines we mark the statistics as inexact
+    // and cap NDV at the new row count
+    let limit_stats = physical_plan.partition_statistics(None)?;
+    assert_eq!(limit_stats.num_rows, Precision::Exact(5));
+    // c1: NDV=2 stays at 2 (already below limit of 5)
     assert_eq!(
-        Statistics {
-            num_rows: Precision::Exact(5),
-            column_statistics: stats
-                .column_statistics
-                .iter()
-                .map(|c| c.clone().to_inexact())
-                .collect(),
-            total_byte_size: Precision::Absent
-        },
-        physical_plan.partition_statistics(None)?
+        limit_stats.column_statistics[0].distinct_count,
+        Precision::Inexact(2)
+    );
+    // c2: NDV=13 capped to 5 (the limit row count)
+    assert_eq!(
+        limit_stats.column_statistics[1].distinct_count,
+        Precision::Inexact(5)
     );
 
     let df = ctx
@@ -289,7 +280,7 @@ async fn sql_limit() -> Result<()> {
         .unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is larger than the original number of lines, statistics remain unchanged
-    assert_eq!(stats, physical_plan.partition_statistics(None)?);
+    assert_eq!(stats, *physical_plan.partition_statistics(None)?);
 
     Ok(())
 }
@@ -309,7 +300,7 @@ async fn sql_window() -> Result<()> {
     let result = physical_plan.partition_statistics(None)?;
 
     assert_eq!(stats.num_rows, result.num_rows);
-    let col_stats = result.column_statistics;
+    let col_stats = &result.column_statistics;
     assert_eq!(2, col_stats.len());
     assert_eq!(stats.column_statistics[1], col_stats[0]);
 

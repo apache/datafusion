@@ -53,6 +53,25 @@ PREPARE my_plan(INT, INT) AS SELECT 1 + $1;
 statement error SQL error: ParserError
 PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1;
 
+# EXEC/EXECUTE with parentheses but no statement name must error instead of panic
+statement error EXECUTE statement requires a name
+EXEC();
+
+statement error EXECUTE statement requires a name
+EXEC('');
+
+statement error EXECUTE statement requires a name
+EXEC('any-string');
+
+statement error EXECUTE statement requires a name
+EXEC(unknown_column);
+
+statement error EXECUTE statement requires a name
+EXECUTE();
+
+statement error EXECUTE statement requires a name
+EXEC ('a');
+
 # #######################
 # Test prepare and execute statements
 
@@ -84,6 +103,38 @@ query ITTITRPI rowsort
 EXECUTE my_plan('j%');
 ----
 1 jane smith 20 MA 100000.45 2000-11-12T00:00:00 99
+
+statement ok
+DEALLOCATE my_plan
+
+# Allow prepare $1 IN (subquery)
+statement ok
+PREPARE my_plan AS SELECT id FROM person WHERE $1 IN (SELECT age FROM person);
+
+query I rowsort
+EXECUTE my_plan(20);
+----
+1
+
+query I rowsort
+EXECUTE my_plan(99);
+----
+
+statement ok
+DEALLOCATE my_plan
+
+# Allow prepare $1 NOT IN (subquery)
+statement ok
+PREPARE my_plan AS SELECT id FROM person WHERE $1 NOT IN (SELECT age FROM person);
+
+query I rowsort
+EXECUTE my_plan(99);
+----
+1
+
+query I rowsort
+EXECUTE my_plan(20);
+----
 
 statement ok
 DEALLOCATE my_plan

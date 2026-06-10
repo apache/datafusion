@@ -22,8 +22,9 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
-use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
-use crate::parsers::CompressionTypeVariant;
+use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
+use crate::parquet_config::DFParquetWriterVersion;
+use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
@@ -157,12 +158,10 @@ macro_rules! config_namespace {
                             // $(#[allow(deprecated)])?
                             {
                                 $(let value = $transform(value);)? // Apply transformation if specified
-                                #[allow(deprecated)]
                                 let ret = self.$field_name.set(rem, value.as_ref());
 
                                 $(if !$warn.is_empty() {
                                     let default: $field_type = $default;
-                                    #[allow(deprecated)]
                                     if default != self.$field_name {
                                         log::warn!($warn);
                                     }
@@ -181,7 +180,6 @@ macro_rules! config_namespace {
                 $(
                     let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                     let desc = concat!($($d),*).trim();
-                    #[allow(deprecated)]
                     self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
@@ -191,8 +189,7 @@ macro_rules! config_namespace {
                 match key {
                     $(
                         stringify!($field_name) => {
-                            #[allow(deprecated)]
-                            {
+                                    {
                                 if rem.is_empty() {
                                     let default_value: $field_type = $default;
                                     self.$field_name = default_value;
@@ -213,7 +210,6 @@ macro_rules! config_namespace {
         }
         impl Default for $struct_name {
             fn default() -> Self {
-                #[allow(deprecated)]
                 Self {
                     $($field_name: $default),*
                 }
@@ -283,7 +279,7 @@ config_namespace! {
         pub enable_options_value_normalization: bool, warn = "`enable_options_value_normalization` is deprecated and ignored", default = false
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
-        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
+        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks and Spark.
         pub dialect: Dialect, default = Dialect::Generic
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
@@ -315,6 +311,15 @@ config_namespace! {
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
         pub default_null_ordering: String, default = "nulls_max".to_string()
+
+        /// When set to true, DataFusion may remove `ORDER BY` clauses from
+        /// subqueries or CTEs during SQL planning when their ordering cannot
+        /// affect the result, such as when no `LIMIT` or other
+        /// order-sensitive operator depends on them.
+        ///
+        /// Disable this option to preserve explicit subquery ordering in the
+        /// planned query.
+        pub enable_subquery_sort_elimination: bool, default = true
     }
 }
 
@@ -337,6 +342,13 @@ pub enum Dialect {
     Ansi,
     DuckDB,
     Databricks,
+    Spark,
+}
+
+impl Dialect {
+    /// List of all supported dialect names, for use in error messages.
+    pub const AVAILABLE: &'static str = "Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks, Spark";
 }
 
 impl AsRef<str> for Dialect {
@@ -355,6 +367,7 @@ impl AsRef<str> for Dialect {
             Self::Ansi => "ansi",
             Self::DuckDB => "duckdb",
             Self::Databricks => "databricks",
+            Self::Spark => "spark",
         }
     }
 }
@@ -377,11 +390,12 @@ impl FromStr for Dialect {
             "ansi" => Self::Ansi,
             "duckdb" => Self::DuckDB,
             "databricks" => Self::Databricks,
+            "spark" | "sparksql" => Self::Spark,
             other => {
-                let error_message = format!(
-                    "Invalid Dialect: {other}. Expected one of: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks"
-                );
-                return Err(DataFusionError::Configuration(error_message));
+                return Err(DataFusionError::Configuration(format!(
+                    "Invalid Dialect: {other}. Expected one of: {}",
+                    Self::AVAILABLE
+                )));
             }
         };
         Ok(value)
@@ -451,6 +465,53 @@ impl Display for SpillCompression {
     }
 }
 
+/// Policy for handling duplicate keys in Spark-compatible map-construction
+/// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
+/// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum MapKeyDedupPolicy {
+    /// Raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
+    #[default]
+    Exception,
+    /// Keep the last occurrence of each duplicate key.
+    LastWin,
+}
+
+impl FromStr for MapKeyDedupPolicy {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_uppercase().as_str() {
+            "EXCEPTION" => Ok(Self::Exception),
+            "LAST_WIN" => Ok(Self::LastWin),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid MapKeyDedupPolicy: {other}. Expected one of: EXCEPTION, LAST_WIN"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for MapKeyDedupPolicy {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = MapKeyDedupPolicy::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for MapKeyDedupPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Exception => "EXCEPTION",
+            Self::LastWin => "LAST_WIN",
+        };
+        write!(f, "{str}")
+    }
+}
+
 impl From<SpillCompression> for Option<CompressionType> {
     fn from(c: SpillCompression) -> Self {
         match c {
@@ -472,6 +533,25 @@ config_namespace! {
         /// buffer-in-memory batches since creating tiny batches would result in too much
         /// metadata memory consumption
         pub batch_size: usize, default = 8192
+
+        /// A perfect hash join (see `HashJoinExec` for more details) will be considered
+        /// if the range of keys (max - min) on the build side is < this threshold.
+        /// This provides a fast path for joins with very small key ranges,
+        /// bypassing the density check.
+        ///
+        /// Currently only supports cases where build_side.num_rows() < u32::MAX.
+        /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
+        pub perfect_hash_join_small_build_threshold: usize, default = 1024
+
+        /// The minimum required density of join keys on the build side to consider a
+        /// perfect hash join (see `HashJoinExec` for more details). Density is calculated as:
+        /// `(number of rows) / (max_key - min_key + 1)`.
+        /// A perfect hash join may be used if the actual key density > this
+        /// value.
+        ///
+        /// Currently only supports cases where build_side.num_rows() < u32::MAX.
+        /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
+        pub perfect_hash_join_min_key_density: f64, default = 0.15
 
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
@@ -516,6 +596,17 @@ config_namespace! {
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
 
+        /// Temporary switch for aggregate stream implementations that are being
+        /// migrated from `GroupedHashAggregateStream`.
+        ///
+        /// When set to true, DataFusion tries the migrated implementations when
+        /// their preconditions are satisfied. When set to false, grouped
+        /// aggregation falls back to `GroupedHashAggregateStream`. This option
+        /// will be removed after the migration is finished.
+        ///
+        /// See <https://github.com/apache/datafusion/issues/22710> for details.
+        pub enable_migration_aggregate: bool, default = false
+
         /// Sets the compression codec used when spilling data to disk.
         ///
         /// Since datafusion writes spill files using the Arrow IPC Stream format,
@@ -541,6 +632,19 @@ config_namespace! {
         /// and sorted in a single RecordBatch rather than sorted in
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
+
+        /// Maximum buffer capacity (in bytes) per partition for BufferExec
+        /// inserted during sort pushdown optimization.
+        ///
+        /// When PushdownSort eliminates a SortExec under SortPreservingMergeExec,
+        /// a BufferExec is inserted to replace SortExec's buffering role. This
+        /// prevents I/O stalls by allowing the scan to run ahead of the merge.
+        ///
+        /// This uses strictly less memory than the SortExec it replaces (which
+        /// buffers the entire partition). The buffer respects the global memory
+        /// pool limit. Setting this to a large value is safe — actual memory
+        /// usage is bounded by partition size and global memory limits.
+        pub sort_pushdown_buffer_capacity: usize, default = 1024 * 1024 * 1024
 
         /// Maximum size in bytes for individual spill files before rotating to a new file.
         ///
@@ -654,6 +758,135 @@ config_namespace! {
         /// # Default
         /// `false` — ANSI SQL mode is disabled by default.
         pub enable_ansi_mode: bool, default = false
+
+        /// How many bytes to buffer in the probe side of hash joins while the build side is
+        /// concurrently being built.
+        ///
+        /// Without this, hash joins will wait until the full materialization of the build side
+        /// before polling the probe side. This is useful in scenarios where the query is not
+        /// completely CPU bounded, allowing to do some early work concurrently and reducing the
+        /// latency of the query.
+        ///
+        /// Note that when hash join buffering is enabled, the probe side will start eagerly
+        /// polling data, not giving time for the producer side of dynamic filters to produce any
+        /// meaningful predicate. Queries with dynamic filters might see performance degradation.
+        ///
+        /// Disabled by default, set to a number greater than 0 for enabling it.
+        pub hash_join_buffering_capacity: usize, default = 0
+    }
+}
+
+config_namespace! {
+    /// Options for content-defined chunking (CDC) when writing parquet files.
+    /// Mirrors `parquet::file::properties::CdcOptions`.
+    ///
+    /// Carried as a [`ParquetCdcOptions`] in [`ParquetOptions::content_defined_chunking`]
+    /// with an explicit `enabled` flag, so it can be toggled with dotted config
+    /// keys (`content_defined_chunking.enabled = true|false`) and the result is
+    /// independent of the order in which the keys are set.
+    pub struct ParquetCdcOptions {
+        /// (writing) EXPERIMENTAL: Enable content-defined chunking (CDC) when writing
+        /// parquet files. When enabled, parallel writing is automatically disabled
+        /// since the chunker state must persist across row groups.
+        pub enabled: bool, default = false
+
+        /// Minimum chunk size in bytes. The rolling hash will not trigger a split
+        /// until this many bytes have been accumulated. Default is 256 KiB.
+        pub min_chunk_size: usize, default = 256 * 1024
+
+        /// Maximum chunk size in bytes. A split is forced when the accumulated
+        /// size exceeds this value. Default is 1 MiB.
+        pub max_chunk_size: usize, default = 1024 * 1024
+
+        /// Normalization level. Increasing this improves deduplication ratio
+        /// but increases fragmentation. Recommended range is [-3, 3], default is 0.
+        pub norm_level: i32, default = 0
+    }
+}
+
+impl ParquetCdcOptions {
+    /// Returns enabled CDC options with the default chunking parameters.
+    ///
+    /// Shorthand for `ParquetCdcOptions { enabled: true, ..Default::default() }`;
+    /// combine with struct-update syntax to override parameters, e.g.
+    /// `ParquetCdcOptions { min_chunk_size: 4096, ..ParquetCdcOptions::enabled() }`.
+    pub fn enabled() -> Self {
+        Self {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    /// Returns disabled CDC options (equivalent to [`ParquetCdcOptions::default`]).
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+}
+
+/// Target maximum size of a Parquet row group in bytes.
+///
+/// Wraps a `usize` so the "must be greater than zero" constraint (arrow-rs
+/// panics on a zero byte limit) is validated when the config is set, rather
+/// than when the writer properties are built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MaxRowGroupBytes(usize);
+
+impl MaxRowGroupBytes {
+    /// Creates a `MaxRowGroupBytes`, rejecting zero.
+    pub fn try_new(value: usize) -> Result<Self> {
+        if value == 0 {
+            return Err(DataFusionError::Configuration(
+                "max_row_group_bytes must be greater than 0".to_string(),
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the configured byte limit.
+    pub fn get(&self) -> usize {
+        self.0
+    }
+}
+
+impl FromStr for MaxRowGroupBytes {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let value = s.parse::<usize>().map_err(|_| {
+            DataFusionError::Configuration(format!(
+                "Invalid max_row_group_bytes: '{s}'. Expected a positive integer."
+            ))
+        })?;
+        Self::try_new(value)
+    }
+}
+
+impl Display for MaxRowGroupBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// `ConfigField` for `Option<MaxRowGroupBytes>`. A custom impl (rather than the
+/// blanket `Option<F>` one) so an invalid value is rejected without leaving the
+/// option in an invalid intermediate state on error. `MaxRowGroupBytes`
+/// deliberately does not implement `Default`, so the blanket impl does not apply.
+impl ConfigField for Option<MaxRowGroupBytes> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(s) => v.some(key, s, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, _key: &str, value: &str) -> Result<()> {
+        *self = Some(MaxRowGroupBytes::from_str(value)?);
+        Ok(())
+    }
+
+    fn reset(&mut self, _key: &str) -> Result<()> {
+        *self = None;
+        Ok(())
     }
 }
 
@@ -699,6 +932,12 @@ config_namespace! {
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
 
+        /// (reading) Force the use of RowSelections for filter results, when
+        /// pushdown_filters is enabled. If false, the reader will automatically
+        /// choose between a RowSelection and a Bitmap based on the number and
+        /// pattern of selected rows.
+        pub force_filter_selections: bool, default = false
+
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.
         pub schema_force_view_types: bool, default = true
@@ -719,6 +958,16 @@ config_namespace! {
         /// nanosecond resolution.
         pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
 
+        /// (reading) Optional timezone applied to INT96 columns when `coerce_int96`
+        /// is set. When `Some`, INT96 columns coerce to
+        /// `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default
+        /// `Timestamp(<coerce_int96>, None)`. Spark and other systems write INT96
+        /// values as UTC-adjusted instants, so callers that need the resulting
+        /// Arrow type to be timezone-aware (e.g. for Spark `TimestampType`
+        /// semantics) should set this to `"UTC"`. No effect when `coerce_int96`
+        /// is `None`.
+        pub coerce_int96_tz: Option<String>, default = None
+
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
@@ -736,12 +985,12 @@ config_namespace! {
         /// (writing) Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = 1024 * 1024
 
-        /// (writing) Sets write_batch_size in bytes
+        /// (writing) Sets write_batch_size in rows
         pub write_batch_size: usize, default = 1024
 
         /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
-        pub writer_version: String, default = "1.0".to_string()
+        pub writer_version: DFParquetWriterVersion, default = DFParquetWriterVersion::default()
 
         /// (writing) Skip encoding the embedded arrow metadata in the KV_meta
         ///
@@ -751,7 +1000,7 @@ config_namespace! {
 
         /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
-        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         ///
@@ -774,8 +1023,20 @@ config_namespace! {
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
-        /// can get better compression and be faster to read.
+        /// can get better compression and be faster to read. When
+        /// `max_row_group_bytes` is also set, the writer flushes a row group when
+        /// either limit is reached, whichever comes first.
         pub max_row_group_size: usize, default =  1024 * 1024
+
+        /// (writing) Target maximum size of each row group in bytes. When set,
+        /// the writer flushes whenever either this limit or `max_row_group_size`
+        /// is reached, whichever comes first. Useful for bounding writer memory
+        /// on wide schemas where a row-count limit can map to very different
+        /// byte sizes. Matches the behavior of `parquet.block.size` in
+        /// parquet-mr. If `None` (the default), only the row-count limit
+        /// applies. Currently only honored when `allow_single_file_parallelism`
+        /// is `false`; by default the parallel file writer ignores this limit.
+        pub max_row_group_bytes: Option<MaxRowGroupBytes>, default = None
 
         /// (writing) Sets "created by" property
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
@@ -836,6 +1097,15 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
+
+        /// (writing) EXPERIMENTAL: Content-defined chunking (CDC) options when writing
+        /// parquet files. Disabled by default; toggle with
+        /// `content_defined_chunking.enabled = true|false`. The chunking parameters live
+        /// under the same prefix (e.g. `content_defined_chunking.min_chunk_size`). When
+        /// enabled, parallel writing is automatically disabled since the chunker state
+        /// must persist across row groups. Mirrors
+        /// `parquet::file::properties::WriterProperties::content_defined_chunking`.
+        pub content_defined_chunking: ParquetCdcOptions, default = Default::default()
     }
 }
 
@@ -901,20 +1171,54 @@ config_namespace! {
         /// past window functions, if possible
         pub enable_window_limits: bool, default = true
 
+        /// When set to true, the optimizer will replace
+        /// Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a
+        /// PartitionedTopKExec that maintains per-partition heaps, avoiding
+        /// a full sort of the input.
+        /// When the window partition key has low cardinality, enabling this optimization
+        /// can improve performance. However, for high cardinality keys, it may
+        /// cause regressions in both memory usage and runtime.
+        pub enable_window_topn: bool, default = false
+
+        /// When set to true, the optimizer will push TopK (Sort with fetch)
+        /// below hash repartition when the partition key is a prefix of the
+        /// sort key, reducing data volume before the shuffle.
+        pub enable_topk_repartition: bool, default = true
+
         /// When set to true, the optimizer will attempt to push down TopK dynamic filters
         /// into the file scan phase.
         pub enable_topk_dynamic_filter_pushdown: bool, default = true
+
+        /// When set to true, uncorrelated scalar subqueries are
+        /// left in the logical plan and executed by `ScalarSubqueryExec` during
+        /// physical execution. When set to false, all scalar subqueries
+        /// (including uncorrelated ones) are rewritten to left joins by the
+        /// `ScalarSubqueryToJoin` optimizer rule.
+        ///
+        /// Note disabling this option is not recommended. It restores
+        /// pre <https://github.com/apache/datafusion/pull/21240>
+        /// behavior, which silently produces incorrect results for
+        /// multi-row subqueries and does not support scalar subqueries in
+        /// ORDER BY / JOIN ON / aggregate-function arguments. This option is
+        /// intended as a temporary escape hatch for distributed execution
+        /// frameworks and is planned to be removed in a future DataFusion
+        /// release.
+        pub enable_physical_uncorrelated_scalar_subquery: bool, default = true
 
         /// When set to true, the optimizer will attempt to push down Join dynamic filters
         /// into the file scan phase.
         pub enable_join_dynamic_filter_pushdown: bool, default = true
 
-        /// When set to true attempts to push down dynamic filters generated by operators (topk & join) into the file scan phase.
+        /// When set to true, the optimizer will attempt to push down Aggregate dynamic filters
+        /// into the file scan phase.
+        pub enable_aggregate_dynamic_filter_pushdown: bool, default = true
+
+        /// When set to true attempts to push down dynamic filters generated by operators (TopK, Join & Aggregate) into the file scan phase.
         /// For example, for a query such as `SELECT * FROM t ORDER BY timestamp DESC LIMIT 10`, the optimizer
         /// will attempt to push down the current top 10 timestamps that the TopK operator references into the file scans.
         /// This means that if we already have 10 timestamps in the year 2025
         /// any files that only have timestamps in the year 2024 can be skipped / pruned at various stages in the scan.
-        /// The config will suppress `enable_join_dynamic_filter_pushdown` & `enable_topk_dynamic_filter_pushdown`
+        /// The config will suppress `enable_join_dynamic_filter_pushdown`, `enable_topk_dynamic_filter_pushdown` & `enable_aggregate_dynamic_filter_pushdown`
         /// So if you disable `enable_topk_dynamic_filter_pushdown`, then enable `enable_dynamic_filter_pushdown`, the `enable_topk_dynamic_filter_pushdown` will be overridden.
         pub enable_dynamic_filter_pushdown: bool, default = true
 
@@ -928,8 +1232,13 @@ config_namespace! {
         /// in parallel using the provided `target_partitions` level
         pub repartition_aggregations: bool, default = true
 
-        /// Minimum total files size in bytes to perform file scan repartitioning.
-        pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
+        /// Minimum total file size in bytes for file-group byte-range
+        /// splitting to fire. Files (or merged file groups) smaller than this
+        /// stay as one partition. Lower values produce more, smaller
+        /// partitions — better at filling `target_partitions` worth of cores
+        /// when files are modestly sized, at the cost of slightly more
+        /// per-partition open / metadata-load overhead.
+        pub repartition_file_min_size: usize, default = 1024 * 1024
 
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
         /// using the provided `target_partitions` level
@@ -960,6 +1269,19 @@ config_namespace! {
         /// record tables provided to the MemTable on creation.
         pub repartition_file_scans: bool, default = true
 
+        /// Minimum number of distinct partition values required to group files by their
+        /// Hive partition column values (enabling Hash partitioning declaration).
+        ///
+        /// How the option is used:
+        ///     - preserve_file_partitions=0: Disable it.
+        ///     - preserve_file_partitions=1: Always enable it.
+        ///     - preserve_file_partitions=N, actual file partitions=M: Only enable when M >= N.
+        ///     This threshold preserves I/O parallelism when file partitioning is below it.
+        ///
+        /// Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct
+        /// partitions is less than the target_partitions.
+        pub preserve_file_partitions: usize, default = 0
+
         /// Should DataFusion repartition data using the partitions keys to execute window
         /// functions in parallel using the provided `target_partitions` level
         pub repartition_windows: bool, default = true
@@ -982,6 +1304,34 @@ config_namespace! {
         /// ```
         pub repartition_sorts: bool, default = true
 
+        /// Partition count threshold for subset satisfaction optimization.
+        ///
+        /// When the current partition count is >= this threshold, DataFusion will
+        /// skip repartitioning if the required partitioning expression is a subset
+        /// of the current partition expression such as Hash(a) satisfies Hash(a, b).
+        ///
+        /// When the current partition count is < this threshold, DataFusion will
+        /// repartition to increase parallelism even when subset satisfaction applies.
+        ///
+        /// Set to 0 to always repartition (disable subset satisfaction optimization).
+        /// Set to a high value to always use subset satisfaction.
+        ///
+        /// Example (subset_repartition_threshold = 4):
+        /// ```text
+        ///     Hash([a]) satisfies Hash([a, b]) because (Hash([a, b]) is subset of Hash([a])
+        ///
+        ///     If current partitions (3) < threshold (4), repartition:
+        ///     AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///       RepartitionExec: partitioning=Hash([a, b], 8), input_partitions=3
+        ///         AggregateExec: mode=Partial, gby=[a, b], aggr=[SUM(x)]
+        ///           DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3)
+        ///
+        ///     If current partitions (8) >= threshold (4), use subset satisfaction:
+        ///     AggregateExec: mode=SinglePartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8)
+        /// ```
+        pub subset_repartition_threshold: usize, default = 4
+
         /// When true, DataFusion will opportunistically remove sorts when the data is already sorted,
         /// (i.e. setting `preserve_order` to true on `RepartitionExec`  and
         /// using `SortPreservingMergeExec`)
@@ -1002,6 +1352,18 @@ config_namespace! {
         /// process to reorder the join keys
         pub top_down_join_key_reordering: bool, default = true
 
+        /// When set to true, the physical plan optimizer may swap join inputs
+        /// based on statistics. When set to false, statistics-driven join
+        /// input reordering is disabled and the original join order in the
+        /// query is used.
+        pub join_reordering: bool, default = true
+
+        /// When set to true, the physical plan optimizer uses the pluggable
+        /// `StatisticsRegistry` for statistics propagation across operators.
+        /// This enables more accurate cardinality estimates compared to each
+        /// operator's built-in `partition_statistics`.
+        pub use_statistics_registry: bool, default = false
+
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
         pub prefer_hash_join: bool, default = true
@@ -1019,6 +1381,36 @@ config_namespace! {
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
 
+        /// Maximum size in bytes for the build side of a hash join to be pushed down as an InList expression for dynamic filtering.
+        /// Build sides larger than this will use hash table lookups instead.
+        /// Set to 0 to always use hash table lookups.
+        ///
+        /// InList pushdown can be more efficient for small build sides because it can result in better
+        /// statistics pruning as well as use any bloom filters present on the scan side.
+        /// InList expressions are also more transparent and easier to serialize over the network in distributed uses of DataFusion.
+        /// On the other hand InList pushdown requires making a copy of the data and thus adds some overhead to the build side and uses more memory.
+        ///
+        /// This setting is per-partition, so we may end up using `hash_join_inlist_pushdown_max_size` * `target_partitions` memory.
+        ///
+        /// The default is 128kB per partition.
+        /// This should allow point lookup joins (e.g. joining on a unique primary key) to use InList pushdown in most cases
+        /// but avoids excessive memory usage or overhead for larger joins.
+        pub hash_join_inlist_pushdown_max_size: usize, default = 128 * 1024
+
+        /// Maximum number of distinct values (rows) in the build side of a hash join to be pushed down as an InList expression for dynamic filtering.
+        /// Build sides with more rows than this will use hash table lookups instead.
+        /// Set to 0 to always use hash table lookups.
+        ///
+        /// This provides an additional limit beyond `hash_join_inlist_pushdown_max_size` to prevent
+        /// very large IN lists that might not provide much benefit over hash table lookups.
+        ///
+        /// This uses the deduplicated row count once the build side has been evaluated.
+        ///
+        /// The default is 150 values per partition.
+        /// This is inspired by Trino's `max-filter-keys-per-column` setting.
+        /// See: <https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds>
+        pub hash_join_inlist_pushdown_max_distinct_values: usize, default = 150
+
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
@@ -1031,6 +1423,34 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
+
+        /// Enable sort pushdown optimization.
+        /// When enabled, attempts to push sort requirements down to data sources
+        /// that can natively handle them (e.g., by reversing file/row group read order).
+        ///
+        /// Returns **inexact ordering**: Sort operator is kept for correctness,
+        /// but optimized input enables early termination for TopK queries (ORDER BY ... LIMIT N),
+        /// providing significant speedup.
+        ///
+        /// Memory: No additional overhead (only changes read order).
+        ///
+        /// Future: Will add option to detect perfectly sorted data and eliminate Sort completely.
+        ///
+        /// Default: true
+        pub enable_sort_pushdown: bool, default = true
+
+        /// When set to true, the optimizer will extract leaf expressions
+        /// (such as `get_field`) from filter/sort/join nodes into projections
+        /// closer to the leaf table scans, and push those projections down
+        /// towards the leaf nodes.
+        pub enable_leaf_expression_pushdown: bool, default = true
+
+        /// When set to true, the logical optimizer will rewrite `UNION DISTINCT` branches that
+        /// read from the same source and differ only by filter predicates into a single branch
+        /// with a combined filter. This optimization is conservative and only applies when the
+        /// branches share the same source and compatible wrapper nodes such as identical
+        /// projections or aliases.
+        pub enable_unions_to_filter: bool, default = false
     }
 }
 
@@ -1068,7 +1488,13 @@ config_namespace! {
         /// Verbosity level for "EXPLAIN ANALYZE". Default is "dev"
         /// "summary" shows common metrics for high-level insights.
         /// "dev" provides deep operator-level introspection for developers.
-        pub analyze_level: ExplainAnalyzeLevel, default = ExplainAnalyzeLevel::Dev
+        pub analyze_level: MetricType, default = MetricType::Dev
+
+        /// Which metric categories to include in "EXPLAIN ANALYZE" output.
+        /// Comma-separated list of: "rows", "bytes", "timing", "uncategorized".
+        /// Use "none" to show plan structure only, or "all" (default) to show everything.
+        /// Metrics without a declared category are treated as "uncategorized".
+        pub analyze_categories: ExplainAnalyzeCategories, default = ExplainAnalyzeCategories::All
     }
 }
 
@@ -1111,35 +1537,53 @@ config_namespace! {
     }
 }
 
-impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions {
+impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
-    fn try_into(self) -> Result<arrow::util::display::FormatOptions<'a>> {
-        let duration_format = match self.duration_format.as_str() {
+    fn try_from(options: &'a FormatOptions) -> Result<Self> {
+        let duration_format = match options.duration_format.as_str() {
             "pretty" => arrow::util::display::DurationFormat::Pretty,
             "iso8601" => arrow::util::display::DurationFormat::ISO8601,
             _ => {
                 return _config_err!(
                     "Invalid duration format: {}. Valid values are pretty or iso8601",
-                    self.duration_format
-                )
+                    options.duration_format
+                );
             }
         };
 
-        Ok(arrow::util::display::FormatOptions::new()
-            .with_display_error(self.safe)
-            .with_null(&self.null)
-            .with_date_format(self.date_format.as_deref())
-            .with_datetime_format(self.datetime_format.as_deref())
-            .with_timestamp_format(self.timestamp_format.as_deref())
-            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
-            .with_time_format(self.time_format.as_deref())
+        Ok(Self::new()
+            .with_display_error(options.safe)
+            .with_null(&options.null)
+            .with_date_format(options.date_format.as_deref())
+            .with_datetime_format(options.datetime_format.as_deref())
+            .with_timestamp_format(options.timestamp_format.as_deref())
+            .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
+            .with_time_format(options.time_format.as_deref())
             .with_duration_format(duration_format)
-            .with_types_info(self.types_info))
+            .with_types_info(options.types_info))
+    }
+}
+
+config_namespace! {
+    /// Options controlling DataFusion's Spark-compatibility layer (functions
+    /// under `datafusion/spark`). Keys here mirror their `spark.sql.*`
+    /// equivalents in Apache Spark.
+    pub struct SparkOptions {
+        /// Policy for handling duplicate keys in Spark-compatible map-construction
+        /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`).
+        ///
+        /// Mirrors Spark's
+        /// [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961):
+        /// - `EXCEPTION` (default): raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
+        /// - `LAST_WIN`: keep the last occurrence of each duplicate key.
+        ///
+        /// Values are case-insensitive.
+        pub map_key_dedup_policy: MapKeyDedupPolicy, default = MapKeyDedupPolicy::Exception
     }
 }
 
 /// A key value pair, with a corresponding description
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
     /// A unique string to identify this config value
     pub key: String,
@@ -1169,6 +1613,8 @@ pub struct ConfigOptions {
     pub extensions: Extensions,
     /// Formatting options when printing batches
     pub format: FormatOptions,
+    /// Spark-compatibility options (functions under `datafusion/spark`)
+    pub spark: SparkOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -1179,6 +1625,7 @@ impl ConfigField for ConfigOptions {
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
         self.format.visit(v, "datafusion.format", "");
+        self.spark.visit(v, "datafusion.spark", "");
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -1191,6 +1638,7 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
             "format" => self.format.set(rem, value),
+            "spark" => self.spark.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -1230,10 +1678,15 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.reset(rem),
             "sql_parser" => self.sql_parser.reset(rem),
             "format" => self.format.reset(rem),
+            "spark" => self.spark.reset(rem),
             other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
     }
 }
+
+/// This namespace is reserved for interacting with Foreign Function Interface
+/// (FFI) based configuration extensions.
+pub const DATAFUSION_FFI_CONFIG_NAMESPACE: &str = "datafusion_ffi";
 
 impl ConfigOptions {
     /// Creates a new [`ConfigOptions`] with default values
@@ -1249,12 +1702,12 @@ impl ConfigOptions {
 
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let Some((prefix, key)) = key.split_once('.') else {
+        let Some((mut prefix, mut inner_key)) = key.split_once('.') else {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
 
         if prefix == "datafusion" {
-            if key == "optimizer.enable_dynamic_filter_pushdown" {
+            if inner_key == "optimizer.enable_dynamic_filter_pushdown" {
                 let bool_value = value.parse::<bool>().map_err(|e| {
                     DataFusionError::Configuration(format!(
                         "Failed to parse '{value}' as bool: {e}",
@@ -1265,16 +1718,27 @@ impl ConfigOptions {
                     self.optimizer.enable_dynamic_filter_pushdown = bool_value;
                     self.optimizer.enable_topk_dynamic_filter_pushdown = bool_value;
                     self.optimizer.enable_join_dynamic_filter_pushdown = bool_value;
+                    self.optimizer.enable_aggregate_dynamic_filter_pushdown = bool_value;
                 }
                 return Ok(());
             }
-            return ConfigField::set(self, key, value);
+            return ConfigField::set(self, inner_key, value);
+        }
+
+        if !self.extensions.0.contains_key(prefix)
+            && self
+                .extensions
+                .0
+                .contains_key(DATAFUSION_FFI_CONFIG_NAMESPACE)
+        {
+            inner_key = key;
+            prefix = DATAFUSION_FFI_CONFIG_NAMESPACE;
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
             return _config_err!("Could not find config namespace \"{prefix}\"");
         };
-        e.0.set(key, value)
+        e.0.set(inner_key, value)
     }
 
     /// Create new [`ConfigOptions`], taking values from environment variables
@@ -1524,6 +1988,14 @@ impl Extensions {
         let e = self.0.get_mut(T::PREFIX)?;
         e.0.as_any_mut().downcast_mut()
     }
+
+    /// Iterates all the config extension entries yielding their prefix and their
+    /// [ExtensionOptions] implementation.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &Box<dyn ExtensionOptions>)> {
+        self.0.iter().map(|(k, v)| (*k, &v.0))
+    }
 }
 
 #[derive(Debug)]
@@ -1653,6 +2125,8 @@ config_field!(bool, value => default_config_transform(value.to_lowercase().as_st
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
+config_field!(u32);
+config_field!(i32);
 
 impl ConfigField for u8 {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
@@ -1690,6 +2164,17 @@ impl ConfigField for CompressionTypeVariant {
 
     fn set(&mut self, _: &str, value: &str) -> Result<()> {
         *self = CompressionTypeVariant::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl ConfigField for CsvQuoteStyle {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = CsvQuoteStyle::from_str(value)?;
         Ok(())
     }
 }
@@ -1843,8 +2328,7 @@ macro_rules! extensions_options {
                             // Safely apply deprecated attribute if present
                             // $(#[allow(deprecated)])?
                             {
-                                #[allow(deprecated)]
-                                self.$field_name.set(rem, value.as_ref())
+                                            self.$field_name.set(rem, value.as_ref())
                             }
                         },
                     )*
@@ -1858,7 +2342,6 @@ macro_rules! extensions_options {
                 $(
                     let key = stringify!($field_name).to_string();
                     let desc = concat!($($d),*).trim();
-                    #[allow(deprecated)]
                     self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
@@ -2032,7 +2515,7 @@ impl TableOptions {
     ///
     /// A result indicating success or failure in setting the configuration option.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let Some((prefix, _)) = key.split_once('.') else {
+        let Some((mut prefix, _)) = key.split_once('.') else {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
 
@@ -2042,6 +2525,15 @@ impl TableOptions {
 
         if prefix == "execution" {
             return Ok(());
+        }
+
+        if !self.extensions.0.contains_key(prefix)
+            && self
+                .extensions
+                .0
+                .contains_key(DATAFUSION_FFI_CONFIG_NAMESPACE)
+        {
+            prefix = DATAFUSION_FFI_CONFIG_NAMESPACE;
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
@@ -2129,7 +2621,7 @@ impl TableOptions {
 /// Options that control how Parquet files are read, including global options
 /// that apply to all columns and optional column-specific overrides
 ///
-/// Closely tied to [`ParquetWriterOptions`](crate::file_options::parquet_writer::ParquetWriterOptions).
+/// Closely tied to `ParquetWriterOptions` (see `crate::file_options::parquet_writer::ParquetWriterOptions` when the "parquet" feature is enabled).
 /// Properties not included in [`TableParquetOptions`] may not be configurable at the external API
 /// (e.g. sorting_columns).
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -2249,13 +2741,13 @@ impl ConfigField for TableParquetOptions {
                 [_meta] | [_meta, ""] => {
                     return _config_err!(
                         "Invalid metadata key provided, missing key in metadata::<key>"
-                    )
+                    );
                 }
                 [_meta, k] => k.into(),
                 _ => {
                     return _config_err!(
                         "Invalid metadata key provided, found too many '::' in \"{key}\""
-                    )
+                    );
                 }
             };
             self.key_value_metadata.insert(k, Some(value.into()));
@@ -2301,7 +2793,6 @@ macro_rules! config_namespace_with_hashmap {
                     $(
                        stringify!($field_name) => {
                            // Handle deprecated fields
-                           #[allow(deprecated)] // Allow deprecated fields
                            $(let value = $transform(value);)?
                            self.$field_name.set(rem, value.as_ref())
                        },
@@ -2317,7 +2808,6 @@ macro_rules! config_namespace_with_hashmap {
                 let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                 let desc = concat!($($d),*).trim();
                 // Handle deprecated fields
-                #[allow(deprecated)]
                 self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
@@ -2325,7 +2815,6 @@ macro_rules! config_namespace_with_hashmap {
 
         impl Default for $struct_name {
             fn default() -> Self {
-                #[allow(deprecated)]
                 Self {
                     $($field_name: $default),*
                 }
@@ -2353,7 +2842,6 @@ macro_rules! config_namespace_with_hashmap {
                     $(
                     let key = format!("{}.{field}::{}", key_prefix, column_name, field = stringify!($field_name));
                     let desc = concat!($($d),*).trim();
-                    #[allow(deprecated)]
                     col_options.$field_name.visit(v, key.as_str(), desc);
                     )*
                 }
@@ -2384,7 +2872,7 @@ config_namespace_with_hashmap! {
 
         /// Sets default parquet compression codec for the column path.
         /// Valid values are: uncompressed, snappy, gzip(level),
-        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub compression: Option<String>, transform = str::to_lowercase, default = None
@@ -2500,10 +2988,15 @@ impl ConfigField for ConfigFileEncryptionProperties {
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
-    fn from(val: ConfigFileEncryptionProperties) -> Self {
+impl TryFrom<ConfigFileEncryptionProperties> for FileEncryptionProperties {
+    type Error = DataFusionError;
+
+    fn try_from(val: ConfigFileEncryptionProperties) -> Result<Self> {
         let mut fep = FileEncryptionProperties::builder(
-            hex::decode(val.footer_key_as_hex).unwrap(),
+            hex::decode(val.footer_key_as_hex)
+            .map_err(|e| {
+                DataFusionError::Configuration(format!("Unable to decode hex footer key from ConfigFileEncryptionProperties: {e}"))
+            })?,
         )
         .with_plaintext_footer(!val.encrypt_footer)
         .with_aad_prefix_storage(val.store_aad_prefix);
@@ -2511,17 +3004,26 @@ impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
         if !val.footer_key_metadata_as_hex.is_empty() {
             fep = fep.with_footer_key_metadata(
                 hex::decode(&val.footer_key_metadata_as_hex)
-                    .expect("Invalid footer key metadata"),
+                    .map_err(|e| {
+                        DataFusionError::Configuration(format!("Unable to decode hex footer key metadata from ConfigFileEncryptionProperties: {e}"))
+                    })?,
             );
         }
 
         for (column_name, encryption_props) in val.column_encryption_properties.iter() {
             let encryption_key = hex::decode(&encryption_props.column_key_as_hex)
-                .expect("Invalid column encryption key");
+                .map_err(|e| {
+                    DataFusionError::Configuration(format!("Unable to decode hex encryption key for column {column_name}: {e}"))
+                })?;
             let key_metadata = encryption_props
                 .column_metadata_as_hex
                 .as_ref()
-                .map(|x| hex::decode(x).expect("Invalid column metadata"));
+                .map(hex::decode)
+                .transpose()
+                .map_err(|e| {
+                    DataFusionError::Configuration(format!("Unable to decode hex column metadata for column {column_name}: {e}"))
+                })?;
+
             match key_metadata {
                 Some(key_metadata) => {
                     fep = fep.with_column_key_and_metadata(
@@ -2537,11 +3039,18 @@ impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
         }
 
         if !val.aad_prefix_as_hex.is_empty() {
-            let aad_prefix: Vec<u8> =
-                hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
+            let aad_prefix: Vec<u8> = hex::decode(&val.aad_prefix_as_hex).map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "Unable to decode hex AAD prefix from ConfigFileEncryptionProperties: {e}"
+                ))
+            })?;
             fep = fep.with_aad_prefix(aad_prefix);
         }
-        Arc::unwrap_or_clone(fep.build().unwrap())
+        Ok(Arc::unwrap_or_clone(fep.build().map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not build FileEncryptionProperties: {e}"
+            ))
+        })?))
     }
 }
 
@@ -2567,10 +3076,7 @@ impl From<&Arc<FileEncryptionProperties>> for ConfigFileEncryptionProperties {
                 },
             );
         }
-        let mut aad_prefix: Vec<u8> = Vec::new();
-        if let Some(prefix) = f.aad_prefix() {
-            aad_prefix = prefix.clone();
-        }
+        let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
         ConfigFileEncryptionProperties {
             encrypt_footer: f.encrypt_footer(),
             footer_key_as_hex: hex::encode(f.footer_key()),
@@ -2660,42 +3166,70 @@ impl ConfigField for ConfigFileDecryptionProperties {
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
-    fn from(val: ConfigFileDecryptionProperties) -> Self {
+impl TryFrom<ConfigFileDecryptionProperties> for FileDecryptionProperties {
+    type Error = DataFusionError;
+
+    fn try_from(val: ConfigFileDecryptionProperties) -> Result<Self> {
         let mut column_names: Vec<&str> = Vec::new();
         let mut column_keys: Vec<Vec<u8>> = Vec::new();
 
         for (col_name, decryption_properties) in val.column_decryption_properties.iter() {
+            let column_key = hex::decode(&decryption_properties.column_key_as_hex).map_err(|e| {
+                        DataFusionError::Configuration(format!
+                            ("Could not decode hex column key from ConfigFileDecryptionProperties for column name {col_name}: {e}."))
+                    })?;
             column_names.push(col_name.as_str());
-            column_keys.push(
-                hex::decode(&decryption_properties.column_key_as_hex)
-                    .expect("Invalid column decryption key"),
-            );
+            column_keys.push(column_key);
         }
 
-        let mut fep = FileDecryptionProperties::builder(
-            hex::decode(val.footer_key_as_hex).expect("Invalid footer key"),
-        )
-        .with_column_keys(column_names, column_keys)
-        .unwrap();
+        let footer_key = hex::decode(val.footer_key_as_hex).map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not decode hex footer key from ConfigFileDecryptionProperties: {e}."
+            ))
+        })?;
+
+        let mut fep = FileDecryptionProperties::builder(footer_key)
+            .with_column_keys(column_names, column_keys)
+            .map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "Could not set column keys on FileDecryptionPropertiesBuilder: {e}."
+                ))
+            })?;
 
         if !val.footer_signature_verification {
             fep = fep.disable_footer_signature_verification();
         }
 
         if !val.aad_prefix_as_hex.is_empty() {
-            let aad_prefix =
-                hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
+            let aad_prefix = hex::decode(&val.aad_prefix_as_hex).map_err(|e| {
+                DataFusionError::Configuration(format!(
+                    "Could not decode hex AAD prefix from ConfigFileDecryptionProperties: {e}."
+                ))
+            })?;
             fep = fep.with_aad_prefix(aad_prefix);
         }
 
-        Arc::unwrap_or_clone(fep.build().unwrap())
+        Ok(Arc::unwrap_or_clone(fep.build().map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not build FileDecryptionProperties: {e}."
+            ))
+        })?))
     }
 }
 
 #[cfg(feature = "parquet_encryption")]
-impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
-    fn from(f: &Arc<FileDecryptionProperties>) -> Self {
+impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
+    type Error = DataFusionError;
+
+    fn try_from(f: &Arc<FileDecryptionProperties>) -> Result<Self> {
+        let footer_key = f.footer_key(None).map_err(|e| {
+            DataFusionError::Configuration(format!(
+                "Could not retrieve footer key from FileDecryptionProperties. \
+                Note that conversion to ConfigFileDecryptionProperties is not supported \
+                when using a key retriever: {e}"
+            ))
+        })?;
+
         let (column_names_vec, column_keys_vec) = f.column_keys();
         let mut column_decryption_properties: HashMap<
             String,
@@ -2708,18 +3242,13 @@ impl From<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties {
             column_decryption_properties.insert(column_name.clone(), props);
         }
 
-        let mut aad_prefix: Vec<u8> = Vec::new();
-        if let Some(prefix) = f.aad_prefix() {
-            aad_prefix = prefix.clone();
-        }
-        ConfigFileDecryptionProperties {
-            footer_key_as_hex: hex::encode(
-                f.footer_key(None).unwrap_or_default().as_ref(),
-            ),
+        let aad_prefix = f.aad_prefix().cloned().unwrap_or_default();
+        Ok(ConfigFileDecryptionProperties {
+            footer_key_as_hex: hex::encode(footer_key.as_ref()),
             column_decryption_properties,
             aad_prefix_as_hex: hex::encode(aad_prefix),
             footer_signature_verification: f.check_plaintext_footer_integrity(),
-        }
+        })
     }
 }
 
@@ -2769,6 +3298,15 @@ config_namespace! {
         pub terminator: Option<u8>, default = None
         pub escape: Option<u8>, default = None
         pub double_quote: Option<bool>, default = None
+        /// Quote style for CSV writing.
+        /// One of: "Always", "Necessary", "NonNumeric", "Never"
+        pub quote_style: CsvQuoteStyle, default = CsvQuoteStyle::Necessary
+        /// Whether to ignore leading whitespace in string values when writing CSV.
+        /// Defaults to `false` when `None`.
+        pub ignore_leading_whitespace: Option<bool>, default = None
+        /// Whether to ignore trailing whitespace in string values when writing CSV.
+        /// Defaults to `false` when `None`.
+        pub ignore_trailing_whitespace: Option<bool>, default = None
         /// Specifies whether newlines in (quoted) values are supported.
         ///
         /// Parsing newlines in quoted values may be affected by execution behaviour such as
@@ -2778,6 +3316,14 @@ config_namespace! {
         /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
         pub newlines_in_values: Option<bool>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        /// Compression level for the output file. The valid range depends on the
+        /// compression algorithm:
+        /// - ZSTD: 1 to 22 (default: 3)
+        /// - GZIP: 0 to 9 (default: 6)
+        /// - BZIP2: 0 to 9 (default: 6)
+        /// - XZ: 0 to 9 (default: 6)
+        /// If not specified, the default level for the compression algorithm is used.
+        pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
         pub date_format: Option<String>, default = None
         pub datetime_format: Option<String>, default = None
@@ -2869,6 +3415,30 @@ impl CsvOptions {
         self
     }
 
+    /// Set the quote style for CSV writing.
+    pub fn with_quote_style(mut self, quote_style: CsvQuoteStyle) -> Self {
+        self.quote_style = quote_style;
+        self
+    }
+
+    /// Set whether to ignore leading whitespace in string values when writing CSV.
+    pub fn with_ignore_leading_whitespace(
+        mut self,
+        ignore_leading_whitespace: bool,
+    ) -> Self {
+        self.ignore_leading_whitespace = Some(ignore_leading_whitespace);
+        self
+    }
+
+    /// Set whether to ignore trailing whitespace in string values when writing CSV.
+    pub fn with_ignore_trailing_whitespace(
+        mut self,
+        ignore_trailing_whitespace: bool,
+    ) -> Self {
+        self.ignore_trailing_whitespace = Some(ignore_trailing_whitespace);
+        self
+    }
+
     /// Specifies whether newlines in (quoted) values are supported.
     ///
     /// Parsing newlines in quoted values may be affected by execution behaviour such as
@@ -2900,6 +3470,14 @@ impl CsvOptions {
         self
     }
 
+    /// Set the compression level for the output file.
+    /// The valid range depends on the compression algorithm.
+    /// If not specified, the default level for the algorithm is used.
+    pub fn with_compression_level(mut self, level: u32) -> Self {
+        self.compression_level = Some(level);
+        self
+    }
+
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
         self.delimiter
@@ -2925,14 +3503,38 @@ config_namespace! {
     /// Options controlling JSON format
     pub struct JsonOptions {
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        /// Compression level for the output file. The valid range depends on the
+        /// compression algorithm:
+        /// - ZSTD: 1 to 22 (default: 3)
+        /// - GZIP: 0 to 9 (default: 6)
+        /// - BZIP2: 0 to 9 (default: 6)
+        /// - XZ: 0 to 9 (default: 6)
+        /// If not specified, the default level for the compression algorithm is used.
+        pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
+       /// The JSON format to use when reading files.
+       ///
+       /// When `true` (default), expects newline-delimited JSON (NDJSON):
+       /// ```text
+       /// {"key1": 1, "key2": "val"}
+       /// {"key1": 2, "key2": "vals"}
+       /// ```
+       ///
+       /// When `false`, expects JSON array format:
+       /// ```text
+       /// [
+       ///   {"key1": 1, "key2": "val"},
+       ///   {"key1": 2, "key2": "vals"}
+       /// ]
+       /// ```
+       pub newline_delimited: bool, default = true
     }
 }
 
 pub trait OutputFormatExt: Display {}
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "parquet", expect(clippy::large_enum_variant))]
 pub enum OutputFormat {
     CSV(CsvOptions),
     JSON(JsonOptions),
@@ -3038,6 +3640,16 @@ mod tests {
     }
 
     #[test]
+    fn iter_test_extension_config() {
+        let mut extension = Extensions::new();
+        extension.insert(TestExtensionConfig::default());
+        let table_config = TableOptions::new().with_extensions(extension);
+        let extensions = table_config.extensions.iter().collect::<Vec<_>>();
+        assert_eq!(extensions.len(), 1);
+        assert_eq!(extensions[0].0, TestExtensionConfig::PREFIX);
+    }
+
+    #[test]
     fn csv_u8_table_options() {
         let mut table_config = TableOptions::new();
         table_config.set_config_format(ConfigFileType::CSV);
@@ -3139,12 +3751,13 @@ mod tests {
         let config_encrypt =
             ConfigFileEncryptionProperties::from(&file_encryption_properties);
         let encryption_properties_built =
-            Arc::new(FileEncryptionProperties::from(config_encrypt.clone()));
+            Arc::new(FileEncryptionProperties::try_from(config_encrypt.clone()).unwrap());
         assert_eq!(file_encryption_properties, encryption_properties_built);
 
-        let config_decrypt = ConfigFileDecryptionProperties::from(&decryption_properties);
+        let config_decrypt =
+            ConfigFileDecryptionProperties::try_from(&decryption_properties).unwrap();
         let decryption_properties_built =
-            Arc::new(FileDecryptionProperties::from(config_decrypt.clone()));
+            Arc::new(FileDecryptionProperties::try_from(config_decrypt.clone()).unwrap());
         assert_eq!(decryption_properties, decryption_properties_built);
 
         ///////////////////////////////////////////////////////////////////////////////////
@@ -3232,6 +3845,124 @@ mod tests {
 
     #[cfg(feature = "parquet_encryption")]
     #[test]
+    fn parquet_encryption_invalid_hex_errors_encryption() {
+        use crate::config::ColumnEncryptionProperties;
+        use crate::config::ConfigFileEncryptionProperties;
+        use parquet::encryption::encrypt::FileEncryptionProperties;
+        use std::collections::HashMap;
+
+        let valid_footer_key_as_hex = hex::encode(b"0123456789012345");
+
+        let mut enc = ConfigFileEncryptionProperties {
+            encrypt_footer: true,
+            footer_key_as_hex: valid_footer_key_as_hex.clone(),
+            footer_key_metadata_as_hex: String::new(),
+            column_encryption_properties: HashMap::new(),
+            aad_prefix_as_hex: String::new(),
+            store_aad_prefix: false,
+        };
+
+        // Encryption: invalid footer key hex
+        enc.footer_key_as_hex = "not_hex".to_string();
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex footer key"));
+        enc.footer_key_as_hex = valid_footer_key_as_hex.clone();
+
+        // Encryption: invalid footer key metadata hex
+        enc.footer_key_metadata_as_hex = "zz".to_string();
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex footer key metadata"));
+        enc.footer_key_metadata_as_hex = String::new();
+
+        // Encryption: invalid column key hex
+        enc.column_encryption_properties.insert(
+            "col1".to_string(),
+            ColumnEncryptionProperties {
+                column_key_as_hex: "bad".to_string(),
+                column_metadata_as_hex: None,
+            },
+        );
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex encryption key for column col1"));
+        enc.column_encryption_properties.clear();
+
+        // Encryption: invalid column metadata hex
+        enc.column_encryption_properties.insert(
+            "col1".to_string(),
+            ColumnEncryptionProperties {
+                column_key_as_hex: hex::encode(b"1234567890123450"),
+                column_metadata_as_hex: Some("zz".to_string()),
+            },
+        );
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex column metadata for column col1"));
+        enc.column_encryption_properties.clear();
+
+        // Encryption: invalid AAD prefix hex
+        enc.aad_prefix_as_hex = "zz".to_string();
+        let err = FileEncryptionProperties::try_from(enc.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unable to decode hex AAD prefix"));
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
+    fn parquet_encryption_invalid_hex_errors_decryption() {
+        use crate::config::ColumnDecryptionProperties;
+        use crate::config::ConfigFileDecryptionProperties;
+        use parquet::encryption::decrypt::FileDecryptionProperties;
+        use std::collections::HashMap;
+
+        let valid_footer_key_as_hex = hex::encode(b"0123456789012345");
+
+        let mut dec = ConfigFileDecryptionProperties {
+            footer_key_as_hex: valid_footer_key_as_hex.clone(),
+            column_decryption_properties: HashMap::new(),
+            aad_prefix_as_hex: String::new(),
+            footer_signature_verification: true,
+        };
+
+        // Decryption: invalid column key hex
+        dec.column_decryption_properties.insert(
+            "col1".to_string(),
+            ColumnDecryptionProperties {
+                column_key_as_hex: "bad".to_string(),
+            },
+        );
+        let err = FileDecryptionProperties::try_from(dec.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Could not decode hex column key"));
+        assert!(err.contains("col1"));
+        dec.column_decryption_properties.clear();
+
+        // Decryption: invalid footer key hex
+        dec.footer_key_as_hex = "bad".to_string();
+        let err = FileDecryptionProperties::try_from(dec.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Could not decode hex footer key"));
+        dec.footer_key_as_hex = valid_footer_key_as_hex;
+
+        // Decryption: invalid AAD prefix hex
+        dec.aad_prefix_as_hex = "zz".to_string();
+        let err = FileDecryptionProperties::try_from(dec.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Could not decode hex AAD prefix"));
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
     fn parquet_encryption_factory_config() {
         let mut parquet_options = TableParquetOptions::default();
 
@@ -3260,6 +3991,42 @@ mod tests {
         assert_eq!(factory_options.get("key2"), Some(&"value 2".to_string()));
     }
 
+    #[cfg(feature = "parquet_encryption")]
+    struct ParquetEncryptionKeyRetriever {}
+
+    #[cfg(feature = "parquet_encryption")]
+    impl parquet::encryption::decrypt::KeyRetriever for ParquetEncryptionKeyRetriever {
+        fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
+            if !key_metadata.is_empty() {
+                Ok(b"1234567890123450".to_vec())
+            } else {
+                Err(parquet::errors::ParquetError::General(
+                    "Key metadata not provided".to_string(),
+                ))
+            }
+        }
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
+    fn conversion_from_key_retriever_to_config_file_decryption_properties() {
+        use crate::Result;
+        use crate::config::ConfigFileDecryptionProperties;
+        use crate::encryption::FileDecryptionProperties;
+
+        let retriever = std::sync::Arc::new(ParquetEncryptionKeyRetriever {});
+        let decryption_properties =
+            FileDecryptionProperties::with_key_retriever(retriever)
+                .build()
+                .unwrap();
+        let config_file_decryption_properties: Result<ConfigFileDecryptionProperties> =
+            (&decryption_properties).try_into();
+        assert!(config_file_decryption_properties.is_err());
+        let err = config_file_decryption_properties.unwrap_err().to_string();
+        assert!(err.contains("key retriever"));
+        assert!(err.contains("Key metadata not provided"));
+    }
+
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options_config_entry() {
@@ -3269,9 +4036,11 @@ mod tests {
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
         let entries = table_config.entries();
-        assert!(entries
-            .iter()
-            .any(|item| item.key == "format.bloom_filter_enabled::col1"))
+        assert!(
+            entries
+                .iter()
+                .any(|item| item.key == "format.bloom_filter_enabled::col1")
+        )
     }
 
     #[cfg(feature = "parquet")]
@@ -3285,10 +4054,10 @@ mod tests {
             )
             .unwrap();
         let entries = table_parquet_options.entries();
-        assert!(entries
-            .iter()
-            .any(|item| item.key
-                == "crypto.file_encryption.column_key_as_hex::double_field"))
+        assert!(
+            entries.iter().any(|item| item.key
+                == "crypto.file_encryption.column_key_as_hex::double_field")
+        )
     }
 
     #[cfg(feature = "parquet")]
@@ -3323,5 +4092,149 @@ mod tests {
         table_config.set("format.metadata::key_dupe", "B").unwrap();
         let parsed_metadata = table_config.parquet.key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
+    }
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_writer_version_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFParquetWriterVersion};
+
+        let mut config = ConfigOptions::default();
+
+        // Valid values should work
+        config
+            .set("datafusion.execution.parquet.writer_version", "1.0")
+            .unwrap();
+        assert_eq!(
+            config.execution.parquet.writer_version,
+            DFParquetWriterVersion::V1_0
+        );
+
+        config
+            .set("datafusion.execution.parquet.writer_version", "2.0")
+            .unwrap();
+        assert_eq!(
+            config.execution.parquet.writer_version,
+            DFParquetWriterVersion::V2_0
+        );
+
+        // Invalid value should error immediately at SET time
+        let err = config
+            .set("datafusion.execution.parquet.writer_version", "3.0")
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
+        );
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn set_cdc_enabled_flag() {
+        use crate::config::ConfigOptions;
+
+        let mut config = ConfigOptions::default();
+        // CDC is disabled by default.
+        assert!(!config.execution.parquet.content_defined_chunking.enabled);
+
+        // `.enabled = true` enables CDC; parameters keep their defaults.
+        config
+            .set(
+                "datafusion.execution.parquet.content_defined_chunking.enabled",
+                "true",
+            )
+            .unwrap();
+        let cdc = &config.execution.parquet.content_defined_chunking;
+        assert!(cdc.enabled);
+        assert_eq!(cdc.min_chunk_size, 256 * 1024);
+        assert_eq!(cdc.max_chunk_size, 1024 * 1024);
+        assert_eq!(cdc.norm_level, 0);
+
+        // `.enabled = false` disables CDC.
+        config
+            .set(
+                "datafusion.execution.parquet.content_defined_chunking.enabled",
+                "false",
+            )
+            .unwrap();
+        assert!(!config.execution.parquet.content_defined_chunking.enabled);
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn set_cdc_param_does_not_enable() {
+        use crate::config::ConfigOptions;
+
+        let mut config = ConfigOptions::default();
+
+        // Setting a parameter does NOT enable CDC (`enabled` is a distinct field,
+        // defaulting to false), and the result is independent of key order.
+        config
+            .set(
+                "datafusion.execution.parquet.content_defined_chunking.min_chunk_size",
+                "1024",
+            )
+            .unwrap();
+        let cdc = &config.execution.parquet.content_defined_chunking;
+        assert!(!cdc.enabled);
+        assert_eq!(cdc.min_chunk_size, 1024);
+        assert_eq!(cdc.max_chunk_size, 1024 * 1024);
+        assert_eq!(cdc.norm_level, 0);
+    }
+
+    #[test]
+    fn test_dialect_spark_roundtrip() {
+        use crate::config::Dialect;
+        use std::str::FromStr;
+
+        assert_eq!(Dialect::from_str("spark").unwrap(), Dialect::Spark);
+        assert_eq!(Dialect::from_str("sparksql").unwrap(), Dialect::Spark);
+        assert_eq!(Dialect::from_str("SPARK").unwrap(), Dialect::Spark);
+        assert_eq!(Dialect::Spark.as_ref(), "spark");
+        assert_eq!(Dialect::Spark.to_string(), "spark");
+    }
+
+    #[test]
+    fn max_row_group_bytes_rejects_zero() {
+        use crate::config::MaxRowGroupBytes;
+        use std::str::FromStr;
+
+        assert!(MaxRowGroupBytes::try_new(0).is_err());
+        assert!(MaxRowGroupBytes::from_str("0").is_err());
+        assert!(MaxRowGroupBytes::from_str("not_a_number").is_err());
+        assert_eq!(MaxRowGroupBytes::try_new(128).unwrap().get(), 128);
+        assert_eq!(MaxRowGroupBytes::from_str("128").unwrap().get(), 128);
+    }
+
+    #[test]
+    fn parquet_max_row_group_bytes_config_set_rejects_zero() {
+        use crate::config::ConfigOptions;
+
+        let mut options = ConfigOptions::new();
+        options
+            .set("datafusion.execution.parquet.max_row_group_bytes", "1024")
+            .unwrap();
+        assert_eq!(
+            options
+                .execution
+                .parquet
+                .max_row_group_bytes
+                .map(|v| v.get()),
+            Some(1024)
+        );
+
+        // Zero is rejected at set time, leaving the previous value unchanged.
+        assert!(
+            options
+                .set("datafusion.execution.parquet.max_row_group_bytes", "0")
+                .is_err()
+        );
+        assert_eq!(
+            options
+                .execution
+                .parquet
+                .max_row_group_bytes
+                .map(|v| v.get()),
+            Some(1024)
+        );
     }
 }

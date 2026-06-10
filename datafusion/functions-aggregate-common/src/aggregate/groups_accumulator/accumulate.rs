@@ -20,10 +20,71 @@
 //! [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 
 use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
-use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
 
+use crate::aggregate::groups_accumulator::nulls::filter_to_validity;
 use datafusion_expr_common::groups_accumulator::EmitTo;
+
+/// If the input has nulls, then the accumulator must potentially
+/// handle each input null value specially (e.g. for `SUM` to mark the
+/// corresponding sum as null)
+///
+/// If there are filters present, `NullState` tracks if it has seen
+/// *any* value for that group (as some values may be filtered
+/// out). Without a filter, the accumulator is only passed groups that
+/// had at least one value to accumulate so they do not need to track
+/// if they have seen values for a particular group.
+#[derive(Debug)]
+pub enum SeenValues {
+    /// All groups seen so far have seen at least one non-null value
+    All {
+        num_values: usize,
+    },
+    // Some groups have not yet seen a non-null value
+    Some {
+        values: BooleanBufferBuilder,
+    },
+}
+
+impl Default for SeenValues {
+    fn default() -> Self {
+        SeenValues::All { num_values: 0 }
+    }
+}
+
+impl SeenValues {
+    /// Return a mutable reference to the `BooleanBufferBuilder` in `SeenValues::Some`.
+    ///
+    /// If `self` is `SeenValues::All`, it is transitioned to `SeenValues::Some`
+    /// by creating a new `BooleanBufferBuilder` where the first `num_values` are true.
+    ///
+    /// The builder is then ensured to have at least `total_num_groups` length,
+    /// with any new entries initialized to false.
+    fn get_builder(&mut self, total_num_groups: usize) -> &mut BooleanBufferBuilder {
+        match self {
+            SeenValues::All { num_values } => {
+                let mut builder = BooleanBufferBuilder::new(total_num_groups);
+                builder.append_n(*num_values, true);
+                if total_num_groups > *num_values {
+                    builder.append_n(total_num_groups - *num_values, false);
+                }
+                *self = SeenValues::Some { values: builder };
+                match self {
+                    SeenValues::Some { values } => values,
+                    _ => unreachable!(),
+                }
+            }
+            SeenValues::Some { values } => {
+                if values.len() < total_num_groups {
+                    values.append_n(total_num_groups - values.len(), false);
+                }
+                values
+            }
+        }
+    }
+}
+
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -53,12 +114,14 @@ use datafusion_expr_common::groups_accumulator::EmitTo;
 pub struct NullState {
     /// Have we seen any non-filtered input values for `group_index`?
     ///
-    /// If `seen_values[i]` is true, have seen at least one non null
+    /// If `seen_values` is `SeenValues::Some(buffer)` and buffer\[i\] is true, have seen at least one non null
     /// value for group `i`
     ///
-    /// If `seen_values[i]` is false, have not seen any values that
+    /// If `seen_values` is `SeenValues::Some(buffer)` and buffer\[i\] is false, have not seen any values that
     /// pass the filter yet for group `i`
-    seen_values: BooleanBufferBuilder,
+    ///
+    /// If `seen_values` is `SeenValues::All`, all groups have seen at least one non null value
+    seen_values: SeenValues,
 }
 
 impl Default for NullState {
@@ -70,14 +133,16 @@ impl Default for NullState {
 impl NullState {
     pub fn new() -> Self {
         Self {
-            seen_values: BooleanBufferBuilder::new(0),
+            seen_values: SeenValues::All { num_values: 0 },
         }
     }
 
     /// return the size of all buffers allocated by this null state, not including self
     pub fn size(&self) -> usize {
-        // capacity is in bits, so convert to bytes
-        self.seen_values.capacity() / 8
+        match &self.seen_values {
+            SeenValues::All { .. } => 0,
+            SeenValues::Some { values } => values.capacity() / 8,
+        }
     }
 
     /// Invokes `value_fn(group_index, value)` for each non null, non
@@ -107,10 +172,17 @@ impl NullState {
         T: ArrowPrimitiveType + Send,
         F: FnMut(usize, T::Native) + Send,
     {
-        // ensure the seen_values is big enough (start everything at
-        // "not seen" valid)
-        let seen_values =
-            initialize_builder(&mut self.seen_values, total_num_groups, false);
+        // skip null handling if no nulls in input or accumulator
+        if let SeenValues::All { num_values } = &mut self.seen_values
+            && opt_filter.is_none()
+            && values.null_count() == 0
+        {
+            accumulate(group_indices, values, None, value_fn);
+            *num_values = total_num_groups;
+            return;
+        }
+
+        let seen_values = self.seen_values.get_builder(total_num_groups);
         accumulate(group_indices, values, opt_filter, |group_index, value| {
             seen_values.set_bit(group_index, true);
             value_fn(group_index, value);
@@ -140,10 +212,21 @@ impl NullState {
         let data = values.values();
         assert_eq!(data.len(), group_indices.len());
 
-        // ensure the seen_values is big enough (start everything at
-        // "not seen" valid)
-        let seen_values =
-            initialize_builder(&mut self.seen_values, total_num_groups, false);
+        // skip null handling if no nulls in input or accumulator
+        if let SeenValues::All { num_values } = &mut self.seen_values
+            && opt_filter.is_none()
+            && values.null_count() == 0
+        {
+            group_indices
+                .iter()
+                .zip(data.iter())
+                .for_each(|(&group_index, new_value)| value_fn(group_index, new_value));
+            *num_values = total_num_groups;
+
+            return;
+        }
+
+        let seen_values = self.seen_values.get_builder(total_num_groups);
 
         // These could be made more performant by iterating in chunks of 64 bits at a time
         match (values.null_count() > 0, opt_filter) {
@@ -195,11 +278,11 @@ impl NullState {
                     .zip(group_indices.iter())
                     .zip(values.iter())
                     .for_each(|((filter_value, &group_index), new_value)| {
-                        if let Some(true) = filter_value {
-                            if let Some(new_value) = new_value {
-                                seen_values.set_bit(group_index, true);
-                                value_fn(group_index, new_value)
-                            }
+                        if let Some(true) = filter_value
+                            && let Some(new_value) = new_value
+                        {
+                            seen_values.set_bit(group_index, true);
+                            value_fn(group_index, new_value)
                         }
                     })
             }
@@ -211,21 +294,39 @@ impl NullState {
     /// for the `emit_to` rows.
     ///
     /// resets the internal state appropriately
-    pub fn build(&mut self, emit_to: EmitTo) -> NullBuffer {
-        let nulls: BooleanBuffer = self.seen_values.finish();
-
-        let nulls = match emit_to {
-            EmitTo::All => nulls,
-            EmitTo::First(n) => {
-                // split off the first N values in seen_values
-                let first_n_null: BooleanBuffer = nulls.slice(0, n);
-                // reset the existing seen buffer
-                self.seen_values
-                    .append_buffer(&nulls.slice(n, nulls.len() - n));
-                first_n_null
+    pub fn build(&mut self, emit_to: EmitTo) -> Option<NullBuffer> {
+        match emit_to {
+            EmitTo::All => {
+                let old_seen = std::mem::take(&mut self.seen_values);
+                match old_seen {
+                    SeenValues::All { .. } => None,
+                    SeenValues::Some { mut values } => {
+                        Some(NullBuffer::new(values.finish()))
+                    }
+                }
             }
-        };
-        NullBuffer::new(nulls)
+            EmitTo::First(n) => match &mut self.seen_values {
+                SeenValues::All { num_values } => {
+                    *num_values = num_values.saturating_sub(n);
+                    None
+                }
+                SeenValues::Some { .. } => {
+                    let mut old_values = match std::mem::take(&mut self.seen_values) {
+                        SeenValues::Some { values } => values,
+                        _ => unreachable!(),
+                    };
+                    let nulls = old_values.finish();
+                    let first_n_null = nulls.slice(0, n);
+                    let remainder = nulls.slice(n, nulls.len() - n);
+                    let mut new_builder = BooleanBufferBuilder::new(remainder.len());
+                    new_builder.append_buffer(&remainder);
+                    self.seen_values = SeenValues::Some {
+                        values: new_builder,
+                    };
+                    Some(NullBuffer::new(first_n_null))
+                }
+            },
+        }
     }
 }
 
@@ -357,10 +458,10 @@ pub fn accumulate<T, F>(
                 .zip(group_indices.iter())
                 .zip(values.iter())
                 .for_each(|((filter_value, &group_index), new_value)| {
-                    if let Some(true) = filter_value {
-                        if let Some(new_value) = new_value {
-                            value_fn(group_index, new_value)
-                        }
+                    if let Some(true) = filter_value
+                        && let Some(new_value) = new_value
+                    {
+                        value_fn(group_index, new_value)
                     }
                 })
         }
@@ -371,7 +472,7 @@ pub fn accumulate<T, F>(
 ///
 /// This method assumes that for any input record index, if any of the value column
 /// is null, or it's filtered out by `opt_filter`, then the record would be ignored.
-/// (won't be accumulated by `value_fn`)
+/// (Won't be accumulated by `value_fn`)
 ///
 /// # Arguments
 ///
@@ -391,33 +492,26 @@ pub fn accumulate_multiple<T, F>(
     T: ArrowPrimitiveType + Send,
     F: FnMut(usize, usize, &[&PrimitiveArray<T>]) + Send,
 {
-    // Calculate `valid_indices` to accumulate, non-valid indices are ignored.
-    // `valid_indices` is a bit mask corresponding to the `group_indices`. An index
-    // is considered valid if:
-    // 1. All columns are non-null at this index.
-    // 2. Not filtered out by `opt_filter`
-
-    // Take AND from all null buffers of `value_columns`.
-    let combined_nulls = value_columns
-        .iter()
-        .map(|arr| arr.logical_nulls())
-        .fold(None, |acc, nulls| {
-            NullBuffer::union(acc.as_ref(), nulls.as_ref())
-        });
-
-    // Take AND from previous combined nulls and `opt_filter`.
-    let valid_indices = match (combined_nulls, opt_filter) {
-        (None, None) => None,
-        (None, Some(filter)) => Some(filter.clone()),
-        (Some(nulls), None) => Some(BooleanArray::new(nulls.inner().clone(), None)),
-        (Some(nulls), Some(filter)) => {
-            let combined = nulls.inner() & filter.values();
-            Some(BooleanArray::new(combined, None))
-        }
-    };
-
     for col in value_columns.iter() {
         debug_assert_eq!(col.len(), group_indices.len());
+    }
+
+    // Start with rows where all value columns are non-null.
+    let mut valid_indices =
+        NullBuffer::union_many(value_columns.iter().map(|arr| arr.nulls()))
+            .map(NullBuffer::into_inner);
+
+    // Restrict to rows where the optional filter is Some(true). Keep the filter
+    // as a raw BooleanBuffer to avoid computing a NullBuffer null_count just to
+    // test row validity below.
+    if let Some(filter) = opt_filter {
+        debug_assert_eq!(filter.len(), group_indices.len());
+        let filter_validity = filter_to_validity(filter);
+        if let Some(valid_indices) = valid_indices.as_mut() {
+            *valid_indices &= &filter_validity;
+        } else {
+            valid_indices = Some(filter_validity);
+        }
     }
 
     match valid_indices {
@@ -462,7 +556,8 @@ pub fn accumulate_indices<F>(
         (None, Some(filter)) => {
             debug_assert_eq!(filter.len(), group_indices.len());
             let group_indices_chunks = group_indices.chunks_exact(64);
-            let bit_chunks = filter.values().bit_chunks();
+            let filter_validity = filter_to_validity(filter);
+            let bit_chunks = filter_validity.bit_chunks();
 
             let group_indices_remainder = group_indices_chunks.remainder();
 
@@ -536,7 +631,8 @@ pub fn accumulate_indices<F>(
 
             let group_indices_chunks = group_indices.chunks_exact(64);
             let valid_bit_chunks = valids.inner().bit_chunks();
-            let filter_bit_chunks = filter.values().bit_chunks();
+            let filter_validity = filter_to_validity(filter);
+            let filter_bit_chunks = filter_validity.bit_chunks();
 
             let group_indices_remainder = group_indices_chunks.remainder();
 
@@ -573,28 +669,15 @@ pub fn accumulate_indices<F>(
     }
 }
 
-/// Ensures that `builder` contains a `BooleanBufferBuilder with at
-/// least `total_num_groups`.
-///
-/// All new entries are initialized to `default_value`
-fn initialize_builder(
-    builder: &mut BooleanBufferBuilder,
-    total_num_groups: usize,
-    default_value: bool,
-) -> &mut BooleanBufferBuilder {
-    if builder.len() < total_num_groups {
-        let new_groups = total_num_groups - builder.len();
-        builder.append_n(new_groups, default_value);
-    }
-    builder
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
 
-    use arrow::array::{Int32Array, UInt32Array};
-    use rand::{rngs::ThreadRng, Rng};
+    use arrow::{
+        array::{Int32Array, UInt32Array},
+        buffer::BooleanBuffer,
+    };
+    use rand::{Rng, rngs::ThreadRng};
     use std::collections::HashSet;
 
     #[test]
@@ -690,11 +773,7 @@ mod test {
             let values_with_nulls: Vec<Option<u32>> = (0..num_values)
                 .map(|_| {
                     let is_null = null_pct < rng.random_range(0.0..1.0);
-                    if is_null {
-                        None
-                    } else {
-                        Some(rng.random())
-                    }
+                    if is_null { None } else { Some(rng.random()) }
                 })
                 .collect();
 
@@ -824,27 +903,38 @@ mod test {
                         .zip(filter.iter())
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
-                            if let Some(true) = is_included {
-                                if let Some(value) = value {
-                                    mock.saw_value(group_index);
-                                    expected_values.push((group_index, value));
-                                }
+                            if let Some(true) = is_included
+                                && let Some(value) = value
+                            {
+                                mock.saw_value(group_index);
+                                expected_values.push((group_index, value));
                             }
                         });
                 }
             }
 
-            assert_eq!(accumulated_values, expected_values,
-                       "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
-            let seen_values = null_state.seen_values.finish_cloned();
-            mock.validate_seen_values(&seen_values);
+            assert_eq!(
+                accumulated_values, expected_values,
+                "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}"
+            );
+
+            match &null_state.seen_values {
+                SeenValues::All { num_values } => {
+                    assert_eq!(*num_values, total_num_groups);
+                }
+                SeenValues::Some { values } => {
+                    let seen_values = values.finish_cloned();
+                    mock.validate_seen_values(&seen_values);
+                }
+            }
 
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
             let null_buffer = null_state.build(EmitTo::All);
-
-            assert_eq!(null_buffer, expected_null_buffer);
+            if let Some(nulls) = &null_buffer {
+                assert_eq!(*nulls, expected_null_buffer);
+            }
         }
 
         // Calls `accumulate_indices`
@@ -895,8 +985,10 @@ mod test {
                 }
             }
 
-            assert_eq!(accumulated_values, expected_values,
-                       "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
+            assert_eq!(
+                accumulated_values, expected_values,
+                "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}"
+            );
         }
 
         /// This is effectively a different implementation of
@@ -940,28 +1032,40 @@ mod test {
                         .zip(filter.iter())
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
-                            if let Some(true) = is_included {
-                                if let Some(value) = value {
-                                    mock.saw_value(group_index);
-                                    expected_values.push((group_index, value));
-                                }
+                            if let Some(true) = is_included
+                                && let Some(value) = value
+                            {
+                                mock.saw_value(group_index);
+                                expected_values.push((group_index, value));
                             }
                         });
                 }
             }
 
-            assert_eq!(accumulated_values, expected_values,
-                       "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
+            assert_eq!(
+                accumulated_values, expected_values,
+                "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}"
+            );
 
-            let seen_values = null_state.seen_values.finish_cloned();
-            mock.validate_seen_values(&seen_values);
+            match &null_state.seen_values {
+                SeenValues::All { num_values } => {
+                    assert_eq!(*num_values, total_num_groups);
+                }
+                SeenValues::Some { values } => {
+                    let seen_values = values.finish_cloned();
+                    mock.validate_seen_values(&seen_values);
+                }
+            }
 
             // Validate the final buffer (one value per group)
-            let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
+            let expected_null_buffer = Some(mock.expected_null_buffer(total_num_groups));
 
+            let is_all_seen = matches!(null_state.seen_values, SeenValues::All { .. });
             let null_buffer = null_state.build(EmitTo::All);
 
-            assert_eq!(null_buffer, expected_null_buffer);
+            if !is_all_seen {
+                assert_eq!(null_buffer, expected_null_buffer);
+            }
         }
     }
 
@@ -1076,6 +1180,68 @@ mod test {
         );
 
         // Only rows where filter is true should be accumulated
+        let expected = vec![(0, vec![1, 10]), (0, vec![3, 30])];
+        assert_eq!(accumulated, expected);
+    }
+
+    #[test]
+    fn test_accumulate_indices_with_null_filter() {
+        let group_indices = vec![0, 1, 0, 1];
+        let filter = BooleanArray::new(
+            BooleanBuffer::from(vec![true, true, true, false]),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+
+        let mut accumulated = vec![];
+        accumulate_indices(&group_indices, None, Some(&filter), |group_idx| {
+            accumulated.push(group_idx);
+        });
+
+        // A NULL filter value should be treated the same as false, even if the
+        // underlying BooleanBuffer value is true.
+        let expected = vec![0, 0];
+        assert_eq!(accumulated, expected);
+
+        let value_validity = NullBuffer::from(vec![true, true, false, true]);
+        let mut accumulated = vec![];
+        accumulate_indices(
+            &group_indices,
+            Some(&value_validity),
+            Some(&filter),
+            |group_idx| {
+                accumulated.push(group_idx);
+            },
+        );
+
+        let expected = vec![0];
+        assert_eq!(accumulated, expected);
+    }
+
+    #[test]
+    fn test_accumulate_multiple_with_null_filter() {
+        let group_indices = vec![0, 1, 0, 1];
+        let values1 = Int32Array::from(vec![1, 2, 3, 4]);
+        let values2 = Int32Array::from(vec![10, 20, 30, 40]);
+        let value_columns = [values1, values2];
+
+        let filter = BooleanArray::new(
+            BooleanBuffer::from(vec![true, true, true, false]),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+
+        let mut accumulated = vec![];
+        accumulate_multiple(
+            &group_indices,
+            &value_columns.iter().collect::<Vec<_>>(),
+            Some(&filter),
+            |group_idx, batch_idx, columns| {
+                let values = columns.iter().map(|col| col.value(batch_idx)).collect();
+                accumulated.push((group_idx, values));
+            },
+        );
+
+        // A NULL filter value should be treated the same as false, even if the
+        // underlying BooleanBuffer value is true.
         let expected = vec![(0, vec![1, 10]), (0, vec![3, 30])];
         assert_eq!(accumulated, expected);
     }

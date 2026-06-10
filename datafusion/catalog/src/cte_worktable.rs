@@ -17,20 +17,17 @@
 
 //! CteWorkTable implementation used for recursive queries
 
+use std::borrow::Cow;
 use std::sync::Arc;
-use std::{any::Any, borrow::Cow};
 
-use crate::Session;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_physical_plan::work_table::WorkTableExec;
-
-use datafusion_physical_plan::ExecutionPlan;
-
 use datafusion_common::error::Result;
 use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::work_table::WorkTableExec;
 
-use crate::TableProvider;
+use crate::{ScanArgs, ScanResult, Session, TableProvider};
 
 /// The temporary working table where the previous iteration of a recursive query is stored
 /// Naming is based on PostgreSQL's implementation.
@@ -39,14 +36,16 @@ use crate::TableProvider;
 pub struct CteWorkTable {
     /// The name of the CTE work table
     name: String,
-    /// This schema must be shared across both the static and recursive terms of a recursive query
+    /// Schema exposed by recursive self-references while planning the recursive term.
+    ///
+    /// This is a conservative work-table schema, not the final recursive query output
+    /// schema. For example, the SQL planner may mark fields nullable here so recursive
+    /// references do not inherit unsound anchor-term nullability assumptions.
     table_schema: SchemaRef,
 }
 
 impl CteWorkTable {
-    /// construct a new CteWorkTable with the given name and schema
-    /// This schema must match the schema of the recursive term of the query
-    /// Since the scan method will contain an physical plan that assumes this schema
+    /// Construct a new CteWorkTable with the given name and self-reference schema.
     pub fn new(name: &str, table_schema: SchemaRef) -> Self {
         Self {
             name: name.to_owned(),
@@ -59,7 +58,7 @@ impl CteWorkTable {
         &self.name
     }
 
-    /// The schema of the recursive term of the query
+    /// The schema exposed by scans of the recursive self-reference.
     pub fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
     }
@@ -67,10 +66,6 @@ impl CteWorkTable {
 
 #[async_trait]
 impl TableProvider for CteWorkTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
@@ -85,16 +80,28 @@ impl TableProvider for CteWorkTable {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // TODO: pushdown filters and limits
-        Ok(Arc::new(WorkTableExec::new(
+        let options = ScanArgs::default()
+            .with_projection(projection.map(|p| p.as_slice()))
+            .with_filters(Some(filters))
+            .with_limit(limit);
+        Ok(self.scan_with_args(state, options).await?.into_inner())
+    }
+
+    async fn scan_with_args<'a>(
+        &self,
+        _state: &dyn Session,
+        args: ScanArgs<'a>,
+    ) -> Result<ScanResult> {
+        Ok(ScanResult::new(Arc::new(WorkTableExec::new(
             self.name.clone(),
             Arc::clone(&self.table_schema),
-        )))
+            args.projection().map(|p| p.to_vec()),
+        )?)))
     }
 
     fn supports_filters_pushdown(

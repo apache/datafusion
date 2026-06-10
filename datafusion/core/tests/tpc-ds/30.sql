@@ -29,4 +29,3 @@ with customer_total_return as
                   ,c_last_review_date_sk,ctr_total_return
 limit 100;
 
-

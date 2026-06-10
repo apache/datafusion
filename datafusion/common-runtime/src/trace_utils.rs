@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use std::any::Any;
 use std::error::Error;
 use std::fmt::{Display, Formatter, Result as FmtResult};

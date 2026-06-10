@@ -181,12 +181,13 @@ async fn query_make_date() -> Result<()> {
 
     // invalid column values will result in an error
     let result = ctx
-        .sql("select make_date(2024, null, 23)")
+        .sql("select make_date(2024, '', 23)")
         .await?
         .collect()
         .await;
 
-    let expected = "Execution error: Unable to parse date from null/empty value";
+    let expected =
+        "Arrow error: Cast error: Cannot cast string '' to value of Int32 type";
     assert_contains!(result.unwrap_err().to_string(), expected);
 
     // invalid date values will also result in an error
@@ -196,7 +197,7 @@ async fn query_make_date() -> Result<()> {
         .collect()
         .await;
 
-    let expected = "Execution error: Unable to parse date from 2024, 1, 32";
+    let expected = "Execution error: Day value '32' is out of range";
     assert_contains!(result.unwrap_err().to_string(), expected);
 
     Ok(())

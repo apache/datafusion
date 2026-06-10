@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use super::*;
-use datafusion_common::{metadata::ScalarAndMetadata, ParamValues, ScalarValue};
+use datafusion_common::{ParamValues, ScalarValue, metadata::ScalarAndMetadata};
 use insta::assert_snapshot;
 
 #[tokio::test]
@@ -222,10 +222,10 @@ async fn test_parameter_invalid_types() -> Result<()> {
         .await;
     assert_snapshot!(results.unwrap_err().strip_backtrace(),
         @r"
-        type_coercion
-        caused by
-        Error during planning: Cannot infer common argument type for comparison operation List(nullable Int32) = Int32
-        ");
+    type_coercion
+    caused by
+    Error during planning: Cannot infer common argument type for comparison operation List(Int32) = Int32
+    ");
     Ok(())
 }
 
@@ -429,5 +429,67 @@ async fn test_select_cast_date_literal_to_timestamp_overflow() -> Result<()> {
         err.to_string(),
         "Cannot cast Date32 value 2932896 to Timestamp(ns): converted value exceeds the representable i64 range"
     );
+    Ok(())
+}
+
+// Regression test: a recursive CTE whose anchor aliases a computed column
+// (`upper(val) AS val`) and whose recursive term leaves the same expression
+// un-aliased must still produce batches whose schema field names come from
+// the anchor term — especially when the outer query uses ORDER BY + LIMIT
+// (the TopK path passes batch schemas through verbatim, so any drift in
+// RecursiveQueryExec's emitted batches is visible downstream).
+#[tokio::test]
+async fn test_recursive_cte_batch_schema_stable_with_order_by_limit() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql(
+        "CREATE TABLE records (\
+            id VARCHAR NOT NULL, \
+            parent_id VARCHAR, \
+            ts TIMESTAMP NOT NULL, \
+            val VARCHAR\
+         )",
+    )
+    .await?
+    .collect()
+    .await?;
+    ctx.sql(
+        "INSERT INTO records VALUES \
+            ('a00', NULL,  TIMESTAMP '2025-01-01 00:00:00', 'v_span'), \
+            ('a01', 'a00', TIMESTAMP '2025-01-01 00:00:01', 'v_log_1'), \
+            ('a02', 'a01', TIMESTAMP '2025-01-01 00:00:02', 'v_log_2'), \
+            ('a03', 'a02', TIMESTAMP '2025-01-01 00:00:03', 'v_log_3'), \
+            ('a04', 'a03', TIMESTAMP '2025-01-01 00:00:04', 'v_log_4'), \
+            ('a05', 'a04', TIMESTAMP '2025-01-01 00:00:05', 'v_log_5')",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let results = ctx
+        .sql(
+            "WITH RECURSIVE descendants AS (\
+                SELECT id, parent_id, ts, upper(val) AS val \
+                  FROM records WHERE id = 'a00' \
+                UNION ALL \
+                SELECT r.id, r.parent_id, r.ts, upper(r.val) \
+                  FROM records r INNER JOIN descendants d ON r.parent_id = d.id \
+             ) \
+             SELECT id, parent_id, ts, val FROM descendants ORDER BY ts ASC LIMIT 10",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    let expected_names = ["id", "parent_id", "ts", "val"];
+    assert!(!results.is_empty(), "expected at least one batch");
+    for (i, batch) in results.iter().enumerate() {
+        let schema = batch.schema();
+        let actual_names: Vec<&str> =
+            schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(
+            actual_names, expected_names,
+            "batch {i} schema field names leaked from recursive branch"
+        );
+    }
     Ok(())
 }

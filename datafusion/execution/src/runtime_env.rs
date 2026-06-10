@@ -18,8 +18,8 @@
 //! Execution [`RuntimeEnv`] environment that manages access to object
 //! store, memory manager, disk manager.
 
-#[allow(deprecated)]
-use crate::disk_manager::DiskManagerConfig;
+#[expect(deprecated)]
+use crate::disk_manager::{DiskManagerConfig, SpillingProgress};
 use crate::{
     disk_manager::{DiskManager, DiskManagerBuilder, DiskManagerMode},
     memory_pool::{
@@ -31,14 +31,14 @@ use crate::{
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 #[cfg(feature = "parquet_encryption")]
 use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
-use datafusion_common::{config::ConfigEntry, Result};
+use datafusion_common::{Result, config::ConfigEntry};
 use object_store::ObjectStore;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::{
     fmt::{Debug, Formatter},
     num::NonZeroUsize,
 };
+use std::{path::PathBuf, time::Duration};
 use url::Url;
 
 #[derive(Clone)]
@@ -101,17 +101,20 @@ fn create_runtime_config_entries(
     max_temp_directory_size: Option<String>,
     temp_directory: Option<String>,
     metadata_cache_limit: Option<String>,
+    list_files_cache_limit: Option<String>,
+    list_files_cache_ttl: Option<String>,
+    file_statistics_cache_limit: Option<String>,
 ) -> Vec<ConfigEntry> {
     vec![
         ConfigEntry {
             key: "datafusion.runtime.memory_limit".to_string(),
             value: memory_limit,
-            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
         ConfigEntry {
             key: "datafusion.runtime.max_temp_directory_size".to_string(),
             value: max_temp_directory_size,
-            description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
         },
         ConfigEntry {
             key: "datafusion.runtime.temp_directory".to_string(),
@@ -121,8 +124,23 @@ fn create_runtime_config_entries(
         ConfigEntry {
             key: "datafusion.runtime.metadata_cache_limit".to_string(),
             value: metadata_cache_limit,
-            description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
-        }
+            description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.list_files_cache_limit".to_string(),
+            value: list_files_cache_limit,
+            description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.list_files_cache_ttl".to_string(),
+            value: list_files_cache_ttl,
+            description: "TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.file_statistics_cache_limit".to_string(),
+            value: file_statistics_cache_limit,
+            description: "Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.",
+        },
     ]
 }
 
@@ -187,6 +205,11 @@ impl RuntimeEnv {
         self.object_store_registry.get_store(url.as_ref())
     }
 
+    /// Returns the current spilling progress
+    pub fn spilling_progress(&self) -> SpillingProgress {
+        self.disk_manager.spilling_progress()
+    }
+
     /// Register an [`EncryptionFactory`] with an associated identifier that can be later
     /// used to configure encryption when reading or writing Parquet.
     /// If an encryption factory with the same identifier was already registered, it is replaced and returned.
@@ -227,6 +250,14 @@ impl RuntimeEnv {
             }
         }
 
+        fn format_duration(duration: Duration) -> String {
+            let total = duration.as_secs();
+            let mins = total / 60;
+            let secs = total % 60;
+
+            format!("{mins}m{secs}s")
+        }
+
         let memory_limit_value = match self.memory_pool.memory_limit() {
             MemoryLimit::Finite(size) => Some(format_byte_size(
                 size.try_into()
@@ -259,11 +290,34 @@ impl RuntimeEnv {
                 .expect("Metadata cache size conversion failed"),
         );
 
+        let list_files_cache_limit = self.cache_manager.get_list_files_cache_limit();
+        let list_files_cache_value = format_byte_size(
+            list_files_cache_limit
+                .try_into()
+                .expect("List files cache size conversion failed"),
+        );
+
+        let list_files_cache_ttl = self
+            .cache_manager
+            .get_list_files_cache_ttl()
+            .map(format_duration);
+
+        let file_statistics_cache_limit =
+            self.cache_manager.get_file_statistic_cache_limit();
+        let file_statistics_cache_value = format_byte_size(
+            file_statistics_cache_limit
+                .try_into()
+                .expect("File statistics cache size conversion failed"),
+        );
+
         create_runtime_config_entries(
             memory_limit_value,
             Some(max_temp_dir_value),
             temp_dir_value,
             Some(metadata_cache_value),
+            Some(list_files_cache_value),
+            list_files_cache_ttl,
+            Some(file_statistics_cache_value),
         )
     }
 }
@@ -279,7 +333,7 @@ impl Default for RuntimeEnv {
 /// See example on [`RuntimeEnv`]
 #[derive(Clone)]
 pub struct RuntimeEnvBuilder {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: DiskManagerConfig,
     /// DiskManager builder to manager temporary disk file usage
@@ -317,7 +371,7 @@ impl RuntimeEnvBuilder {
         }
     }
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[deprecated(since = "48.0.0", note = "Use with_disk_manager_builder instead")]
     /// Customize disk manager
     pub fn with_disk_manager(mut self, disk_manager: DiskManagerConfig) -> Self {
@@ -355,12 +409,23 @@ impl RuntimeEnvBuilder {
     /// Specify the total memory to use while running the DataFusion
     /// plan to `max_memory * memory_fraction` in bytes.
     ///
-    /// This defaults to using [`GreedyMemoryPool`] wrapped in the
-    /// [`TrackConsumersPool`] with a maximum of 5 consumers.
+    /// If a memory pool is already configured on this builder, this first
+    /// attempts to resize it in place via [`MemoryPool::try_resize`]. Pools
+    /// that support resize (e.g. [`GreedyMemoryPool`]) keep their identity
+    /// — useful for any wrapper that needs to observe limit changes (e.g.
+    /// to retune external accounting). Pools whose [`MemoryPool::try_resize`]
+    /// returns `Err` (the default) fall back to wholesale replacement
+    /// with a [`TrackConsumersPool`]-wrapped [`GreedyMemoryPool`] (top 5
+    /// consumers), preserving the historical behavior.
     ///
     /// Note DataFusion does not yet respect this limit in all cases.
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
         let pool_size = (max_memory as f64 * memory_fraction) as usize;
+        if let Some(existing) = &self.memory_pool
+            && existing.try_resize(pool_size).is_ok()
+        {
+            return self;
+        }
         self.with_memory_pool(Arc::new(TrackConsumersPool::new(
             GreedyMemoryPool::new(pool_size),
             NonZeroUsize::new(5).unwrap(),
@@ -387,6 +452,23 @@ impl RuntimeEnvBuilder {
         self
     }
 
+    /// Specifies the memory limit for the object list cache, in bytes.
+    pub fn with_object_list_cache_limit(mut self, limit: usize) -> Self {
+        self.cache_manager = self.cache_manager.with_list_files_cache_limit(limit);
+        self
+    }
+
+    /// Specifies the duration entries in the object list cache will be considered valid.
+    pub fn with_object_list_cache_ttl(mut self, ttl: Option<Duration>) -> Self {
+        self.cache_manager = self.cache_manager.with_list_files_cache_ttl(ttl);
+        self
+    }
+
+    pub fn with_file_statistics_cache_limit(mut self, limit: usize) -> Self {
+        self.cache_manager = self.cache_manager.with_file_statistics_cache_limit(limit);
+        self
+    }
+
     /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
         let Self {
@@ -406,7 +488,7 @@ impl RuntimeEnvBuilder {
             disk_manager: if let Some(builder) = disk_manager_builder {
                 Arc::new(builder.build()?)
             } else {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 DiskManager::try_new(disk_manager)?
             },
             cache_manager: CacheManager::try_new(&cache_manager)?,
@@ -424,10 +506,15 @@ impl RuntimeEnvBuilder {
     /// Create a new RuntimeEnvBuilder from an existing RuntimeEnv
     pub fn from_runtime_env(runtime_env: &RuntimeEnv) -> Self {
         let cache_config = CacheManagerConfig {
-            table_files_statistics_cache: runtime_env
+            file_statistics_cache: runtime_env.cache_manager.get_file_statistic_cache(),
+            file_statistics_cache_limit: runtime_env
                 .cache_manager
-                .get_file_statistic_cache(),
+                .get_file_statistic_cache_limit(),
             list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
+            list_files_cache_limit: runtime_env
+                .cache_manager
+                .get_list_files_cache_limit(),
+            list_files_cache_ttl: runtime_env.cache_manager.get_list_files_cache_ttl(),
             file_metadata_cache: Some(
                 runtime_env.cache_manager.get_file_metadata_cache(),
             ),
@@ -435,7 +522,7 @@ impl RuntimeEnvBuilder {
         };
 
         Self {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             disk_manager: DiskManagerConfig::Existing(Arc::clone(
                 &runtime_env.disk_manager,
             )),
@@ -457,6 +544,9 @@ impl RuntimeEnvBuilder {
             Some("100G".to_string()),
             None,
             Some("50M".to_owned()),
+            Some("1M".to_owned()),
+            None,
+            Some("20M".to_owned()),
         )
     }
 
@@ -481,5 +571,50 @@ impl RuntimeEnvBuilder {
             );
         }
         docs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory_pool::{GreedyMemoryPool, MemoryLimit, UnboundedMemoryPool};
+
+    #[test]
+    fn with_memory_limit_resizes_in_place_when_pool_supports_it() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(100));
+        let pool_ptr = Arc::as_ptr(&pool);
+
+        let env = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .with_memory_limit(500, 1.0)
+            .build()
+            .unwrap();
+
+        // Same Arc as before — wrapper-or-other-resize-capable pools survive.
+        assert!(std::ptr::eq(Arc::as_ptr(&env.memory_pool), pool_ptr));
+        assert!(matches!(
+            env.memory_pool.memory_limit(),
+            MemoryLimit::Finite(500)
+        ));
+    }
+
+    #[test]
+    fn with_memory_limit_falls_back_to_replace_when_resize_unsupported() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let pool_ptr = Arc::as_ptr(&pool);
+
+        let env = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .with_memory_limit(500, 1.0)
+            .build()
+            .unwrap();
+
+        // Different Arc — wholesale replacement happened because Unbounded's
+        // default `try_resize` returns Err.
+        assert!(!std::ptr::eq(Arc::as_ptr(&env.memory_pool), pool_ptr));
+        assert!(matches!(
+            env.memory_pool.memory_limit(),
+            MemoryLimit::Finite(500)
+        ));
     }
 }

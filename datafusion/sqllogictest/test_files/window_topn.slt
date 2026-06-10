@@ -1,0 +1,626 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for Window TopN optimization: PartitionedTopKExec
+
+statement ok
+CREATE TABLE window_topn_t (id INT, pk INT, val INT) AS VALUES
+  (1, 1, 10),
+  (2, 1, 20),
+  (3, 1, 30),
+  (4, 1, 40),
+  (5, 2, 5),
+  (6, 2, 15),
+  (7, 2, 25),
+  (8, 3, 100),
+  (9, 3, 50),
+  (10, 3, 75);
+
+# Enable the optimization for all tests
+statement ok
+SET datafusion.optimizer.enable_window_topn = true;
+
+# Test 1: Correct results for top-3 per partition
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+1 1 10
+10 3 75
+2 1 20
+3 1 30
+5 2 5
+6 2 15
+7 2 25
+8 3 100
+9 3 50
+
+# Test 2: Verify plan contains PartitionedTopKExec with fetch=3
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+logical_plan
+01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+02)--Filter: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(3)
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_t projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test 3: rn < 4 should give same results (fetch=3)
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+) WHERE rn < 4;
+----
+1 1 10
+10 3 75
+2 1 20
+3 1 30
+5 2 5
+6 2 15
+7 2 25
+8 3 100
+9 3 50
+
+# Test 4: Without PARTITION BY — should NOT optimize
+query II rowsort
+SELECT id, val FROM (
+  SELECT *, ROW_NUMBER() OVER (ORDER BY val) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+1 10
+5 5
+6 15
+
+# Test 5: Disabled config falls back to normal plan
+statement ok
+SET datafusion.optimizer.enable_window_topn = false;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+logical_plan
+01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+02)--Filter: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(3)
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_t projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--FilterExec: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 <= 3
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.optimizer.enable_window_topn = true;
+
+# Test 6: Flipped predicate: 3 >= rn should also trigger optimization
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+) WHERE 3 >= rn;
+----
+logical_plan
+01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+02)--Filter: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(3)
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_t projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test 7: Filter on data column (not window output) — should NOT optimize
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+) WHERE val <= 3;
+----
+logical_plan
+01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+02)--Filter: window_topn_t.val <= Int32(3)
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_t projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--FilterExec: val@2 <= 3
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test 8: rn < 4 plan shows PartitionedTopKExec with fetch=3
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+) WHERE rn < 4;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+# Test 9: 3 < rn is NOT a top-K pattern — should NOT optimize
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+) WHERE 3 < rn;
+----
+logical_plan
+01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+02)--Filter: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW > UInt64(3)
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_t projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--FilterExec: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 > 3
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test 10: Tree format EXPLAIN shows partition and order expressions
+statement ok
+SET datafusion.explain.format = tree;
+
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│           id: id          │
+05)│           pk: pk          │
+06)│                           │
+07)│            rn:            │
+08)│ row_number() PARTITION BY │
+09)│  [window_topn_t.pk] ORDER │
+10)│    BY [window_topn_t.val  │
+11)│    ASC NULLS LAST] RANGE  │
+12)│      BETWEEN UNBOUNDED    │
+13)│        PRECEDING AND      │
+14)│         CURRENT ROW       │
+15)│                           │
+16)│          val: val         │
+17)└─────────────┬─────────────┘
+18)┌─────────────┴─────────────┐
+19)│    BoundedWindowAggExec   │
+20)│    --------------------   │
+21)│        mode: Sorted       │
+22)│                           │
+23)│        select_list:       │
+24)│ row_number() PARTITION BY │
+25)│  [window_topn_t.pk] ORDER │
+26)│    BY [window_topn_t.val  │
+27)│    ASC NULLS LAST] RANGE  │
+28)│      BETWEEN UNBOUNDED    │
+29)│        PRECEDING AND      │
+30)│         CURRENT ROW       │
+31)└─────────────┬─────────────┘
+32)┌─────────────┴─────────────┐
+33)│    PartitionedTopKExec    │
+34)│    --------------------   │
+35)│          fetch: 3         │
+36)│                           │
+37)│           order:          │
+38)│   [val@2 ASC NULLS LAST]  │
+39)│                           │
+40)│     partition: [pk@1]     │
+41)└─────────────┬─────────────┘
+42)┌─────────────┴─────────────┐
+43)│       DataSourceExec      │
+44)│    --------------------   │
+45)│         bytes: 480        │
+46)│       format: memory      │
+47)│          rows: 1          │
+48)└───────────────────────────┘
+
+statement ok
+SET datafusion.explain.format = indent;
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+# Test 11: ROW_NUMBER + RANK together — filter on rn should still optimize
+query IIIII rowsort
+SELECT id, pk, val, rn, rnk FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    RANK() OVER (PARTITION BY pk ORDER BY val) as rnk
+  FROM window_topn_t
+) WHERE rn <= 3;
+----
+1 1 10 1 1
+10 3 75 2 2
+2 1 20 2 2
+3 1 30 3 3
+5 2 5 1 1
+6 2 15 2 2
+7 2 25 3 3
+8 3 100 3 3
+9 3 50 1 1
+
+# Test 12: ROW_NUMBER + SUM together — filter on rn, correctness check
+query IIIII rowsort
+SELECT id, pk, val, rn, running_sum FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    SUM(val) OVER (PARTITION BY pk ORDER BY val) as running_sum
+  FROM window_topn_t
+) WHERE rn <= 3;
+----
+1 1 10 1 10
+10 3 75 2 125
+2 1 20 2 30
+3 1 30 3 60
+5 2 5 1 5
+6 2 15 2 20
+7 2 25 3 45
+8 3 100 3 225
+9 3 50 1 50
+
+# Test 13: Filter on RANK (not ROW_NUMBER) — should NOT optimize
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    RANK() OVER (PARTITION BY pk ORDER BY val) as rnk
+  FROM window_topn_t
+) WHERE rnk <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn, rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as rnk]
+02)--FilterExec: rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 <= 3
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test 14: Filter on rn AND rnk — compound predicate should NOT optimize
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    RANK() OVER (PARTITION BY pk ORDER BY val) as rnk
+  FROM window_topn_t
+) WHERE rn <= 3 AND rnk <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn, rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as rnk]
+02)--FilterExec: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 <= 3 AND rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 <= 3
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+# Test 15: ROW_NUMBER with DESC ordering — correctness
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val DESC) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+10 3 75
+2 1 20
+3 1 30
+4 1 40
+5 2 5
+6 2 15
+7 2 25
+8 3 100
+9 3 50
+
+# Test 16: Multiple partition keys — should optimize
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk, id ORDER BY val) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk, window_topn_t.id] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk, window_topn_t.id] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk, window_topn_t.id] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fetch=3, partition=[pk@1, id@0], order=[val@2 ASC NULLS LAST]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+# Test 17: No PARTITION BY (only ORDER BY) — should NOT optimize
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (ORDER BY id) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() ORDER BY [window_topn_t.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--FilterExec: row_number() ORDER BY [window_topn_t.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 <= 3
+03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [window_topn_t.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [window_topn_t.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test 18: Overlapping partition and order keys (PARTITION BY id ORDER BY id, val) — should optimize
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY id, val) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.id] ORDER BY [window_topn_t.id ASC NULLS LAST, window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.id] ORDER BY [window_topn_t.id ASC NULLS LAST, window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.id] ORDER BY [window_topn_t.id ASC NULLS LAST, window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fetch=3, partition=[id@0], order=[val@2 ASC NULLS LAST]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test 19: Overlapping keys correctness (each id is unique, so rn=1 for all)
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+query IIII rowsort
+SELECT id, pk, val, rn FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY id, val) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+1 1 10 1
+10 3 75 1
+2 1 20 1
+3 1 30 1
+4 1 40 1
+5 2 5 1
+6 2 15 1
+7 2 25 1
+8 3 100 1
+9 3 50 1
+
+# Test 20: PARTITION BY same column used in ORDER BY with different direction — should optimize
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY pk, val DESC) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk ASC NULLS LAST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk ASC NULLS LAST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk ASC NULLS LAST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fetch=3, partition=[pk@1], order=[val@2 DESC]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test 21: Correctness for PARTITION BY pk ORDER BY pk, val DESC
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+query IIII rowsort
+SELECT id, pk, val, rn FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY pk, val DESC) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+10 3 75 2
+2 1 20 3
+3 1 30 2
+4 1 40 1
+5 2 5 3
+6 2 15 2
+7 2 25 1
+8 3 100 1
+9 3 50 3
+
+# Test 22: PARTITION BY pk ORDER BY pk DESC, val DESC — pk direction conflicts with partition sort
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY pk DESC, val DESC) as rn FROM window_topn_t
+) WHERE rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk DESC NULLS FIRST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk DESC NULLS FIRST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.pk DESC NULLS FIRST, window_topn_t.val DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fetch=3, partition=[pk@1], order=[val@2 DESC]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+# ---- Tests with QUALIFY clause ----
+
+# Test 28: QUALIFY with ROW_NUMBER — correctness
+query IIII rowsort
+SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+QUALIFY rn <= 3;
+----
+1 1 10 1
+10 3 75 2
+2 1 20 2
+3 1 30 3
+5 2 5 1
+6 2 15 2
+7 2 25 3
+8 3 100 3
+9 3 50 1
+
+# Test 29: QUALIFY plan should use PartitionedTopKExec
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+QUALIFY rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test 30: QUALIFY with < operator
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+query IIII rowsort
+SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM window_topn_t
+QUALIFY rn < 3;
+----
+1 1 10 1
+10 3 75 2
+2 1 20 2
+5 2 5 1
+6 2 15 2
+9 3 50 1
+
+# Test 31: QUALIFY on RANK — should NOT optimize
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val) as rnk FROM window_topn_t
+QUALIFY rnk <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rnk]
+02)--FilterExec: rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 <= 3
+03)----BoundedWindowAggExec: wdw=[rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+statement ok
+DROP TABLE window_topn_t;
+
+# ---- Tests with NULL values for sort option coverage ----
+
+statement ok
+CREATE TABLE window_topn_nulls (id INT, pk INT, val INT) AS VALUES
+  (1, 1, 10),
+  (2, 1, NULL),
+  (3, 1, 30),
+  (4, 2, NULL),
+  (5, 2, 5),
+  (6, 2, 15),
+  (7, 2, NULL);
+
+# Test 23: ORDER BY val ASC NULLS LAST (default) — NULLs sorted last within partition
+query IIII rowsort
+SELECT id, pk, val, rn FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val ASC NULLS LAST) as rn FROM window_topn_nulls
+) WHERE rn <= 2;
+----
+1 1 10 1
+3 1 30 2
+5 2 5 1
+6 2 15 2
+
+# Test 24: ORDER BY val ASC NULLS FIRST — NULLs sorted first within partition
+query IIII rowsort
+SELECT id, pk, val, rn FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val ASC NULLS FIRST) as rn FROM window_topn_nulls
+) WHERE rn <= 2;
+----
+1 1 10 2
+2 1 NULL 1
+4 2 NULL 1
+7 2 NULL 2
+
+# Test 25: ORDER BY val DESC NULLS FIRST (default for DESC) — NULLs first
+query IIII rowsort
+SELECT id, pk, val, rn FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val DESC NULLS FIRST) as rn FROM window_topn_nulls
+) WHERE rn <= 2;
+----
+2 1 NULL 1
+3 1 30 2
+4 2 NULL 1
+7 2 NULL 2
+
+# Test 26: ORDER BY val DESC NULLS LAST — NULLs last
+query IIII rowsort
+SELECT id, pk, val, rn FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val DESC NULLS LAST) as rn FROM window_topn_nulls
+) WHERE rn <= 2;
+----
+1 1 10 2
+3 1 30 1
+5 2 5 2
+6 2 15 1
+
+# Test 27: Verify plans show correct sort options
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val ASC NULLS FIRST) as rn FROM window_topn_nulls
+) WHERE rn <= 2;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fetch=2, partition=[pk@1], order=[val@2 ASC]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val DESC NULLS LAST) as rn FROM window_topn_nulls
+) WHERE rn <= 2;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_nulls.pk] ORDER BY [window_topn_nulls.val DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fetch=2, partition=[pk@1], order=[val@2 DESC NULLS LAST]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+statement ok
+DROP TABLE window_topn_nulls;
+
+# Reset config to default (false)
+statement ok
+SET datafusion.optimizer.enable_window_topn = false;

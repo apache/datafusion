@@ -17,7 +17,6 @@
 
 //! TableProvider for stream sources, such as FIFO files
 
-use std::any::Any;
 use std::fmt::Formatter;
 use std::fs::{File, OpenOptions};
 use std::io::BufReader;
@@ -28,7 +27,7 @@ use std::sync::Arc;
 use crate::{Session, TableProvider, TableProviderFactory};
 use arrow::array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
+use datafusion_common::{Constraints, DataFusionError, Result, config_err, plan_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -303,10 +302,6 @@ impl StreamTable {
 
 #[async_trait]
 impl TableProvider for StreamTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(self.0.source.schema())
     }
@@ -405,10 +400,6 @@ impl DisplayAs for StreamWrite {
 
 #[async_trait]
 impl DataSink for StreamWrite {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         self.0.source.schema()
     }

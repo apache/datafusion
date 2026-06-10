@@ -17,7 +17,7 @@
 
 //! See `main.rs` for how to run it.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::{
     array::{AsArray, RecordBatch, StringArray, UInt8Array},
@@ -27,13 +27,13 @@ use datafusion::{
     catalog::Session,
     common::{GetExt, Statistics},
     datasource::{
+        MemTable,
         file_format::{
-            csv::CsvFormatFactory, file_compression_type::FileCompressionType,
-            FileFormat, FileFormatFactory,
+            FileFormat, FileFormatFactory, csv::CsvFormatFactory,
+            file_compression_type::FileCompressionType,
         },
         physical_plan::{FileScanConfig, FileSinkConfig, FileSource},
         table_schema::TableSchema,
-        MemTable,
     },
     error::Result,
     execution::session_state::SessionStateBuilder,
@@ -104,10 +104,6 @@ impl TSVFileFormat {
 
 #[async_trait::async_trait]
 impl FileFormat for TSVFileFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         "tsv".to_string()
     }
@@ -206,10 +202,6 @@ impl FileFormatFactory for TSVFileFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         todo!()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

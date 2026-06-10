@@ -15,13 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::StableAbi;
-use datafusion::logical_expr::logical_plan::dml::InsertOp;
+use datafusion_expr::logical_plan::dml::InsertOp;
 
 /// FFI safe version of [`InsertOp`].
-#[repr(C)]
-#[derive(StableAbi)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
+#[repr(u8)]
 pub enum FFI_InsertOp {
     Append,
     Overwrite,

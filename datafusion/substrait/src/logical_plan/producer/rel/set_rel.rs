@@ -18,7 +18,7 @@
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::logical_expr::Union;
 use substrait::proto::rel::RelType;
-use substrait::proto::{set_rel, Rel, SetRel};
+use substrait::proto::{Rel, SetRel, set_rel};
 
 pub fn from_union(
     producer: &mut impl SubstraitProducer,

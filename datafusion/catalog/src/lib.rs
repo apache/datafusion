@@ -23,7 +23,6 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Interfaces and default implementations of catalogs and schemas.
@@ -35,6 +34,7 @@
 
 pub mod cte_worktable;
 pub mod default_table_source;
+pub mod empty;
 pub mod information_schema;
 pub mod listing_schema;
 pub mod memory;
@@ -48,13 +48,13 @@ mod dynamic_file;
 mod schema;
 mod table;
 
+pub use r#async::*;
 pub use catalog::*;
 pub use datafusion_session::Session;
 pub use dynamic_file::catalog::*;
 pub use memory::{
     MemTable, MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
 };
-pub use r#async::*;
 pub use schema::*;
 pub use table::*;
 

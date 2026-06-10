@@ -20,14 +20,17 @@ use std::process::Command;
 use rstest::rstest;
 
 use async_trait::async_trait;
-use insta::{glob, Settings};
+use insta::internals::SettingsBindDropGuard;
+use insta::{Settings, glob};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::path::PathBuf;
 use std::{env, fs};
-use testcontainers::core::{CmdWaitFor, ExecCommand, Mount};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt, TestcontainersError};
 use testcontainers_modules::minio;
+use testcontainers_modules::testcontainers::core::{CmdWaitFor, ExecCommand, Mount};
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+use testcontainers_modules::testcontainers::{
+    ContainerAsync, ImageExt, TestcontainersError,
+};
 
 fn cli() -> Command {
     Command::new(get_cargo_bin("datafusion-cli"))
@@ -42,7 +45,7 @@ fn make_settings() -> Settings {
     settings
 }
 
-async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
+async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String> {
     const MINIO_ROOT_USER: &str = "TEST-DataFusionLogin";
     const MINIO_ROOT_PASSWORD: &str = "TEST-DataFusionPassword";
 
@@ -97,30 +100,28 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
                     let stdout = container.stdout_to_vec().await.unwrap_or_default();
                     let stderr = container.stderr_to_vec().await.unwrap_or_default();
 
-                    panic!(
+                    return Err(format!(
                         "Failed to execute command: {}\nError: {}\nStdout: {:?}\nStderr: {:?}",
                         cmd_ref,
                         e,
                         String::from_utf8_lossy(&stdout),
                         String::from_utf8_lossy(&stderr)
-                    );
+                    ));
                 }
             }
 
-            container
+            Ok(container)
         }
 
-        Err(TestcontainersError::Client(e)) => {
-            panic!("Failed to start MinIO container. Ensure Docker is running and accessible: {e}");
-        }
-        Err(e) => {
-            panic!("Failed to start MinIO container: {e}");
-        }
+        Err(TestcontainersError::Client(e)) => Err(format!(
+            "Failed to start MinIO container. Ensure Docker is running and accessible: {e}"
+        )),
+        Err(e) => Err(format!("Failed to start MinIO container: {e}")),
     }
 }
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for tests
     let _ = env_logger::try_init();
@@ -215,6 +216,42 @@ fn test_cli_top_memory_consumers<'a>(
     #[case] snapshot_name: &str,
     #[case] top_memory_consumers: impl IntoIterator<Item = &'a str>,
 ) {
+    let _bound = bind_to_settings(snapshot_name);
+
+    let mut cmd = cli();
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1 desc;";
+    cmd.args(["--memory-limit", "10M", "--command", sql]);
+    cmd.args(top_memory_consumers);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[rstest]
+#[case("no_track", ["--top-memory-consumers", "0"])]
+#[case("top2", ["--top-memory-consumers", "2"])]
+#[test]
+fn test_cli_top_memory_consumers_with_mem_pool_type<'a>(
+    #[case] snapshot_name: &str,
+    #[case] top_memory_consumers: impl IntoIterator<Item = &'a str>,
+) {
+    let _bound = bind_to_settings(snapshot_name);
+
+    let mut cmd = cli();
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1 desc;";
+    cmd.args([
+        "--memory-limit",
+        "10M",
+        "--mem-pool-type",
+        "fair",
+        "--command",
+        sql,
+    ]);
+    cmd.args(top_memory_consumers);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+fn bind_to_settings(snapshot_name: &str) -> SettingsBindDropGuard {
     let mut settings = make_settings();
 
     settings.set_snapshot_suffix(snapshot_name);
@@ -224,20 +261,45 @@ fn test_cli_top_memory_consumers<'a>(
         "Consumer(can spill: bool) consumed XB, peak XB",
     );
     settings.add_filter(
-        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total memory pool: '.*?'",
         "Error: Failed to allocate ",
     );
     settings.add_filter(
-        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total memory pool: '.*?'",
         "Resources exhausted: Failed to allocate",
     );
+
+    settings.bind_to_scope()
+}
+
+#[test]
+fn test_cli_with_unbounded_memory_pool() {
+    let mut settings = make_settings();
+
+    settings.set_snapshot_suffix("default");
 
     let _bound = settings.bind_to_scope();
 
     let mut cmd = cli();
     let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
-    cmd.args(["--memory-limit", "10M", "--command", sql]);
-    cmd.args(top_memory_consumers);
+    cmd.args(["--maxrows", "10", "--command", sql]);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[test]
+fn test_cli_wide_result_set_no_crash() {
+    let mut settings = make_settings();
+
+    settings.set_snapshot_suffix("wide_result_set");
+
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    let sql = "SELECT v1 as c0, v1+1 as c1, v1+2 as c2, v1+3 as c3, v1+4 as c4, \
+               v1+5 as c5, v1+6 as c6, v1+7 as c7, v1+8 as c8, v1+9 as c9 \
+               FROM generate_series(1, 100) as t1(v1);";
+    cmd.args(["--maxrows", "5", "--command", sql]);
 
     assert_cmd_snapshot!(cmd);
 }
@@ -249,7 +311,14 @@ async fn test_cli() {
         return;
     }
 
-    let container = setup_minio_container().await;
+    let container = match setup_minio_container().await {
+        Ok(c) => c,
+        Err(e) if e.contains("toomanyrequests") => {
+            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
+            return;
+        }
+        e @ Err(_) => e.unwrap(),
+    };
 
     let settings = make_settings();
     let _bound = settings.bind_to_scope();
@@ -258,13 +327,15 @@ async fn test_cli() {
 
     glob!("sql/integration/*.sql", |path| {
         let input = fs::read_to_string(path).unwrap();
-        assert_cmd_snapshot!(cli()
-            .env_clear()
-            .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
-            .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
-            .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
-            .env("AWS_ALLOW_HTTP", "true")
-            .pass_stdin(input))
+        assert_cmd_snapshot!(
+            cli()
+                .env_clear()
+                .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
+                .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
+                .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
+                .env("AWS_ALLOW_HTTP", "true")
+                .pass_stdin(input)
+        )
     });
 }
 
@@ -280,7 +351,14 @@ async fn test_aws_options() {
     let settings = make_settings();
     let _bound = settings.bind_to_scope();
 
-    let container = setup_minio_container().await;
+    let container = match setup_minio_container().await {
+        Ok(c) => c,
+        Err(e) if e.contains("toomanyrequests") => {
+            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
+            return;
+        }
+        e @ Err(_) => e.unwrap(),
+    };
     let port = container.get_host_port_ipv4(9000).await.unwrap();
 
     let input = format!(
@@ -328,10 +406,12 @@ SELECT COUNT(*) FROM hits;
 "#
     );
 
-    assert_cmd_snapshot!(cli()
-        .env("RUST_LOG", "warn")
-        .env_remove("AWS_ENDPOINT")
-        .pass_stdin(input));
+    assert_cmd_snapshot!(
+        cli()
+            .env("RUST_LOG", "warn")
+            .env_remove("AWS_ENDPOINT")
+            .pass_stdin(input)
+    );
 }
 
 /// Ensure backtrace will be printed, if executing `datafusion-cli` with a query
@@ -351,14 +431,12 @@ fn test_backtrace_output(#[case] query: &str) {
     let output = cmd.output().expect("Failed to execute command");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined_output = format!("{}{}", stdout, stderr);
+    let combined_output = format!("{stdout}{stderr}");
 
     // Assert that the output includes literal 'backtrace'
     assert!(
         combined_output.to_lowercase().contains("backtrace"),
-        "Expected output to contain 'backtrace', but got stdout: '{}' stderr: '{}'",
-        stdout,
-        stderr
+        "Expected output to contain 'backtrace', but got stdout: '{stdout}' stderr: '{stderr}'"
     );
 }
 
@@ -369,7 +447,14 @@ async fn test_s3_url_fallback() {
         return;
     }
 
-    let container = setup_minio_container().await;
+    let container = match setup_minio_container().await {
+        Ok(c) => c,
+        Err(e) if e.contains("toomanyrequests") => {
+            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
+            return;
+        }
+        e @ Err(_) => e.unwrap(),
+    };
 
     let mut settings = make_settings();
     settings.set_snapshot_suffix("s3_url_fallback");
@@ -399,8 +484,14 @@ async fn test_object_store_profiling() {
         return;
     }
 
-    let container = setup_minio_container().await;
-
+    let container = match setup_minio_container().await {
+        Ok(c) => c,
+        Err(e) if e.contains("toomanyrequests") => {
+            eprintln!("Skipping test: Docker pull rate limit reached: {e}");
+            return;
+        }
+        e @ Err(_) => e.unwrap(),
+    };
     let mut settings = make_settings();
 
     // as the object store profiling contains timestamps and durations, we must
@@ -450,7 +541,7 @@ SELECT * from CARS LIMIT 1;
 #[async_trait]
 trait MinioCommandExt {
     async fn with_minio(&mut self, container: &ContainerAsync<minio::MinIO>)
-        -> &mut Self;
+    -> &mut Self;
 }
 
 #[async_trait]

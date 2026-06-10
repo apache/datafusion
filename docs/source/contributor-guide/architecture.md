@@ -55,7 +55,7 @@ contain features that are useful for a wide range of use cases. Use case specifi
 functionality (such as very specific time series or stream processing features)
 are typically implemented using the extension APIs.
 
-If have a use case that is not covered by the existing APIs, we would love to
+If you have a use case that is not covered by the existing APIs, we would love to
 work with you to design a new general purpose API. There are often others who are
 interested in similar extensions and the act of defining the API often improves
 the code overall for everyone.

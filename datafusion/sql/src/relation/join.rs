@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_datafusion_err, Column, Result};
+use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
@@ -179,7 +179,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
-/// Return `true` iff the given [`TableFactor`] is lateral.
+/// Returns `true` if the given [`TableFactor`] is lateral.
 pub(crate) fn is_lateral(factor: &TableFactor) -> bool {
     match factor {
         TableFactor::Derived { lateral, .. } => *lateral,
@@ -189,7 +189,7 @@ pub(crate) fn is_lateral(factor: &TableFactor) -> bool {
     }
 }
 
-/// Return `true` iff the given [`Join`] is lateral.
+/// Returns `true` if the given [`Join`] is lateral.
 pub(crate) fn is_lateral_join(join: &Join) -> Result<bool> {
     let is_lateral_syntax = is_lateral(&join.relation);
     let is_apply_syntax = match join.join_operator {

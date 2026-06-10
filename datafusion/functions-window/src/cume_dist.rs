@@ -18,10 +18,10 @@
 //! `cume_dist` window function implementation
 
 use arrow::datatypes::FieldRef;
+use datafusion_common::Result;
 use datafusion_common::arrow::array::{ArrayRef, Float64Array};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::Result;
 use datafusion_expr::{
     Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
@@ -30,7 +30,6 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
-use std::any::Any;
 use std::fmt::Debug;
 use std::iter;
 use std::ops::Range;
@@ -39,6 +38,7 @@ use std::sync::Arc;
 define_udwf_and_expr!(
     CumeDist,
     cume_dist,
+    cume_dist_udwf,
     "Calculates the cumulative distribution of a value in a group of values."
 );
 
@@ -84,11 +84,6 @@ impl Default for CumeDist {
 }
 
 impl WindowUDFImpl for CumeDist {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "cume_dist"
     }
@@ -167,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::single_range_in_vec_init)]
+    #[expect(clippy::single_range_in_vec_init)]
     fn test_cume_dist() -> Result<()> {
         test_f64_result(0, vec![], vec![])?;
 

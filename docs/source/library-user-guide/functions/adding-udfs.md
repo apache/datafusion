@@ -31,14 +31,14 @@ This page covers how to add UDFs to DataFusion. In particular, it covers how to 
 | Table          | A function that takes parameters and returns a `TableProvider` to be used in an query plan.                | [simple_udtf.rs]                      |
 | Scalar (async) | A scalar function for performing `async` operations (such as network or I/O calls) within the UDF.         | [async_udf.rs]                        |
 
-[simple_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-[advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
-[simple_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-[advanced_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
-[simple_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-[advanced_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-[simple_udtf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs
-[async_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs
+[simple_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udf.rs
+[advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
+[simple_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udwf.rs
+[advanced_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
+[simple_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udaf.rs
+[advanced_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
+[simple_udtf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udtf.rs
+[async_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/async_udf.rs
 
 First we'll talk about adding an Scalar UDF end-to-end, then we'll talk about the differences between the different
 types of UDFs.
@@ -98,7 +98,6 @@ impl AddOne {
 
 /// Implement the ScalarUDFImpl trait for AddOne
 impl ScalarUDFImpl for AddOne {
-   fn as_any(&self) -> &dyn Any { self }
    fn name(&self) -> &str { "add_one" }
    fn signature(&self) -> &Signature { &self.signature }
    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
@@ -161,7 +160,6 @@ We now need to register the function with DataFusion so that it can be used in t
 #
 # /// Implement the ScalarUDFImpl trait for AddOne
 # impl ScalarUDFImpl for AddOne {
-#    fn as_any(&self) -> &dyn Any { self }
 #    fn name(&self) -> &str { "add_one" }
 #    fn signature(&self) -> &Signature { &self.signature }
 #    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
@@ -411,10 +409,6 @@ impl AsyncUpper {
 /// Implement the normal ScalarUDFImpl trait for AsyncUpper
 #[async_trait]
 impl ScalarUDFImpl for AsyncUpper {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "async_upper"
     }
@@ -514,10 +508,6 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #
 # #[async_trait]
 # impl ScalarUDFImpl for AsyncUpper {
-#     fn as_any(&self) -> &dyn Any {
-#         self
-#     }
-#
 #     fn name(&self) -> &str {
 #         "async_upper"
 #     }
@@ -579,12 +569,11 @@ After registration, you can use these async UDFs directly in SQL queries, for ex
 SELECT async_upper('datafusion');
 ```
 
-For async UDF implementation details, see [`async_udf.rs`](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs).
+For async UDF implementation details, see [`async_udf.rs`](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/async_udf.rs).
 
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
-[`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
-[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
 
 ## Named Arguments
 
@@ -642,7 +631,6 @@ impl PowerFunction {
 }
 
 impl ScalarUDFImpl for PowerFunction {
-    fn as_any(&self) -> &dyn Any { self }
     fn name(&self) -> &str { "power" }
     fn signature(&self) -> &Signature { &self.signature }
 
@@ -683,6 +671,10 @@ No function matches the given name and argument types substr(Utf8).
 
 Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have
 access to the rows around them. Access to the proximal rows is helpful, but adds some complexity to the implementation.
+
+For background and other considerations, see the [User defined Window Functions in DataFusion] blog.
+
+[user defined window functions in datafusion]: https://datafusion.apache.org/blog/2025/04/19/user-defined-window-functions
 
 For example, we will declare a user defined window function that computes a moving average.
 
@@ -820,7 +812,7 @@ let smooth_it = create_udwf(
 
 [`windowudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html
 [`create_udwf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html
-[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 
 The `create_udwf` has five arguments to check:
 
@@ -1348,7 +1340,7 @@ async fn main() -> Result<()> {
 
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
-[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 
 ## Adding a Table UDF
 
@@ -1385,15 +1377,16 @@ in the CLI to read the metadata from a Parquet file.
 
 The simple UDTF used here takes a single `Int64` argument and returns a table with a single column with the value of the
 argument. To create a function in DataFusion, you need to implement the `TableFunctionImpl` trait. This trait has a
-single method, `call`, that takes a slice of `Expr`s and returns a `Result<Arc<dyn TableProvider>>`.
+single method, `call_with_args`, that takes a `TableFunctionArgs` struct and returns a `Result<Arc<dyn TableProvider>>`.
+Passed struct includes function arguments as a slice of `Expr`s.
 
-In the `call` method, you parse the input `Expr`s and return a `TableProvider`. You might also want to do some
+In the `call_with_args` method, you parse the input `Expr`s and return a `TableProvider`. You might also want to do some
 validation of the input `Expr`s, e.g. checking that the number of arguments is correct.
 
 ```rust
 use std::sync::Arc;
 use datafusion::common::{plan_err, ScalarValue, Result};
-use datafusion::catalog::{TableFunctionImpl, TableProvider};
+use datafusion::catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::datasource::memory::MemTable;
 use arrow::record_batch::RecordBatch;
@@ -1405,7 +1398,8 @@ use datafusion_expr::Expr;
 pub struct EchoFunction {}
 
 impl TableFunctionImpl for EchoFunction {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let exprs = args.exprs();
         let Some(Expr::Literal(ScalarValue::Int64(Some(value)), _)) = exprs.get(0) else {
             return plan_err!("First argument must be an integer");
         };
@@ -1434,7 +1428,7 @@ With the UDTF implemented, you can register it with the `SessionContext`:
 ```rust
 # use std::sync::Arc;
 # use datafusion::common::{plan_err, ScalarValue, Result};
-# use datafusion::catalog::{TableFunctionImpl, TableProvider};
+# use datafusion::catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 # use datafusion::arrow::array::{ArrayRef, Int64Array};
 # use datafusion::datasource::memory::MemTable;
 # use arrow::record_batch::RecordBatch;
@@ -1446,7 +1440,8 @@ With the UDTF implemented, you can register it with the `SessionContext`:
 # pub struct EchoFunction {}
 #
 # impl TableFunctionImpl for EchoFunction {
-#     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+#    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+#        let exprs = args.exprs();
 #         let Some(Expr::Literal(ScalarValue::Int64(Some(value)), _)) = exprs.get(0) else {
 #             return plan_err!("First argument must be an integer");
 #         };
@@ -1492,7 +1487,9 @@ async fn main() -> Result<()> {
 
 ## Custom Expression Planning
 
-DataFusion provides native support for common SQL operators by default such as `+`, `-`, `||`. However it does not provide support for other operators such as `@>`. To override DataFusion's default handling or support unsupported operators, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion
+DataFusion provides native support for common SQL operators and constructs by default such as `+`, `-`, `||`. However it does not provide support for other operators such as `@>` or constructs like `TABLESAMPLE` which are less common or vary more between SQL dialects. To override DataFusion's default handling or support these unsupported features, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion.
+
+For a comprehensive guide on extending SQL syntax including `ExprPlanner`, `TypePlanner`, and `RelationPlanner`, see [Extending DataFusion's SQL Syntax](../extending-sql.md)
 
 ### Implementing Custom Expression Planning
 

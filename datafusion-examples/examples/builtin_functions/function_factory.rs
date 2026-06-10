@@ -19,12 +19,12 @@
 
 use arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{exec_datafusion_err, exec_err, internal_err, DataFusionError};
+use datafusion::common::{DataFusionError, exec_datafusion_err, exec_err, internal_err};
 use datafusion::error::Result;
 use datafusion::execution::context::{
     FunctionFactory, RegisterFunction, SessionContext, SessionState,
 };
-use datafusion::logical_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion::logical_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion::logical_expr::{
     ColumnarValue, CreateFunction, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
@@ -118,10 +118,6 @@ struct ScalarFunctionWrapper {
 }
 
 impl ScalarUDFImpl for ScalarFunctionWrapper {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -145,7 +141,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let replacement = Self::replacement(&self.expr, &args)?;
 

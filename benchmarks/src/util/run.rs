@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::{error::Result, DATAFUSION_VERSION};
+use datafusion::{DATAFUSION_VERSION, error::Result};
 use datafusion_common::utils::get_available_parallelism;
 use serde::{Serialize, Serializer};
 use serde_json::Value;

@@ -17,13 +17,13 @@
 
 //! This module contains tests for limiting memory at runtime in DataFusion
 
-use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
 mod repartition_mem_limit;
+mod union_nullable_spill;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
@@ -39,19 +39,19 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
-use datafusion_common::{assert_contains, Result};
+use datafusion_catalog::streaming::StreamingTable;
+use datafusion_common::{Result, assert_contains};
+use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::collect as collect_batches;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
@@ -63,7 +63,7 @@ use futures::StreamExt;
 use tokio::fs::File;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();
@@ -212,6 +212,7 @@ async fn sort_merge_join_spill() {
         .with_config(config)
         .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_scenario(Scenario::AccessLogStreaming)
+        .with_expected_success()
         .run()
         .await
 }
@@ -513,7 +514,7 @@ async fn test_in_mem_buffer_almost_full() {
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
 
-    let query = "select * from generate_series(1,9000000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,9000000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     // Check not fail
@@ -534,7 +535,7 @@ async fn test_external_sort_zero_merge_reservation() {
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
 
-    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1;";
+    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
@@ -598,15 +599,20 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
     let ctx = setup_context(1024 * 1024, 1024 * 1024, spill_compression).await?; // 1MB disk limit, 1MB memory limit
 
     let df = ctx
-        .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1")
+        .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1 desc")
         .await
         .unwrap();
 
-    let err = df.collect().await.unwrap_err();
-    assert_contains!(
-    err.to_string(),
-    "The used disk space during the spilling process has exceeded the allowable limit"
-    );
+    let error_message = df.collect().await.unwrap_err().to_string();
+    for expected in [
+        "The used disk space during the spilling process has exceeded the allowable limit",
+        "datafusion.runtime.max_temp_directory_size",
+    ] {
+        assert!(
+            error_message.contains(expected),
+            "'{expected}' is not contained by '{error_message}'"
+        );
+    }
 
     Ok(())
 }
@@ -621,7 +627,7 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit
 
     let df = ctx
-        .sql("select * from generate_series(1, 10000) as t1(v1) order by v1")
+        .sql("select * from generate_series(1, 10000) as t1(v1) order by v1 desc")
         .await
         .unwrap();
     let plan = df.create_physical_plan().await.unwrap();
@@ -657,7 +663,7 @@ async fn test_spill_file_compressed_with_zstd() -> Result<()> {
     let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, zstd
 
     let df = ctx
-        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")
+        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1 desc")
         .await
         .unwrap();
     let plan = df.create_physical_plan().await.unwrap();
@@ -693,7 +699,7 @@ async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
     let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, lz4_frame
 
     let df = ctx
-        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")
+        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1 desc")
         .await
         .unwrap();
     let plan = df.create_physical_plan().await.unwrap();
@@ -977,11 +983,13 @@ impl Scenario {
                     descending: false,
                     nulls_first: false,
                 };
-                let sort_information = vec![[
-                    PhysicalSortExpr::new(col("a", &schema).unwrap(), options),
-                    PhysicalSortExpr::new(col("b", &schema).unwrap(), options),
-                ]
-                .into()];
+                let sort_information = vec![
+                    [
+                        PhysicalSortExpr::new(col("a", &schema).unwrap(), options),
+                        PhysicalSortExpr::new(col("b", &schema).unwrap(), options),
+                    ]
+                    .into(),
+                ];
 
                 let table = SortedTableProvider::new(batches, sort_information);
                 Arc::new(table)
@@ -1057,7 +1065,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
     let batch_size = 50;
 
     let mut i = 0;
-    let gen = std::iter::from_fn(move || {
+    let batch_gen = std::iter::from_fn(move || {
         // create values like
         // 0000000001
         // 0000000002
@@ -1080,7 +1088,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
 
     let num_batches = 5;
 
-    let batches: Vec<_> = gen.take(num_batches).collect();
+    let batches: Vec<_> = batch_gen.take(num_batches).collect();
 
     batches.iter().enumerate().for_each(|(i, batch)| {
         println!("Dict batch[{i}] size is: {}", batch.get_array_memory_size());
@@ -1136,10 +1144,6 @@ impl SortedTableProvider {
 
 #[async_trait]
 impl TableProvider for SortedTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

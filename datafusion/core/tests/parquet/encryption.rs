@@ -25,11 +25,11 @@ use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::config::{EncryptionFactoryOptions, TableParquetOptions};
-use datafusion_common::{assert_batches_sorted_eq, exec_datafusion_err, DataFusionError};
+use datafusion_common::{DataFusionError, assert_batches_sorted_eq, exec_datafusion_err};
 use datafusion_datasource_parquet::ParquetFormat;
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::file::column_crypto_metadata::ColumnCryptoMetaData;
@@ -54,6 +54,7 @@ async fn read_parquet_test_data<'a, T: Into<String>>(
         .unwrap()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn write_batches(
     path: PathBuf,
     props: WriterProperties,
@@ -114,8 +115,8 @@ async fn round_trip_encryption() {
 
     // Read encrypted parquet
     let ctx: SessionContext = SessionContext::new();
-    let options =
-        ParquetReadOptions::default().file_decryption_properties((&decrypt).into());
+    let options = ParquetReadOptions::default()
+        .file_decryption_properties((&decrypt).try_into().unwrap());
 
     let encrypted_batches = read_parquet_test_data(
         tempfile.into_os_string().into_string().unwrap(),

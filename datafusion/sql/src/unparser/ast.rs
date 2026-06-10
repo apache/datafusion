@@ -20,7 +20,7 @@ use std::ops::ControlFlow;
 
 use sqlparser::ast::helpers::attached_token::AttachedToken;
 use sqlparser::ast::{
-    self, visit_expressions_mut, LimitClause, OrderByKind, SelectFlavor,
+    self, LimitClause, OrderByKind, SelectFlavor, visit_expressions_mut,
 };
 
 #[derive(Clone)]
@@ -38,7 +38,6 @@ pub struct QueryBuilder {
     distinct_union: bool,
 }
 
-#[allow(dead_code)]
 impl QueryBuilder {
     pub fn with(&mut self, value: Option<ast::With>) -> &mut Self {
         self.with = value;
@@ -140,7 +139,16 @@ impl Default for QueryBuilder {
 pub struct SelectBuilder {
     distinct: Option<ast::Distinct>,
     top: Option<ast::Top>,
-    projection: Vec<ast::SelectItem>,
+    /// Projection items for the SELECT clause.
+    ///
+    /// This field uses `Option` to distinguish between three distinct states:
+    /// - `None`: No projection has been set (not yet initialized)
+    /// - `Some(vec![])`: Empty projection explicitly set (generates `SELECT FROM ...` or `SELECT 1 FROM ...`)
+    /// - `Some(vec![SelectItem::Wildcard(...)])`: Wildcard projection (generates `SELECT * FROM ...`)
+    /// - `Some(vec![...])`: Non-empty projection with specific columns/expressions
+    ///
+    /// Use `projection()` to set this field and `already_projected()` to check if it has been set.
+    projection: Option<Vec<ast::SelectItem>>,
     into: Option<ast::SelectInto>,
     from: Vec<TableWithJoinsBuilder>,
     lateral_views: Vec<ast::LateralView>,
@@ -154,10 +162,52 @@ pub struct SelectBuilder {
     qualify: Option<ast::Expr>,
     value_table_mode: Option<ast::ValueTableMode>,
     flavor: Option<SelectFlavor>,
+    /// Counter for generating unique LATERAL FLATTEN aliases within this SELECT.
+    flatten_alias_counter: usize,
+    /// Table aliases that correspond to LATERAL FLATTEN relations.
+    /// Column references into these aliases must use `VALUE` as the column name.
+    flatten_table_aliases: Vec<String>,
 }
 
-#[allow(dead_code)]
+/// Prefix used for auto-generated LATERAL FLATTEN table aliases.
+const FLATTEN_ALIAS_PREFIX: &str = "_unnest";
+
 impl SelectBuilder {
+    /// Generate a unique alias for a LATERAL FLATTEN relation
+    /// (`_unnest_1`, `_unnest_2`, …). Each call returns a fresh name.
+    pub fn next_flatten_alias(&mut self) -> String {
+        self.flatten_alias_counter += 1;
+        format!("{FLATTEN_ALIAS_PREFIX}_{}", self.flatten_alias_counter)
+    }
+
+    /// Register a table alias as pointing to a LATERAL FLATTEN relation.
+    pub fn add_flatten_table_alias(&mut self, alias: String) {
+        self.flatten_table_aliases.push(alias);
+    }
+
+    /// Returns true if no FLATTEN table aliases have been registered.
+    pub fn flatten_table_aliases_empty(&self) -> bool {
+        self.flatten_table_aliases.is_empty()
+    }
+
+    /// Returns true if the given table alias refers to a FLATTEN relation.
+    pub fn is_flatten_table_alias(&self, alias: &str) -> bool {
+        self.flatten_table_aliases.iter().any(|a| a == alias)
+    }
+
+    /// Returns the most recently generated flatten alias, or `None` if
+    /// `next_flatten_alias` has not been called yet.
+    pub fn current_flatten_alias(&self) -> Option<String> {
+        if self.flatten_alias_counter > 0 {
+            Some(format!(
+                "{FLATTEN_ALIAS_PREFIX}_{}",
+                self.flatten_alias_counter
+            ))
+        } else {
+            None
+        }
+    }
+
     pub fn distinct(&mut self, value: Option<ast::Distinct>) -> &mut Self {
         self.distinct = value;
         self
@@ -167,16 +217,37 @@ impl SelectBuilder {
         self
     }
     pub fn projection(&mut self, value: Vec<ast::SelectItem>) -> &mut Self {
-        self.projection = value;
+        self.projection = Some(value);
         self
     }
     pub fn pop_projections(&mut self) -> Vec<ast::SelectItem> {
-        let ret = self.projection.clone();
-        self.projection.clear();
-        ret
+        self.projection.take().unwrap_or_default()
     }
+    /// Returns true if a projection has been explicitly set via `projection()`.
+    ///
+    /// This method is used to determine whether the SELECT clause has already been
+    /// defined, which helps avoid creating duplicate projection nodes during query
+    /// unparsing. It returns `true` for both empty and non-empty projections.
+    ///
+    /// # Returns
+    ///
+    /// - `true` if `projection()` has been called (regardless of whether it was empty or not)
+    /// - `false` if no projection has been set yet
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut builder = SelectBuilder::default();
+    /// assert!(!builder.already_projected());
+    ///
+    /// builder.projection(vec![]);
+    /// assert!(builder.already_projected()); // true even for empty projection
+    ///
+    /// builder.projection(vec![SelectItem::Wildcard(...)]);
+    /// assert!(builder.already_projected()); // true for non-empty projection
+    /// ```
     pub fn already_projected(&self) -> bool {
-        !self.projection.is_empty()
+        self.projection.is_some()
     }
     pub fn into(&mut self, value: Option<ast::SelectInto>) -> &mut Self {
         self.into = value;
@@ -287,10 +358,12 @@ impl SelectBuilder {
     }
     pub fn build(&self) -> Result<ast::Select, BuilderError> {
         Ok(ast::Select {
+            optimizer_hints: vec![],
             distinct: self.distinct.clone(),
+            select_modifiers: None,
             top_before_distinct: false,
             top: self.top.clone(),
-            projection: self.projection.clone(),
+            projection: self.projection.clone().unwrap_or_default(),
             into: self.into.clone(),
             from: self
                 .from
@@ -302,7 +375,7 @@ impl SelectBuilder {
             group_by: match self.group_by {
                 Some(ref value) => value.clone(),
                 None => {
-                    return Err(Into::into(UninitializedFieldError::from("group_by")))
+                    return Err(Into::into(UninitializedFieldError::from("group_by")));
                 }
             },
             cluster_by: self.cluster_by.clone(),
@@ -312,12 +385,12 @@ impl SelectBuilder {
             named_window: self.named_window.clone(),
             qualify: self.qualify.clone(),
             value_table_mode: self.value_table_mode,
-            connect_by: None,
+            connect_by: Vec::new(),
             window_before_qualify: false,
             prewhere: None,
             select_token: AttachedToken::empty(),
             flavor: match self.flavor {
-                Some(ref value) => value.clone(),
+                Some(ref value) => *value,
                 None => return Err(Into::into(UninitializedFieldError::from("flavor"))),
             },
             exclude: None,
@@ -327,7 +400,7 @@ impl SelectBuilder {
         Self {
             distinct: Default::default(),
             top: Default::default(),
-            projection: Default::default(),
+            projection: None,
             into: Default::default(),
             from: Default::default(),
             lateral_views: Default::default(),
@@ -341,6 +414,8 @@ impl SelectBuilder {
             qualify: Default::default(),
             value_table_mode: Default::default(),
             flavor: Some(SelectFlavor::Standard),
+            flatten_alias_counter: 0,
+            flatten_table_aliases: Vec::new(),
         }
     }
 }
@@ -356,7 +431,6 @@ pub struct TableWithJoinsBuilder {
     joins: Vec<ast::Join>,
 }
 
-#[allow(dead_code)]
 impl TableWithJoinsBuilder {
     pub fn relation(&mut self, value: RelationBuilder) -> &mut Self {
         self.relation = Some(value);
@@ -402,17 +476,18 @@ pub struct RelationBuilder {
     relation: Option<TableFactorBuilder>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
-#[allow(clippy::large_enum_variant)]
+// Boxing variants would penalize the common builder path; this enum is
+// constructed-then-consumed locally rather than stored at scale.
+#[expect(clippy::large_enum_variant)]
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
     Unnest(UnnestRelationBuilder),
+    Flatten(FlattenRelationBuilder),
     Empty,
 }
 
-#[allow(dead_code)]
 impl RelationBuilder {
     pub fn has_relation(&self) -> bool {
         self.relation.is_some()
@@ -428,6 +503,11 @@ impl RelationBuilder {
 
     pub fn unnest(&mut self, value: UnnestRelationBuilder) -> &mut Self {
         self.relation = Some(TableFactorBuilder::Unnest(value));
+        self
+    }
+
+    pub fn flatten(&mut self, value: FlattenRelationBuilder) -> &mut Self {
+        self.relation = Some(TableFactorBuilder::Flatten(value));
         self
     }
 
@@ -447,6 +527,9 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Unnest(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
+            Some(TableFactorBuilder::Flatten(ref mut rel_builder)) => {
+                rel_builder.alias = value;
+            }
             Some(TableFactorBuilder::Empty) => (),
             None => (),
         }
@@ -457,6 +540,7 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Table(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Derived(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Unnest(ref value)) => Some(value.build()?),
+            Some(TableFactorBuilder::Flatten(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Empty) => None,
             None => return Err(Into::into(UninitializedFieldError::from("relation"))),
         })
@@ -484,7 +568,6 @@ pub struct TableRelationBuilder {
     index_hints: Vec<ast::TableIndexHints>,
 }
 
-#[allow(dead_code)]
 impl TableRelationBuilder {
     pub fn name(&mut self, value: ast::ObjectName) -> &mut Self {
         self.name = Some(value);
@@ -558,7 +641,6 @@ pub struct DerivedRelationBuilder {
     alias: Option<ast::TableAlias>,
 }
 
-#[allow(dead_code)]
 impl DerivedRelationBuilder {
     pub fn lateral(&mut self, value: bool) -> &mut Self {
         self.lateral = Some(value);
@@ -581,10 +663,11 @@ impl DerivedRelationBuilder {
             subquery: match self.subquery {
                 Some(ref value) => value.clone(),
                 None => {
-                    return Err(Into::into(UninitializedFieldError::from("subquery")))
+                    return Err(Into::into(UninitializedFieldError::from("subquery")));
                 }
             },
             alias: self.alias.clone(),
+            sample: None,
         })
     }
     fn create_empty() -> Self {
@@ -610,7 +693,6 @@ pub struct UnnestRelationBuilder {
     with_ordinality: bool,
 }
 
-#[allow(dead_code)]
 impl UnnestRelationBuilder {
     pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
         self.alias = value;
@@ -658,6 +740,78 @@ impl UnnestRelationBuilder {
 }
 
 impl Default for UnnestRelationBuilder {
+    fn default() -> Self {
+        Self::create_empty()
+    }
+}
+
+/// Builds a `LATERAL FLATTEN(INPUT => expr, OUTER => bool)` table factor
+/// for Snowflake-style unnesting.
+#[derive(Clone)]
+pub struct FlattenRelationBuilder {
+    pub alias: Option<ast::TableAlias>,
+    /// The input expression to flatten (e.g. a column reference).
+    pub input_expr: Option<ast::Expr>,
+    /// Whether to preserve rows for NULL/empty inputs (Snowflake `OUTER` param).
+    pub outer: bool,
+}
+
+impl FlattenRelationBuilder {
+    pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
+        self.alias = value;
+        self
+    }
+
+    pub fn input_expr(&mut self, value: ast::Expr) -> &mut Self {
+        self.input_expr = Some(value);
+        self
+    }
+
+    pub fn outer(&mut self, value: bool) -> &mut Self {
+        self.outer = value;
+        self
+    }
+
+    pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
+        let input = self.input_expr.clone().ok_or_else(|| {
+            BuilderError::from(UninitializedFieldError::from("input_expr"))
+        })?;
+
+        let mut args = vec![ast::FunctionArg::Named {
+            name: ast::Ident::new("INPUT"),
+            arg: ast::FunctionArgExpr::Expr(input),
+            operator: ast::FunctionArgOperator::RightArrow,
+        }];
+
+        if self.outer {
+            args.push(ast::FunctionArg::Named {
+                name: ast::Ident::new("OUTER"),
+                arg: ast::FunctionArgExpr::Expr(ast::Expr::Value(
+                    ast::Value::Boolean(true).into(),
+                )),
+                operator: ast::FunctionArgOperator::RightArrow,
+            });
+        }
+
+        Ok(ast::TableFactor::Function {
+            lateral: true,
+            name: ast::ObjectName::from(vec![ast::Ident::new("FLATTEN")]),
+            args,
+            with_ordinality: false,
+            alias: self.alias.clone(),
+        })
+    }
+
+    fn create_empty() -> Self {
+        Self {
+            alias: None,
+            input_expr: None,
+            outer: false,
+        }
+    }
+}
+
+impl Default for FlattenRelationBuilder {
     fn default() -> Self {
         Self::create_empty()
     }
@@ -711,10 +865,10 @@ impl From<String> for BuilderError {
 impl fmt::Display for BuilderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::UninitializedField(ref field) => {
+            Self::UninitializedField(field) => {
                 write!(f, "`{field}` must be initialized")
             }
-            Self::ValidationError(ref error) => write!(f, "{error}"),
+            Self::ValidationError(error) => write!(f, "{error}"),
         }
     }
 }

@@ -108,12 +108,10 @@ mod tests {
 
     use arrow::util::pretty::pretty_format_batches;
     use datafusion_common::config::TableParquetOptions;
-    use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, assert_contains,
-    };
+    use datafusion_common::{assert_batches_sorted_eq, assert_contains};
     use datafusion_execution::config::SessionConfig;
 
-    use tempfile::{tempdir, TempDir};
+    use tempfile::{TempDir, tempdir};
 
     #[tokio::test]
     async fn read_with_glob_path() -> Result<()> {
@@ -355,7 +353,9 @@ mod tests {
         let expected_path = binding[0].as_str();
         assert_eq!(
             read_df.unwrap_err().strip_backtrace(),
-            format!("Execution error: File path '{expected_path}' does not match the expected extension '.parquet'")
+            format!(
+                "Execution error: File path '{expected_path}' does not match the expected extension '.parquet'"
+            )
         );
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
@@ -372,20 +372,22 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         assert_eq!(total_rows, 5);
 
-        // Read the dataframe from 'output4/'
+        // Read the dataframe from 'output4/' — an empty folder. Inference now
+        // errors on an empty location instead of producing a 0-column table.
         std::fs::create_dir(&path4)?;
-        let read_df = ctx
+        let err = ctx
             .read_parquet(
                 &path4,
                 ParquetReadOptions {
                     ..Default::default()
                 },
             )
-            .await?;
-
-        let results = read_df.collect().await?;
-        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
-        assert_eq!(total_rows, 0);
+            .await
+            .expect_err("read_parquet on an empty folder should error");
+        assert!(
+            err.strip_backtrace().contains("No files found at"),
+            "unexpected error: {err}"
+        );
 
         // Read the dataframe from double dot folder;
         let read_df = ctx
@@ -508,17 +510,18 @@ mod tests {
         let ctx = SessionContext::new();
         let test_path = "/foo/";
 
-        let actual = ctx
+        // Reading from a non-existent / empty location now errors at planning
+        // time rather than producing a 0-column table that surfaces a confusing
+        // "column not found" error at query time.
+        let err = ctx
             .read_parquet(test_path, ParquetReadOptions::default())
-            .await?
-            .collect()
-            .await?;
-
-        #[cfg_attr(any(), rustfmt::skip)]
-        assert_batches_eq!(&[
-            "++",
-            "++",
-        ], &actual);
+            .await
+            .expect_err("read_parquet on an empty location should error");
+        let msg = err.strip_backtrace();
+        assert!(
+            msg.contains("No files found at") && msg.contains(test_path),
+            "unexpected error: {msg}"
+        );
 
         Ok(())
     }

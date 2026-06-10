@@ -1,0 +1,140 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query I
+SELECT try_sum(x) AS sum_x FROM VALUES (1), (2), (3) AS tab(x);
+----
+6
+
+query I
+SELECT try_sum(x) AS sum_x FROM VALUES (NULL), (2), (NULL) AS tab(x);
+----
+2
+
+query I
+SELECT try_sum(x) AS sum_x FROM VALUES (CAST(9223372036854775807 AS BIGINT)), (1) AS tab(x);
+----
+NULL
+
+query R
+SELECT try_sum(x) AS sum_x FROM VALUES (1.5), (2.5), (3.0) AS tab(x);
+----
+7
+
+query R
+SELECT try_sum(x) AS sum_x FROM VALUES (1e308), (1e308) AS tab(x);
+----
+Infinity
+
+query R
+SELECT try_sum(x) AS sum_x FROM VALUES (CAST('NaN' AS DOUBLE)), (1.0) AS tab(x);
+----
+NaN
+
+query R
+SELECT try_sum(x) AS sum_x FROM VALUES (CAST('Infinity' AS DOUBLE)), (1.0) AS tab(x);
+----
+Infinity
+
+# Decimal
+
+query R
+SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(10,2) '1.23'), (DECIMAL(10,2) '4.77') AS tab(x);
+----
+6
+
+query R
+SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(10,2) '1.00'), (NULL), (DECIMAL(10,2) '2.50') AS tab(x);
+----
+3.5
+
+query R
+SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(5,0) '90000'), (DECIMAL(5,0) '20000') AS tab(x);
+----
+110000
+
+query R
+SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(38,0) '11111111111111111111111111111111111111'),
+                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
+                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
+                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
+                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
+                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
+                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
+                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
+                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
+                                      (DECIMAL(38,0) '11111111111111111111111111111111111111') AS tab(x);
+----
+NULL
+
+#Group By
+query TI
+SELECT g, try_sum(x) AS sum_x
+FROM VALUES
+  ('bad', CAST(9223372036854775807 AS BIGINT)),
+  ('bad', 1),
+  ('ok', 10),
+  ('ok', NULL),
+  ('ok', 5) AS tab(g, x)
+GROUP BY g
+ORDER BY g;
+----
+bad NULL
+ok 15
+
+query R
+SELECT try_sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
+----
+NULL
+
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST('-Infinity' AS DOUBLE)), (CAST('Infinity' AS DOUBLE)) AS tab(col);
+----
+NaN
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST('-Infinity' AS DOUBLE)), (CAST('-Infinity' AS DOUBLE)) AS tab(col);
+----
+-Infinity
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST('Infinity' AS FLOAT)), (CAST(1.0 AS FLOAT)) AS tab(col);
+----
+Infinity
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (-0.0), (0.0) AS tab(col);
+----
+0
+
+# need be 0.0
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST(-0.0 AS DOUBLE)), (CAST(0.0 AS DOUBLE)) AS tab(col);
+----
+0
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST(-5.5 AS DECIMAL(10,2))), (CAST(5.5 AS DECIMAL(10,2))) AS tab(col);
+----
+0
+
+# Compare double 0.0 vs decimal 0.00
+query RR
+SELECT 0.0 AS double_zero, CAST(0.0 AS DECIMAL(10,2)) AS decimal_zero;
+----
+0 0

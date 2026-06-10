@@ -23,6 +23,9 @@ on:
   pull_request:
   merge_group:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
@@ -32,28 +35,60 @@ jobs:
     runs-on: ubuntu-latest
     name: Check License Header
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Install HawkEye
+      # This CI job is bound by installation time, use `--profile dev` to speed it up
         run: cargo install hawkeye --version 6.2.0 --locked --profile dev
       - name: Run license header check
         run: ci/scripts/license_header.sh
 
   prettier:
     name: Use prettier to check formatting of documents
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
-      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903  # v6.0.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
         with:
           node-version: "20"
       - name: Prettier check
+      # if you encounter error, see instructions inside the script
+        run: ci/scripts/doc_prettier_check.sh
+
+  markdown-link-check:
+    name: Check Markdown Links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - name: Load tool versions
         run: |
-          # if you encounter error, rerun the command below and commit the changes
-          #
-          # ignore subproject CHANGELOG.md because they are machine generated
-          npx prettier@2.7.1 --write \
-            '{datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md' \
-            '!datafusion/CHANGELOG.md' \
-            README.md \
-            CONTRIBUTING.md
-          git diff --exit-code
+          source ci/scripts/utils/tool_versions.sh
+          echo "LYCHEE_VERSION=${LYCHEE_VERSION}" >> "$GITHUB_ENV"
+      - name: Install lychee
+        uses: taiki-e/install-action@0631aa6515c7d545823c67cfae7ef4fc7f490154  # v2.81.8
+        with:
+          tool: lychee@${{ env.LYCHEE_VERSION }}
+      - name: Run markdown link check
+        run: bash ci/scripts/markdown_link_check.sh
+
+  asf-yaml-check:
+    name: Validate required_status_checks in .asf.yaml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - run: pip install pyyaml
+      - run: python3 ci/scripts/check_asf_yaml_status_checks.py
+
+  typos:
+    name: Spell Check with Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
+      # Version fixed on purpose. It uses heuristics to detect typos, so upgrading
+      # it may cause checks to fail more often.
+      # We can upgrade it manually once a while.
+      - name: Install typos-cli
+        run: cargo install typos-cli --locked --version 1.37.0
+      - name: Run typos check
+        run: ci/scripts/typos_check.sh

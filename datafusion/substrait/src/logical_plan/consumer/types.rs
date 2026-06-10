@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::utils::{from_substrait_precision, next_struct_field_name, DEFAULT_TIMEZONE};
 use super::SubstraitConsumer;
-#[allow(deprecated)]
+use super::utils::{DEFAULT_TIMEZONE, from_substrait_precision, next_struct_field_name};
+#[expect(deprecated)]
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
@@ -26,27 +26,45 @@ use crate::variation_const::{
     DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
     TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
-    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use crate::variation_const::{FLOAT_16_TYPE_NAME, NULL_TYPE_NAME};
 use datafusion::arrow::datatypes::{
-    DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
+    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
+use datafusion::common::datatype::DataTypeExt;
 use datafusion::common::{
-    not_impl_err, substrait_datafusion_err, substrait_err, DFSchema,
+    DFSchema, not_impl_err, substrait_datafusion_err, substrait_err,
 };
 use std::sync::Arc;
-use substrait::proto::{r#type, NamedStruct, Type};
+use substrait::proto::{NamedStruct, Type, r#type};
+
+pub(crate) fn field_from_substrait_type_without_names(
+    consumer: &impl SubstraitConsumer,
+    dt: &Type,
+) -> datafusion::common::Result<FieldRef> {
+    Ok(from_substrait_type_without_names(consumer, dt)?.into_nullable_field_ref())
+}
 
 pub(crate) fn from_substrait_type_without_names(
     consumer: &impl SubstraitConsumer,
     dt: &Type,
 ) -> datafusion::common::Result<DataType> {
     from_substrait_type(consumer, dt, &[], &mut 0)
+}
+
+pub fn field_from_substrait_type(
+    consumer: &impl SubstraitConsumer,
+    dt: &Type,
+    dfs_names: &[String],
+    name_idx: &mut usize,
+) -> datafusion::common::Result<FieldRef> {
+    // We could add nullability here now that we are returning a Field
+    Ok(from_substrait_type(consumer, dt, dfs_names, name_idx)?.into_nullable_field_ref())
 }
 
 pub fn from_substrait_type(
@@ -88,9 +106,10 @@ pub fn from_substrait_type(
             },
             r#type::Kind::Fp32(_) => Ok(DataType::Float32),
             r#type::Kind::Fp64(_) => Ok(DataType::Float64),
+            #[expect(deprecated)]
             r#type::Kind::Timestamp(ts) => {
                 // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 match ts.type_variation_reference {
                     TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
                         Ok(DataType::Timestamp(TimeUnit::Second, None))
@@ -248,20 +267,22 @@ pub fn from_substrait_type(
                 // TODO: remove the code below once the producer has been updated
                 if let Some(name) = consumer.get_extensions().types.get(&u.type_reference)
                 {
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     match name.as_ref() {
                         // Kept for backwards compatibility, producers should use IntervalCompound instead
-                        INTERVAL_MONTH_DAY_NANO_TYPE_NAME => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+                        INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
+                            Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+                        }
                         FLOAT_16_TYPE_NAME => Ok(DataType::Float16),
                         NULL_TYPE_NAME => Ok(DataType::Null),
                         _ => not_impl_err!(
-                                "Unsupported Substrait user defined type with ref {} and variation {}",
-                                u.type_reference,
-                                u.type_variation_reference
-                            ),
+                            "Unsupported Substrait user defined type with ref {} and variation {}",
+                            u.type_reference,
+                            u.type_variation_reference
+                        ),
                     }
                 } else {
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     match u.type_reference {
                         // Kept for backwards compatibility, producers should use IntervalYear instead
                         INTERVAL_YEAR_MONTH_TYPE_REF => {
@@ -276,10 +297,10 @@ pub fn from_substrait_type(
                             Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                         }
                         _ => not_impl_err!(
-                        "Unsupported Substrait user defined type with ref {} and variation {}",
-                        u.type_reference,
-                        u.type_variation_reference
-                    ),
+                            "Unsupported Substrait user defined type with ref {} and variation {}",
+                            u.type_reference,
+                            u.type_variation_reference
+                        ),
                     }
                 }
             }
@@ -326,12 +347,98 @@ fn from_substrait_struct_type(
 ) -> datafusion::common::Result<Fields> {
     let mut fields = vec![];
     for (i, f) in s.types.iter().enumerate() {
-        let field = Field::new(
-            next_struct_field_name(i, dfs_names, name_idx)?,
-            from_substrait_type(consumer, f, dfs_names, name_idx)?,
-            true, // We assume everything to be nullable since that's easier than ensuring it matches
-        );
+        let name = next_struct_field_name(i, dfs_names, name_idx)?;
+        let data_type = from_substrait_type(consumer, f, dfs_names, name_idx)?;
+        let field = Field::new(name, data_type, type_is_nullable(f)?);
         fields.push(field);
     }
     Ok(fields.into())
+}
+
+fn type_is_nullable(dt: &Type) -> datafusion::common::Result<bool> {
+    let Some(kind) = dt.kind.as_ref() else {
+        return Ok(true);
+    };
+
+    let nullability = match kind {
+        r#type::Kind::Bool(boolean) => boolean.nullability,
+        r#type::Kind::I8(integer) => integer.nullability,
+        r#type::Kind::I16(integer) => integer.nullability,
+        r#type::Kind::I32(integer) => integer.nullability,
+        r#type::Kind::I64(integer) => integer.nullability,
+        r#type::Kind::Fp32(float) => float.nullability,
+        r#type::Kind::Fp64(float) => float.nullability,
+        #[expect(deprecated)]
+        r#type::Kind::Timestamp(timestamp) => timestamp.nullability,
+        r#type::Kind::Date(date) => date.nullability,
+        #[expect(deprecated)]
+        r#type::Kind::Time(time) => time.nullability,
+        #[expect(deprecated)]
+        r#type::Kind::TimestampTz(timestamp) => timestamp.nullability,
+        r#type::Kind::IntervalYear(interval) => interval.nullability,
+        r#type::Kind::IntervalDay(interval) => interval.nullability,
+        r#type::Kind::IntervalCompound(interval) => interval.nullability,
+        r#type::Kind::Uuid(uuid) => uuid.nullability,
+        r#type::Kind::String(string) => string.nullability,
+        r#type::Kind::Binary(binary) => binary.nullability,
+        r#type::Kind::FixedChar(fixed) => fixed.nullability,
+        r#type::Kind::Varchar(varchar) => varchar.nullability,
+        r#type::Kind::FixedBinary(fixed) => fixed.nullability,
+        r#type::Kind::Decimal(decimal) => decimal.nullability,
+        r#type::Kind::PrecisionTime(time) => time.nullability,
+        r#type::Kind::PrecisionTimestamp(timestamp) => timestamp.nullability,
+        r#type::Kind::PrecisionTimestampTz(timestamp) => timestamp.nullability,
+        r#type::Kind::Struct(r#struct) => r#struct.nullability,
+        r#type::Kind::List(list) => list.nullability,
+        r#type::Kind::Map(map) => map.nullability,
+        r#type::Kind::Func(func) => func.nullability,
+        r#type::Kind::UserDefined(user_defined) => user_defined.nullability,
+        #[expect(deprecated)]
+        r#type::Kind::UserDefinedTypeReference(_) => r#type::Nullability::Required as i32,
+        r#type::Kind::Alias(alias) => alias.nullability,
+    };
+
+    is_nullable(nullability)
+}
+
+fn is_nullable(nullability: i32) -> datafusion::common::Result<bool> {
+    match r#type::Nullability::try_from(nullability) {
+        Ok(r#type::Nullability::Required) => Ok(false),
+        Ok(r#type::Nullability::Nullable | r#type::Nullability::Unspecified) => Ok(true),
+        Err(_) => not_impl_err!("Unsupported Substrait Nullability value {nullability}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use substrait::proto::r#type::Kind;
+
+    #[test]
+    fn type_is_nullable_user_defined_type_reference_is_required() {
+        // The deprecated `UserDefinedTypeReference` variant doesn't carry a
+        // nullability field; the consumer hardcodes Required (non-null).
+        #[expect(deprecated)]
+        let dt = Type {
+            kind: Some(Kind::UserDefinedTypeReference(0)),
+        };
+        assert!(!type_is_nullable(&dt).unwrap());
+    }
+
+    #[test]
+    fn type_is_nullable_missing_kind_defaults_to_nullable() {
+        // Defensive: a Type whose kind is None is treated as nullable.
+        let dt = Type { kind: None };
+        assert!(type_is_nullable(&dt).unwrap());
+    }
+
+    #[test]
+    fn is_nullable_rejects_unrecognized_enum_value() {
+        let err = is_nullable(i32::MAX).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unsupported Substrait Nullability"),
+            "got: {err}"
+        );
+    }
 }

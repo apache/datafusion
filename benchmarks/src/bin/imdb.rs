@@ -17,41 +17,44 @@
 
 //! IMDB binary entrypoint
 
+use clap::{Parser, Subcommand};
 use datafusion::error::Result;
 use datafusion_benchmarks::imdb;
-use structopt::StructOpt;
-
-#[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
-compile_error!(
-    "feature \"snmalloc\" and feature \"mimalloc\" cannot be enabled at the same time"
-);
 
 #[cfg(feature = "snmalloc")]
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-#[cfg(feature = "mimalloc")]
+// `cargo clippy --all-features` enables both allocator features, so prefer
+// `snmalloc` in that case and fall back to `mimalloc` otherwise.
+#[cfg(all(not(feature = "snmalloc"), feature = "mimalloc"))]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[derive(Debug, StructOpt)]
-#[structopt(about = "benchmark command")]
-enum BenchmarkSubCommandOpt {
-    #[structopt(name = "datafusion")]
-    DataFusionBenchmark(imdb::RunOpt),
+#[derive(Debug, Parser)]
+#[command(name = "IMDB", about = "IMDB Dataset Processing.")]
+struct Cli {
+    #[command(subcommand)]
+    command: ImdbOpt,
 }
 
-#[derive(Debug, StructOpt)]
-#[structopt(name = "IMDB", about = "IMDB Dataset Processing.")]
+#[derive(Debug, Subcommand)]
 enum ImdbOpt {
+    #[command(subcommand)]
     Benchmark(BenchmarkSubCommandOpt),
     Convert(imdb::ConvertOpt),
+}
+
+#[derive(Debug, Subcommand)]
+enum BenchmarkSubCommandOpt {
+    #[command(name = "datafusion")]
+    DataFusionBenchmark(imdb::RunOpt),
 }
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
     env_logger::init();
-    match ImdbOpt::from_args() {
+    match Cli::parse().command {
         ImdbOpt::Benchmark(BenchmarkSubCommandOpt::DataFusionBenchmark(opt)) => {
             Box::pin(opt.run()).await
         }

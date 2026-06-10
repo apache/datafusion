@@ -1,0 +1,109 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# Tests for arrow_try_cast: like arrow_cast but returns NULL on cast failure
+##########
+
+# Successful cast to Float64
+query R
+select arrow_try_cast(123, 'Float64');
+----
+123
+
+# Successful cast to Int64
+query I
+select arrow_try_cast('123', 'Int64');
+----
+123
+
+# Failed cast returns NULL
+query I
+select arrow_try_cast('not_a_number', 'Int64');
+----
+NULL
+
+# Same-type passthrough
+query I
+select arrow_try_cast(1, 'Int32');
+----
+1
+
+# Cast to LargeUtf8
+query T
+select arrow_try_cast('foo', 'LargeUtf8');
+----
+foo
+
+# Cast integer to string
+query T
+select arrow_try_cast(42, 'Utf8');
+----
+42
+
+# Cast to dictionary type
+query T
+select arrow_try_cast('bar', 'Dictionary(Int32, Utf8)');
+----
+bar
+
+# NULL input stays NULL
+query I
+select arrow_try_cast(NULL, 'Int64');
+----
+NULL
+
+# Error on invalid type string
+statement error
+select arrow_try_cast(1, 'NotAType');
+
+# Error when second argument is not a string constant
+statement error
+select arrow_try_cast(1, 123);
+
+# Multiple arrow_try_cast in one query
+query IT
+select arrow_try_cast('456', 'Int64') as a,
+       arrow_try_cast(789, 'Utf8') as b;
+----
+456 789
+
+# Tests that exercise physical execution (not constant folding)
+
+# Cast column values to Int64, with mixed valid/null/invalid inputs
+query I
+select arrow_try_cast(a, 'Int64') from (values('100'), (NULL), ('foo')) t(a);
+----
+100
+NULL
+NULL
+
+# Cast column values to Float64
+query R
+select arrow_try_cast(a, 'Float64') from (values('3.14'), ('not_num'), (NULL)) t(a);
+----
+3.14
+NULL
+NULL
+
+# Cast integer column to Utf8
+query T
+select arrow_try_cast(a, 'Utf8') from (values(1), (2), (NULL)) t(a);
+----
+1
+2
+NULL

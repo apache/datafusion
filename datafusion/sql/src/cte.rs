@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
-    not_impl_err, plan_err,
+    Result, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
-    Result,
 };
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
 use sqlparser::ast::{Query, SetExpr, SetOperator, With};
@@ -92,7 +92,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => (left, right, set_quantifier),
             other => {
                 // If the query is not a UNION, then it is not a recursive CTE
-                cte_query.body = Box::new(other);
+                *cte_query.body = other;
                 return self.non_recursive_cte(cte_query, planner_context);
             }
         };
@@ -128,15 +128,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // in the case of DataFusion).
         //
         // Since we can't simply register a table during planning stage (it is
-        // an execution problem), we'll use a relation object that preserves the
-        // schema of the input perfectly and also knows which recursive CTE it is
-        // bound to.
+        // an execution problem), we'll use a relation object that knows which
+        // recursive CTE it is bound to.
 
         // ---------- Step 2: Create a temporary relation ------------------
         // Step 2.1: Create a table source for the temporary relation
-        let work_table_source = self
-            .context_provider
-            .create_cte_work_table(cte_name, Arc::clone(static_plan.schema().inner()))?;
+        // Recursive self-references must expose conservative (nullable)
+        // columns. Deriving them from the static term's possibly non-nullable
+        // schema would let the recursive term treat values from previous
+        // iterations as non-nullable.
+        let work_table_source = self.context_provider.create_cte_work_table(
+            cte_name,
+            nullable_schema(static_plan.schema().inner()),
+        )?;
 
         // Step 2.2: Create a temporary relation logical plan that will be used
         // as the input to the recursive term
@@ -185,17 +189,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
+/// Return a copy of `schema` with every field marked nullable, preserving field
+/// and schema metadata.
+fn nullable_schema(schema: &Schema) -> SchemaRef {
+    Arc::new(Schema::new_with_metadata(
+        schema
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone().with_nullable(true))
+            .collect::<Vec<_>>(),
+        schema.metadata().clone(),
+    ))
+}
+
 fn has_work_table_reference(
     plan: &LogicalPlan,
     work_table_source: &Arc<dyn TableSource>,
 ) -> bool {
     let mut has_reference = false;
     plan.apply(|node| {
-        if let LogicalPlan::TableScan(scan) = node {
-            if Arc::ptr_eq(&scan.source, work_table_source) {
-                has_reference = true;
-                return Ok(TreeNodeRecursion::Stop);
-            }
+        if let LogicalPlan::TableScan(scan) = node
+            && Arc::ptr_eq(&scan.source, work_table_source)
+        {
+            has_reference = true;
+            return Ok(TreeNodeRecursion::Stop);
         }
         Ok(TreeNodeRecursion::Continue)
     })

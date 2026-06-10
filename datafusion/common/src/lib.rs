@@ -23,8 +23,6 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 mod column;
@@ -32,6 +30,7 @@ mod dfschema;
 mod functional_dependencies;
 mod join_type;
 mod param_value;
+mod partitioning;
 mod schema_reference;
 mod table_reference;
 mod unnest;
@@ -45,13 +44,16 @@ pub mod diagnostic;
 pub mod display;
 pub mod encryption;
 pub mod error;
+pub mod extensions;
 pub mod file_options;
 pub mod format;
 pub mod hash_utils;
+pub mod heap_size;
 pub mod instant;
 pub mod metadata;
 pub mod nested_struct;
 mod null_equality;
+pub mod parquet_config;
 pub mod parsers;
 pub mod pruning;
 pub mod rounding;
@@ -67,27 +69,31 @@ pub mod utils;
 pub use arrow;
 pub use column::Column;
 pub use dfschema::{
-    qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
+    DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema, qualified_name,
 };
 pub use diagnostic::Diagnostic;
+pub use display::human_readable::{
+    human_readable_count, human_readable_duration, human_readable_size, units,
+};
 pub use error::{
-    field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
-    SharedResult,
+    DataFusionError, Result, SchemaError, SharedResult, field_not_found,
+    unqualified_field_not_found,
 };
 pub use file_options::file_type::{
-    GetExt, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
-    DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
+    DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
+    DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION, GetExt,
 };
 pub use functional_dependencies::{
+    Constraint, Constraints, Dependency, FunctionalDependence, FunctionalDependencies,
     aggregate_functional_dependencies, get_required_group_by_exprs_indices,
-    get_target_functional_dependencies, Constraint, Constraints, Dependency,
-    FunctionalDependence, FunctionalDependencies,
+    get_required_sort_exprs_indices, get_target_functional_dependencies,
 };
-use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::DefaultHashBuilder;
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use nested_struct::cast_column;
 pub use null_equality::NullEquality;
 pub use param_value::ParamValues;
+pub use partitioning::{SplitPoint, validate_range_split_points};
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;
 pub use spans::{Location, Span, Spans};
@@ -103,9 +109,9 @@ pub use utils::project_schema;
 // https://github.com/rust-lang/rust/pull/52234#issuecomment-976702997
 #[doc(hidden)]
 pub use error::{
-    _config_datafusion_err, _exec_datafusion_err, _internal_datafusion_err,
-    _not_impl_datafusion_err, _plan_datafusion_err, _resources_datafusion_err,
-    _substrait_datafusion_err,
+    _config_datafusion_err, _exec_datafusion_err, _ffi_datafusion_err,
+    _internal_datafusion_err, _not_impl_datafusion_err, _plan_datafusion_err,
+    _resources_datafusion_err, _substrait_datafusion_err,
 };
 
 // The HashMap and HashSet implementations that should be used as the uniform defaults
@@ -113,6 +119,7 @@ pub type HashMap<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<K, V, S>;
 pub type HashSet<T, S = DefaultHashBuilder> = hashbrown::HashSet<T, S>;
 pub mod hash_map {
     pub use hashbrown::hash_map::Entry;
+    pub use hashbrown::hash_map::EntryRef;
 }
 pub mod hash_set {
     pub use hashbrown::hash_set::Entry;
@@ -137,10 +144,10 @@ macro_rules! downcast_value {
 // Not public API.
 #[doc(hidden)]
 pub mod __private {
-    use crate::error::_internal_datafusion_err;
     use crate::Result;
+    use crate::error::_internal_datafusion_err;
     use arrow::array::Array;
-    use std::any::{type_name, Any};
+    use std::any::{Any, type_name};
 
     #[doc(hidden)]
     pub trait DowncastArrayHelper {
@@ -191,7 +198,7 @@ mod tests {
 
         assert_starts_with(
             error.to_string(),
-            "Internal error: could not cast array of type Int32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::UInt64Type>"
+            "Internal error: could not cast array of type Int32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::UInt64Type>",
         );
     }
 

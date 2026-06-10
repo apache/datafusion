@@ -18,11 +18,14 @@
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, Result};
+use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+use datafusion_expr::registry::ExtensionTypeRegistryRef;
+use datafusion_expr::{
+    AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
+};
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use parking_lot::{Mutex, RwLock};
 use std::any::Any;
@@ -100,7 +103,7 @@ pub trait Session: Send + Sync {
     /// + 2` will not be simplified to `a = 3` as this is a more involved process.
     /// See the [expr_api] example for how to simplify expressions.
     ///
-    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
     fn create_physical_expr(
         &self,
         expr: Expr,
@@ -110,11 +113,17 @@ pub trait Session: Send + Sync {
     /// Return reference to scalar_functions
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>>;
 
+    /// Return reference to higher_order_functions
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>>;
+
     /// Return reference to aggregate_functions
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>>;
 
     /// Return reference to window functions
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>>;
+
+    /// Return a reference to the extension type registry
+    fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef;
 
     /// Return the runtime env
     fn runtime_env(&self) -> &Arc<RuntimeEnv>;
@@ -149,6 +158,7 @@ impl From<&dyn Session> for TaskContext {
             state.session_id().to_string(),
             state.config().clone(),
             state.scalar_functions().clone(),
+            state.higher_order_functions().clone(),
             state.aggregate_functions().clone(),
             state.window_functions().clone(),
             Arc::clone(state.runtime_env()),

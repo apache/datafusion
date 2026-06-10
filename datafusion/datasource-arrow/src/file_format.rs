@@ -19,7 +19,6 @@
 //!
 //! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::io::{Seek, SeekFrom};
@@ -30,12 +29,12 @@ use arrow::error::ArrowError;
 use arrow::ipc::convert::fb_to_schema;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::IpcWriteOptions;
-use arrow::ipc::{root_as_message, CompressionType};
+use arrow::ipc::{CompressionType, root_as_message};
 use datafusion_common::error::Result;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, DataFusionError, GetExt, Statistics,
-    DEFAULT_ARROW_EXTENSION,
+    DEFAULT_ARROW_EXTENSION, DataFusionError, GetExt, Statistics,
+    internal_datafusion_err, not_impl_err,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
@@ -43,9 +42,9 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::{
-    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
+    ObjectWriterBuilder, SharedBuffer, get_writer_schema,
 };
-use datafusion_datasource::TableSchema;
+use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -60,10 +59,11 @@ use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use object_store::{
-    path::Path, GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore,
+    GetOptions, GetRange, GetResultPayload, ObjectMeta, ObjectStore, ObjectStoreExt,
+    path::Path,
 };
 use tokio::io::AsyncWriteExt;
 
@@ -97,10 +97,6 @@ impl FileFormatFactory for ArrowFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ArrowFormat)
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 impl GetExt for ArrowFormatFactory {
@@ -116,10 +112,6 @@ pub struct ArrowFormat;
 
 #[async_trait]
 impl FileFormat for ArrowFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         ArrowFormatFactory::new().get_ext()
     }
@@ -163,7 +155,9 @@ impl FileFormat for ArrowFormat {
                             match StreamReader::try_new(&mut file, None) {
                                 Ok(reader) => reader.schema(),
                                 Err(stream_error) => {
-                                    return Err(internal_datafusion_err!("Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"));
+                                    return Err(internal_datafusion_err!(
+                                        "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
+                                    ));
                                 }
                             }
                         }
@@ -171,7 +165,7 @@ impl FileFormat for ArrowFormat {
                 }
                 GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
             };
-            schemas.push(schema.as_ref().clone());
+            schemas.push(Arc::unwrap_or_clone(schema));
         }
         let merged_schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(merged_schema))
@@ -203,18 +197,24 @@ impl FileFormat for ArrowFormat {
             .object_meta
             .location;
 
-        let table_schema = TableSchema::new(
-            Arc::clone(conf.file_schema()),
-            conf.table_partition_cols().clone(),
-        );
+        let table_schema = TableSchemaBuilder::from(conf.file_schema())
+            .with_table_partition_cols(conf.table_partition_cols().clone())
+            .build();
 
-        let source: Arc<dyn FileSource> =
+        let mut source: Arc<dyn FileSource> =
             match is_object_in_arrow_ipc_file_format(object_store, object_location).await
             {
                 Ok(true) => Arc::new(ArrowSource::new_file_source(table_schema)),
                 Ok(false) => Arc::new(ArrowSource::new_stream_file_source(table_schema)),
                 Err(e) => Err(e)?,
             };
+
+        // Preserve projection from the original file source
+        if let Some(projection) = conf.file_source.projection()
+            && let Some(new_source) = source.try_pushdown_projection(projection)?
+        {
+            source = new_source;
+        }
 
         let config = FileScanConfigBuilder::from(conf)
             .with_source(source)
@@ -364,10 +364,6 @@ impl DisplayAs for ArrowFileSink {
 
 #[async_trait]
 impl DataSink for ArrowFileSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }
@@ -539,15 +535,20 @@ async fn is_object_in_arrow_ipc_file_format(
 mod tests {
     use super::*;
 
+    use std::any::Any;
+
     use chrono::DateTime;
-    use datafusion_common::config::TableOptions;
     use datafusion_common::DFSchema;
+    use datafusion_common::config::TableOptions;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::execution_props::ExecutionProps;
-    use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+    use datafusion_expr::registry::ExtensionTypeRegistryRef;
+    use datafusion_expr::{
+        AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
+    };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use object_store::{chunked::ChunkedStore, memory::InMemory, path::Path};
+    use object_store::{chunked::ChunkedStore, memory::InMemory};
 
     struct MockSession {
         config: SessionConfig,
@@ -592,11 +593,19 @@ mod tests {
             unimplemented!()
         }
 
+        fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
+            unimplemented!()
+        }
+
         fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
             unimplemented!()
         }
 
         fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
             unimplemented!()
         }
 
@@ -699,7 +708,10 @@ mod tests {
                 .await;
 
             assert!(err.is_err());
-            assert_eq!( "Arrow error: Parser error: Unexpected end of byte stream for Arrow IPC file", err.unwrap_err().to_string().lines().next().unwrap());
+            assert_eq!(
+                "Arrow error: Parser error: Unexpected end of byte stream for Arrow IPC file",
+                err.unwrap_err().to_string().lines().next().unwrap()
+            );
         }
 
         Ok(())

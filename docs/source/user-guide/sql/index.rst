@@ -22,6 +22,7 @@ SQL Reference
    :maxdepth: 2
 
    data_types
+   struct_coercion
    select
    subqueries
    ddl
