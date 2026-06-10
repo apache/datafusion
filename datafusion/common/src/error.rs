@@ -1353,7 +1353,10 @@ mod test {
         ensure_rust_backtrace_enabled();
 
         let res: Result<(), DataFusionError> = plan_err!("Err");
-        assert_error_have_message_and_backtrace(&res.unwrap_err(), "Error during planning: Err");
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Error during planning: Err",
+        );
     }
 
     #[cfg(not(feature = "backtrace"))]
@@ -1377,7 +1380,10 @@ mod test {
     }
 
     #[cfg(feature = "backtrace")]
-    fn assert_error_have_message_and_backtrace(err: &DataFusionError, message_before_backtrace: &str) {
+    fn assert_error_have_message_and_backtrace(
+        err: &DataFusionError,
+        message_before_backtrace: &str,
+    ) {
         let err = err.to_string();
         assert!(err.contains(DataFusionError::BACK_TRACE_SEP));
         assert!(
@@ -1410,8 +1416,9 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_error_have_message_and_backtrace(&res.unwrap_err(),
-            "Internal error: item should not be None"
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: item should not be None",
         );
     }
 
@@ -1445,8 +1452,9 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_error_have_message_and_backtrace(&res.unwrap_err(),
-            "Internal error: Assertion failed: false"
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: false",
         );
     }
 
@@ -1462,8 +1470,9 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_error_have_message_and_backtrace(&res.unwrap_err(),
-            "Internal error: Assertion failed: false: my cool context"
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: false: my cool context",
         );
     }
 
@@ -1513,8 +1522,9 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_error_have_message_and_backtrace(&res.unwrap_err(),
-            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2)"
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2)",
         );
     }
 
@@ -1532,8 +1542,9 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_error_have_message_and_backtrace(&res.unwrap_err(),
-            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2): my cool context"
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 == arg2 (left: 1, right: 2): my cool context",
         );
     }
 
@@ -1587,8 +1598,9 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_error_have_message_and_backtrace(&res.unwrap_err(),
-            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1)"
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1)",
         );
     }
 
@@ -1606,8 +1618,9 @@ mod test {
         }
 
         let res: Result<(), DataFusionError> = get_error();
-        assert_error_have_message_and_backtrace(&res.unwrap_err(),
-            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1): my cool context"
+        assert_error_have_message_and_backtrace(
+            &res.unwrap_err(),
+            "Internal error: Assertion failed: arg1 != arg2 (left: 1, right: 1): my cool context",
         );
     }
 
