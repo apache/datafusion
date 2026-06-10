@@ -1,0 +1,93 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Single source of truth for which PR diffs should skip code CI.
+#
+# Workflows that gate jobs on "is this a real code change?" call this
+# composite action; every existing job downstream then uses
+# `if: needs.detect-changes.outputs.has_code == 'true'`. The caller is
+# responsible for `actions/checkout` with `fetch-depth: 0` before invoking
+# this action — we need full history to compute the PR diff.
+
+name: 'Detect changes'
+description: >-
+  Emit has_code='true' if the PR contains any changed file that does NOT
+  match `ignore-paths`. When every changed file matches, has_code='false'
+  and dependent jobs should report `skipped`.
+
+inputs:
+  ignore-paths:
+    description: |
+      Newline-separated glob patterns. If EVERY changed file in the PR
+      matches one of these globs, has_code='false' (code CI is skipped —
+      only dev.yml / docs*.yaml jobs run).
+
+      Glob syntax matches `pull_request: paths-ignore:`:
+        **                any depth
+        *                 any chars within one path segment
+        foo/bar.txt       a single specific file
+        subdir/**         everything under subdir/
+        **.png            any .png file at any depth
+        **/CHANGELOG.md   CHANGELOG.md in any directory
+
+      To add a new entry: append one line below. To override per-workflow,
+      pass `with: ignore-paths: |` from the caller.
+    required: false
+    default: |
+      docs/**
+      **.md
+      .github/ISSUE_TEMPLATE/**
+      .github/pull_request_template.md
+
+outputs:
+  has_code:
+    description: >-
+      'true' if at least one changed file is outside `ignore-paths`,
+      'false' if every changed file matches one of those globs.
+    value: ${{ steps.filter.outputs.has_code }}
+
+runs:
+  using: composite
+  steps:
+    - id: filter
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        IGNORE_CODE_CI_FOR_PATHS: ${{ inputs.ignore-paths }}
+      run: |
+        # Fail-open: if anything goes wrong, default to running every job
+        # rather than silently skipping (which would let broken CI merge).
+        set +e
+        if [ -z "$BASE_SHA" ]; then
+          echo "has_code=true" >> "$GITHUB_OUTPUT"; exit 0
+        fi
+        # Translate IGNORE_CODE_CI_FOR_PATHS (one glob per line) into git
+        # pathspec excludes; `:(exclude,glob)` activates ** globbing.
+        excludes=()
+        while IFS= read -r pattern; do
+          [ -n "$pattern" ] && excludes+=( ":(exclude,glob)$pattern" )
+        done <<< "$IGNORE_CODE_CI_FOR_PATHS"
+        # If anything remains after stripping ignored paths, the PR has
+        # real code changes and code CI should run.
+        diff_output=$(git diff --name-only "$BASE_SHA..$HEAD_SHA" -- "${excludes[@]}")
+        if [ -n "$diff_output" ]; then
+          echo "has_code=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_code=false" >> "$GITHUB_OUTPUT"
+        fi
+        exit 0

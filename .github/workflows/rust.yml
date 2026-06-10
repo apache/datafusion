@@ -55,47 +55,11 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           fetch-depth: 0
+      # Glob list and detection logic live in
+      # .github/actions/detect-changes/action.yml (single source of truth).
+      # To override the patterns for this workflow, pass `with: ignore-paths:`.
       - id: filter
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          # Skip code CI on PRs whose changed files all match one of these
-          # globs (only dev.yml / docs*.yaml jobs run in that case).
-          #
-          # To add a new entry: append a line below with a glob pattern.
-          # Syntax matches `pull_request: paths-ignore:` — `**` = any depth,
-          # `*` = any chars within one path segment. Examples:
-          #     foo/bar.txt          a single specific file
-          #     subdir/**            everything under subdir/
-          #     **.png               any .png file at any depth
-          #     **/CHANGELOG.md      CHANGELOG.md in any directory
-          IGNORE_CODE_CI_FOR_PATHS: |
-            docs/**
-            **.md
-            .github/ISSUE_TEMPLATE/**
-            .github/pull_request_template.md
-        run: |
-          # Fail-open: if anything goes wrong, default to running every job
-          # rather than silently skipping (which would let broken CI merge).
-          set +e
-          if [ -z "$BASE_SHA" ]; then
-            echo "has_code=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          # Translate IGNORE_CODE_CI_FOR_PATHS (one glob per line) into git
-          # pathspec excludes; `:(exclude,glob)` activates ** globbing.
-          excludes=()
-          while IFS= read -r pattern; do
-            [ -n "$pattern" ] && excludes+=( ":(exclude,glob)$pattern" )
-          done <<< "$IGNORE_CODE_CI_FOR_PATHS"
-          # If anything remains after stripping ignored paths, the PR has
-          # real code changes and code CI should run.
-          diff_output=$(git diff --name-only "$BASE_SHA..$HEAD_SHA" -- "${excludes[@]}")
-          if [ -n "$diff_output" ]; then
-            echo "has_code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_code=false" >> "$GITHUB_OUTPUT"
-          fi
-          exit 0
+        uses: ./.github/actions/detect-changes
 
   # Check crate compiles and base cargo check passes
   linux-build-lib:
