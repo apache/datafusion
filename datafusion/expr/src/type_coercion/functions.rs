@@ -33,7 +33,7 @@ use datafusion_common::utils::{
 use datafusion_common::{
     Result, exec_err, internal_err, plan_err, types::NativeType, utils::list_ndims,
 };
-use datafusion_expr_common::signature::ArrayFunctionArgument;
+use datafusion_expr_common::signature::{ArrayFunctionArgument, EncodingPreservation};
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
@@ -873,9 +873,44 @@ fn get_valid_types(
         TypeSignature::Coercible(param_types) => {
             function_length_check(function_name, current_types.len(), param_types.len())?;
 
+            fn cast_origin(
+                current_type: &DataType,
+                encoding_preservation: EncodingPreservation,
+            ) -> &DataType {
+                match (encoding_preservation, current_type) {
+                    (
+                        EncodingPreservation::Dictionary,
+                        DataType::Dictionary(_, value_type),
+                    ) => value_type,
+                    _ => current_type,
+                }
+            }
+
+            fn preserve_encoding(
+                current_type: &DataType,
+                casted_type: DataType,
+                encoding_preservation: EncodingPreservation,
+            ) -> DataType {
+                match (encoding_preservation, current_type, &casted_type) {
+                    (
+                        EncodingPreservation::Dictionary,
+                        DataType::Dictionary(_, _),
+                        DataType::Dictionary(_, _),
+                    ) => casted_type,
+                    (
+                        EncodingPreservation::Dictionary,
+                        DataType::Dictionary(key_type, _),
+                        _,
+                    ) => DataType::Dictionary(key_type.clone(), Box::new(casted_type)),
+                    _ => casted_type,
+                }
+            }
+
             let mut new_types = Vec::with_capacity(current_types.len());
             for (current_type, param) in current_types.iter().zip(param_types.iter()) {
                 let current_native_type: NativeType = current_type.into();
+                let encoding_preservation = param.encoding_preservation();
+                let cast_origin = cast_origin(current_type, encoding_preservation);
 
                 if param
                     .desired_type()
@@ -883,9 +918,13 @@ fn get_valid_types(
                 {
                     let casted_type = param
                         .desired_type()
-                        .default_casted_type(&current_native_type, current_type)?;
+                        .default_casted_type(&current_native_type, cast_origin)?;
 
-                    new_types.push(casted_type);
+                    new_types.push(preserve_encoding(
+                        current_type,
+                        casted_type,
+                        encoding_preservation,
+                    ));
                 } else if param
                     .allowed_source_types()
                     .iter()
@@ -894,8 +933,12 @@ fn get_valid_types(
                     // If the condition is met which means `implicit coercion`` is provided so we can safely unwrap
                     let default_casted_type = param.default_casted_type().unwrap();
                     let casted_type =
-                        default_casted_type.default_cast_for(current_type)?;
-                    new_types.push(casted_type);
+                        default_casted_type.default_cast_for(cast_origin)?;
+                    new_types.push(preserve_encoding(
+                        current_type,
+                        casted_type,
+                        encoding_preservation,
+                    ));
                 } else {
                     let hint = if matches!(current_native_type, NativeType::Binary) {
                         "\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String."
@@ -1214,11 +1257,11 @@ mod tests {
     use arrow::datatypes::IntervalUnit;
     use datafusion_common::{
         assert_contains,
-        types::{logical_binary, logical_int64},
+        types::{logical_binary, logical_int64, logical_string},
     };
     use datafusion_expr_common::{
         columnar_value::ColumnarValue,
-        signature::{Coercion, TypeSignatureClass},
+        signature::{Coercion, EncodingPreservation, TypeSignatureClass},
     };
 
     #[test]
@@ -1827,6 +1870,53 @@ mod tests {
             NativeType::Int64,
         ))?;
         assert_eq!(vec![dictionary.clone()], output);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coercible_dictionary_preserves_encoding() -> Result<()> {
+        fn dictionary_input(
+            value_type: DataType,
+            coercion: Coercion,
+        ) -> Result<Vec<DataType>> {
+            fields_with_udf(
+                &[Field::new(
+                    "field",
+                    DataType::Dictionary(Box::new(DataType::Int8), Box::new(value_type)),
+                    true,
+                )
+                .into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
+            )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
+        }
+
+        let coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+            .with_encoding_preservation(EncodingPreservation::Dictionary);
+
+        assert_eq!(
+            dictionary_input(DataType::LargeUtf8, coercion.clone())?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::LargeUtf8),
+            )]
+        );
+        assert_eq!(
+            dictionary_input(
+                DataType::BinaryView,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_string()),
+                    vec![TypeSignatureClass::Native(logical_binary())],
+                    NativeType::String,
+                )
+                .with_encoding_preservation(EncodingPreservation::Dictionary),
+            )?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Utf8View),
+            )]
+        );
 
         Ok(())
     }

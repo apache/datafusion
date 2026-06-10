@@ -468,7 +468,7 @@ Utf8View
 query T
 SELECT arrow_typeof(upper(arrow_cast(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)')))
 ----
-Utf8View
+Dictionary(Int32, Utf8View)
 
 query T
 SELECT btrim('   foo  ')
@@ -548,7 +548,7 @@ Utf8View
 query T
 SELECT arrow_typeof(lower(arrow_cast(arrow_cast('FOObar', 'Dictionary(Int32, Utf8)'), 'Dictionary(Int32, Utf8View)')))
 ----
-Utf8View
+Dictionary(Int32, Utf8View)
 
 query T
 SELECT ltrim('   foo')
