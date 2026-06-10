@@ -318,6 +318,12 @@ impl Precision<ScalarValue> {
     }
 }
 
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> From<Option<T>> for Precision<T> {
+    fn from(option: Option<T>) -> Self {
+        option.map_or(Precision::Absent, Precision::Exact)
+    }
+}
+
 impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
