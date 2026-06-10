@@ -255,12 +255,8 @@ impl TopK {
         let array = filtered.into_array(num_rows)?;
         let mut filter = array.as_boolean().clone();
         if !filter.has_true() {
-            // No row can improve the heap, but the batch's last-row prefix may
-            // still indicate that no future batch can either. Call
-            // attempt_early_completion before short-circuiting; the post-update
-            // call below is gated on `replacements > 0`, which a fully-filtered
-            // batch never satisfies, so skipping this would silently drop the
-            // worse-prefix signal.
+            // The heap is unchanged, but a fully rejected batch can still prove
+            // that the shared sort prefix has passed the heap boundary.
             self.attempt_early_completion(&batch)?;
             return Ok(());
         }
@@ -1105,20 +1101,15 @@ mod tests {
         assert_eq!(record_batch_store.batches_size, 0);
     }
 
-    /// This test validates that the `try_finish` method marks the TopK operator as finished
-    /// when the prefix (on column "a") of the last row in the current batch is strictly greater
-    /// than the max top‑k row.
-    /// The full sort expression is defined on both columns ("a", "b"), but the input ordering is only on "a".
-    #[tokio::test]
-    async fn test_try_finish_marks_finished_with_prefix() -> Result<()> {
-        // Create a schema with two columns.
+    /// Builds an `(a Int32, b Float64)` schema and a `TopK` with full sort
+    /// `(a ASC, b ASC)`, input prefix `[a]`, `k = 3`, `batch_size = 2`. Used by
+    /// the prefix-completion tests below to keep their per-scenario logic in focus.
+    fn build_ab_prefix_topk() -> Result<(Arc<Schema>, TopK)> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Float64, false),
         ]));
 
-        // Create sort expressions.
-        // Full sort: first by "a", then by "b".
         let sort_expr_a = PhysicalSortExpr {
             expr: col("a", schema.as_ref())?,
             options: SortOptions::default(),
@@ -1128,28 +1119,33 @@ mod tests {
             options: SortOptions::default(),
         };
 
-        // Input ordering uses only column "a" (a prefix of the full sort).
+        // Input ordering uses only column "a" (a prefix of the full sort on (a, b)).
         let prefix = vec![sort_expr_a.clone()];
         let full_expr = LexOrdering::from([sort_expr_a, sort_expr_b]);
 
-        // Create a dummy runtime environment and metrics.
-        let runtime = Arc::new(RuntimeEnv::default());
-        let metrics = ExecutionPlanMetricsSet::new();
-
-        // Create a TopK instance with k = 3 and batch_size = 2.
-        let mut topk = TopK::try_new(
+        let topk = TopK::try_new(
             0,
             Arc::clone(&schema),
             prefix,
             full_expr,
             3,
             2,
-            runtime,
-            &metrics,
+            Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
             Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
                 DynamicFilterPhysicalExpr::new(vec![], lit(true)),
             )))),
         )?;
+        Ok((schema, topk))
+    }
+
+    /// This test validates that the `try_finish` method marks the TopK operator as finished
+    /// when the prefix (on column "a") of the last row in the current batch is strictly greater
+    /// than the max top‑k row.
+    /// The full sort expression is defined on both columns ("a", "b"), but the input ordering is only on "a".
+    #[tokio::test]
+    async fn test_try_finish_marks_finished_with_prefix() -> Result<()> {
+        let (schema, mut topk) = build_ab_prefix_topk()?;
 
         // Create the first batch with two columns:
         // Column "a": [1, 1, 2], Column "b": [20.0, 15.0, 30.0].
@@ -1213,40 +1209,7 @@ mod tests {
     /// detect was being silently dropped.
     #[tokio::test]
     async fn test_try_finish_fires_when_filter_rejects_entire_batch() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Float64, false),
-        ]));
-
-        let sort_expr_a = PhysicalSortExpr {
-            expr: col("a", schema.as_ref())?,
-            options: SortOptions::default(),
-        };
-        let sort_expr_b = PhysicalSortExpr {
-            expr: col("b", schema.as_ref())?,
-            options: SortOptions::default(),
-        };
-
-        // Full sort on (a, b); input ordering is on `a` only (the prefix).
-        let prefix = vec![sort_expr_a.clone()];
-        let full_expr = LexOrdering::from([sort_expr_a, sort_expr_b]);
-
-        let runtime = Arc::new(RuntimeEnv::default());
-        let metrics = ExecutionPlanMetricsSet::new();
-
-        let mut topk = TopK::try_new(
-            0,
-            Arc::clone(&schema),
-            prefix,
-            full_expr,
-            3,
-            2,
-            runtime,
-            &metrics,
-            Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
-                DynamicFilterPhysicalExpr::new(vec![], lit(true)),
-            )))),
-        )?;
+        let (schema, mut topk) = build_ab_prefix_topk()?;
 
         // Batch 1 fills the heap with (1, 20.0), (1, 15.0), (2, 30.0).
         // heap.max becomes (a=2, b=30.0); update_filter tightens the heap filter to
