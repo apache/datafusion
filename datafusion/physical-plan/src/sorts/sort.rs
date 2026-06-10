@@ -589,11 +589,11 @@ impl ExternalSorter {
     ) -> Result<SendableRecordBatchStream> {
         if self.in_mem_batches.is_empty() {
             let empty_stream = Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
-            if(is_output_stream) {
-                return Ok(Box::pin(ObservedStream::new(empty_stream, self.metrics.baseline.clone(), None)));
+            return Ok(if is_output_stream {
+                Box::pin(ObservedStream::new(empty_stream, self.metrics.baseline.clone(), None))
             } else {
-                return Ok(empty_stream);
-            }
+                empty_stream
+            });
         }
 
         // The elapsed compute timer is updated when the value is dropped.
@@ -611,11 +611,11 @@ impl ExternalSorter {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
             let sorted_stream = self.sort_batch_stream(batch, reservation)?;
-            if(is_output_stream) {
-                return Ok(Box::pin(ObservedStream::new(sorted_stream, self.metrics.baseline.clone(), None)));
+            return Ok(if is_output_stream {
+                Box::pin(ObservedStream::new(sorted_stream, self.metrics.baseline.clone(), None))
             } else {
-                return Ok(sorted_stream);
-            }
+                sorted_stream
+            })
         }
 
         // If less than sort_in_place_threshold_bytes, concatenate and sort in place
@@ -628,11 +628,11 @@ impl ExternalSorter {
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
             let sorted_stream = self.sort_batch_stream(batch, reservation)?;
-            if(is_output_stream) {
-                return Ok(Box::pin(ObservedStream::new(sorted_stream, self.metrics.baseline.clone(), None)));
+            return Ok(if is_output_stream {
+                Box::pin(ObservedStream::new(sorted_stream, self.metrics.baseline.clone(), None))
             } else {
-                return Ok(sorted_stream);
-            }
+                sorted_stream
+            })
         }
 
         let streams = std::mem::take(&mut self.in_mem_batches)
@@ -822,8 +822,8 @@ pub fn sort_batch(
     fetch: Option<usize>,
 ) -> Result<RecordBatch> {
     let sort_columns = expressions
-        .iter()
-        .map(|expr| expr.evaluate_to_sort_column(batch))
+            .iter()
+            .map(|expr| expr.evaluate_to_sort_column(batch))
         .collect::<Result<Vec<_>>>()?;
 
     let indices = lexsort_to_indices(&sort_columns, fetch)?;
