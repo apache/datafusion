@@ -67,6 +67,7 @@ use datafusion_common::{
     internal_err, plan_err, validate_range_split_points,
 };
 use indexmap::IndexSet;
+use itertools::Itertools as _;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
@@ -4485,9 +4486,8 @@ impl Partitioning {
 /// placing each row in the partition described by the split points. DataFusion
 /// will not validate this is upheld.
 ///
-/// NOTE: Planning [`LogicalPlan::Repartition`] with range partitioning is not
-/// currently supported. Range-aware optimizer and execution behavior will be
-/// introduced incrementally. See
+/// NOTE: Range-aware optimizer and execution behavior will be introduced
+/// incrementally. See
 /// <https://github.com/apache/datafusion/issues/22395>.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct RangePartitioning {
@@ -4544,17 +4544,11 @@ fn logical_sort_options(ordering: &[SortExpr]) -> Vec<SortOptions> {
 
 impl Display for RangePartitioning {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let ordering = self
-            .ordering()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
+        let ordering = self.ordering().iter().map(ToString::to_string).join(", ");
         let split_points = self
             .split_points()
             .iter()
             .map(ToString::to_string)
-            .collect::<Vec<_>>()
             .join(", ");
         write!(
             f,
