@@ -1879,6 +1879,7 @@ dependencies = [
  "itertools 0.14.0",
  "libc",
  "log",
+ "num-traits",
  "object_store",
  "parquet",
  "rand 0.9.4",

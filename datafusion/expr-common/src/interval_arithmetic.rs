@@ -913,7 +913,7 @@ impl Interval {
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
             )
         {
-            self.upper.distance(&self.lower).map(|diff| diff as u64)
+            self.upper.distance_u64(&self.lower)
         } else if data_type.is_floating() {
             // Negative numbers are sorted in the reverse order. To
             // always have a positive difference after the subtraction,
