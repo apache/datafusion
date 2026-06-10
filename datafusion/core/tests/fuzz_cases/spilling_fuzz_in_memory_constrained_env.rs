@@ -39,13 +39,14 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::{Column, col};
+use datafusion_physical_expr_common::metrics::MetricsSet;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
+use datafusion_physical_plan::metrics::MetricValue;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use futures::StreamExt;
-use datafusion_physical_expr_common::metrics::MetricsSet;
 
 #[tokio::test]
 async fn test_sort_with_limited_memory() -> Result<()> {
@@ -79,7 +80,8 @@ async fn test_sort_with_limited_memory() -> Result<()> {
     })
     .await?;
 
-    let total_spill_files_size = metrics.spill_count().unwrap_or_default() * record_batch_size;
+    let total_spill_files_size =
+        metrics.spill_count().unwrap_or_default() * record_batch_size;
     assert!(
         total_spill_files_size > pool_size,
         "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
@@ -318,9 +320,9 @@ async fn run_sort_test_with_limited_memory(
     let metrics = run_test(args, sort_exec, result).await?;
 
     assert_baseline_metrics_for_non_empty_output(
-        metrics,
-        number_of_record_batches * output_batch_size,
-        record_batch_size as usize
+        &metrics,
+        number_of_record_batches * record_batch_size,
+        record_batch_size as usize,
     );
 
     Ok(metrics)
@@ -367,7 +369,8 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory() -> Result<()
         })
         .await?;
 
-    let total_spill_files_size = metrics.spill_count().unwrap_or_default() * record_batch_size;
+    let total_spill_files_size =
+        metrics.spill_count().unwrap_or_default() * record_batch_size;
     assert!(
         total_spill_files_size > pool_size,
         "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
@@ -704,5 +707,8 @@ fn assert_baseline_metrics_for_non_empty_output(
         })
         .expect("Must have output_batches metric since it exists in the baseline");
 
-    assert_eq!(output_batches.value(), expected_output_rows.div_ceil(output_batch_size));
+    assert_eq!(
+        output_batches.value(),
+        expected_output_rows.div_ceil(output_batch_size)
+    );
 }
