@@ -321,7 +321,7 @@ async fn run_sort_test_with_limited_memory(
 
     assert_baseline_metrics_for_non_empty_output(
         &metrics,
-        number_of_record_batches * record_batch_size,
+        number_of_record_batches * record_batch_size as usize,
         record_batch_size as usize,
     );
 
