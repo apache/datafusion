@@ -1,0 +1,17 @@
+name Q00
+group clickbench_sorted
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench_sorted/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run
+SELECT * FROM hits ORDER BY "EventTime" DESC limit 10;
+
+result sql_benchmarks/clickbench_sorted/results/q00.csv
+

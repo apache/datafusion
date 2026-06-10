@@ -1,0 +1,17 @@
+name Q04
+group clickbench_extended
+subgroup ${CLICKBENCH_TYPE:-single}
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run
+SELECT "ClientIP", "WatchID",  COUNT(*) c, MIN("ResponseStartTiming") tmin, MEDIAN("ResponseStartTiming") tmed, MAX("ResponseStartTiming") tmax FROM hits WHERE "JavaEnable" = 0  GROUP BY  "ClientIP", "WatchID" HAVING c > 1 ORDER BY tmed DESC LIMIT 10;
+
+result sql_benchmarks/clickbench_extended/results/q04.csv

@@ -21,10 +21,10 @@ use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
     expressions::UnKnownColumn, physical_exprs_equal,
 };
-use datafusion_common::{Result, ScalarValue, plan_err};
+pub use datafusion_common::SplitPoint;
+use datafusion_common::{Result, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -156,20 +156,7 @@ impl Display for Partitioning {
 /// Comparisons use the lexicographic order defined by `ordering`, including
 /// `ASC`/`DESC` and null ordering. Split points must be strictly ordered
 /// according to that ordering, and each split point must have one value per
-/// ordering expression.
-///
-/// `N` split points define `N + 1` partitions:
-///
-/// ```text
-/// partition 0: key < split_points[0]
-/// partition 1: split_points[0] <= key < split_points[1]
-/// ...
-/// partition N - 1: split_points[N - 2] <= key < split_points[N - 1]
-/// partition N: split_points[N - 1] <= key
-/// ```
-///
-/// Values equal to split point `i` belong to partition `i + 1`, so interior
-/// partitions are lower-inclusive and upper-exclusive.
+/// ordering expression. See [`SplitPoint`] for the shared boundary convention.
 ///
 /// Like other user-specified data properties such as sortedness, if a source
 /// declares range partitioning, it is responsible for placing each row in the
@@ -217,39 +204,6 @@ pub struct RangePartitioning {
     split_points: Vec<SplitPoint>,
 }
 
-/// A boundary between adjacent range partitions.
-///
-/// A split point is a tuple with one [`ScalarValue`] per sort expression in the
-/// parent [`RangePartitioning`] ordering.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SplitPoint {
-    values: Vec<ScalarValue>,
-}
-
-impl SplitPoint {
-    /// Creates a new split point from its tuple values.
-    pub fn new(values: Vec<ScalarValue>) -> Self {
-        Self { values }
-    }
-
-    /// Returns the tuple values for this split point.
-    pub fn values(&self) -> &[ScalarValue] {
-        &self.values
-    }
-}
-
-impl Display for SplitPoint {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let values = self
-            .values
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        write!(f, "({values})")
-    }
-}
-
 impl RangePartitioning {
     /// Creates range partitioning metadata without validating split points.
     ///
@@ -265,7 +219,13 @@ impl RangePartitioning {
     /// Creates range partitioning metadata and validates split point shape and
     /// ordering.
     pub fn try_new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Result<Self> {
-        validate_range_split_points(&ordering, &split_points)?;
+        validate_range_split_points(
+            &split_points,
+            &ordering
+                .iter()
+                .map(|sort_expr| sort_expr.options)
+                .collect::<Vec<_>>(),
+        )?;
         Ok(Self::new(ordering, split_points))
     }
 
@@ -284,6 +244,54 @@ impl RangePartitioning {
         self.split_points.len() + 1
     }
 
+    /// Returns true when `self` and `other` describe the same range partition
+    /// map.
+    ///
+    /// Single-partition range partitionings are always compatible. Otherwise,
+    /// the two partitionings must have identical split points and equivalent
+    /// ordering expressions with the same sort options.
+    pub fn compatible_with(
+        &self,
+        other: &Self,
+        eq_properties: &EquivalenceProperties,
+    ) -> bool {
+        if self.partition_count() == 1 && other.partition_count() == 1 {
+            return true;
+        }
+
+        if self.split_points != other.split_points
+            || self.ordering.len() != other.ordering.len()
+        {
+            return false;
+        }
+
+        if !self
+            .ordering
+            .iter()
+            .zip(other.ordering.iter())
+            .all(|(left, right)| left.options == right.options)
+        {
+            return false;
+        }
+
+        let left_exprs = self
+            .ordering
+            .iter()
+            .map(|sort_expr| Arc::clone(&sort_expr.expr))
+            .collect::<Vec<_>>();
+        let right_exprs = other
+            .ordering
+            .iter()
+            .map(|sort_expr| Arc::clone(&sort_expr.expr))
+            .collect::<Vec<_>>();
+
+        equivalent_exprs(&left_exprs, &right_exprs, eq_properties)
+    }
+
+    /// Calculates the range partitioning after applying the given projection.
+    ///
+    /// Returns `None` if any range key cannot be projected or if projection
+    /// collapses distinct range keys into duplicate output expressions.
     fn project(
         &self,
         mapping: &ProjectionMapping,
@@ -336,84 +344,35 @@ fn format_range_split_points(split_points: &[SplitPoint]) -> String {
         .join(", ")
 }
 
-fn validate_range_split_points(
-    ordering: &LexOrdering,
-    split_points: &[SplitPoint],
-) -> Result<()> {
-    let width = ordering.len();
-    for (idx, split_point) in split_points.iter().enumerate() {
-        let split_point_width = split_point.values.len();
-        if split_point_width != width {
-            return plan_err!(
-                "Range partitioning split point {idx} has width {split_point_width}, but ordering has width {width}"
-            );
-        }
+fn equivalent_exprs(
+    left: &[Arc<dyn PhysicalExpr>],
+    right: &[Arc<dyn PhysicalExpr>],
+    eq_properties: &EquivalenceProperties,
+) -> bool {
+    if physical_exprs_equal(left, right) {
+        return true;
     }
 
-    for (idx, split_points) in split_points.windows(2).enumerate() {
-        if compare_split_points(ordering, &split_points[0], &split_points[1])?
-            != Ordering::Less
-        {
-            return plan_err!(
-                "Range partitioning split points must be strictly ordered: split point {idx} ({}) must be less than split point {} ({})",
-                split_points[0],
-                idx + 1,
-                split_points[1]
-            );
-        }
+    let eq_groups = eq_properties.eq_group();
+    if eq_groups.is_empty() {
+        return false;
     }
 
-    Ok(())
+    let normalized_left = normalize_exprs(left, eq_properties);
+    let normalized_right = normalize_exprs(right, eq_properties);
+
+    physical_exprs_equal(&normalized_left, &normalized_right)
 }
 
-fn compare_split_points(
-    ordering: &LexOrdering,
-    left: &SplitPoint,
-    right: &SplitPoint,
-) -> Result<Ordering> {
-    for ((left_value, right_value), sort_expr) in
-        left.values.iter().zip(&right.values).zip(ordering.iter())
-    {
-        let value_ordering =
-            compare_scalar_values_for_sort(left_value, right_value, sort_expr)?;
-        if value_ordering != Ordering::Equal {
-            return Ok(value_ordering);
-        }
-    }
-
-    Ok(Ordering::Equal)
-}
-
-fn compare_scalar_values_for_sort(
-    left: &ScalarValue,
-    right: &ScalarValue,
-    sort_expr: &PhysicalSortExpr,
-) -> Result<Ordering> {
-    match (left.is_null(), right.is_null()) {
-        (true, true) => Ok(Ordering::Equal),
-        (true, false) => Ok(if sort_expr.options.nulls_first {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        }),
-        (false, true) => Ok(if sort_expr.options.nulls_first {
-            Ordering::Greater
-        } else {
-            Ordering::Less
-        }),
-        (false, false) => {
-            let Some(ordering) = left.partial_cmp(right) else {
-                return plan_err!(
-                    "Range partitioning split point values are not comparable: {left:?} and {right:?}"
-                );
-            };
-            Ok(if sort_expr.options.descending {
-                ordering.reverse()
-            } else {
-                ordering
-            })
-        }
-    }
+fn normalize_exprs(
+    exprs: &[Arc<dyn PhysicalExpr>],
+    eq_properties: &EquivalenceProperties,
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    let eq_groups = eq_properties.eq_group();
+    exprs
+        .iter()
+        .map(|expr| eq_groups.normalize_expr(Arc::clone(expr)))
+        .collect()
 }
 
 /// Represents how a [`Partitioning`] satisfies a [`Distribution`] requirement.
@@ -444,6 +403,42 @@ impl Partitioning {
         match self {
             RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
             Range(range) => range.partition_count(),
+        }
+    }
+
+    /// Returns true when `self` and `other` describe compatible partition maps.
+    ///
+    /// Compatible partition maps can be used for partition-local behavior: if
+    /// this returns true, partition `i` from both partitionings can be treated
+    /// as covering the same partition domain. This is stricter than
+    /// [`Self::satisfaction`], which only answers whether this partitioning can
+    /// satisfy a required distribution.
+    pub fn compatible_with(
+        &self,
+        other: &Self,
+        eq_properties: &EquivalenceProperties,
+    ) -> bool {
+        if self.partition_count() == 1 && other.partition_count() == 1 {
+            return true;
+        }
+
+        match (self, other) {
+            (
+                Partitioning::Hash(left_exprs, left_count),
+                Partitioning::Hash(right_exprs, right_count),
+            ) => {
+                if left_count != right_count {
+                    return false;
+                }
+                if left_exprs.is_empty() || right_exprs.is_empty() {
+                    return false;
+                }
+                equivalent_exprs(left_exprs, right_exprs, eq_properties)
+            }
+            (Partitioning::Range(left), Partitioning::Range(right)) => {
+                left.compatible_with(right, eq_properties)
+            }
+            _ => false,
         }
     }
 
@@ -503,36 +498,23 @@ impl Partitioning {
                         return PartitioningSatisfaction::NotSatisfied;
                     }
 
-                    // Fast path: exact match
-                    if physical_exprs_equal(required_exprs, partition_exprs) {
+                    if equivalent_exprs(required_exprs, partition_exprs, eq_properties) {
                         return PartitioningSatisfaction::Exact;
                     }
 
-                    // Normalization path using equivalence groups
                     let eq_groups = eq_properties.eq_group();
                     if !eq_groups.is_empty() {
-                        let normalized_required_exprs = required_exprs
-                            .iter()
-                            .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
-                            .collect::<Vec<_>>();
-                        let normalized_partition_exprs = partition_exprs
-                            .iter()
-                            .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
-                            .collect::<Vec<_>>();
-                        if physical_exprs_equal(
-                            &normalized_required_exprs,
-                            &normalized_partition_exprs,
-                        ) {
-                            return PartitioningSatisfaction::Exact;
-                        }
-
-                        if allow_subset
-                            && Self::is_subset_partitioning(
+                        if allow_subset {
+                            let normalized_partition_exprs =
+                                normalize_exprs(partition_exprs, eq_properties);
+                            let normalized_required_exprs =
+                                normalize_exprs(required_exprs, eq_properties);
+                            if Self::is_subset_partitioning(
                                 &normalized_partition_exprs,
                                 &normalized_required_exprs,
-                            )
-                        {
-                            return PartitioningSatisfaction::Subset;
+                            ) {
+                                return PartitioningSatisfaction::Subset;
+                            }
                         }
                     } else if allow_subset
                         && Self::is_subset_partitioning(partition_exprs, required_exprs)
@@ -652,7 +634,7 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::Result;
+    use datafusion_common::{Result, ScalarValue};
 
     struct PartitioningTestFixture {
         schema: SchemaRef,
@@ -1270,6 +1252,157 @@ mod tests {
         assert_eq!(partition_count, 2);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_compatible_with() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let mut eq_properties = fixture.eq_properties.clone();
+        eq_properties.add_equal_conditions(fixture.col(0), fixture.col(1))?;
+
+        let split_points = vec![int_split_point([10]), int_split_point([20])];
+        let range_a = fixture.range([0], split_points.clone());
+        let range_a_same = fixture.range([0], split_points.clone());
+        let range_b_equivalent = fixture.range([1], split_points.clone());
+        let range_b_different_split = fixture.range([1], vec![int_split_point([30])]);
+        let range_a_desc = RangePartitioning::try_new(
+            [fixture.range_sort_expr(0, SortOptions::new(true, false))].into(),
+            vec![int_split_point([10])],
+        )?;
+        let single_partition_range_a = fixture.range([0], vec![]);
+        let single_partition_range_b = fixture.range([1], vec![]);
+
+        assert!(range_a.compatible_with(&range_a_same, &fixture.eq_properties));
+        assert!(range_a.compatible_with(&range_b_equivalent, &eq_properties));
+        assert!(!range_a.compatible_with(&range_b_equivalent, &fixture.eq_properties));
+        assert!(!range_a.compatible_with(&range_b_different_split, &eq_properties));
+        assert!(!range_a.compatible_with(&range_a_desc, &eq_properties));
+        assert!(
+            single_partition_range_a
+                .compatible_with(&single_partition_range_b, &fixture.eq_properties)
+        );
+
+        assert!(
+            fixture
+                .range_partitioning([0], vec![int_split_point([10])])
+                .compatible_with(
+                    &fixture.range_partitioning([1], vec![int_split_point([10])]),
+                    &eq_properties
+                )
+        );
+        assert!(
+            !fixture
+                .range_partitioning([0], vec![int_split_point([10])])
+                .compatible_with(
+                    &fixture.range_partitioning([0], vec![int_split_point([20])]),
+                    &fixture.eq_properties
+                )
+        );
+        assert!(
+            !fixture
+                .range_partitioning([0], vec![int_split_point([10])])
+                .compatible_with(
+                    &fixture.hash_partitioning([0], 2),
+                    &fixture.eq_properties
+                )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_partitioning_compatible_with() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
+        let mut eq_properties = fixture.eq_properties.clone();
+        eq_properties.add_equal_conditions(fixture.col(0), fixture.col(1))?;
+
+        assert!(
+            fixture.hash_partitioning([0], 2).compatible_with(
+                &fixture.hash_partitioning([0], 2),
+                &fixture.eq_properties
+            )
+        );
+        assert!(
+            fixture
+                .hash_partitioning([0], 2)
+                .compatible_with(&fixture.hash_partitioning([1], 2), &eq_properties)
+        );
+        assert!(
+            !fixture.hash_partitioning([0], 2).compatible_with(
+                &fixture.hash_partitioning([1], 2),
+                &fixture.eq_properties
+            )
+        );
+        assert!(
+            !fixture.hash_partitioning([0], 2).compatible_with(
+                &fixture.hash_partitioning([0], 3),
+                &fixture.eq_properties
+            )
+        );
+        assert!(!fixture.hash_partitioning([0], 2).compatible_with(
+            &fixture.hash_partitioning([0, 1], 2),
+            &fixture.eq_properties
+        ));
+        assert!(
+            !Partitioning::Hash(vec![], 2)
+                .compatible_with(&Partitioning::Hash(vec![], 2), &fixture.eq_properties)
+        );
+        assert!(!fixture.hash_partitioning([0], 2).compatible_with(
+            &fixture.range_partitioning([0], vec![int_split_point([10])]),
+            &fixture.eq_properties
+        ));
+        assert!(
+            fixture.hash_partitioning([0], 1).compatible_with(
+                &Partitioning::RoundRobinBatch(1),
+                &fixture.eq_properties
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_robin_partitioning_compatible_with() {
+        let eq_properties = EquivalenceProperties::new(Arc::new(Schema::empty()));
+
+        assert!(
+            Partitioning::RoundRobinBatch(1)
+                .compatible_with(&Partitioning::RoundRobinBatch(1), &eq_properties)
+        );
+        assert!(
+            !Partitioning::RoundRobinBatch(2)
+                .compatible_with(&Partitioning::RoundRobinBatch(2), &eq_properties)
+        );
+        assert!(
+            Partitioning::RoundRobinBatch(1)
+                .compatible_with(&Partitioning::UnknownPartitioning(1), &eq_properties)
+        );
+        assert!(
+            !Partitioning::RoundRobinBatch(2)
+                .compatible_with(&Partitioning::UnknownPartitioning(2), &eq_properties)
+        );
+    }
+
+    #[test]
+    fn test_unknown_partitioning_compatible_with() {
+        let eq_properties = EquivalenceProperties::new(Arc::new(Schema::empty()));
+
+        assert!(
+            Partitioning::UnknownPartitioning(1)
+                .compatible_with(&Partitioning::UnknownPartitioning(1), &eq_properties)
+        );
+        assert!(
+            !Partitioning::UnknownPartitioning(2)
+                .compatible_with(&Partitioning::UnknownPartitioning(2), &eq_properties)
+        );
+        assert!(
+            Partitioning::UnknownPartitioning(1)
+                .compatible_with(&Partitioning::RoundRobinBatch(1), &eq_properties)
+        );
+        assert!(
+            !Partitioning::UnknownPartitioning(2)
+                .compatible_with(&Partitioning::RoundRobinBatch(2), &eq_properties)
+        );
     }
 
     #[test]

@@ -1,0 +1,12 @@
+
+name Q15
+group nlj
+
+expect_plan NestedLoopJoinExec
+
+run
+-- Q15: RIGHT SEMI 30K x 30K | HIGH 99.9%
+SELECT t1.*
+FROM range(30000) AS t2
+    RIGHT SEMI JOIN range(30000) AS t1
+ON t2.value < t1.value;
