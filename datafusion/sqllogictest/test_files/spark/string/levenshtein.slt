@@ -147,7 +147,7 @@ SELECT levenshtein(s1, s2, 2) AS result FROM VALUES ('abc', 'abc'), ('abc', 'def
 
 ## Different threshold per row
 query I
-SELECT levenshtein(s1, s2, t) AS result FROM VALUES ('abc', 'def', 2), ('abc', 'def', 5), ('abc', 'def', 3) AS t(s1, s2, t);
+SELECT levenshtein(s1, s2, threshold) AS result FROM VALUES ('abc', 'def', 2), ('abc', 'def', 5), ('abc', 'def', 3) AS v(s1, s2, threshold);
 ----
 -1
 3
@@ -155,27 +155,27 @@ SELECT levenshtein(s1, s2, t) AS result FROM VALUES ('abc', 'def', 2), ('abc', '
 
 ## Null threshold per row — Spark treats null threshold as 0
 query I
-SELECT levenshtein(s1, s2, t) AS result FROM VALUES ('kitten', 'sitting', CAST(NULL AS INT)), ('abc', 'def', 1) AS t(s1, s2, t);
+SELECT levenshtein(s1, s2, threshold) AS result FROM VALUES ('kitten', 'sitting', CAST(NULL AS INT)), ('abc', 'def', 1) AS v(s1, s2, threshold);
 ----
 -1
 -1
 
 ## Null threshold per row with identical strings — dist=0 <= 0 → returns 0
 query I
-SELECT levenshtein(s1, s2, t) AS result FROM VALUES ('abc', 'abc', CAST(NULL AS INT)) AS t(s1, s2, t);
+SELECT levenshtein(s1, s2, threshold) AS result FROM VALUES ('abc', 'abc', CAST(NULL AS INT)) AS v(s1, s2, threshold);
 ----
 0
 
 ## Null strings with threshold in columns
 query I
-SELECT levenshtein(s1, s2, t) AS result
+SELECT levenshtein(s1, s2, threshold) AS result
 FROM VALUES
   (CAST(NULL AS STRING), 'hello', 5),
   ('hello', CAST(NULL AS STRING), 5),
   (CAST(NULL AS STRING), CAST(NULL AS STRING), 5),
   ('abc', 'abc', CAST(NULL AS INT)),
   ('abc', 'def', CAST(NULL AS INT))
-AS t(s1, s2, t);
+AS v(s1, s2, threshold);
 ----
 NULL
 NULL

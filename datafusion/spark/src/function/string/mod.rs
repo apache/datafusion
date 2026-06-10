@@ -94,11 +94,17 @@ pub mod expr_fn {
         "Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros.",
         arg1
     ));
-    export_functions!((
-        levenshtein,
-        "Returns the Levenshtein distance between two strings. Optionally accepts a threshold; returns -1 if the distance exceeds it.",
-        str1 str2 threshold
-    ));
+    // `levenshtein` has both 2-arg (`str1`, `str2`) and 3-arg
+    // (`str1`, `str2`, `threshold`) forms, so the fixed-arity
+    // `export_functions!` macro would force one shape and make the other
+    // unreachable from the `expr_fn` API. Mirror how the core
+    // `datafusion-functions` crate exposes variadic helpers
+    // (e.g. `concat_ws`, `trim`) and ship a manual `Vec<Expr>` wrapper.
+    #[doc = "Returns the Levenshtein distance between two strings. Optionally accepts a threshold; returns -1 if the distance exceeds it."]
+    pub fn levenshtein(args: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
+        super::levenshtein().call(args)
+    }
+
     export_functions!((
         like,
         "Returns true if str matches pattern (case sensitive).",

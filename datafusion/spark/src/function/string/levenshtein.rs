@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
@@ -83,10 +82,6 @@ impl SparkLevenshtein {
 }
 
 impl ScalarUDFImpl for SparkLevenshtein {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "levenshtein"
     }
@@ -122,14 +117,40 @@ impl ScalarUDFImpl for SparkLevenshtein {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
-        // Determine the coerced string type (handles mixed Utf8 + LargeUtf8)
+        // Arity is validated in `return_type` at planning time, but invoke can
+        // also be reached via direct UDF calls (tests, programmatic invocation)
+        // so we re-check here before indexing `args[0]` / `args[1]`.
+        if args.len() != 2 && args.len() != 3 {
+            return exec_err!("levenshtein expects 2 or 3 arguments, got {}", args.len());
+        }
+
+        // Determine the coerced string type (handles mixed Utf8 + LargeUtf8).
+        // If neither string nor binary→string coercion applies, error out
+        // explicitly — mirrors `return_type`'s behaviour instead of silently
+        // defaulting to Utf8.
         let coerced_type = string_coercion(&args[0].data_type(), &args[1].data_type())
             .or_else(|| {
                 binary_to_string_coercion(&args[0].data_type(), &args[1].data_type())
             })
-            .unwrap_or(DataType::Utf8);
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Execution(format!(
+                    "Unsupported data types for levenshtein. Expected Utf8, \
+                     LargeUtf8 or Utf8View, got {:?} and {:?}",
+                    args[0].data_type(),
+                    args[1].data_type()
+                ))
+            })?;
 
-        // Spark returns NULL when any scalar argument is NULL.
+        // Spark NULL behaviour for `levenshtein`:
+        //   - NULL string argument (scalar OR per-row)  → result is NULL
+        //   - NULL threshold scalar                      → result is NULL
+        //   - NULL threshold value PER ROW               → treated as `0`
+        //     (handled inside `apply_threshold_*` in the kernel, NOT here)
+        //
+        // The per-row asymmetry (string-null propagates, threshold-null does
+        // not) is verified Spark behaviour — see the Sail Gherkin scenario
+        // "null threshold per row treated as zero" in
+        // `python/pysail/tests/spark/function/features/levenshtein.feature`.
         let null_int = |dt: &DataType| match dt {
             DataType::LargeUtf8 => ColumnarValue::Scalar(ScalarValue::Int64(None)),
             _ => ColumnarValue::Scalar(ScalarValue::Int32(None)),
@@ -151,6 +172,50 @@ impl ScalarUDFImpl for SparkLevenshtein {
                 exec_err!("Unsupported data type {other:?} for function levenshtein")
             }
         }
+    }
+}
+
+/// Applies the optional per-row threshold to a computed Levenshtein distance,
+/// returning an `i32` result. Used by the `Utf8` / `Utf8View` paths.
+///
+/// Spark semantics — verified against PySpark and codified in the Sail
+/// test suite (`spark/function/features/levenshtein.feature`, scenario
+/// "null threshold per row treated as zero"):
+///
+/// - No threshold column at all → return the raw distance.
+/// - Non-null threshold value → return `-1` if `dist > threshold`, else `dist`.
+/// - NULL threshold value at this row → treat as `0`, so any non-zero distance
+///   returns `-1` and identical strings (distance 0) return `0`.
+///
+/// This matches Spark's behaviour where a NULL threshold per row is NOT
+/// null-propagating; only NULL string arguments produce a NULL result.
+#[inline]
+fn apply_threshold_i32(dist: i32, threshold: Option<(&Int32Array, usize)>) -> i32 {
+    match threshold {
+        Some((arr, i)) => {
+            let t = if arr.is_null(i) { 0 } else { arr.value(i) };
+            if dist > t { -1 } else { dist }
+        }
+        None => dist,
+    }
+}
+
+/// `i64` counterpart of [`apply_threshold_i32`], used by the `LargeUtf8` path
+/// where the distance is materialised as `i64`. The threshold column itself
+/// remains `Int32` (Spark's signature), so the value is widened to `i64`
+/// before comparison.
+#[inline]
+fn apply_threshold_i64(dist: i64, threshold: Option<(&Int32Array, usize)>) -> i64 {
+    match threshold {
+        Some((arr, i)) => {
+            let t = if arr.is_null(i) {
+                0
+            } else {
+                arr.value(i) as i64
+            };
+            if dist > t { -1 } else { dist }
+        }
+        None => dist,
     }
 }
 
@@ -197,18 +262,10 @@ fn spark_levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
                             let dist = datafusion_strsim::levenshtein_with_buffer(
                                 string1, string2, &mut cache,
                             ) as i32;
-                            match &threshold {
-                                Some(t) => {
-                                    let thresh =
-                                        if t.is_null(i) { 0 } else { t.value(i) };
-                                    if dist > thresh {
-                                        Some(-1i32)
-                                    } else {
-                                        Some(dist)
-                                    }
-                                }
-                                None => Some(dist),
-                            }
+                            Some(apply_threshold_i32(
+                                dist,
+                                threshold.as_ref().map(|t| (*t, i)),
+                            ))
                         }
                         _ => None,
                     })
@@ -229,18 +286,10 @@ fn spark_levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
                             let dist = datafusion_strsim::levenshtein_with_buffer(
                                 string1, string2, &mut cache,
                             ) as i32;
-                            match &threshold {
-                                Some(t) => {
-                                    let thresh =
-                                        if t.is_null(i) { 0 } else { t.value(i) };
-                                    if dist > thresh {
-                                        Some(-1i32)
-                                    } else {
-                                        Some(dist)
-                                    }
-                                }
-                                None => Some(dist),
-                            }
+                            Some(apply_threshold_i32(
+                                dist,
+                                threshold.as_ref().map(|t| (*t, i)),
+                            ))
                         }
                         _ => None,
                     })
@@ -261,18 +310,10 @@ fn spark_levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
                             let dist = datafusion_strsim::levenshtein_with_buffer(
                                 string1, string2, &mut cache,
                             ) as i64;
-                            match &threshold {
-                                Some(t) => {
-                                    let thresh =
-                                        if t.is_null(i) { 0 } else { t.value(i) as i64 };
-                                    if dist > thresh {
-                                        Some(-1i64)
-                                    } else {
-                                        Some(dist)
-                                    }
-                                }
-                                None => Some(dist),
-                            }
+                            Some(apply_threshold_i64(
+                                dist,
+                                threshold.as_ref().map(|t| (*t, i)),
+                            ))
                         }
                         _ => None,
                     })
@@ -589,6 +630,90 @@ mod tests {
         let res = spark_levenshtein::<i64>(&[s1, s2])?;
         let result = as_int64_array(&res)?;
         assert_eq!(&Int64Array::from(vec![3i64]), result);
+        Ok(())
+    }
+
+    // ── Utf8View path ───────────────────────────────────────────
+
+    #[test]
+    fn test_utf8view_two_arg() -> Result<()> {
+        use arrow::array::StringViewArray;
+        let s1: ArrayRef = Arc::new(StringViewArray::from(vec!["kitten"]));
+        let s2: ArrayRef = Arc::new(StringViewArray::from(vec!["sitting"]));
+        let res = spark_levenshtein::<i32>(&[s1, s2])?;
+        let result = as_int32_array(&res)?;
+        assert_eq!(&Int32Array::from(vec![3]), result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_utf8view_with_threshold_exceeds() -> Result<()> {
+        use arrow::array::StringViewArray;
+        let s1: ArrayRef = Arc::new(StringViewArray::from(vec!["kitten"]));
+        let s2: ArrayRef = Arc::new(StringViewArray::from(vec!["sitting"]));
+        let t: ArrayRef = Arc::new(Int32Array::from(vec![2]));
+        // distance 3 > threshold 2 → -1
+        let res = spark_levenshtein::<i32>(&[s1, s2, t])?;
+        let result = as_int32_array(&res)?;
+        assert_eq!(&Int32Array::from(vec![-1]), result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_utf8view_with_threshold_within() -> Result<()> {
+        use arrow::array::StringViewArray;
+        let s1: ArrayRef = Arc::new(StringViewArray::from(vec!["kitten"]));
+        let s2: ArrayRef = Arc::new(StringViewArray::from(vec!["sitting"]));
+        let t: ArrayRef = Arc::new(Int32Array::from(vec![5]));
+        // distance 3 <= threshold 5 → 3
+        let res = spark_levenshtein::<i32>(&[s1, s2, t])?;
+        let result = as_int32_array(&res)?;
+        assert_eq!(&Int32Array::from(vec![3]), result);
+        Ok(())
+    }
+
+    // ── LargeUtf8 + threshold path ──────────────────────────────
+
+    #[test]
+    fn test_largeutf8_with_threshold_exceeds() -> Result<()> {
+        use arrow::array::LargeStringArray;
+        use datafusion_common::cast::as_int64_array;
+        let s1: ArrayRef = Arc::new(LargeStringArray::from(vec!["kitten"]));
+        let s2: ArrayRef = Arc::new(LargeStringArray::from(vec!["sitting"]));
+        let t: ArrayRef = Arc::new(Int32Array::from(vec![2]));
+        // distance 3 > threshold 2 → -1 (as i64)
+        let res = spark_levenshtein::<i64>(&[s1, s2, t])?;
+        let result = as_int64_array(&res)?;
+        assert_eq!(&Int64Array::from(vec![-1i64]), result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_largeutf8_with_threshold_within() -> Result<()> {
+        use arrow::array::LargeStringArray;
+        use datafusion_common::cast::as_int64_array;
+        let s1: ArrayRef = Arc::new(LargeStringArray::from(vec!["kitten"]));
+        let s2: ArrayRef = Arc::new(LargeStringArray::from(vec!["sitting"]));
+        let t: ArrayRef = Arc::new(Int32Array::from(vec![5]));
+        // distance 3 <= threshold 5 → 3 (as i64)
+        let res = spark_levenshtein::<i64>(&[s1, s2, t])?;
+        let result = as_int64_array(&res)?;
+        assert_eq!(&Int64Array::from(vec![3i64]), result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_largeutf8_with_null_threshold_row_treated_as_zero() -> Result<()> {
+        use arrow::array::LargeStringArray;
+        use datafusion_common::cast::as_int64_array;
+        // Row 0: "abc" vs "def" with NULL threshold → treated as 0 → -1
+        // Row 1: "xyz" vs "xyz" with NULL threshold → distance 0 → 0
+        let s1: ArrayRef = Arc::new(LargeStringArray::from(vec!["abc", "xyz"]));
+        let s2: ArrayRef = Arc::new(LargeStringArray::from(vec!["def", "xyz"]));
+        let t: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        let res = spark_levenshtein::<i64>(&[s1, s2, t])?;
+        let result = as_int64_array(&res)?;
+        assert_eq!(&Int64Array::from(vec![-1i64, 0i64]), result);
         Ok(())
     }
 }
