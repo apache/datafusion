@@ -146,9 +146,9 @@ impl OptimizerRule for EliminateOuterJoin {
     }
 }
 
-/// Run the null-rejection analysis on `predicate` against `join`'s left/right
-/// schemas. Return `Some(new_join_plan)` if the join type can be tightened
-/// (e.g. LEFT → INNER), `None` otherwise.
+/// Determine which null-padded sides of `join` are rejected by `predicate`.
+/// Return `Some(new_join_plan)` if that side-level evidence can tighten the
+/// join type (e.g. LEFT → INNER), `None` otherwise.
 fn try_simplify_join(join: &Join, predicate: &Expr) -> Option<LogicalPlan> {
     if !join.join_type.is_outer() {
         return None;
@@ -271,13 +271,14 @@ impl NullRejectingSides {
     }
 }
 
-/// Find the join sides where `expr` rejects NULL-padded rows. If a side is
-/// marked, the predicate is guaranteed to evaluate to NULL or false when that
-/// side's columns are NULL, and the row cannot survive a WHERE clause.
+/// Compute which join sides cannot be NULL-padded and still pass `expr` in a
+/// WHERE clause. A marked side means rows with that side padded to NULL are
+/// guaranteed to evaluate to NULL or false and be filtered out.
 ///
-/// `left_schema` and `right_schema` are the join's two child schemas.
-/// `top_level` is true at the root of the WHERE predicate and false on each
-/// recursion.
+/// `left_schema` and `right_schema` map column references to join sides.
+/// `top_level` is true only while walking the root WHERE context; nested
+/// contexts are more conservative because their boolean result may be combined
+/// by an enclosing expression.
 fn extract_null_rejecting_sides(
     expr: &Expr,
     left_schema: &Arc<DFSchema>,
@@ -303,23 +304,20 @@ fn extract_null_rejecting_sides(
                     top_level,
                 );
 
-                // AND distributes only down a top-level AND chain in the WHERE
-                // clause: each conjunct is independently null-rejecting, so
-                // either side's evidence is enough. Once an AND appears below
-                // any other context, we use the same intersection analysis as
-                // OR because the context might influence whether the row is
-                // filtered.
+                // Top-level AND: each conjunct is an independent WHERE filter,
+                // so side evidence from either branch is sufficient.
+                // Nested AND is handled like OR because the enclosing context
+                // may still let a NULL-padded row pass.
                 if top_level && *op == Operator::And {
                     left_sides.union(right_sides)
                 } else {
-                    // OR (and nested AND): a row survives if EITHER operand
-                    // returns true. We can credit a join side only when BOTH
-                    // operands independently reject NULL on that side.
+                    // OR (and nested AND): a NULL-padded row is rejected only
+                    // if both branches reject NULLs for the same side.
                     left_sides.intersection(right_sides)
                 }
             }
-            // Any other operator that DataFusion declares as NULL-on-NULL:
-            // recurse into both operands so we collect side evidence.
+            // Other NULL-on-NULL operators preserve null rejection from either
+            // operand.
             op if op.returns_null_on_null() => {
                 let left_sides =
                     extract_null_rejecting_sides(left, left_schema, right_schema, false);
@@ -327,19 +325,17 @@ fn extract_null_rejecting_sides(
                     extract_null_rejecting_sides(right, left_schema, right_schema, false);
                 left_sides.union(right_sides)
             }
-            // All other operators (notably including IS [ NOT ] DISTINCT FROM)
-            // are declared as not null-propagating, so they don't contribute
-            // any null-rejecting sides.
+            // Other operators, notably IS [ NOT ] DISTINCT FROM, are not
+            // NULL-propagating and provide no side-level rejection evidence.
             _ => NullRejectingSides::default(),
         },
         Expr::Not(arg) | Expr::Negative(arg) => {
             extract_null_rejecting_sides(arg, left_schema, right_schema, false)
         }
-        // IS NOT NULL / IS TRUE / IS FALSE / IS NOT UNKNOWN all return FALSE on
-        // NULL input. At the top of a WHERE clause, that FALSE filters the row
-        // and so we can recurse; below the top level the surrounding context
-        // may transform that FALSE into something that accepts NULL rows,
-        // making the recursion unsound.
+        // These wrappers return FALSE on NULL input, so they reject NULLs only
+        // when they are themselves in the root WHERE context. Under another
+        // expression, that FALSE can be transformed into a NULL-accepting result
+        // (for example by NOT), so recurse only at the top level.
         Expr::IsNotNull(arg)
         | Expr::IsTrue(arg)
         | Expr::IsFalse(arg)
@@ -354,9 +350,8 @@ fn extract_null_rejecting_sides(
         | Expr::TryCast(TryCast { expr, field: _ }) => {
             extract_null_rejecting_sides(expr, left_schema, right_schema, false)
         }
-        // IN list and BETWEEN are null-rejecting on the input expression:
-        // NULL input yields a NULL result, regardless of whether the list
-        // or range bounds themselves contain NULLs.
+        // IN list and BETWEEN reject NULLs from their input expression; list
+        // values and range bounds do not affect which join side is padded.
         Expr::InList(InList { expr, .. }) => {
             extract_null_rejecting_sides(expr, left_schema, right_schema, false)
         }
@@ -370,15 +365,10 @@ fn extract_null_rejecting_sides(
                 extract_null_rejecting_sides(pattern, left_schema, right_schema, false);
             expr_sides.union(pattern_sides)
         }
-        // Anything not handled above contributes no null-rejecting
-        // sides. Two categories worth calling out:
-        //   - IS NULL, IS NOT TRUE, IS NOT FALSE, IS UNKNOWN — return
-        //     TRUE on NULL input, so they actively *accept* NULL rows
-        //     and are intentionally excluded.
-        //   - Function calls (scalar / aggregate / window / UDF),
-        //     scalar subqueries, struct/list accessors, aliases,
-        //     literals, etc. — we don't have a uniform NULL-propagation
-        //     guarantee for these cases, so we conservatively skip them.
+        // Everything else is conservative: NULL-accepting predicates such as
+        // IS NULL / IS NOT TRUE / IS NOT FALSE / IS UNKNOWN must not eliminate
+        // an outer join, and functions/subqueries/accessors/literals have no
+        // uniform NULL-propagation contract here.
         _ => NullRejectingSides::default(),
     }
 }
