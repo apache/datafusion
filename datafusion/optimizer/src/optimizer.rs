@@ -518,10 +518,23 @@ fn rewrite_plan_in_place(
         }
     }
 
-    // Recurse into children using Arc::make_mut (zero-cost when refcount == 1)
-    changed |= map_children_mut(plan, |child| {
-        rewrite_plan_in_place(child, apply_order, rule, config)
+    let mut child_schema_changed = false;
+    let children_changed = map_children_mut(plan, |child| {
+        let old_schema = Arc::clone(child.schema());
+        let child_changed = rewrite_plan_in_place(child, apply_order, rule, config)?;
+        if child_changed && old_schema.as_ref() != child.schema().as_ref() {
+            child_schema_changed = true;
+        }
+        Ok(child_changed)
     })?;
+    changed |= children_changed;
+
+    if child_schema_changed {
+        // Child rewrites can change their output schemas. Recompute the current
+        // node before later rules use positional requirements from that schema.
+        let owned = std::mem::take(plan);
+        *plan = owned.recompute_schema()?;
+    }
 
     // f_up phase
     if apply_order == ApplyOrder::BottomUp {
@@ -604,15 +617,14 @@ impl Optimizer {
         while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
-            // Check once per pass whether the plan contains subquery
-            // expressions. When there are no subqueries, we use the
-            // cheaper `rewrite` traversal instead of
-            // `rewrite_with_subqueries`, avoiding the per-node
-            // map_subqueries call that walks all expression trees
-            // via ownership-based transform_down.
-            let has_subqueries = plan_has_subqueries(&new_plan);
-
             for rule in &self.rules {
+                // Re-check for each rule: early rules can remove subquery
+                // expressions, allowing later rules to use the cheaper in-place
+                // traversal in the same optimizer pass. This is also
+                // correctness-sensitive: the in-place path refreshes parent
+                // schemas after child schemas change.
+                let has_subqueries = plan_has_subqueries(&new_plan);
+
                 // If skipping failed rules, copy plan before attempting to rewrite
                 // as rewriting is destructive
                 let prev_plan = options
@@ -773,13 +785,15 @@ mod tests {
 
     use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
-        DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
+        Column, DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
     };
     use datafusion_expr::logical_plan::EmptyRelation;
-    use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, Projection, col, lit};
+    use datafusion_expr::{
+        Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, col, lit,
+    };
 
     use crate::optimizer::Optimizer;
-    use crate::test::test_table_scan;
+    use crate::test::{test_table_scan, test_table_scan_with_name};
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
 
     use super::ApplyOrder;
@@ -860,6 +874,34 @@ mod tests {
         let optimized_plan = opt.optimize(plan, &config, &observe)?;
         // metadata was removed
         assert_eq!(optimized_plan.schema().as_ref(), input_schema.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn in_place_rewrite_recomputes_parent_schema_when_child_schema_changes() -> Result<()>
+    {
+        let left = LogicalPlanBuilder::from(test_table_scan_with_name("left")?)
+            .project(vec![col("left.a"), col("left.b"), col("left.c")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("right")?)
+            .project(vec![col("right.a"), col("right.b"), col("right.c")])?
+            .build()?;
+        let mut plan = LogicalPlanBuilder::from(left)
+            .join_on(right, JoinType::Inner, [col("left.a").eq(col("right.a"))])?
+            .build()?;
+
+        assert_eq!(plan.schema().fields().len(), 6);
+
+        let changed = super::rewrite_plan_in_place(
+            &mut plan,
+            ApplyOrder::TopDown,
+            &KeepOnlyAProjectionRule {},
+            &OptimizerContext::new(),
+        )?;
+
+        assert!(changed);
+        assert_eq!(plan.schema().fields().len(), 2);
+        assert!(plan.schema().has_column_with_unqualified_name("a"));
         Ok(())
     }
 
@@ -977,6 +1019,40 @@ mod tests {
             Ok(Transformed::yes(
                 LogicalPlanBuilder::from(table_scan).build()?,
             ))
+        }
+    }
+
+    #[derive(Default, Debug)]
+    struct KeepOnlyAProjectionRule {}
+
+    impl OptimizerRule for KeepOnlyAProjectionRule {
+        fn name(&self) -> &str {
+            "keep_only_a_projection"
+        }
+
+        fn apply_order(&self) -> Option<ApplyOrder> {
+            Some(ApplyOrder::TopDown)
+        }
+
+        fn supports_rewrite(&self) -> bool {
+            true
+        }
+
+        fn rewrite(
+            &self,
+            plan: LogicalPlan,
+            _config: &dyn OptimizerConfig,
+        ) -> Result<Transformed<LogicalPlan>> {
+            let projection = match plan {
+                LogicalPlan::Projection(p) => p,
+                _ => return Ok(Transformed::no(plan)),
+            };
+
+            let expr = Expr::from(Column::from(projection.schema.qualified_field(0)));
+
+            Ok(Transformed::yes(LogicalPlan::Projection(
+                Projection::try_new(vec![expr], Arc::clone(&projection.input))?,
+            )))
         }
     }
 
