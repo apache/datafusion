@@ -1,0 +1,103 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+statement ok
+CREATE TABLE json_data (id INT, json_str TEXT) AS VALUES
+  (1, '{"name": "Alice", "age": 30}'),
+  (2, '{"name": "Bob", "age": 25}'),
+  (3, '{"items": [1, 2, 3], "count": 3}'),
+  (4, 'null'),
+  (5, '"simple string"'),
+  (6, '123'),
+  (7, 'true');
+
+# String values are returned without JSON quotes
+query T
+select variant_get_str(json_to_variant(json_str), 'name') from json_data;
+----
+Alice
+Bob
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# Numeric values are JSON-serialized
+query T
+select variant_get_str(json_to_variant(json_str), 'age') from json_data;
+----
+30
+25
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# Array values are JSON-serialized
+query T
+select variant_get_str(json_to_variant(json_str), 'items') from json_data;
+----
+NULL
+NULL
+[1,2,3]
+NULL
+NULL
+NULL
+NULL
+
+# Missing paths return NULL
+query T
+select variant_get_str(json_to_variant(json_str), 'nonexistent') from json_data;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# Scalar variant with string value
+query T
+select variant_get_str(json_to_variant('{"greeting": "hello world"}'), 'greeting');
+----
+hello world
+
+# Scalar variant with numeric value
+query T
+select variant_get_str(json_to_variant('{"count": 42}'), 'count');
+----
+42
+
+# Scalar variant with boolean value
+query T
+select variant_get_str(json_to_variant('{"flag": true}'), 'flag');
+----
+true
+
+# Scalar variant with null value
+query T
+select variant_get_str(json_to_variant('{"key": null}'), 'key');
+----
+null
+
+# Scalar variant with nested object
+query T
+select variant_get_str(json_to_variant('{"obj": {"a": 1}}'), 'obj');
+----
+{"a":1}

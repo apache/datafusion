@@ -1,0 +1,252 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# tests the cast_to_variant udf
+# this function takes a Variant Scalar or Array and converts it into a respective Variant value
+# you can also use metadata and value to create a Variant
+
+# one-arg path (from_array): primitive coverage
+statement ok
+CREATE TABLE cast_int_data (id INT, i INT) AS VALUES
+  (1, 1),
+  (2, NULL),
+  (3, -5);
+
+query ITTTTTT
+SELECT
+  id,
+  variant_pretty(cast_to_variant(i)),
+  variant_pretty(cast_to_variant(arrow_cast(i, 'Int8'))),
+  variant_pretty(cast_to_variant(arrow_cast(i, 'Int16'))),
+  variant_pretty(cast_to_variant(arrow_cast(i, 'Int64'))),
+  variant_pretty(cast_to_variant(arrow_cast(i, 'Float32'))),
+  variant_pretty(cast_to_variant(arrow_cast(i, 'Float64')))
+FROM cast_int_data
+ORDER BY id;
+----
+1 Int32(1) Int8(1) Int16(1) Int64(1) Float(1.0) Double(1.0)
+2 NULL NULL NULL NULL NULL NULL
+3 Int32(-5) Int8(-5) Int16(-5) Int64(-5) Float(-5.0) Double(-5.0)
+
+# one-arg path (from_array): string family with nulls
+statement ok
+CREATE TABLE cast_string_array_data (id INT, s TEXT) AS VALUES
+  (1, 'hello world'),
+  (2, NULL),
+  (3, 'Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van');
+
+query ITTT
+SELECT
+  id,
+  variant_pretty(cast_to_variant(s)),
+  variant_pretty(cast_to_variant(arrow_cast(s, 'Utf8View'))),
+  variant_pretty(cast_to_variant(arrow_cast(s, 'LargeUtf8')))
+FROM cast_string_array_data
+ORDER BY id;
+----
+1 ShortString(ShortString("hello world")) ShortString(ShortString("hello world")) ShortString(ShortString("hello world"))
+2 NULL NULL NULL
+3 String("Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van") String("Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van") String("Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van")
+
+# one-arg path (from_array): binary family with nulls
+query ITTTT
+SELECT
+  id,
+  variant_pretty(cast_to_variant(b)),
+  variant_pretty(cast_to_variant(lb)),
+  variant_pretty(cast_to_variant(bv)),
+  variant_pretty(cast_to_variant(fb))
+FROM (
+  SELECT
+    1 AS id,
+    arrow_cast(X'0a', 'Binary') AS b,
+    arrow_cast(X'0b', 'LargeBinary') AS lb,
+    arrow_cast(X'0c', 'BinaryView') AS bv,
+    arrow_cast(X'01020304', 'FixedSizeBinary(4)') AS fb
+  UNION ALL
+  SELECT
+    2 AS id,
+    arrow_cast(NULL, 'Binary') AS b,
+    arrow_cast(NULL, 'LargeBinary') AS lb,
+    arrow_cast(NULL, 'BinaryView') AS bv,
+    arrow_cast(NULL, 'FixedSizeBinary(4)') AS fb
+) t
+ORDER BY id;
+----
+1 Binary(0a) Binary(0b) Binary(0c) Binary(01 02 03 04)
+2 NULL NULL NULL NULL
+
+# one-arg path: primitive scalar coverage
+query TTTTTTTT
+SELECT
+  variant_pretty(cast_to_variant(arrow_cast(true, 'Boolean'))),
+  variant_pretty(cast_to_variant(arrow_cast(-8, 'Int8'))),
+  variant_pretty(cast_to_variant(arrow_cast(-16, 'Int16'))),
+  variant_pretty(cast_to_variant(arrow_cast(-32, 'Int32'))),
+  variant_pretty(cast_to_variant(arrow_cast(-64, 'Int64'))),
+  variant_pretty(cast_to_variant(arrow_cast(1.5, 'Float16'))),
+  variant_pretty(cast_to_variant(arrow_cast(1.25, 'Float32'))),
+  variant_pretty(cast_to_variant(arrow_cast(3.25, 'Float64')));
+----
+BooleanTrue Int8(-8) Int16(-16) Int32(-32) Int64(-64) Float(1.5) Float(1.25) Double(3.25)
+
+# one-arg path: string scalar coverage
+query TTTTTT
+SELECT
+  variant_pretty(cast_to_variant(arrow_cast('hello world', 'Utf8'))),
+  variant_pretty(cast_to_variant(arrow_cast('hello world', 'Utf8View'))),
+  variant_pretty(cast_to_variant(arrow_cast('hello world', 'LargeUtf8'))),
+  variant_pretty(cast_to_variant(arrow_cast('Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van', 'Utf8'))),
+  variant_pretty(cast_to_variant(arrow_cast('Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van', 'Utf8View'))),
+  variant_pretty(cast_to_variant(arrow_cast('Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van', 'LargeUtf8')));
+----
+ShortString(ShortString("hello world")) ShortString(ShortString("hello world")) ShortString(ShortString("hello world")) String("Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van") String("Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van") String("Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van Alex Dave Van")
+
+# one-arg path: unsigned integer coverage
+query TTTT
+SELECT
+  variant_pretty(cast_to_variant(arrow_cast(8, 'UInt8'))),
+  variant_pretty(cast_to_variant(arrow_cast(16, 'UInt16'))),
+  variant_pretty(cast_to_variant(arrow_cast(32, 'UInt32'))),
+  variant_pretty(cast_to_variant(arrow_cast(64, 'UInt64')));
+----
+Int8(8) Int16(16) Int32(32) Int64(64)
+
+# one-arg path: binary coverage
+query TTTT
+SELECT
+  variant_pretty(cast_to_variant(arrow_cast(X'0a', 'Binary'))),
+  variant_pretty(cast_to_variant(arrow_cast(X'0b', 'LargeBinary'))),
+  variant_pretty(cast_to_variant(arrow_cast(X'0c', 'BinaryView'))),
+  variant_pretty(cast_to_variant(arrow_cast(X'01020304', 'FixedSizeBinary(4)')));
+----
+Binary(0a) Binary(0b) Binary(0c) Binary(01 02 03 04)
+
+# one-arg path: decimal coverage (Decimal32/64/128/256)
+query TTTT
+SELECT
+  variant_pretty(cast_to_variant(arrow_cast(123.45, 'Decimal32(9,2)'))),
+  variant_pretty(cast_to_variant(arrow_cast(123.45, 'Decimal64(18,2)'))),
+  variant_pretty(cast_to_variant(arrow_cast(123.45, 'Decimal128(20,2)'))),
+  variant_pretty(cast_to_variant(arrow_cast(123.45, 'Decimal256(20,2)')));
+----
+Decimal4(VariantDecimal4 { integer: 12345, scale: 2 }) Decimal8(VariantDecimal8 { integer: 12345, scale: 2 }) Decimal16(VariantDecimal16 { integer: 12345, scale: 2 }) Decimal16(VariantDecimal16 { integer: 12345, scale: 2 })
+
+# one-arg path: timestamp coverage (all units, no timezone)
+query TTTT
+SELECT
+  variant_pretty(cast_to_variant(arrow_cast('2024-01-02T03:04:05', 'Timestamp(Second, None)'))),
+  variant_pretty(cast_to_variant(arrow_cast('2024-01-02T03:04:05.123', 'Timestamp(Millisecond, None)'))),
+  variant_pretty(cast_to_variant(arrow_cast('2024-01-02T03:04:05.123456', 'Timestamp(Microsecond, None)'))),
+  variant_pretty(cast_to_variant(arrow_cast('2024-01-02T03:04:05.123456789', 'Timestamp(Nanosecond, None)')));
+----
+TimestampNtzMicros(2024-01-02T03:04:05) TimestampNtzMicros(2024-01-02T03:04:05.123) TimestampNtzMicros(2024-01-02T03:04:05.123456) TimestampNtzNanos(2024-01-02T03:04:05.123456789)
+
+# one-arg path: timestamp coverage (all units, with timezone)
+query TTTT
+SELECT
+  variant_pretty(cast_to_variant(arrow_cast('2024-01-02T03:04:05Z', 'Timestamp(Second, Some("UTC"))'))),
+  variant_pretty(cast_to_variant(arrow_cast('2024-01-02T03:04:05.123Z', 'Timestamp(Millisecond, Some("UTC"))'))),
+  variant_pretty(cast_to_variant(arrow_cast('2024-01-02T03:04:05.123456Z', 'Timestamp(Microsecond, Some("UTC"))'))),
+  variant_pretty(cast_to_variant(arrow_cast('2024-01-02T03:04:05.123456789Z', 'Timestamp(Nanosecond, Some("UTC"))')));
+----
+TimestampMicros(2024-01-02T03:04:05Z) TimestampMicros(2024-01-02T03:04:05.123Z) TimestampMicros(2024-01-02T03:04:05.123456Z) TimestampNanos(2024-01-02T03:04:05.123456789Z)
+
+# one-arg path: date and time coverage
+query TTTTTT
+SELECT
+  variant_pretty(cast_to_variant(arrow_cast('2024-01-02', 'Date32'))),
+  variant_pretty(cast_to_variant(arrow_cast('2024-01-02', 'Date64'))),
+  variant_pretty(cast_to_variant(arrow_cast('01:02:03', 'Time32(Second)'))),
+  variant_pretty(cast_to_variant(arrow_cast('01:02:03.123', 'Time32(Millisecond)'))),
+  variant_pretty(cast_to_variant(arrow_cast('01:02:03.123456', 'Time64(Microsecond)'))),
+  variant_pretty(cast_to_variant(arrow_cast('01:02:03.123456789', 'Time64(Nanosecond)')));
+----
+Date(2024-01-02) Date(2024-01-02) Time(01:02:03) Time(01:02:03.123) Time(01:02:03.123456) Time(01:02:03.123456)
+
+# one-arg path: list coverage (List/LargeList/FixedSizeList)
+query TTT
+SELECT
+  variant_pretty(cast_to_variant(arrow_cast(i, 'List(Int64)'))),
+  variant_pretty(cast_to_variant(arrow_cast(i, 'LargeList(Int64)'))),
+  variant_pretty(cast_to_variant(arrow_cast([i, i + 1, i + 2], 'FixedSizeList(3, Int64)')))
+FROM cast_int_data
+WHERE id = 1;
+----
+[Int64(1)] [Int64(1)] [Int64(1), Int64(2), Int64(3)]
+
+# one-arg path: struct, map, and dictionary coverage
+query TTT
+SELECT
+  variant_to_json(cast_to_variant(named_struct('a', 1, 'b', 'x'))),
+  variant_to_json(cast_to_variant(MAP {'a': 1, 'b': 2})),
+  variant_pretty(cast_to_variant(arrow_cast('foo', 'Dictionary(Int32, Utf8)')));
+----
+{"a":1,"b":"x"} {"a":1,"b":2} ShortString(ShortString("foo"))
+
+# TODO: add coverage when SQL path / dependency behavior allows it
+# - Null input (currently awkward to assert in this file because variant_pretty on scalar null path is not stable)
+# - ListView / LargeListView inputs (DataFusion SQL cannot currently construct these scalar inputs here)
+
+# one-arg path (already Variant): pass-through should be unchanged
+query T
+SELECT variant_pretty(cast_to_variant(json_to_variant('{"name": "norm"}')));
+----
+{"name": ShortString(ShortString("norm"))}
+
+# one-arg path (from_array): Variant array pass-through should be unchanged
+statement ok
+CREATE TABLE cast_variant_array_data (id INT, json_str TEXT) AS VALUES
+  (1, '{"name":"norm"}'),
+  (2, NULL);
+
+query IT
+WITH input AS (
+  SELECT id, json_to_variant(json_str) AS v FROM cast_variant_array_data
+)
+SELECT id, variant_to_json(cast_to_variant(v)) FROM input ORDER BY id;
+----
+1 {"name":"norm"}
+2 NULL
+
+# two-arg path (from_metadata_value)
+# test_scalar_binary_views
+query T
+WITH input AS (
+  SELECT json_to_variant('{"name": "norm"}') AS v
+)
+SELECT variant_pretty(cast_to_variant(v.metadata, v.value)) FROM input;
+----
+{"name": ShortString(ShortString("norm"))}
+
+# test_array_binary_views
+statement ok
+CREATE TABLE cast_json_data (id INT, json_str TEXT) AS VALUES
+  (1, '{"name": "norm"}'),
+  (2, NULL),
+  (3, NULL),
+  (4, '{"id": 1, "parent_id": 0, "child_ids": [2, 3, 4, 5]}');
+
+query IT
+WITH input AS (
+  SELECT id, json_to_variant(json_str) AS v FROM cast_json_data
+)
+SELECT id, variant_to_json(cast_to_variant(v.metadata, v.value)) FROM input ORDER BY id;
+----
+1 {"name":"norm"}
+2 NULL
+3 NULL
+4 {"child_ids":[2,3,4,5],"id":1,"parent_id":0}

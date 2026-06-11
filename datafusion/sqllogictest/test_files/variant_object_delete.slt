@@ -1,0 +1,179 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# tests the variant_object_delete udf
+# this function takes a variant object and a string key,
+# and returns a new variant object with that key removed
+
+# Test 1: Delete a key from a simple object
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    json_to_variant('{"a": 1, "b": 2, "c": 3}'),
+    'b'
+  )
+);
+----
+{"a": Int8(1), "c": Int8(3)}
+
+# Test 2: Delete the only key from an object
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    json_to_variant('{"a": 1}'),
+    'a'
+  )
+);
+----
+{}
+
+# Test 3: Delete a key that doesn't exist (object unchanged)
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    json_to_variant('{"a": 1, "b": 2}'),
+    'c'
+  )
+);
+----
+{"a": Int8(1), "b": Int8(2)}
+
+# Test 4: Delete from an empty object (no-op)
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    json_to_variant('{}'),
+    'a'
+  )
+);
+----
+{}
+
+# Test 5: Delete a key with a nested object value
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    json_to_variant('{"name": "Alice", "address": {"city": "NYC"}}'),
+    'address'
+  )
+);
+----
+{"name": ShortString(ShortString("Alice"))}
+
+# Test 6: Delete a key with an array value
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    json_to_variant('{"name": "Bob", "scores": [95, 87]}'),
+    'scores'
+  )
+);
+----
+{"name": ShortString(ShortString("Bob"))}
+
+# Test 7: Delete a key with a null value
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    json_to_variant('{"a": null, "b": 2}'),
+    'a'
+  )
+);
+----
+{"b": Int8(2)}
+
+# Test 8: Chain multiple deletes
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    variant_object_delete(
+      json_to_variant('{"a": 1, "b": 2, "c": 3}'),
+      'a'
+    ),
+    'c'
+  )
+);
+----
+{"b": Int8(2)}
+
+# Test 9: Delete then insert
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_delete(
+      json_to_variant('{"a": 1, "b": 2}'),
+      'a'
+    ),
+    'c',
+    json_to_variant('3')
+  )
+);
+----
+{"b": Int8(2), "c": Int8(3)}
+
+# Test 10: Insert then delete the same key
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    variant_object_insert(
+      json_to_variant('{"a": 1}'),
+      'b',
+      json_to_variant('2')
+    ),
+    'b'
+  )
+);
+----
+{"a": Int8(1)}
+
+# Test 11: Delete with numeric key name
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    json_to_variant('{"0": "zero", "1": "one"}'),
+    '0'
+  )
+);
+----
+{"1": ShortString(ShortString("one"))}
+
+# Test 12: Delete key from object constructed with variant_object_construct
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    variant_object_construct(
+      'name', json_to_variant('"Alice"'),
+      'age', json_to_variant('30')
+    ),
+    'age'
+  )
+);
+----
+{"name": ShortString(ShortString("Alice"))}
+
+# Test 13: Delete all keys one by one
+query T
+SELECT variant_pretty(
+  variant_object_delete(
+    variant_object_delete(
+      json_to_variant('{"a": 1, "b": 2}'),
+      'a'
+    ),
+    'b'
+  )
+);
+----
+{}

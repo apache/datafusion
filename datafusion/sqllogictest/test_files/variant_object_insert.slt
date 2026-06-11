@@ -1,0 +1,285 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# tests the variant_object_insert udf
+# this function takes a variant object, a string key, and a variant value,
+# and inserts the key-value pair into the object (or updates if key exists)
+
+# Create test data
+statement ok
+CREATE TABLE test_data (id INT, name TEXT, age INT, active BOOL) AS VALUES
+  (1, 'Norm', 50, true),
+  (2, 'Marie', 22, false),
+  (3, 'Joe', 31, true);
+
+# Test 1: Insert a simple string value into an empty object
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    json_to_variant('{}'),
+    'name',
+    json_to_variant('"Alice"')
+  )
+);
+----
+{"name": ShortString(ShortString("Alice"))}
+
+# Test 2: Insert a number into an object with existing fields
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct('name', json_to_variant('"Bob"')),
+    'age',
+    json_to_variant('25')
+  )
+);
+----
+{"age": Int8(25), "name": ShortString(ShortString("Bob"))}
+
+# Test 3: Update an existing key
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct(
+      'name', json_to_variant('"Charlie"'),
+      'age', json_to_variant('30')
+    ),
+    'age',
+    json_to_variant('31')
+  )
+);
+----
+{"age": Int8(31), "name": ShortString(ShortString("Charlie"))}
+
+# Test 4: Insert a boolean value
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct('name', json_to_variant('"David"')),
+    'active',
+    json_to_variant('true')
+  )
+);
+----
+{"active": BooleanTrue, "name": ShortString(ShortString("David"))}
+
+# Test 5: Insert a null value
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct('name', json_to_variant('"Eve"')),
+    'middle_name',
+    json_to_variant('null')
+  )
+);
+----
+{"middle_name": Null, "name": ShortString(ShortString("Eve"))}
+
+# Test 6: Insert a nested object
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct('name', json_to_variant('"Frank"')),
+    'address',
+    json_to_variant('{"city": "NYC", "zip": 10001}')
+  )
+);
+----
+{"address": {"city": ShortString(ShortString("NYC")), "zip": Int16(10001)}, "name": ShortString(ShortString("Frank"))}
+
+# Test 7: Insert an array value
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct('name', json_to_variant('"Grace"')),
+    'scores',
+    json_to_variant('[95, 87, 92]')
+  )
+);
+----
+{"name": ShortString(ShortString("Grace")), "scores": [Int8(95), Int8(87), Int8(92)]}
+
+# Test 8: Insert with numeric key (as string)
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    json_to_variant('{"0": "zero"}'),
+    '1',
+    json_to_variant('"one"')
+  )
+);
+----
+{"0": ShortString(ShortString("zero")), "1": ShortString(ShortString("one"))}
+
+# Test 9: Chain multiple inserts
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_insert(
+      variant_object_construct('a', json_to_variant('1')),
+      'b',
+      json_to_variant('2')
+    ),
+    'c',
+    json_to_variant('3')
+  )
+);
+----
+{"a": Int8(1), "b": Int8(2), "c": Int8(3)}
+
+# Test 10: Insert a complex nested structure
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct('user', json_to_variant('"Henry"')),
+    'metadata',
+    json_to_variant('{"tags": ["admin", "user"], "count": 42}')
+  )
+);
+----
+{"metadata": {"count": Int8(42), "tags": [ShortString(ShortString("admin")), ShortString(ShortString("user"))]}, "user": ShortString(ShortString("Henry"))}
+
+# Test 11: Insert with special characters in key
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    json_to_variant('{}'),
+    'user_name',
+    json_to_variant('"test_user"')
+  )
+);
+----
+{"user_name": ShortString(ShortString("test_user"))}
+
+# Test 12: Insert with special characters in value
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    json_to_variant('{}'),
+    'message',
+    json_to_variant('"hello\nworld"')
+  )
+);
+----
+{"message": ShortString(ShortString("hello\nworld"))}
+
+# Test 13: Insert into object with multiple existing fields
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct(
+      'a', json_to_variant('1'),
+      'b', json_to_variant('2'),
+      'c', json_to_variant('3')
+    ),
+    'd',
+    json_to_variant('4')
+  )
+);
+----
+{"a": Int8(1), "b": Int8(2), "c": Int8(3), "d": Int8(4)}
+
+# Test 14: Update with different type
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct('value', json_to_variant('42')),
+    'value',
+    json_to_variant('"forty-two"')
+  )
+);
+----
+{"value": ShortString(ShortString("forty-two"))}
+
+# Test 15: Insert negative number
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    json_to_variant('{}'),
+    'temperature',
+    json_to_variant('-10')
+  )
+);
+----
+{"temperature": Int8(-10)}
+
+# Test 16: Insert decimal number
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    json_to_variant('{}'),
+    'price',
+    json_to_variant('19.99')
+  )
+);
+----
+{"price": Double(19.99)}
+
+# Test 17: Insert into object with null values
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct('a', json_to_variant('null')),
+    'b',
+    json_to_variant('"value"')
+  )
+);
+----
+{"a": Null, "b": ShortString(ShortString("value"))}
+
+# Test 18: Insert empty array
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    json_to_variant('{}'),
+    'items',
+    json_to_variant('[]')
+  )
+);
+----
+{"items": []}
+
+# Test 19: Insert empty object
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_construct('name', json_to_variant('"test"')),
+    'config',
+    json_to_variant('{}')
+  )
+);
+----
+{"config": {}, "name": ShortString(ShortString("test"))}
+
+# Test 20: Multiple updates to same key
+query T
+SELECT variant_pretty(
+  variant_object_insert(
+    variant_object_insert(
+      variant_object_construct('x', json_to_variant('1')),
+      'x',
+      json_to_variant('2')
+    ),
+    'x',
+    json_to_variant('3')
+  )
+);
+----
+{"x": Int8(3)}
+
+# Cleanup
+statement ok
+DROP TABLE test_data;

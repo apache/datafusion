@@ -42,6 +42,7 @@ workspace = true
 nested_expressions = ["datafusion-functions-nested"]
 # This feature is deprecated. Use the `nested_expressions` feature instead.
 array_expressions = ["nested_expressions"]
+variant_expressions = ["datafusion-functions-variant"]
 # Used to enable the avro format
 avro = ["datafusion-datasource-avro"]
 backtrace = ["datafusion-common/backtrace"]
@@ -57,6 +58,7 @@ crypto_expressions = ["datafusion-functions/crypto_expressions"]
 datetime_expressions = ["datafusion-functions/datetime_expressions"]
 default = [
     "nested_expressions",
+    "variant_expressions",
     "crypto_expressions",
     "datetime_expressions",
     "encoding_expressions",
@@ -133,6 +135,7 @@ datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true, default-features = false, optional = true }
 datafusion-functions-table = { workspace = true }
+datafusion-functions-variant = { workspace = true, default-features = false, optional = true }
 datafusion-functions-window = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }

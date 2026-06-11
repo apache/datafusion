@@ -29,6 +29,8 @@ use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]
 use crate::functions_nested;
+#[cfg(feature = "variant_expressions")]
+use crate::functions_variant;
 use crate::{functions, functions_aggregate, functions_table, functions_window};
 use datafusion_catalog::TableFunction;
 use datafusion_catalog::{MemoryCatalogProvider, MemorySchemaProvider};
@@ -104,11 +106,17 @@ impl SessionStateDefaults {
 
     /// returns the list of default [`ScalarUDF`]s
     pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
-        #[cfg_attr(not(feature = "nested_expressions"), expect(unused_mut))]
+        #[cfg_attr(
+            not(any(feature = "nested_expressions", feature = "variant_expressions")),
+            expect(unused_mut)
+        )]
         let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
 
         #[cfg(feature = "nested_expressions")]
         functions.append(&mut functions_nested::all_default_nested_functions());
+
+        #[cfg(feature = "variant_expressions")]
+        functions.append(&mut functions_variant::all_default_variant_functions());
 
         functions
     }
@@ -159,10 +167,11 @@ impl SessionStateDefaults {
         file_formats
     }
 
-    /// registers all builtin functions - scalar, array and aggregate
+    /// registers all builtin functions - scalar, array, variant, and aggregate
     pub fn register_builtin_functions(state: &mut SessionState) {
         Self::register_scalar_functions(state);
         Self::register_array_functions(state);
+        Self::register_variant_functions(state);
         Self::register_aggregate_functions(state);
     }
 
@@ -178,6 +187,15 @@ impl SessionStateDefaults {
         #[cfg(feature = "nested_expressions")]
         functions_nested::register_all(state)
             .expect("can not register nested expressions");
+    }
+
+    /// registers all the builtin variant functions
+    #[cfg_attr(not(feature = "variant_expressions"), expect(unused_variables))]
+    pub fn register_variant_functions(state: &mut SessionState) {
+        // register crate of variant expressions (if enabled)
+        #[cfg(feature = "variant_expressions")]
+        functions_variant::register_all(state)
+            .expect("can not register variant expressions");
     }
 
     /// registers all the builtin aggregate functions

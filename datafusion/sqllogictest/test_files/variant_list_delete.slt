@@ -1,0 +1,168 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# tests the variant_list_delete udf
+# this function takes a variant list and an integer index,
+# and returns a new variant list with the element at that index removed
+
+# Test 1: Delete the first element from a list
+query T
+SELECT variant_pretty(
+  variant_list_delete(
+    json_to_variant('[1, 2, 3]'),
+    0
+  )
+);
+----
+[Int8(2), Int8(3)]
+
+# Test 2: Delete the last element from a list
+query T
+SELECT variant_pretty(
+  variant_list_delete(
+    json_to_variant('[1, 2, 3]'),
+    2
+  )
+);
+----
+[Int8(1), Int8(2)]
+
+# Test 3: Delete a middle element
+query T
+SELECT variant_pretty(
+  variant_list_delete(
+    json_to_variant('[1, 2, 3]'),
+    1
+  )
+);
+----
+[Int8(1), Int8(3)]
+
+# Test 4: Delete the only element from a single-element list
+query T
+SELECT variant_pretty(
+  variant_list_delete(
+    json_to_variant('[42]'),
+    0
+  )
+);
+----
+[]
+
+# Test 5: Delete with an out-of-bounds index errors
+statement error index 5 oob for list of length 3
+SELECT variant_pretty(
+  variant_list_delete(
+    json_to_variant('[1, 2, 3]'),
+    5
+  )
+);
+
+# Test 6: Delete from an empty list errors
+statement error index 0 oob for list of length 0
+SELECT variant_pretty(
+  variant_list_delete(
+    json_to_variant('[]'),
+    0
+  )
+);
+
+# Test 7: Delete a nested object element
+query T
+SELECT variant_pretty(
+  variant_list_delete(
+    json_to_variant('[{"a": 1}, {"b": 2}, {"c": 3}]'),
+    1
+  )
+);
+----
+[{"a": Int8(1)}, {"c": Int8(3)}]
+
+# Test 8: Delete a nested list element
+query T
+SELECT variant_pretty(
+  variant_list_delete(
+    json_to_variant('[[1, 2], [3, 4], [5, 6]]'),
+    0
+  )
+);
+----
+[[Int8(3), Int8(4)], [Int8(5), Int8(6)]]
+
+# Test 9: Delete a null element
+query T
+SELECT variant_pretty(
+  variant_list_delete(
+    json_to_variant('[null, 1, 2]'),
+    0
+  )
+);
+----
+[Int8(1), Int8(2)]
+
+# Test 10: Delete from a mixed-type list
+query T
+SELECT variant_pretty(
+  variant_list_delete(
+    json_to_variant('[1, "hello", true, null]'),
+    1
+  )
+);
+----
+[Int8(1), BooleanTrue, Null]
+
+# Test 11: Chain multiple deletes
+query T
+SELECT variant_pretty(
+  variant_list_delete(
+    variant_list_delete(
+      json_to_variant('[1, 2, 3, 4]'),
+      0
+    ),
+    0
+  )
+);
+----
+[Int8(3), Int8(4)]
+
+# Test 12: Delete then insert
+query T
+SELECT variant_pretty(
+  variant_list_insert(
+    variant_list_delete(
+      json_to_variant('[1, 2, 3]'),
+      1
+    ),
+    json_to_variant('99')
+  )
+);
+----
+[Int8(1), Int8(3), Int8(99)]
+
+# Test 13: Delete from a list constructed with variant_list_construct
+query T
+SELECT variant_pretty(
+  variant_list_delete(
+    variant_list_construct(
+      json_to_variant('"Alice"'),
+      json_to_variant('"Bob"'),
+      json_to_variant('"Charlie"')
+    ),
+    1
+  )
+);
+----
+[ShortString(ShortString("Alice")), ShortString(ShortString("Charlie"))]

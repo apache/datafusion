@@ -1,0 +1,108 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# tests the variant_object_construct udf
+# this function takes alternating key-value pairs where keys are strings
+# values are variants, and constructs a variant object
+
+
+# Create test data
+statement ok
+CREATE TABLE test_data (id INT, name TEXT, age INT, active BOOL) AS VALUES
+  (1, 'Norm', 50, true),
+  (2, 'Marie', 22, false),
+  (3, 'Joe', 31, true);
+
+# Test 1: Simple object with one key-value pair
+query T
+SELECT variant_pretty(variant_object_construct('name', json_to_variant('"Alice"')));
+----
+{"name": ShortString(ShortString("Alice"))}
+
+# Test 2: Object with multiple fields of different types
+query T
+SELECT variant_pretty(
+  variant_object_construct(
+    'name', json_to_variant('"Alice"'),
+    'age', json_to_variant('30'),
+    'active', json_to_variant('true')
+  )
+);
+----
+{"active": BooleanTrue, "age": Int8(30), "name": ShortString(ShortString("Alice"))}
+
+# Test 3: Object with nested values
+query T
+SELECT variant_pretty(
+  variant_object_construct(
+    'user', json_to_variant('{"name": "Bob", "age": 25}'),
+    'role', json_to_variant('"admin"')
+  )
+);
+----
+{"role": ShortString(ShortString("admin")), "user": {"age": Int8(25), "name": ShortString(ShortString("Bob"))}}
+
+# Test 4: Object with array value
+query T
+SELECT variant_pretty(
+  variant_object_construct(
+    'items', json_to_variant('[1, 2, 3]'),
+    'count', json_to_variant('3')
+  )
+);
+----
+{"count": Int8(3), "items": [Int8(1), Int8(2), Int8(3)]}
+
+# Test 5: Object with null value
+query T
+SELECT variant_pretty(
+  variant_object_construct(
+    'name', json_to_variant('"Charlie"'),
+    'middle_name', json_to_variant('null')
+  )
+);
+----
+{"middle_name": Null, "name": ShortString(ShortString("Charlie"))}
+
+# todo: uncomment when we support array cases
+# # Test 6: Construct objects from table data
+# query T
+# SELECT variant_pretty(
+#   variant_object_construct(
+#     'name', json_to_variant('"' || name || '"'),
+#     'age', json_to_variant(CAST(age AS TEXT)),
+#     'active', json_to_variant(CAST(active AS TEXT))
+#   )
+# ) FROM test_data ORDER BY id;
+# ----
+# {"name": ShortString(ShortString("Alice")), "age": Int32(30), "active": Bool(true)}
+# {"name": ShortString(ShortString("Bob")), "age": Int32(25), "active": Bool(false)}
+# {"name": ShortString(ShortString("Charlie")), "age": Int32(35), "active": Bool(true)}
+
+# Test 7: Object with numeric keys (still must be strings)
+query T
+SELECT variant_pretty(
+  variant_object_construct(
+    '0', json_to_variant('"first"'),
+    '1', json_to_variant('"second"')
+  )
+);
+----
+{"0": ShortString(ShortString("first")), "1": ShortString(ShortString("second"))}
+
+# Cleanup
+statement ok
+DROP TABLE test_data;

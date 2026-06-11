@@ -1,0 +1,143 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# tests the variant_object_keys udf
+# this function takes a variant and an optional path,
+# and returns a list of all keys of the (resolved) object
+
+# Test 1: Get keys from a simple object
+query ?
+SELECT variant_object_keys(json_to_variant('{"a": 1, "b": 2, "c": 3}'));
+----
+[a, b, c]
+
+# Test 2: Get keys from an empty object
+query ?
+SELECT variant_object_keys(json_to_variant('{}'));
+----
+[]
+
+# Test 3: Get keys from a single-key object
+query ?
+SELECT variant_object_keys(json_to_variant('{"name": "Alice"}'));
+----
+[name]
+
+# Test 4: Non-object variant returns null (array)
+query ?
+SELECT variant_object_keys(json_to_variant('[1, 2, 3]'));
+----
+NULL
+
+# Test 5: Non-object variant returns null (string)
+query ?
+SELECT variant_object_keys(json_to_variant('"hello"'));
+----
+NULL
+
+# Test 6: Non-object variant returns null (number)
+query ?
+SELECT variant_object_keys(json_to_variant('42'));
+----
+NULL
+
+# Test 7: Nested object - only top-level keys returned
+query ?
+SELECT variant_object_keys(json_to_variant('{"name": "Alice", "address": {"city": "NYC"}}'));
+----
+[address, name]
+
+# Test 8: Object with numeric string keys
+query ?
+SELECT variant_object_keys(json_to_variant('{"0": "zero", "1": "one"}'));
+----
+[0, 1]
+
+# Test 9: Keys from a constructed variant object
+query ?
+SELECT variant_object_keys(
+  variant_object_construct(
+    'x', json_to_variant('1'),
+    'y', json_to_variant('2')
+  )
+);
+----
+[x, y]
+
+# Test 10: Keys after object insert
+query ?
+SELECT variant_object_keys(
+  variant_object_insert(
+    json_to_variant('{"a": 1}'),
+    'b',
+    json_to_variant('2')
+  )
+);
+----
+[a, b]
+
+# Test 11: Keys after object delete
+query ?
+SELECT variant_object_keys(
+  variant_object_delete(
+    json_to_variant('{"a": 1, "b": 2, "c": 3}'),
+    'b'
+  )
+);
+----
+[a, c]
+
+# Test 12: Variant null returns null
+query ?
+SELECT variant_object_keys(json_to_variant('null'));
+----
+NULL
+
+# Test 13: With path - get keys of nested object
+query ?
+SELECT variant_object_keys(
+  json_to_variant('{"user": {"name": "Alice", "age": 30}}'),
+  'user'
+);
+----
+[age, name]
+
+# Test 14: With path - target is not an object
+query ?
+SELECT variant_object_keys(
+  json_to_variant('{"items": [1, 2, 3]}'),
+  'items'
+);
+----
+NULL
+
+# Test 15: With path - path does not exist
+query ?
+SELECT variant_object_keys(
+  json_to_variant('{"a": 1}'),
+  'nonexistent'
+);
+----
+NULL
+
+# Test 16: With path - deeply nested
+query ?
+SELECT variant_object_keys(
+  json_to_variant('{"a": {"b": {"x": 1, "y": 2}}}'),
+  'a.b'
+);
+----
+[x, y]

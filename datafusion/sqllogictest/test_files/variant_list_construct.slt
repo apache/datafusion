@@ -1,0 +1,155 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# tests the variant_list_construct udf
+# this function takes variant values and constructs a variant list
+
+# Create test data
+statement ok
+CREATE TABLE test_data (id INT, name TEXT, age INT, active BOOL) AS VALUES
+  (1, 'Norm', 50, true),
+  (2, 'Marie', 22, false),
+  (3, 'Joe', 31, true);
+
+# Test 1: Simple list with one element
+query T
+SELECT variant_pretty(variant_list_construct(json_to_variant('"Alice"')));
+----
+[ShortString(ShortString("Alice"))]
+
+# Test 2: List with multiple elements of different types
+query T
+SELECT variant_pretty(
+  variant_list_construct(
+    json_to_variant('"Alice"'),
+    json_to_variant('30'),
+    json_to_variant('true')
+  )
+);
+----
+[ShortString(ShortString("Alice")), Int8(30), BooleanTrue]
+
+# Test 3: List with nested object
+query T
+SELECT variant_pretty(
+  variant_list_construct(
+    json_to_variant('{"name": "Bob", "age": 25}'),
+    json_to_variant('"admin"')
+  )
+);
+----
+[{"age": Int8(25), "name": ShortString(ShortString("Bob"))}, ShortString(ShortString("admin"))]
+
+# Test 4: List with nested array
+query T
+SELECT variant_pretty(
+  variant_list_construct(
+    json_to_variant('[1, 2, 3]'),
+    json_to_variant('5')
+  )
+);
+----
+[[Int8(1), Int8(2), Int8(3)], Int8(5)]
+
+# Test 5: List with null values
+query T
+SELECT variant_pretty(
+  variant_list_construct(
+    json_to_variant('"Charlie"'),
+    json_to_variant('null'),
+    json_to_variant('42')
+  )
+);
+----
+[ShortString(ShortString("Charlie")), Null, Int8(42)]
+
+# Test 6: List with all nulls
+query T
+SELECT variant_pretty(
+  variant_list_construct(
+    json_to_variant('null'),
+    json_to_variant('null')
+  )
+);
+----
+[Null, Null]
+
+# Test 7: List with boolean values
+query T
+SELECT variant_pretty(
+  variant_list_construct(
+    json_to_variant('true'),
+    json_to_variant('false'),
+    json_to_variant('true')
+  )
+);
+----
+[BooleanTrue, BooleanFalse, BooleanTrue]
+
+# Test 8: List with numeric values
+query T
+SELECT variant_pretty(
+  variant_list_construct(
+    json_to_variant('1'),
+    json_to_variant('2.5'),
+    json_to_variant('3'),
+    json_to_variant('-10')
+  )
+);
+----
+[Int8(1), Double(2.5), Int8(3), Int8(-10)]
+
+# Test 9: List with string values
+query T
+SELECT variant_pretty(
+  variant_list_construct(
+    json_to_variant('"first"'),
+    json_to_variant('"second"'),
+    json_to_variant('"third"')
+  )
+);
+----
+[ShortString(ShortString("first")), ShortString(ShortString("second")), ShortString(ShortString("third"))]
+
+# Test 10: List with mixed complex types
+query T
+SELECT variant_pretty(
+  variant_list_construct(
+    json_to_variant('{"key": "value"}'),
+    json_to_variant('[1, 2]'),
+    json_to_variant('"string"'),
+    json_to_variant('123'),
+    json_to_variant('null')
+  )
+);
+----
+[{"key": ShortString(ShortString("value"))}, [Int8(1), Int8(2)], ShortString(ShortString("string")), Int8(123), Null]
+
+# Test 11: List with special characters in strings
+query T
+SELECT variant_pretty(
+  variant_list_construct(
+    json_to_variant('"hello world"'),
+    json_to_variant('"foo\nbar"'),
+    json_to_variant('"test\"quote"')
+  )
+);
+----
+[ShortString(ShortString("hello world")), ShortString(ShortString("foo\nbar")), ShortString(ShortString("test\"quote"))]
+
+# Cleanup
+statement ok
+DROP TABLE test_data;
