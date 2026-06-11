@@ -271,7 +271,9 @@ unsafe extern "C" fn reverse_expr_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_Revers
         match inner.reverse_expr() {
             ReversedUDWF::Identical => FFI_ReversedUDWF::Identical,
             ReversedUDWF::NotSupported => FFI_ReversedUDWF::NotSupported,
-            ReversedUDWF::Reversed(udf) => FFI_ReversedUDWF::Reversed(udf.into()),
+            ReversedUDWF::Reversed(udf) => {
+                FFI_ReversedUDWF::Reversed(Box::new(udf.into()))
+            }
         }
     }
 }
@@ -639,7 +641,7 @@ impl From<&FFI_SortOptions> for SortOptions {
 pub enum FFI_ReversedUDWF {
     Identical,
     NotSupported,
-    Reversed(FFI_WindowUDF),
+    Reversed(Box<FFI_WindowUDF>),
 }
 
 impl From<FFI_ReversedUDWF> for ReversedUDWF {
@@ -648,7 +650,7 @@ impl From<FFI_ReversedUDWF> for ReversedUDWF {
             FFI_ReversedUDWF::Identical => ReversedUDWF::Identical,
             FFI_ReversedUDWF::NotSupported => ReversedUDWF::NotSupported,
             FFI_ReversedUDWF::Reversed(ffi_udf) => {
-                let udf_impl: Arc<dyn WindowUDFImpl> = (&ffi_udf).into();
+                let udf_impl: Arc<dyn WindowUDFImpl> = (&*ffi_udf).into();
                 ReversedUDWF::Reversed(Arc::new(WindowUDF::new_from_shared_impl(
                     udf_impl,
                 )))
