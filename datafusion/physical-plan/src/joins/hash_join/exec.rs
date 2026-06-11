@@ -1461,6 +1461,9 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
                     array_map_created_count,
+                    // with_null_aware_mark_state: the extra scope maps + null
+                    // bitmap are only built for correlated null-aware LeftMark
+                    // (`on[1..]` are correlation scope keys).
                     self.null_aware
                         && self.join_type == JoinType::LeftMark
                         && on_left.len() > 1,
@@ -1484,6 +1487,9 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
                     array_map_created_count,
+                    // with_null_aware_mark_state: the extra scope maps + null
+                    // bitmap are only built for correlated null-aware LeftMark
+                    // (`on[1..]` are correlation scope keys).
                     self.null_aware
                         && self.join_type == JoinType::LeftMark
                         && on_left.len() > 1,
