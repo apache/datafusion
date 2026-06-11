@@ -24,7 +24,7 @@ use crate::strings::{
     StringViewArrayBuilder, append_view,
 };
 use arrow::array::{
-    Array, ArrayRef, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
     StringViewArray, new_null_array,
 };
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
@@ -386,6 +386,21 @@ fn case_conversion(
                 }
 
                 Ok(ColumnarValue::Array(Arc::new(builder.finish(nulls)?)))
+            }
+            DataType::Dictionary(_, _) => {
+                let dict = array.as_any_dictionary();
+                let values = dict.values();
+                let converted = case_conversion(
+                    &[ColumnarValue::Array(Arc::clone(values))],
+                    lower,
+                    name,
+                )?;
+                match converted {
+                    ColumnarValue::Array(new_values) => {
+                        Ok(ColumnarValue::Array(dict.with_values(new_values)))
+                    }
+                    _ => unreachable!("Array input should produce Array output"),
+                }
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },

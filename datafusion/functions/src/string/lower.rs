@@ -91,7 +91,9 @@ impl ScalarUDFImpl for LowerFunc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, ArrayRef, StringArray, StringViewArray};
+    use arrow::array::{
+        Array, ArrayRef, DictionaryArray, StringArray, StringViewArray, UInt8Array,
+    };
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
@@ -368,6 +370,24 @@ mod tests {
         // The slice's addressed bytes are "HELLO" + "WORLD" = 10; the ASCII
         // fast path must produce a tight output buffer (not the parent's).
         assert_eq!(result_sa.value_data().len(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dict() -> Result<()> {
+        let input = Arc::new(DictionaryArray::new(
+            UInt8Array::from_iter_values([0, 1, 1, 0, 1, 0]),
+            Arc::new(StringArray::from_iter_values(["A", "b"])),
+        ));
+
+        let result = invoke_lower(input)?;
+
+        let expected = DictionaryArray::new(
+            UInt8Array::from_iter_values([0, 1, 1, 0, 1, 0]),
+            Arc::new(StringArray::from_iter_values(["a", "b"])),
+        );
+
+        assert_eq!(result.as_ref(), &expected);
         Ok(())
     }
 }
