@@ -1589,6 +1589,9 @@ impl ExecutionPlan for HashJoinExec {
                     self.null_equality,
                     self.null_aware && self.join_type == JoinType::RightAnti,
                     array_map_created_count,
+                    // with_null_aware_mark_state: the extra scope maps + null
+                    // bitmap are only built for correlated null-aware LeftMark
+                    // (`on[1..]` are correlation scope keys).
                     self.null_aware
                         && self.join_type == JoinType::LeftMark
                         && on_left.len() > 1,
@@ -1613,6 +1616,9 @@ impl ExecutionPlan for HashJoinExec {
                     self.null_equality,
                     false,
                     array_map_created_count,
+                    // with_null_aware_mark_state: the extra scope maps + null
+                    // bitmap are only built for correlated null-aware LeftMark
+                    // (`on[1..]` are correlation scope keys).
                     self.null_aware
                         && self.join_type == JoinType::LeftMark
                         && on_left.len() > 1,
