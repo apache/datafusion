@@ -338,13 +338,13 @@ where c_acctbal < (
 logical_plan
 01)Sort: customer.c_custkey ASC NULLS LAST
 02)--Projection: customer.c_custkey
-03)----Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.sum(orders.o_totalprice)
+03)----LeftSemi Join: customer.c_custkey = __scalar_sq_1.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.sum(orders.o_totalprice)
 04)------TableScan: customer projection=[c_custkey, c_acctbal]
 05)------SubqueryAlias: __scalar_sq_1
 06)--------Projection: sum(orders.o_totalprice), orders.o_custkey
 07)----------Aggregate: groupBy=[[orders.o_custkey]], aggr=[[sum(orders.o_totalprice)]]
 08)------------Projection: orders.o_custkey, orders.o_totalprice
-09)--------------Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.price
+09)--------------LeftSemi Join: orders.o_orderkey = __scalar_sq_2.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.price
 10)----------------TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
 11)----------------SubqueryAlias: __scalar_sq_2
 12)------------------Projection: sum(lineitem.l_extendedprice) AS price, lineitem.l_orderkey
@@ -555,7 +555,7 @@ logical_plan
 02)--TableScan: t0 projection=[t0_id, t0_name]
 03)--SubqueryAlias: __correlated_sq_2
 04)----Projection: t1.t1_name
-05)------Inner Join: t1.t1_id = t2.t2_id
+05)------LeftSemi Join: t1.t1_id = t2.t2_id
 06)--------TableScan: t1 projection=[t1_id, t1_name]
 07)--------TableScan: t2 projection=[t2_id]
 
@@ -568,7 +568,7 @@ logical_plan
 02)--TableScan: t0 projection=[t0_id, t0_name]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: t2.t2_name
-05)------Inner Join: t1.t1_id = t2.t2_id
+05)------RightSemi Join: t1.t1_id = t2.t2_id
 06)--------TableScan: t1 projection=[t1_id]
 07)--------SubqueryAlias: t2
 08)----------TableScan: t2 projection=[t2_id, t2_name]
@@ -1675,7 +1675,7 @@ where c_acctbal < (
 logical_plan
 01)Sort: customer.c_custkey ASC NULLS LAST
 02)--Projection: customer.c_custkey
-03)----Inner Join: customer.c_custkey = __scalar_sq_2.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_2.sum(orders.o_totalprice)
+03)----LeftSemi Join: customer.c_custkey = __scalar_sq_2.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_2.sum(orders.o_totalprice)
 04)------TableScan: customer projection=[c_custkey, c_acctbal]
 05)------SubqueryAlias: __scalar_sq_2
 06)--------Projection: sum(orders.o_totalprice), orders.o_custkey
@@ -1701,7 +1701,7 @@ where c_acctbal < (
 logical_plan
 01)Sort: customer.c_custkey ASC NULLS LAST
 02)--Projection: customer.c_custkey
-03)----Inner Join: customer.c_custkey = __scalar_sq_2.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_2.sum(orders.o_totalprice)
+03)----LeftSemi Join: customer.c_custkey = __scalar_sq_2.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_2.sum(orders.o_totalprice)
 04)------TableScan: customer projection=[c_custkey, c_acctbal]
 05)------SubqueryAlias: __scalar_sq_2
 06)--------Projection: sum(orders.o_totalprice), orders.o_custkey
@@ -1746,7 +1746,7 @@ WHERE e1.salary > (
 ----
 logical_plan
 01)Projection: e1.employee_name, e1.salary
-02)--Inner Join: e1.dept_id = __scalar_sq_1.dept_id Filter: CAST(e1.salary AS Decimal128(38, 14)) > __scalar_sq_1.avg(e2.salary)
+02)--LeftSemi Join: e1.dept_id = __scalar_sq_1.dept_id Filter: CAST(e1.salary AS Decimal128(38, 14)) > __scalar_sq_1.avg(e2.salary)
 03)----SubqueryAlias: e1
 04)------TableScan: employees projection=[employee_name, dept_id, salary]
 05)----SubqueryAlias: __scalar_sq_1
