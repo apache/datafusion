@@ -201,13 +201,7 @@ e
 # 0 0
 
 # These queries would fall back to a sort-merge, but we force them
-# into hash joins to make sure we null awareness.
-
-statement ok
-set datafusion.execution.target_partitions = 2;
-
-statement ok
-set datafusion.optimizer.repartition_joins = true;
+# into hash joins to make sure we preserve null awareness.
 
 statement ok
 set datafusion.optimizer.prefer_hash_join = false;

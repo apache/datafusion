@@ -411,38 +411,29 @@ fn build_join(
             replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
         })?;
 
-    let (join_filter, aliased_in_predicate) =
-        match (join_filter_opt, in_predicate_opt.cloned()) {
-            (
-                Some(join_filter),
-                Some(Expr::BinaryExpr(BinaryExpr {
-                    left,
-                    op: Operator::Eq,
-                    right,
-                })),
-            ) => {
-                let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
-                let in_predicate =
-                    Expr::eq(left.deref().clone(), Expr::Column(right_col));
-                (in_predicate.clone().and(join_filter), Some(in_predicate))
-            }
-            (Some(join_filter), _) => (join_filter, None),
-            (
-                _,
-                Some(Expr::BinaryExpr(BinaryExpr {
-                    left,
-                    op: Operator::Eq,
-                    right,
-                })),
-            ) => {
-                let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
-                let in_predicate =
-                    Expr::eq(left.deref().clone(), Expr::Column(right_col));
-                (in_predicate.clone(), Some(in_predicate))
-            }
-            (None, None) => (lit(true), None),
-            _ => return Ok(None),
-        };
+    // Rewrite the scalar in-predicate's right side to reference the aliased
+    // subquery output (e.g. `outer.id = __correlated_sq_1.id`). `None` when
+    // there is no in-predicate or it is not a plain equality.
+    let aliased_in_predicate = match in_predicate_opt {
+        Some(Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Eq,
+            right,
+        })) => {
+            let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
+            Some(Expr::eq(left.deref().clone(), Expr::Column(right_col)))
+        }
+        _ => None,
+    };
+
+    let join_filter = match (join_filter_opt, &aliased_in_predicate) {
+        (Some(join_filter), Some(in_predicate)) => in_predicate.clone().and(join_filter),
+        (Some(join_filter), None) => join_filter,
+        (None, Some(in_predicate)) => in_predicate.clone(),
+        // A non-equality in-predicate cannot become a join filter on its own.
+        (None, None) if in_predicate_opt.is_some() => return Ok(None),
+        (None, None) => lit(true),
+    };
 
     if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
         let right_schema = sub_query_alias.schema();
@@ -477,34 +468,31 @@ fn build_join(
             sub_query_alias.clone()
         };
 
-        let mark_filter_is_hashable_only =
-            if join_type == JoinType::LeftMark && in_predicate_opt.is_some() {
-                let (_, residual_filter) = split_eq_and_noneq_join_predicate(
-                    join_filter.clone(),
-                    left.schema(),
-                    right_projected.schema(),
-                )?;
-                residual_filter.is_none()
-            } else {
-                false
-            };
-
         // For scalar NOT IN mark joins, propagate null-aware semantics into the
         // nullable mark column when the predicate can be implemented by hash keys.
         // Non-equality correlated filters stay on the legacy path because hash join
         // execution cannot mark UNKNOWN candidates for residual predicates.
         // Only the in-predicate's value keys decide nullability: NULLs in
         // correlation keys can never make `IN`/`NOT IN` evaluate to UNKNOWN.
-        let null_aware = join_type == JoinType::LeftMark
-            && mark_filter_is_hashable_only
-            && match &aliased_in_predicate {
-                Some(in_predicate) => in_predicate_values_may_be_null(
-                    in_predicate,
-                    left.schema(),
-                    right_projected.schema(),
-                )?,
-                None => false,
-            };
+        let null_aware = if join_type == JoinType::LeftMark && in_predicate_opt.is_some()
+        {
+            let (_, residual_filter) = split_eq_and_noneq_join_predicate(
+                join_filter.clone(),
+                left.schema(),
+                right_projected.schema(),
+            )?;
+            residual_filter.is_none()
+                && match &aliased_in_predicate {
+                    Some(in_predicate) => in_predicate_values_may_be_null(
+                        in_predicate,
+                        left.schema(),
+                        right_projected.schema(),
+                    )?,
+                    None => false,
+                }
+        } else {
+            false
+        };
 
         let new_plan = LogicalPlanBuilder::from(left.clone())
             .join_detailed_with_options(
@@ -643,26 +631,19 @@ mod tests {
         table_scan(Some(name), &schema, None)?.build()
     }
 
-    fn has_null_aware_left_mark_join(plan: &LogicalPlan) -> bool {
+    fn has_left_mark_join_with_null_aware(
+        plan: &LogicalPlan,
+        expected_null_aware: bool,
+    ) -> bool {
         if let LogicalPlan::Join(join) = plan
             && join.join_type == JoinType::LeftMark
         {
-            return join.null_aware;
-        }
-
-        plan.inputs().into_iter().any(has_null_aware_left_mark_join)
-    }
-
-    fn has_non_null_aware_left_mark_join(plan: &LogicalPlan) -> bool {
-        if let LogicalPlan::Join(join) = plan
-            && join.join_type == JoinType::LeftMark
-        {
-            return !join.null_aware;
+            return join.null_aware == expected_null_aware;
         }
 
         plan.inputs()
             .into_iter()
-            .any(has_non_null_aware_left_mark_join)
+            .any(|input| has_left_mark_join_with_null_aware(input, expected_null_aware))
     }
 
     fn optimize_with_decorrelate(plan: LogicalPlan) -> Result<LogicalPlan> {
@@ -1322,7 +1303,7 @@ mod tests {
 
         let optimized = optimize_with_decorrelate(plan)?;
         assert!(
-            has_null_aware_left_mark_join(&optimized),
+            has_left_mark_join_with_null_aware(&optimized, true),
             "{}",
             optimized.display_indent_schema()
         );
@@ -1350,7 +1331,7 @@ mod tests {
 
         let optimized = optimize_with_decorrelate(plan)?;
         assert!(
-            has_non_null_aware_left_mark_join(&optimized),
+            has_left_mark_join_with_null_aware(&optimized, false),
             "{}",
             optimized.display_indent_schema()
         );
@@ -1387,7 +1368,7 @@ mod tests {
 
         let optimized = optimize_with_decorrelate(plan)?;
         assert!(
-            has_non_null_aware_left_mark_join(&optimized),
+            has_left_mark_join_with_null_aware(&optimized, false),
             "{}",
             optimized.display_indent_schema()
         );
