@@ -2388,14 +2388,8 @@ mod tests {
         )
     }
 
-    // Regression test for https://github.com/apache/datafusion/issues/22477
-    // `= ANY` / `<> ALL` decorrelate into several stacked LeftMark joins whose
-    // (pushed-down) filters reference no right column. OptimizeProjections must
-    // not prune each mark join's right child to zero columns: a zero-column
-    // child has no table reference, so `mark_field` would emit an unqualified
-    // `mark` and the stacked marks would collide on the duplicate bare name.
-    // Here each mark stays qualified (`__correlated_sq_N.mark`) and the plan
-    // optimizes without error.
+    // Stacked filter-less LeftMark joins (from `= ANY` / `<> ALL`) must keep
+    // each `mark` qualified so they don't collide.
     #[test]
     fn optimize_projections_stacked_mark_joins_keep_qualified_mark() -> Result<()> {
         let person = test_table_scan_with_name("person")?;
@@ -2407,9 +2401,6 @@ mod tests {
                 .build()
         };
 
-        // Three stacked LeftMark joins with trivially-`true` filters (the
-        // filter-less shape left behind by push_down_filter), feeding a filter
-        // that references all three marks.
         let plan = LogicalPlanBuilder::from(person)
             .join_on(
                 aliased_scan("s1", "__correlated_sq_1")?,

@@ -1713,17 +1713,11 @@ logical_plan
 21)----------Projection: column1 AS v
 22)------------Values: (Int64(5)), (Int64(NULL))
 
-# Regression test for https://github.com/apache/datafusion/issues/22477
-# `= ANY` / `<> ALL` over the SAME table decorrelate into several stacked
-# LeftMark joins. After push_down_filter the join filters reference no right
-# column, so the mark joins are filter-less. optimize_projections must not prune
-# each mark join's right child to zero columns (which would make the synthetic
-# `mark` unqualified and collide across the stack). Previously failed planning
-# with "Schema contains duplicate unqualified field name mark".
+# same-table `= ANY` / `<> ALL` must plan without
+# "duplicate unqualified field name mark".
 statement ok
 create table set_cmp_self(id int, age int) as values (1, 20), (2, 30), (3, 40);
 
-# every row's age is in {20, 30, 40}, so `= ANY` holds for all rows
 query I rowsort
 select id from set_cmp_self where age = any(select age from set_cmp_self);
 ----
@@ -1731,7 +1725,6 @@ select id from set_cmp_self where age = any(select age from set_cmp_self);
 2
 3
 
-# each row's age equals itself in the set, so `<> ALL` is false for every row
 query I
 select id from set_cmp_self where age <> all(select age from set_cmp_self);
 ----
