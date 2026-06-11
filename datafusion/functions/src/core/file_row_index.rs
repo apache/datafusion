@@ -19,7 +19,7 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, exec_err};
 use datafusion_doc::Documentation;
 use datafusion_expr::{
     ColumnarValue, ExpressionPlacement, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -30,8 +30,8 @@ use datafusion_macros::user_doc;
 /// Scalar UDF implementation for `file_row_index()`.
 ///
 /// File sources that can expose per-file row indexes rewrite this placeholder
-/// function into a source-provided physical expression. Its fallback
-/// evaluation returns NULL because there is no file context outside a scan.
+/// function into a source-provided physical expression. Direct evaluation
+/// returns an error because there is no file context outside a scan.
 #[user_doc(
     doc_section(label = "Other Functions"),
     description = r#"Returns the zero-based row offset within the source file
@@ -40,8 +40,8 @@ that produced the current row.
 The value is scoped to one file, so rows from different files in the same scan
 can have the same row index. This function is intended to be rewritten at
 file-scan time. If the input file is not known (for example, if this function
-is evaluated outside a file scan, or was not pushed down into one), this
-function returns NULL.
+is evaluated outside a file scan, or was not pushed down into one), direct
+evaluation returns an error.
 "#,
     syntax_example = "file_row_index()",
     sql_example = r#"```sql
@@ -83,7 +83,7 @@ impl ScalarUDFImpl for FileRowIndexFunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [] = take_function_args(self.name(), args.args)?;
-        Ok(ColumnarValue::Scalar(ScalarValue::Int64(None)))
+        exec_err!("file_row_index() is source dependent and cannot be evaluated directly")
     }
 
     fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {

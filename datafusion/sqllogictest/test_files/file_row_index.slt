@@ -114,12 +114,26 @@ SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
 
-# Without the rewrite in ParquetSource, `file_row_index()` is just NULL
+# Without the rewrite in ParquetSource, `file_row_index()` errors because it
+# depends on file-source context
 
-query I
+query error file_row_index\(\) is source dependent and cannot be evaluated directly
 SELECT file_row_index()
-----
-NULL
+
+# Testing pushdown over a source that doesn't support `file_row_index()`.
+
+statement ok
+COPY  (VALUES (10), (20), (30), (40), (50))
+TO 'test_files/scratch/file_row_index/csv_table/data.csv'
+STORED AS CSV;
+
+statement ok
+CREATE EXTERNAL TABLE csv_table(column1 int)
+STORED AS CSV
+LOCATION 'test_files/scratch/file_row_index/csv_table/data.csv';
+
+query error file_row_index\(\) is source dependent and cannot be evaluated directly
+SELECT *, file_row_index() FROM csv_table;
 
 # Testing a table with two files.
 
@@ -152,3 +166,6 @@ DROP TABLE parquet_two_files;
 
 statement ok
 DROP TABLE parquet_table;
+
+statement ok
+DROP TABLE csv_table;

@@ -679,6 +679,8 @@ impl FileSource for ParquetSource {
     ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
         let mut source = self.clone();
 
+        // If there's no reference to `FileRowIndexFunc` in the projection, we can just merge
+        // both projections as-is, there's no need to modify the projection first.
         if !projection.iter().any(|projection_expr| {
             expr_references_scalar_udf::<FileRowIndexFunc>(&projection_expr.expr)
         }) {
@@ -1014,9 +1016,14 @@ impl FileSource for ParquetSource {
     }
 }
 
+/// Returns the a [`TableSchema`] containing a [`RowNumber`] virtual column and a [`Column`] expression referencing its row index column.
+/// The expression is then merged into a projection.
+///
+/// - If the schema already has a virtual column with the [`RowNumber`] type, it returns the schema unchanged.
+/// - If the schema doesn't have the appropriate virtual column, it returns a modified schema with the virtual column appended to it.
 fn table_schema_with_row_index_col(table_schema: &TableSchema) -> (TableSchema, Column) {
-    let virtual_offset = table_schema.file_schema().fields().len()
-        + table_schema.table_partition_cols().len();
+    // If we can find a virtual column with the `RowNumber` type, we just return the schema
+    // and create the appropriate `column` we're going to use
     if let Some((idx, field)) =
         table_schema
             .virtual_columns()
@@ -1028,6 +1035,9 @@ fn table_schema_with_row_index_col(table_schema: &TableSchema) -> (TableSchema, 
                     .is_some_and(|name| name == RowNumber::NAME)
             })
     {
+        let virtual_offset = table_schema.file_schema().fields().len()
+            + table_schema.table_partition_cols().len();
+
         return (
             table_schema.clone(),
             Column::new(field.name(), virtual_offset + idx),

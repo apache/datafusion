@@ -110,7 +110,7 @@ pub fn expr_references_scalar_udf<T: ScalarUDFImpl>(
 /// The rewrite matches the concrete [`ScalarUDFImpl`] type rather than the
 /// function name. `replacement` is called with each matching
 /// [`ScalarFunctionExpr`] after its children have been rewritten.
-pub fn rewrite_scalar_udf<T, F>(
+fn rewrite_scalar_udf<T, F>(
     expr: Arc<dyn PhysicalExpr>,
     mut replacement: F,
 ) -> Result<Arc<dyn PhysicalExpr>>
@@ -156,6 +156,10 @@ pub fn rewrite_file_row_index_expr(
 /// Rewrite `file_row_index()` in a pushed projection to read from a
 /// source-provided row-index column.
 ///
+///
+/// For example if `row_index_column` is `__datafusion_row_idx` this function rewrites all
+/// instances of `file_row_index()` to `__datafusion_row_index` column references.
+///
 /// `base_projection` is the current projection already pushed into a source.
 /// The row-index source column is appended to that base projection if it is not
 /// already present. `projection` is rewritten to read from the projected
@@ -166,8 +170,11 @@ pub fn rewrite_file_row_index_projection(
     row_index_col: &Column,
 ) -> Result<ProjectionExprs> {
     let mut base_exprs = base_projection.as_ref().to_vec();
-    let row_index_projection_idx = row_index_projection_idx(&base_exprs, row_index_col);
-    if row_index_projection_idx == base_exprs.len() {
+    let row_index_projection_idx =
+        base_projection.projected_column_position(row_index_col);
+
+    // If the column doesn't exist in the projection yet
+    if row_index_projection_idx.is_none() {
         base_exprs.push(ProjectionExpr {
             expr: Arc::new(row_index_col.clone()),
             alias: row_index_col.name().to_owned(),
@@ -175,25 +182,14 @@ pub fn rewrite_file_row_index_projection(
     }
 
     let rewritten_projection = projection.clone().try_map_exprs(|expr| {
-        rewrite_file_row_index_expr(expr, row_index_col.name(), row_index_projection_idx)
+        rewrite_file_row_index_expr(
+            expr,
+            row_index_col.name(),
+            row_index_projection_idx.unwrap_or(base_exprs.len() - 1),
+        )
     })?;
 
     ProjectionExprs::new(base_exprs).try_merge(&rewritten_projection)
-}
-
-fn row_index_projection_idx(
-    projection: &[ProjectionExpr],
-    row_index_col: &Column,
-) -> usize {
-    projection
-        .iter()
-        .position(|projection| {
-            projection
-                .expr
-                .downcast_ref::<Column>()
-                .is_some_and(|column| column == row_index_col)
-        })
-        .unwrap_or(projection.len())
 }
 
 /// Trait for adapting [`PhysicalExpr`] expressions to match a target schema.

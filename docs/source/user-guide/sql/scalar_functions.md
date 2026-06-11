@@ -5894,8 +5894,8 @@ that produced the current row.
 The value is scoped to one file, so rows from different files in the same scan
 can have the same row index. This function is intended to be rewritten at
 file-scan time. If the input file is not known (for example, if this function
-is evaluated outside a file scan, or was not pushed down into one), this
-function returns NULL.
+is evaluated outside a file scan, or was not pushed down into one), direct
+evaluation returns an error.
 
 ```sql
 file_row_index()

@@ -725,6 +725,60 @@ impl ProjectionExprs {
         stats.column_statistics = column_statistics;
         Ok(stats)
     }
+
+    /// Returns the output position of `column` if this projection contains it.
+    ///
+    /// This only matches projection expressions that are exactly [`Column`] expressions.
+    /// Computed expressions, even if they reference `column`, do not match. The
+    /// comparison uses [`Column`] equality, so both the name and index must match.
+    /// If the same column appears more than once, this returns the first matching
+    /// position.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use datafusion_common::ScalarValue;
+    /// use datafusion_physical_expr::expressions::{Column, Literal};
+    /// use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+    /// use std::sync::Arc;
+    ///
+    /// let projection = ProjectionExprs::new([
+    ///     ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+    ///     ProjectionExpr::new(
+    ///         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+    ///         "answer",
+    ///     ),
+    ///     ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+    /// ]);
+    ///
+    /// assert_eq!(
+    ///     projection.projected_column_position(&Column::new("b", 1)),
+    ///     Some(0)
+    /// );
+    /// assert_eq!(
+    ///     projection.projected_column_position(&Column::new("a", 0)),
+    ///     Some(2)
+    /// );
+    ///
+    /// // The literal projection is not a Column expression.
+    /// assert_eq!(
+    ///     projection.projected_column_position(&Column::new("answer", 1)),
+    ///     None
+    /// );
+    ///
+    /// // Columns not present in the projection also return None.
+    /// assert_eq!(
+    ///     projection.projected_column_position(&Column::new("c", 2)),
+    ///     None
+    /// );
+    /// ```
+    pub fn projected_column_position(&self, column: &Column) -> Option<usize> {
+        self.iter().position(|expr| {
+            expr.expr
+                .downcast_ref::<Column>()
+                .is_some_and(|projected| projected == column)
+        })
+    }
 }
 
 /// Propagate column statistics through CAST projections. Other expressions
@@ -2210,6 +2264,43 @@ pub(crate) mod tests {
         let field_1 = Field::new("col1", DataType::Utf8, false);
         let field_2 = Field::new("col2", DataType::Float32, false);
         Schema::new(vec![field_0, field_1, field_2])
+    }
+
+    #[test]
+    fn test_projected_column_position_returns_output_position() {
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(Arc::new(Column::new("col2", 2)), "col2"),
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "col0"),
+        ]);
+
+        assert_eq!(
+            projection.projected_column_position(&Column::new("col2", 2)),
+            Some(0)
+        );
+        assert_eq!(
+            projection.projected_column_position(&Column::new("col0", 0)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn test_projected_column_position_returns_none_for_non_column_or_missing() {
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(
+                Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+                "col1",
+            ),
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "col0"),
+        ]);
+
+        assert_eq!(
+            projection.projected_column_position(&Column::new("col1", 1)),
+            None
+        );
+        assert_eq!(
+            projection.projected_column_position(&Column::new("col2", 2)),
+            None
+        );
     }
 
     #[test]
