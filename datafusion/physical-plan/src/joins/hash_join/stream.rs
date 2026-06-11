@@ -1064,7 +1064,7 @@ impl HashJoinStream {
                     .load(Ordering::Relaxed);
                 let build_key_column = &build_side.left_data.values()[0];
                 let null_indices_bitmap =
-                    if build_side.left_data.null_aware_mark_scope_map().is_some() {
+                    if build_side.left_data.null_aware_state().is_some() {
                         Some(build_side.left_data.null_indices_bitmap().lock())
                     } else {
                         None
@@ -1112,8 +1112,8 @@ impl HashJoinStream {
 /// Records which build rows of a correlated null-aware `LeftMark` join are
 /// UNKNOWN candidates for this probe batch.
 ///
-/// Key layout (consumed positionally): index 0 is the `NOT IN` value key;
-/// indices 1..N are the correlation scope keys. A build row's mark must be
+/// Key layout: `on[0]` is the `NOT IN` value key, `on[1..]` the correlation
+/// scope keys (see `HashJoinExec::null_aware`). A build row's mark must be
 /// NULL (SQL UNKNOWN) instead of FALSE when it is unmatched and either:
 /// 1. its value key is NULL and any probe row shares its correlation scope, or
 /// 2. some probe row in its correlation scope has a NULL value key.
@@ -1133,7 +1133,7 @@ fn mark_null_candidates_for_probe_batch(
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
 ) -> Result<()> {
-    let Some(scope_map) = build_side.left_data.null_aware_mark_scope_map() else {
+    let Some(null_aware_state) = build_side.left_data.null_aware_state() else {
         return Ok(());
     };
 
@@ -1155,7 +1155,7 @@ fn mark_null_candidates_for_probe_batch(
     let build_scope_values = &build_side.left_data.values()[1..];
     let probe_scope_values = &state.values[1..];
 
-    let null_value_scope_map = build_side.left_data.null_value_scope_map();
+    let null_value_scope_map = null_aware_state.null_value_scope_map.as_ref();
     let probe_has_null_values = probe_value_key.null_count() > 0;
     if null_value_scope_map.is_none() && !probe_has_null_values {
         return Ok(());
@@ -1200,7 +1200,7 @@ fn mark_null_candidates_for_probe_batch(
         create_hashes(&probe_null_scope_values, random_state, hashes_buffer)?;
 
         scan_scope_matches_into_bitmap(
-            scope_map,
+            null_aware_state.scope_map.as_ref(),
             build_scope_values,
             &probe_null_scope_values,
             hashes_buffer,
