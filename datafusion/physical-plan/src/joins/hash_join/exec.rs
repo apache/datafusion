@@ -66,7 +66,7 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{ArrayRef, BooleanBufferBuilder};
+use arrow::array::{ArrayRef, BooleanBufferBuilder, UInt64Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -89,7 +89,7 @@ use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, l
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use datafusion_common::hash_utils::RandomState;
+use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
@@ -186,6 +186,26 @@ fn try_create_array_map(
     Ok(Some((array_map, batch, left_values)))
 }
 
+/// Correlation-scope hash map over only the build rows whose scalar `NOT IN`
+/// value key is NULL, used by correlated null-aware `LeftMark` joins.
+///
+/// Such rows produce a NULL (UNKNOWN) mark whenever *any* probe row shares
+/// their correlation scope, so every probe row must be tested against them.
+/// Restricting this map to the NULL-valued build rows keeps that lookup
+/// proportional to the number of NULLs instead of enumerating every scope
+/// match of every probe row.
+pub(super) struct NullValueScopeMap {
+    /// Hash table keyed by the correlation scope values of the NULL-valued
+    /// build rows. Stored positions index into `scope_values`/`build_indices`,
+    /// not the full build batch.
+    pub(super) map: Box<dyn JoinHashMapType>,
+    /// Correlation scope key values of the NULL-valued build rows.
+    pub(super) scope_values: Vec<ArrayRef>,
+    /// Maps positions in `map`/`scope_values` back to row indices in the full
+    /// build batch.
+    pub(super) build_indices: UInt64Array,
+}
+
 /// HashTable and input data for the left (build side) of a join
 pub(super) struct JoinLeftData {
     /// The hash table with indices into `batch`
@@ -194,8 +214,14 @@ pub(super) struct JoinLeftData {
     /// Hash table over correlated scope keys for scalar null-aware mark joins.
     ///
     /// For null-aware `LeftMark`, key 0 is the scalar `NOT IN` value key and
-    /// keys 1..N are correlated equality scope keys.
-    null_aware_mark_scope_map: Option<Arc<Map>>,
+    /// keys 1..N are correlated equality scope keys. This map covers all build
+    /// rows and is probed only with NULL-valued probe rows; the complementary
+    /// direction uses `null_value_scope_map`.
+    null_aware_mark_scope_map: Option<Box<dyn JoinHashMapType>>,
+    /// Scope map restricted to the build rows whose value key is NULL (see
+    /// [`NullValueScopeMap`]). `None` when the build side has no NULL value
+    /// keys.
+    null_value_scope_map: Option<NullValueScopeMap>,
     /// The input rows for the build side
     batch: RecordBatch,
     /// The build side on expressions values
@@ -232,8 +258,12 @@ impl JoinLeftData {
         &self.map
     }
 
-    pub(super) fn null_aware_mark_scope_map(&self) -> Option<&Map> {
+    pub(super) fn null_aware_mark_scope_map(&self) -> Option<&dyn JoinHashMapType> {
         self.null_aware_mark_scope_map.as_deref()
+    }
+
+    pub(super) fn null_value_scope_map(&self) -> Option<&NullValueScopeMap> {
+        self.null_value_scope_map.as_ref()
     }
 
     /// returns a reference to the build side batch
@@ -2003,7 +2033,7 @@ fn new_join_hashmap(
 /// * `probe_threads_count` - Number of threads that will probe this hash table
 /// * `should_compute_dynamic_filters` - Whether to compute min/max bounds for dynamic filtering
 /// * `with_null_aware_mark_state` - Whether to build the per-build-row null-indices bitmap
-///   and correlation-scope map used by correlated null-aware `LeftMark` joins
+///   and correlation-scope maps used by correlated null-aware `LeftMark` joins
 ///
 /// # Dynamic Filter Coordination
 /// When `should_compute_dynamic_filters` is true, this function computes the min/max bounds
@@ -2167,7 +2197,8 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
-    let null_aware_mark_scope_map = if with_null_aware_mark_state {
+    let (null_aware_mark_scope_map, null_value_scope_map) = if with_null_aware_mark_state
+    {
         // Null-aware `LeftMark` convention: `on_left[0]` is the value key and
         // `on_left[1..]` the scope keys, so the scope map needs more than one key.
         debug_assert!(
@@ -2178,13 +2209,15 @@ async fn collect_left_input(
         // This secondary map is keyed only by correlation scope keys. The
         // primary join map may still use ArrayMap for full-key TRUE matches,
         // but scope-only NULL marking uses a HashMap for arbitrary key shapes.
-        let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
+        // It is probed only with the NULL-valued probe rows, so the lookup work
+        // is proportional to the probe-side NULLs.
+        let mut scope_map = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
         let mut hashes_buffer = vec![0; batch.num_rows()];
         update_hash(
             &on_left[1..],
             &batch,
-            &mut *hashmap,
+            &mut *scope_map,
             0,
             &random_state,
             &mut hashes_buffer,
@@ -2192,9 +2225,39 @@ async fn collect_left_input(
             true,
         )?;
 
-        Some(Arc::new(Map::HashMap(hashmap)))
+        // Build rows whose value key is NULL get a dedicated scope map: any
+        // probe row sharing their scope makes their mark UNKNOWN, so they are
+        // probed with *every* probe row. Restricting the map to the NULL-valued
+        // rows keeps that lookup proportional to the build-side NULLs.
+        let value_key = &left_values[0];
+        let null_value_scope_map = if value_key.null_count() > 0 {
+            let null_mask = arrow::compute::is_null(value_key.as_ref())?;
+            let build_indices = UInt64Array::from_iter_values(
+                null_mask.values().set_indices().map(|i| i as u64),
+            );
+            let scope_values = left_values[1..]
+                .iter()
+                .map(|values| Ok(arrow::compute::filter(values.as_ref(), &null_mask)?))
+                .collect::<Result<Vec<_>>>()?;
+
+            let null_rows = build_indices.len();
+            let mut map = new_join_hashmap(null_rows, &mut reservation, &metrics)?;
+            let mut hashes_buffer = vec![0; null_rows];
+            create_hashes(&scope_values, &random_state, &mut hashes_buffer)?;
+            map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
+
+            Some(NullValueScopeMap {
+                map,
+                scope_values,
+                build_indices,
+            })
+        } else {
+            None
+        };
+
+        (Some(scope_map), null_value_scope_map)
     } else {
-        None
+        (None, None)
     };
 
     let map = Arc::new(join_hash_map);
@@ -2232,6 +2295,7 @@ async fn collect_left_input(
     let data = JoinLeftData {
         map,
         null_aware_mark_scope_map,
+        null_value_scope_map,
         batch,
         values: left_values,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
@@ -7009,6 +7073,143 @@ mod tests {
             | 2  | 1   | true  |
             | 3  | 2   | false |
             | 4  | 3   | false |
+            +----+-----+-------+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// Scalar correlated null-aware left mark join where only the build side's
+    /// value key contains NULL.
+    ///
+    /// This isolates the NULL-value scope map direction of
+    /// `mark_null_candidates_for_probe_batch`: NULL-valued build rows become
+    /// UNKNOWN as soon as any probe row shares their correlation scope, while
+    /// non-null build rows stay `true`/`false`.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_correlated_build_null_only(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let left = build_table_two_cols(
+            ("id", &vec![Some(1), None, None, Some(3)]),
+            ("grp", &vec![Some(1), Some(1), Some(2), Some(3)]),
+        );
+
+        let right = build_table_two_cols(
+            ("id", &vec![Some(2), Some(1)]),
+            ("grp", &vec![Some(1), Some(2)]),
+        );
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
+            ),
+        ];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftMark,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // `(NULL, 1)` and `(NULL, 2)` have non-empty correlated scopes, so
+        // their marks are UNKNOWN. `(1, 1)` finds no equal value and no NULL in
+        // its scope (false); `(3, 3)` has an empty correlated scope (false).
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-----+-------+
+            | id | grp | mark  |
+            +----+-----+-------+
+            |    | 1   |       |
+            |    | 2   |       |
+            | 1  | 1   | false |
+            | 3  | 3   | false |
+            +----+-----+-------+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// Scalar correlated null-aware left mark join where only the probe side's
+    /// value key contains NULL.
+    ///
+    /// This isolates the NULL-valued-probe-row direction of
+    /// `mark_null_candidates_for_probe_batch`: every unmatched build row whose
+    /// correlation scope contains a NULL-valued probe row becomes UNKNOWN.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_correlated_probe_null_only(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let left = build_table_two_cols(
+            ("id", &vec![Some(1), Some(2), Some(5), Some(7)]),
+            ("grp", &vec![Some(1), Some(1), Some(2), Some(3)]),
+        );
+
+        let right = build_table_two_cols(
+            ("id", &vec![Some(2), None, Some(4)]),
+            ("grp", &vec![Some(1), Some(1), Some(2)]),
+        );
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
+            ),
+        ];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftMark,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // `(1, 1)` is unmatched and its scope contains a NULL value (UNKNOWN);
+        // `(2, 1)` matches (true); `(5, 2)`'s scope holds only `4` (false);
+        // `(7, 3)` has an empty correlated scope (false).
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-----+-------+
+            | id | grp | mark  |
+            +----+-----+-------+
+            | 1  | 1   |       |
+            | 2  | 1   | true  |
+            | 5  | 2   | false |
+            | 7  | 3   | false |
             +----+-----+-------+
             ");
         }
