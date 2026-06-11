@@ -23,19 +23,19 @@ use std::vec;
 
 use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
-use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
+use datafusion_common::{Column, TableReference};
 use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion_common::{
     DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
     plan_datafusion_err,
 };
+use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 pub use datafusion_expr::planner::ContextProvider;
 use datafusion_expr::utils::find_column_exprs;
-use datafusion_expr::{Expr, col};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
@@ -575,7 +575,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
                 .project(fields.iter().zip(idents).map(|(field, ident)| {
-                    col(field.name()).alias(self.ident_normalizer.normalize(ident))
+                    Expr::Column(Column::from_qualified_name_ignore_case(field.name()))
+                        .alias(self.ident_normalizer.normalize(ident))
                 }))?
                 .build()
         }
