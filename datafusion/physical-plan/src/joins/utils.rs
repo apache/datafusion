@@ -2516,6 +2516,24 @@ mod tests {
         let on: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("a", 0))];
         let random_state = RandomState::with_seed(42);
         let mut hashes_buffer = vec![0; batch.num_rows()];
+        create_hashes([batch.column(0)], &random_state, &mut hashes_buffer)?;
+
+        let matched_build_indices =
+            |map: &JoinHashMapU32, hashes_buffer: &[u64]| -> Vec<u64> {
+                let mut input_indices = vec![];
+                let mut match_indices = vec![];
+                map.get_matched_indices_with_limit_offset(
+                    hashes_buffer,
+                    None,
+                    8192,
+                    (0, None),
+                    &mut input_indices,
+                    &mut match_indices,
+                );
+                match_indices.sort_unstable();
+                match_indices.dedup();
+                match_indices
+            };
 
         let mut map = JoinHashMapU32::with_capacity(batch.num_rows());
         update_hash(
@@ -2530,8 +2548,10 @@ mod tests {
             NullEquality::NullEqualsNothing,
         )?;
         // NULL keys can never match under NullEqualsNothing, so they must not
-        // be inserted into the map: only hash(1) and hash(2) remain.
-        assert_eq!(map.len(), 2);
+        // be inserted into the map. Assert row indices rather than map length:
+        // with forced hash collisions, multiple logical keys can share one
+        // hash table entry.
+        assert_eq!(matched_build_indices(&map, &hashes_buffer), vec![0, 2, 4]);
 
         let mut map = JoinHashMapU32::with_capacity(batch.num_rows());
         update_hash(
@@ -2545,9 +2565,12 @@ mod tests {
             true,
             NullEquality::NullEqualsNull,
         )?;
-        // Under NullEqualsNull, NULL keys can match and share a single hash:
-        // hash(1), hash(2), and hash(NULL).
-        assert_eq!(map.len(), 3);
+        // Under NullEqualsNull, NULL keys can match, so the build-side NULL
+        // rows must be present in the map.
+        assert_eq!(
+            matched_build_indices(&map, &hashes_buffer),
+            vec![0, 1, 2, 3, 4]
+        );
 
         Ok(())
     }
