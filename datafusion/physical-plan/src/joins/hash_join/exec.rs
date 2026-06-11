@@ -796,7 +796,7 @@ impl EmbeddedProjection for HashJoinExec {
 
 impl HashJoinExec {
     /// Name of the metric counting how many partitions selected the
-    /// [`ArrayMap`]-based build-side strategy instead of a hash table.
+    /// `ArrayMap`-based build-side strategy instead of a hash table.
     pub const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &'static str =
         "array_map_created_count";
 
