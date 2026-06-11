@@ -440,9 +440,9 @@ impl PartialHashAggregateStream {
                                 unreachable!("expected reading input state")
                             };
 
-                            // Move to `ProdicingOutput` state first, its `skip_hash_table`
-                            // field will ensure it will go to the next skip-partial-aggr
-                            // stage, after the accumulated batches has been output.
+                            // Move to `ProducingOutput` first. Its `skip_hash_table`
+                            // field moves the stream to skip-partial aggregation after
+                            // the accumulated batches have been output.
                             return ControlFlow::Continue(
                                 PartialHashAggregateState::ProducingOutput {
                                     hash_table,
