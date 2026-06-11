@@ -177,7 +177,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 /// Implementation of [`ParquetFileReaderFactory`] supporting the caching of footer and page
 /// metadata. Reads and updates the [`FileMetadataCache`] with the [`ParquetMetaData`] data.
 ///
-/// [`CachedParquetFileReader::get_metadata`] forwards the [`PageIndexPolicy`] from
+/// [`CachedParquetFileReader::get_metadata`] forwards the [`parquet::file::metadata::PageIndexPolicy`] from
 /// [`ArrowReaderOptions`] to [`DFParquetMetadata::fetch_metadata`], so callers such as the
 /// parquet opener can skip page-index I/O during the initial metadata load.
 #[derive(Debug)]
