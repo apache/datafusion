@@ -22,6 +22,10 @@
 //! unwrap_cast module to be shared between logical and physical layers.
 
 use std::cmp::Ordering;
+use std::sync::Arc;
+
+use crate::interval_arithmetic::Interval;
+use crate::operator::Operator;
 
 use arrow::datatypes::{
     DataType, MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
@@ -29,7 +33,18 @@ use arrow::datatypes::{
     MIN_DECIMAL64_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION, TimeUnit,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
+
+/// Source-domain preimage of `CAST(source_expr AS target_type) OP literal`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CastPredicatePreimage {
+    /// A singleton preimage represented by a literal in the source type. This
+    /// can keep the original comparison operator.
+    Exact(ScalarValue),
+    /// A half-open source-domain interval `[lower, upper)`. The caller must
+    /// map the comparison operator to range predicates.
+    Range(Interval),
+}
 
 /// Convert a literal [`ScalarValue`] to `target_type`, preserving the exact value.
 ///
@@ -74,6 +89,232 @@ pub fn try_cast_literal_to_type(
         .or_else(|| try_cast_binary(lit_value, target_type))
 }
 
+/// Computes a source-domain preimage for `CAST(source AS target_type) OP literal`.
+///
+/// This is the shared semantic core for logical and physical cast-predicate
+/// rewrites. It returns a singleton [`CastPredicatePreimage::Exact`] for casts
+/// where moving the cast to the literal preserves comparison semantics, and a
+/// [`CastPredicatePreimage::Range`] for many-to-one casts with known preimages
+/// such as timestamp precision narrowing.
+pub fn cast_predicate_preimage(
+    source_type: &DataType,
+    target_type: &DataType,
+    op: Operator,
+    lit_value: &ScalarValue,
+) -> Result<Option<CastPredicatePreimage>> {
+    if let Some(interval) =
+        timestamp_precision_narrowing_preimage(source_type, target_type, lit_value)?
+    {
+        return Ok(Some(CastPredicatePreimage::Range(interval)));
+    }
+
+    if is_timestamp_precision_narrowing_cast(source_type, target_type) {
+        return Ok(None);
+    }
+
+    Ok(
+        exact_preimage_for_cast_predicate(source_type, target_type, op, lit_value)
+            .map(CastPredicatePreimage::Exact),
+    )
+}
+
+/// Computes a singleton source-domain literal for exact cast-predicate rewrites.
+///
+/// This intentionally returns `None` for timestamp precision narrowing: those
+/// casts are many-to-one and need range preimages instead.
+pub fn cast_predicate_exact_literal(
+    source_type: &DataType,
+    target_type: &DataType,
+    lit_value: &ScalarValue,
+) -> Option<ScalarValue> {
+    if is_timestamp_precision_narrowing_cast(source_type, target_type) {
+        return None;
+    }
+
+    try_cast_literal_to_type(lit_value, source_type)
+}
+
+/// Returns true when casting a timestamp from `source_type` to `target_type`
+/// loses timestamp precision.
+pub fn is_timestamp_precision_narrowing_cast(
+    source_type: &DataType,
+    target_type: &DataType,
+) -> bool {
+    let (DataType::Timestamp(source_unit, _), DataType::Timestamp(target_unit, _)) =
+        (source_type, target_type)
+    else {
+        return false;
+    };
+
+    timestamp_unit_scale(source_unit) > timestamp_unit_scale(target_unit)
+}
+
+fn exact_preimage_for_cast_predicate(
+    source_type: &DataType,
+    target_type: &DataType,
+    op: Operator,
+    lit_value: &ScalarValue,
+) -> Option<ScalarValue> {
+    cast_to_string_equality_preimage(source_type, target_type, op, lit_value)
+        .or_else(|| cast_predicate_exact_literal(source_type, target_type, lit_value))
+}
+
+/// Computes a singleton preimage for equality predicates over casts whose target
+/// value is a string representation of an integer source value.
+///
+/// For example, `CAST(int_col AS Utf8) = '123'` can be rewritten to
+/// `int_col = 123`, but `CAST(int_col AS Utf8) = '0123'` cannot be rewritten to
+/// `int_col = 123` because casting `123` back to a string yields `'123'`, not
+/// `'0123'`.
+fn cast_to_string_equality_preimage(
+    source_type: &DataType,
+    target_type: &DataType,
+    op: Operator,
+    lit_value: &ScalarValue,
+) -> Option<ScalarValue> {
+    if !matches!(
+        target_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        return None;
+    }
+
+    match (op, lit_value) {
+        (
+            Operator::Eq | Operator::NotEq,
+            ScalarValue::Utf8(Some(_))
+            | ScalarValue::Utf8View(Some(_))
+            | ScalarValue::LargeUtf8(Some(_)),
+        ) => {
+            // Only try for integer types (TODO can we do this for other types
+            // like timestamps)?
+            use DataType::*;
+            if matches!(
+                source_type,
+                Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
+            ) {
+                let casted = lit_value.cast_to(source_type).ok()?;
+                let round_tripped = casted.cast_to(&lit_value.data_type()).ok()?;
+                if lit_value != &round_tripped {
+                    return None;
+                }
+                Some(casted)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn timestamp_precision_narrowing_preimage(
+    source_type: &DataType,
+    target_type: &DataType,
+    lit_value: &ScalarValue,
+) -> Result<Option<Interval>> {
+    let (
+        DataType::Timestamp(source_unit, source_tz),
+        DataType::Timestamp(target_unit, _),
+    ) = (source_type, target_type)
+    else {
+        return Ok(None);
+    };
+
+    let source_scale = i128::from(timestamp_unit_scale(source_unit));
+    let target_scale = i128::from(timestamp_unit_scale(target_unit));
+    if source_scale <= target_scale {
+        return Ok(None);
+    }
+
+    let Some(target_value) = timestamp_literal_value(lit_value, target_unit) else {
+        return Ok(None);
+    };
+
+    let bucket_width = source_scale / target_scale;
+    let Some((lower, upper)) = trunc_toward_zero_bucket(target_value, bucket_width)
+    else {
+        return Ok(None);
+    };
+
+    let Ok(lower) = i64::try_from(lower) else {
+        return Ok(None);
+    };
+    let Ok(upper) = i64::try_from(upper) else {
+        return Ok(None);
+    };
+
+    Interval::try_new(
+        timestamp_scalar(source_unit, source_tz.clone(), lower),
+        timestamp_scalar(source_unit, source_tz.clone(), upper),
+    )
+    .map(Some)
+}
+
+/// Returns the half-open source-domain bucket `[lower, upper)` that truncates
+/// toward zero to `value` when divided by `bucket_width`.
+///
+/// Timestamp precision narrowing follows integer truncation toward zero rather
+/// than mathematical floor. For example, when `bucket_width = 1_000_000`, both
+/// `999_999` and `-999_999` truncate to `0`, while `-1_000_000` truncates to
+/// `-1`.
+///
+/// This makes the inverse bucket depend on the sign of `value`:
+///
+/// * `value > 0`: `[value * width, (value + 1) * width)`
+/// * `value == 0`: `[1 - width, width)`, spanning small negative and positive
+///   values that both truncate to zero
+/// * `value < 0`: `[(value - 1) * width + 1, value * width + 1)`
+///
+/// The arithmetic uses `checked_*` operations and returns `None` if an
+/// intermediate bound cannot be represented as `i128`.
+fn trunc_toward_zero_bucket(value: i64, bucket_width: i128) -> Option<(i128, i128)> {
+    let value = value as i128;
+    if value > 0 {
+        let lower = value.checked_mul(bucket_width)?;
+        let upper = value.checked_add(1)?.checked_mul(bucket_width)?;
+        Some((lower, upper))
+    } else if value == 0 {
+        Some((1_i128.checked_sub(bucket_width)?, bucket_width))
+    } else {
+        let lower = value
+            .checked_sub(1)?
+            .checked_mul(bucket_width)?
+            .checked_add(1)?;
+        let upper = value.checked_mul(bucket_width)?.checked_add(1)?;
+        Some((lower, upper))
+    }
+}
+
+fn timestamp_literal_value(lit_value: &ScalarValue, unit: &TimeUnit) -> Option<i64> {
+    match (lit_value, unit) {
+        (ScalarValue::TimestampSecond(Some(value), _), TimeUnit::Second)
+        | (ScalarValue::TimestampMillisecond(Some(value), _), TimeUnit::Millisecond)
+        | (ScalarValue::TimestampMicrosecond(Some(value), _), TimeUnit::Microsecond)
+        | (ScalarValue::TimestampNanosecond(Some(value), _), TimeUnit::Nanosecond) => {
+            Some(*value)
+        }
+        _ => None,
+    }
+}
+
+fn timestamp_unit_scale(unit: &TimeUnit) -> i64 {
+    match unit {
+        TimeUnit::Second => 1,
+        TimeUnit::Millisecond => MILLISECONDS,
+        TimeUnit::Microsecond => MICROSECONDS,
+        TimeUnit::Nanosecond => NANOSECONDS,
+    }
+}
+
+fn timestamp_scalar(unit: &TimeUnit, tz: Option<Arc<str>>, value: i64) -> ScalarValue {
+    match unit {
+        TimeUnit::Second => ScalarValue::TimestampSecond(Some(value), tz),
+        TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(value), tz),
+        TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(Some(value), tz),
+        TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(value), tz),
+    }
+}
+
 /// Returns true if unwrap_cast_in_comparison supports this data type
 pub fn is_supported_type(data_type: &DataType) -> bool {
     is_supported_numeric_type(data_type)
@@ -101,35 +342,6 @@ fn is_date_type(data_type: &DataType) -> bool {
 fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     (is_date_type(from_type) && to_type.is_temporal())
         || (is_date_type(to_type) && from_type.is_temporal())
-}
-
-/// Returns true when casting a timestamp from `from_type` to `to_type` loses
-/// timestamp precision.
-///
-/// This is used by comparison cast unwrapping to avoid rewrites such as
-/// `CAST(ts_ns AS timestamp(ms)) = lit_ms` -> `ts_ns = lit_ns`. The original
-/// predicate can match any nanosecond value in the same millisecond, while the
-/// rewritten predicate only matches the exact millisecond boundary.
-pub fn is_timestamp_precision_narrowing_cast(
-    from_type: &DataType,
-    to_type: &DataType,
-) -> bool {
-    let (DataType::Timestamp(from_unit, _), DataType::Timestamp(to_unit, _)) =
-        (from_type, to_type)
-    else {
-        return false;
-    };
-
-    timestamp_unit_scale(from_unit) > timestamp_unit_scale(to_unit)
-}
-
-fn timestamp_unit_scale(unit: &TimeUnit) -> i128 {
-    match unit {
-        TimeUnit::Second => 1,
-        TimeUnit::Millisecond => MILLISECONDS as i128,
-        TimeUnit::Microsecond => MICROSECONDS as i128,
-        TimeUnit::Nanosecond => NANOSECONDS as i128,
-    }
 }
 
 /// Returns true if unwrap_cast_in_comparison supports this numeric type
@@ -428,18 +640,12 @@ fn try_cast_dictionary(
 fn cast_between_timestamp(from: &DataType, to: &DataType, value: i128) -> Option<i64> {
     let value = value as i64;
     let from_scale = match from {
-        DataType::Timestamp(TimeUnit::Second, _) => 1,
-        DataType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
-        DataType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
+        DataType::Timestamp(unit, _) => timestamp_unit_scale(unit),
         _ => return Some(value),
     };
 
     let to_scale = match to {
-        DataType::Timestamp(TimeUnit::Second, _) => 1,
-        DataType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
-        DataType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
+        DataType::Timestamp(unit, _) => timestamp_unit_scale(unit),
         _ => return Some(value),
     };
 
@@ -982,6 +1188,82 @@ mod tests {
         )
         .unwrap();
         assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(None, None));
+    }
+
+    #[test]
+    fn test_cast_predicate_preimage_exact() {
+        assert_eq!(
+            cast_predicate_preimage(
+                &DataType::Int32,
+                &DataType::Int64,
+                Operator::Gt,
+                &ScalarValue::Int64(Some(10)),
+            )
+            .unwrap(),
+            Some(CastPredicatePreimage::Exact(ScalarValue::Int32(Some(10))))
+        );
+
+        assert_eq!(
+            cast_predicate_preimage(
+                &DataType::Int32,
+                &DataType::Utf8,
+                Operator::Eq,
+                &ScalarValue::Utf8(Some("123".to_string())),
+            )
+            .unwrap(),
+            Some(CastPredicatePreimage::Exact(ScalarValue::Int32(Some(123))))
+        );
+
+        assert_eq!(
+            cast_predicate_preimage(
+                &DataType::Int32,
+                &DataType::Utf8,
+                Operator::Eq,
+                &ScalarValue::Utf8(Some("0123".to_string())),
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_cast_predicate_preimage_timestamp_narrowing_range() {
+        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
+
+        assert_eq!(
+            cast_predicate_preimage(
+                &ts_ns,
+                &ts_ms,
+                Operator::Eq,
+                &ScalarValue::TimestampMillisecond(Some(1000), None),
+            )
+            .unwrap(),
+            Some(CastPredicatePreimage::Range(
+                Interval::try_new(
+                    ScalarValue::TimestampNanosecond(Some(1_000_000_000), None),
+                    ScalarValue::TimestampNanosecond(Some(1_001_000_000), None),
+                )
+                .unwrap()
+            ))
+        );
+
+        assert_eq!(
+            cast_predicate_preimage(
+                &ts_ns,
+                &ts_ms,
+                Operator::Eq,
+                &ScalarValue::TimestampMillisecond(Some(-1), None),
+            )
+            .unwrap(),
+            Some(CastPredicatePreimage::Range(
+                Interval::try_new(
+                    ScalarValue::TimestampNanosecond(Some(-1_999_999), None),
+                    ScalarValue::TimestampNanosecond(Some(-999_999), None),
+                )
+                .unwrap()
+            ))
+        );
     }
 
     #[test]
