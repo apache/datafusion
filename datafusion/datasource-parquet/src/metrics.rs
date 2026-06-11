@@ -71,6 +71,9 @@ pub struct ParquetFileMetrics {
     pub page_index_pages_pruned: PruningMetrics,
     /// Total time spent evaluating parquet page index filters
     pub page_index_eval_time: Time,
+    /// Number of times page index I/O was skipped because row-group statistics
+    /// already proved page index could not prune further
+    pub page_index_load_skipped: Count,
     /// Total time spent reading and parsing metadata from the footer
     pub metadata_load_time: Time,
     /// Scan Efficiency Ratio, calculated as bytes_scanned / total_file_size
@@ -185,6 +188,11 @@ impl ParquetFileMetrics {
             .clone()
             .subset_time("page_index_eval_time", partition);
 
+        let page_index_load_skipped = builder
+            .clone()
+            .with_type(MetricType::Summary)
+            .counter("page_index_load_skipped", partition);
+
         let page_index_rows_pruned = builder
             .clone()
             .pruning_metrics("page_index_rows_pruned", partition);
@@ -213,6 +221,7 @@ impl ParquetFileMetrics {
             statistics_eval_time,
             bloom_filter_eval_time,
             page_index_eval_time,
+            page_index_load_skipped,
             metadata_load_time,
             scan_efficiency_ratio,
             predicate_cache_inner_records,

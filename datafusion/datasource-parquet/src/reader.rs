@@ -176,9 +176,10 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 
 /// Implementation of [`ParquetFileReaderFactory`] supporting the caching of footer and page
 /// metadata. Reads and updates the [`FileMetadataCache`] with the [`ParquetMetaData`] data.
-/// This reader always loads the entire metadata (including page index, unless the file is
-/// encrypted), even if not required by the current query, to ensure it is always available for
-/// those that need it.
+///
+/// [`CachedParquetFileReader::get_metadata`] forwards the [`PageIndexPolicy`] from
+/// [`ArrowReaderOptions`] to [`DFParquetMetadata::fetch_metadata`], so callers such as the
+/// parquet opener can skip page-index I/O during the initial metadata load.
 #[derive(Debug)]
 pub struct CachedParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
@@ -289,7 +290,6 @@ impl AsyncFileReader for CachedParquetFileReader {
 
     fn get_metadata<'a>(
         &'a mut self,
-        #[cfg_attr(not(feature = "parquet_encryption"), expect(unused_variables))]
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let object_meta = self.partitioned_file.object_meta.clone();
@@ -304,10 +304,13 @@ impl AsyncFileReader for CachedParquetFileReader {
             #[cfg(not(feature = "parquet_encryption"))]
             let file_decryption_properties = None;
 
+            let page_index_policy = options.map(|o| o.column_index_policy());
+
             DFParquetMetadata::new(&self.store, &object_meta)
                 .with_decryption_properties(file_decryption_properties)
                 .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
                 .with_metadata_size_hint(self.metadata_size_hint)
+                .with_page_index_policy(page_index_policy)
                 .fetch_metadata()
                 .await
                 .map_err(|e| {
