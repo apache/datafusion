@@ -25,6 +25,7 @@ use arrow::compute::kernels::bitwise::{
     bitwise_xor, bitwise_xor_scalar,
 };
 use arrow::compute::kernels::boolean::not;
+use arrow::compute::kernels::cast::cast;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
@@ -267,12 +268,37 @@ macro_rules! regexp_is_match_flag {
     }};
 }
 
+/// Unpack a dictionary array to its value type, leaving other arrays as-is
+fn flatten_dictionary(array: &ArrayRef) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::Dictionary(_, value_type) => Ok(cast(array, value_type)?),
+        _ => Ok(Arc::clone(array)),
+    }
+}
+
 pub(crate) fn regex_match_dyn(
     left: &ArrayRef,
     right: &ArrayRef,
     not_match: bool,
     flag: bool,
 ) -> Result<ArrayRef> {
+    // Type coercion deliberately preserves `Dictionary(_, Utf8)` inputs so
+    // that literal patterns can use the dictionary fast path in
+    // `regex_match_dyn_scalar`. Here every row has its own pattern, so the
+    // dictionary encoding offers no shortcut: flatten the inputs, and if the
+    // dictionary's value type differs from the coerced pattern type (e.g.
+    // `Dictionary(Int32, Utf8)` matched against `Utf8View` patterns), cast to
+    // a common string type.
+    if matches!(left.data_type(), DataType::Dictionary(_, _))
+        || matches!(right.data_type(), DataType::Dictionary(_, _))
+    {
+        let left = flatten_dictionary(left)?;
+        let mut right = flatten_dictionary(right)?;
+        if right.data_type() != left.data_type() {
+            right = cast(&right, left.data_type())?;
+        }
+        return regex_match_dyn(&left, &right, not_match, flag);
+    }
     match left.data_type() {
         DataType::Utf8 => {
             regexp_is_match_flag!(left, right, StringArray, not_match, flag)

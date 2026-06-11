@@ -151,6 +151,48 @@ p2
 p2e1
 p2m1e1
 
+# Dictionary input matched against a literal pattern (scalar fast path: the
+# regex runs once per distinct dictionary value, so the dictionary input is
+# deliberately not cast away by type coercion)
+query T rowsort
+SELECT s FROM test WHERE arrow_cast(s, 'Dictionary(Int32, Utf8)') SIMILAR TO 'p[12].*';
+----
+p1
+p1e1
+p1m1e1
+p2
+p2e1
+p2m1e1
+
+# Dictionary input matched against a NULL pattern is NULL, not an error
+query B
+SELECT arrow_cast(s, 'Dictionary(Int32, Utf8)') SIMILAR TO NULL FROM test WHERE s = 'p1';
+----
+NULL
+
+# Dictionary input matched against a non-literal pattern
+query T rowsort
+SELECT s FROM test, patterns WHERE arrow_cast(s, 'Dictionary(Int32, Utf8)') SIMILAR TO pat;
+----
+p1
+p1e1
+p1m1e1
+p2
+p2e1
+p2m1e1
+
+# Dictionary input matched against a non-literal pattern of a different
+# string type than the dictionary's value type
+query T rowsort
+SELECT s FROM test, patterns WHERE arrow_cast(s, 'Dictionary(Int32, Utf8)') SIMILAR TO arrow_cast(pat, 'Utf8View');
+----
+p1
+p1e1
+p1m1e1
+p2
+p2e1
+p2m1e1
+
 statement ok
 DROP TABLE patterns;
 
