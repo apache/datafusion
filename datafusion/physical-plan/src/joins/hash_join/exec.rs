@@ -206,22 +206,29 @@ pub(super) struct NullValueScopeMap {
     pub(super) build_indices: UInt64Array,
 }
 
+/// Extra build-side state for correlated null-aware `LeftMark` joins.
+///
+/// Key layout: `on[0]` is the scalar `NOT IN` value key, `on[1..]` the
+/// correlation scope keys; see the `null_aware` field of `HashJoinExec`.
+pub(super) struct NullAwareMarkState {
+    /// Hash table keyed only by the correlation scope keys, covering all build
+    /// rows. Probed only with NULL-valued probe rows; the complementary
+    /// direction uses `null_value_scope_map`.
+    pub(super) scope_map: Box<dyn JoinHashMapType>,
+    /// Scope map restricted to the build rows whose value key is NULL (see
+    /// [`NullValueScopeMap`]). `None` when the build side has no NULL value
+    /// keys.
+    pub(super) null_value_scope_map: Option<NullValueScopeMap>,
+}
+
 /// HashTable and input data for the left (build side) of a join
 pub(super) struct JoinLeftData {
     /// The hash table with indices into `batch`
     /// Arc is used to allow sharing with SharedBuildAccumulator for hash map pushdown
     pub(super) map: Arc<Map>,
-    /// Hash table over correlated scope keys for scalar null-aware mark joins.
-    ///
-    /// For null-aware `LeftMark`, key 0 is the scalar `NOT IN` value key and
-    /// keys 1..N are correlated equality scope keys. This map covers all build
-    /// rows and is probed only with NULL-valued probe rows; the complementary
-    /// direction uses `null_value_scope_map`.
-    null_aware_mark_scope_map: Option<Box<dyn JoinHashMapType>>,
-    /// Scope map restricted to the build rows whose value key is NULL (see
-    /// [`NullValueScopeMap`]). `None` when the build side has no NULL value
-    /// keys.
-    null_value_scope_map: Option<NullValueScopeMap>,
+    /// Extra build-side state for correlated null-aware `LeftMark` joins (see
+    /// [`NullAwareMarkState`]); `None` for all other joins.
+    null_aware_state: Option<NullAwareMarkState>,
     /// The input rows for the build side
     batch: RecordBatch,
     /// The build side on expressions values
@@ -258,12 +265,8 @@ impl JoinLeftData {
         &self.map
     }
 
-    pub(super) fn null_aware_mark_scope_map(&self) -> Option<&dyn JoinHashMapType> {
-        self.null_aware_mark_scope_map.as_deref()
-    }
-
-    pub(super) fn null_value_scope_map(&self) -> Option<&NullValueScopeMap> {
-        self.null_value_scope_map.as_ref()
+    pub(super) fn null_aware_state(&self) -> Option<&NullAwareMarkState> {
+        self.null_aware_state.as_ref()
     }
 
     /// returns a reference to the build side batch
@@ -2197,10 +2200,9 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
-    let (null_aware_mark_scope_map, null_value_scope_map) = if with_null_aware_mark_state
-    {
-        // Null-aware `LeftMark` convention: `on_left[0]` is the value key and
-        // `on_left[1..]` the scope keys, so the scope map needs more than one key.
+    let null_aware_state = if with_null_aware_mark_state {
+        // Per the key layout on `HashJoinExec::null_aware`, the scope map
+        // needs more than one key.
         debug_assert!(
             on_left.len() > 1,
             "null-aware LeftMark needs on_left[0]=value, on_left[1..]=scope, got {} key(s)",
@@ -2255,9 +2257,12 @@ async fn collect_left_input(
             None
         };
 
-        (Some(scope_map), null_value_scope_map)
+        Some(NullAwareMarkState {
+            scope_map,
+            null_value_scope_map,
+        })
     } else {
-        (None, None)
+        None
     };
 
     let map = Arc::new(join_hash_map);
@@ -2294,8 +2299,7 @@ async fn collect_left_input(
 
     let data = JoinLeftData {
         map,
-        null_aware_mark_scope_map,
-        null_value_scope_map,
+        null_aware_state,
         batch,
         values: left_values,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
@@ -6838,30 +6842,24 @@ mod tests {
         );
     }
 
-    /// Test null-aware left mark join when probe side contains NULL.
-    /// Expected:
-    /// - matched rows => true
-    /// - unmatched non-NULL rows => NULL
-    /// - NULL build keys with non-empty probe side => NULL
-    #[apply(hash_join_exec_configs)]
-    #[tokio::test]
-    async fn test_null_aware_left_mark_probe_null(batch_size: usize) -> Result<()> {
+    /// Builds a null-aware `LeftMark` `HashJoinExec` on `on_names` key pairs
+    /// (`on_names[0]` is the `NOT IN` value key, the rest are correlation
+    /// scope keys), executes partition 0, and collects the result batches.
+    async fn null_aware_mark_join_collect(
+        batch_size: usize,
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on_names: &[(&str, &str)],
+    ) -> Result<Vec<RecordBatch>> {
         let task_ctx = prepare_task_ctx(batch_size, false);
 
-        let left = build_table_two_cols(
-            ("c1", &vec![Some(1), Some(4), None]),
-            ("dummy", &vec![Some(10), Some(40), Some(0)]),
-        );
-
-        let right = build_table_two_cols(
-            ("c2", &vec![Some(1), Some(2), None]),
-            ("dummy", &vec![Some(100), Some(200), Some(300)]),
-        );
-
-        let on = vec![(
-            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
-        )];
+        let mut on: JoinOn = vec![];
+        for &(left_name, right_name) in on_names {
+            on.push((
+                Arc::new(Column::new_with_schema(left_name, &left.schema())?) as _,
+                Arc::new(Column::new_with_schema(right_name, &right.schema())?) as _,
+            ));
+        }
 
         let join = HashJoinExec::try_new(
             left,
@@ -6872,11 +6870,34 @@ mod tests {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
-            true, // null_aware = true
+            true, // null_aware
         )?;
 
         let stream = join.execute(0, task_ctx)?;
-        let batches = common::collect(stream).await?;
+        common::collect(stream).await
+    }
+
+    /// Test null-aware left mark join when probe side contains NULL.
+    /// Expected:
+    /// - matched rows => true
+    /// - unmatched non-NULL rows => NULL
+    /// - NULL build keys with non-empty probe side => NULL
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_probe_null(batch_size: usize) -> Result<()> {
+        let left = build_table_two_cols(
+            ("c1", &vec![Some(1), Some(4), None]),
+            ("dummy", &vec![Some(10), Some(40), Some(0)]),
+        );
+
+        let right = build_table_two_cols(
+            ("c2", &vec![Some(1), Some(2), None]),
+            ("dummy", &vec![Some(100), Some(200), Some(300)]),
+        );
+
+        let batches =
+            null_aware_mark_join_collect(batch_size, left, right, &[("c1", "c2")])
+                .await?;
 
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
@@ -6898,8 +6919,6 @@ mod tests {
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn test_null_aware_left_mark_empty_probe(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size, false);
-
         let left = build_table_two_cols(
             ("c1", &vec![Some(1), None]),
             ("dummy", &vec![Some(10), Some(0)]),
@@ -6910,25 +6929,9 @@ mod tests {
             ("dummy", &Vec::<Option<i32>>::new()),
         );
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
-        )];
-
-        let join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::LeftMark,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true, // null_aware = true
-        )?;
-
-        let stream = join.execute(0, task_ctx)?;
-        let batches = common::collect(stream).await?;
+        let batches =
+            null_aware_mark_join_collect(batch_size, left, right, &[("c1", "c2")])
+                .await?;
 
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
@@ -6951,8 +6954,6 @@ mod tests {
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn test_null_aware_left_mark_correlated_scope(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size, false);
-
         let left = build_table_two_cols(
             ("id", &vec![Some(1), Some(2), Some(3), None, None, Some(5)]),
             (
@@ -6966,31 +6967,13 @@ mod tests {
             ("grp", &vec![Some(1), Some(1), Some(2)]),
         );
 
-        let on = vec![
-            (
-                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
-            ),
-            (
-                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
-            ),
-        ];
-
-        let join = HashJoinExec::try_new(
+        let batches = null_aware_mark_join_collect(
+            batch_size,
             left,
             right,
-            on,
-            None,
-            &JoinType::LeftMark,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
-        )?;
-
-        let stream = join.execute(0, task_ctx)?;
-        let batches = common::collect(stream).await?;
+            &[("id", "id"), ("grp", "grp")],
+        )
+        .await?;
 
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
@@ -7023,8 +7006,6 @@ mod tests {
     async fn test_null_aware_left_mark_correlated_no_value_nulls(
         batch_size: usize,
     ) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size, false);
-
         let left = build_table_two_cols(
             ("id", &vec![Some(1), Some(2), Some(3), Some(4)]),
             ("grp", &vec![Some(1), Some(1), Some(2), Some(3)]),
@@ -7035,31 +7016,13 @@ mod tests {
             ("grp", &vec![Some(1), Some(2)]),
         );
 
-        let on = vec![
-            (
-                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
-            ),
-            (
-                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
-            ),
-        ];
-
-        let join = HashJoinExec::try_new(
+        let batches = null_aware_mark_join_collect(
+            batch_size,
             left,
             right,
-            on,
-            None,
-            &JoinType::LeftMark,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
-        )?;
-
-        let stream = join.execute(0, task_ctx)?;
-        let batches = common::collect(stream).await?;
+            &[("id", "id"), ("grp", "grp")],
+        )
+        .await?;
 
         // Every mark is true/false; no UNKNOWN is produced when value keys are
         // non-null. `id=2` matches within `grp=1` (true); `id=4`'s `grp=3` has
@@ -7092,8 +7055,6 @@ mod tests {
     async fn test_null_aware_left_mark_correlated_build_null_only(
         batch_size: usize,
     ) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size, false);
-
         let left = build_table_two_cols(
             ("id", &vec![Some(1), None, None, Some(3)]),
             ("grp", &vec![Some(1), Some(1), Some(2), Some(3)]),
@@ -7104,31 +7065,13 @@ mod tests {
             ("grp", &vec![Some(1), Some(2)]),
         );
 
-        let on = vec![
-            (
-                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
-            ),
-            (
-                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
-            ),
-        ];
-
-        let join = HashJoinExec::try_new(
+        let batches = null_aware_mark_join_collect(
+            batch_size,
             left,
             right,
-            on,
-            None,
-            &JoinType::LeftMark,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
-        )?;
-
-        let stream = join.execute(0, task_ctx)?;
-        let batches = common::collect(stream).await?;
+            &[("id", "id"), ("grp", "grp")],
+        )
+        .await?;
 
         // `(NULL, 1)` and `(NULL, 2)` have non-empty correlated scopes, so
         // their marks are UNKNOWN. `(1, 1)` finds no equal value and no NULL in
@@ -7160,8 +7103,6 @@ mod tests {
     async fn test_null_aware_left_mark_correlated_probe_null_only(
         batch_size: usize,
     ) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size, false);
-
         let left = build_table_two_cols(
             ("id", &vec![Some(1), Some(2), Some(5), Some(7)]),
             ("grp", &vec![Some(1), Some(1), Some(2), Some(3)]),
@@ -7172,31 +7113,13 @@ mod tests {
             ("grp", &vec![Some(1), Some(1), Some(2)]),
         );
 
-        let on = vec![
-            (
-                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
-            ),
-            (
-                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
-            ),
-        ];
-
-        let join = HashJoinExec::try_new(
+        let batches = null_aware_mark_join_collect(
+            batch_size,
             left,
             right,
-            on,
-            None,
-            &JoinType::LeftMark,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
-        )?;
-
-        let stream = join.execute(0, task_ctx)?;
-        let batches = common::collect(stream).await?;
+            &[("id", "id"), ("grp", "grp")],
+        )
+        .await?;
 
         // `(1, 1)` is unmatched and its scope contains a NULL value (UNKNOWN);
         // `(2, 1)` matches (true); `(5, 2)`'s scope holds only `4` (false);
