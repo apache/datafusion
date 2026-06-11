@@ -37,8 +37,8 @@ use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
-    BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
-    in_subquery, lit, not, not_exists, not_in_subquery,
+    BinaryExpr, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Operator,
+    exists, in_subquery, lit, not, not_exists, not_in_subquery,
 };
 
 use log::debug;
@@ -355,6 +355,31 @@ fn join_keys_may_be_null(
     Ok(false)
 }
 
+/// Check whether the value keys of a scalar `IN`/`NOT IN` predicate may
+/// produce NULLs.
+///
+/// Unlike [`join_keys_may_be_null`], this only examines the in-predicate's two
+/// sides: SQL UNKNOWN can only arise from a NULL in the compared values. A
+/// NULL in a correlation key merely makes the correlated subquery empty for
+/// that outer row, which `IN`/`NOT IN` resolve to FALSE/TRUE, never UNKNOWN.
+fn in_predicate_values_may_be_null(
+    in_predicate: &Expr,
+    left_schema: &DFSchemaRef,
+    right_schema: &DFSchemaRef,
+) -> Result<bool> {
+    let Expr::BinaryExpr(BinaryExpr {
+        left,
+        op: Operator::Eq,
+        right,
+    }) = in_predicate
+    else {
+        // Unexpected shape: conservatively assume the values may be NULL.
+        return Ok(true);
+    };
+
+    Ok(left.nullable(left_schema.as_ref())? || right.nullable(right_schema.as_ref())?)
+}
+
 fn build_join(
     left: &LogicalPlan,
     subquery: &LogicalPlan,
@@ -386,35 +411,38 @@ fn build_join(
             replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
         })?;
 
-    let join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
-        (
-            Some(join_filter),
-            Some(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right,
-            })),
-        ) => {
-            let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
-            let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
-            in_predicate.and(join_filter)
-        }
-        (Some(join_filter), _) => join_filter,
-        (
-            _,
-            Some(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right,
-            })),
-        ) => {
-            let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
-
-            Expr::eq(left.deref().clone(), Expr::Column(right_col))
-        }
-        (None, None) => lit(true),
-        _ => return Ok(None),
-    };
+    let (join_filter, aliased_in_predicate) =
+        match (join_filter_opt, in_predicate_opt.cloned()) {
+            (
+                Some(join_filter),
+                Some(Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                })),
+            ) => {
+                let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
+                let in_predicate =
+                    Expr::eq(left.deref().clone(), Expr::Column(right_col));
+                (in_predicate.clone().and(join_filter), Some(in_predicate))
+            }
+            (Some(join_filter), _) => (join_filter, None),
+            (
+                _,
+                Some(Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                })),
+            ) => {
+                let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
+                let in_predicate =
+                    Expr::eq(left.deref().clone(), Expr::Column(right_col));
+                (in_predicate.clone(), Some(in_predicate))
+            }
+            (None, None) => (lit(true), None),
+            _ => return Ok(None),
+        };
 
     if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
         let right_schema = sub_query_alias.schema();
@@ -465,14 +493,18 @@ fn build_join(
         // nullable mark column when the predicate can be implemented by hash keys.
         // Non-equality correlated filters stay on the legacy path because hash join
         // execution cannot mark UNKNOWN candidates for residual predicates.
+        // Only the in-predicate's value keys decide nullability: NULLs in
+        // correlation keys can never make `IN`/`NOT IN` evaluate to UNKNOWN.
         let null_aware = join_type == JoinType::LeftMark
-            && in_predicate_opt.is_some()
             && mark_filter_is_hashable_only
-            && join_keys_may_be_null(
-                &join_filter,
-                left.schema(),
-                right_projected.schema(),
-            )?;
+            && match &aliased_in_predicate {
+                Some(in_predicate) => in_predicate_values_may_be_null(
+                    in_predicate,
+                    left.schema(),
+                    right_projected.schema(),
+                )?,
+                None => false,
+            };
 
         let new_plan = LogicalPlanBuilder::from(left.clone())
             .join_detailed_with_options(
@@ -1307,6 +1339,43 @@ mod tests {
             LogicalPlanBuilder::from(inner_scan)
                 .filter(
                     out_ref_col(DataType::Int32, "outer_t.grp").lt(col("inner_t.grp")),
+                )?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(col("outer_t.id"), subquery).is_null())?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_non_null_aware_left_mark_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn correlated_not_in_mark_join_not_null_aware_for_non_nullable_value_key()
+    -> Result<()> {
+        // The value key `id` is non-nullable on both sides; only the
+        // correlation key `grp` is nullable. A NULL correlation key just makes
+        // the correlated subquery empty, so NOT IN can never be UNKNOWN and
+        // the mark join does not need null-aware semantics.
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("grp", DataType::Int32, true),
+        ]);
+        let outer_scan = table_scan(Some("outer_t"), &schema, None)?.build()?;
+        let inner_scan = table_scan(Some("inner_t"), &schema, None)?.build()?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(
+                    out_ref_col(DataType::Int32, "outer_t.grp").eq(col("inner_t.grp")),
                 )?
                 .project(vec![col("inner_t.id")])?
                 .build()?,

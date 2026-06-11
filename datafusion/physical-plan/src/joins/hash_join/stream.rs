@@ -47,7 +47,7 @@ use crate::{
     },
 };
 
-use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, UInt32Array, UInt64Array};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -1109,6 +1109,21 @@ impl HashJoinStream {
     }
 }
 
+/// Records which build rows of a correlated null-aware `LeftMark` join are
+/// UNKNOWN candidates for this probe batch.
+///
+/// Key layout (consumed positionally): index 0 is the `NOT IN` value key;
+/// indices 1..N are the correlation scope keys. A build row's mark must be
+/// NULL (SQL UNKNOWN) instead of FALSE when it is unmatched and either:
+/// 1. its value key is NULL and any probe row shares its correlation scope, or
+/// 2. some probe row in its correlation scope has a NULL value key.
+///
+/// Each case only does work proportional to the rows that actually involve a
+/// NULL value key: case 1 probes the build-side NULL-value scope map (which
+/// contains only NULL-valued build rows) with all probe rows, and case 2
+/// probes the full scope map with only the NULL-valued probe rows. Enumerating
+/// every scope match of every probe row instead would degrade to
+/// O(build * probe) for low-cardinality correlation keys.
 fn mark_null_candidates_for_probe_batch(
     build_side: &BuildSideReadyState,
     state: &ProcessProbeBatchState,
@@ -1118,20 +1133,10 @@ fn mark_null_candidates_for_probe_batch(
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
 ) -> Result<()> {
-    let Some(null_aware_mark_scope_map) =
-        build_side.left_data.null_aware_mark_scope_map()
-    else {
+    let Some(scope_map) = build_side.left_data.null_aware_mark_scope_map() else {
         return Ok(());
     };
 
-    let Map::HashMap(scope_hashmap) = null_aware_mark_scope_map else {
-        // `collect_left_input` constructs the correlation-scope map as a
-        // HashMap even when the primary full-key join map uses ArrayMap.
-        return internal_err!("null-aware mark scope map must be a hash map");
-    };
-
-    // Key layout (consumed positionally below): index 0 is the `NOT IN` value
-    // key; indices 1..N are the correlation scope keys.
     debug_assert!(
         build_side.left_data.values().len() > 1,
         "build keys must be [value, scope..]"
@@ -1146,24 +1151,90 @@ fn mark_null_candidates_for_probe_batch(
         "build/probe key counts must match"
     );
 
-    let build_value_key = &build_side.left_data.values()[0];
     let probe_value_key = &state.values[0];
     let build_scope_values = &build_side.left_data.values()[1..];
     let probe_scope_values = &state.values[1..];
 
-    if build_value_key.null_count() == 0 && probe_value_key.null_count() == 0 {
+    let null_value_scope_map = build_side.left_data.null_value_scope_map();
+    let probe_has_null_values = probe_value_key.null_count() > 0;
+    if null_value_scope_map.is_none() && !probe_has_null_values {
         return Ok(());
     }
 
-    hashes_buffer.clear();
-    hashes_buffer.resize(state.batch.num_rows(), 0);
-    create_hashes(probe_scope_values, random_state, hashes_buffer)?;
-
     let mut null_bitmap = build_side.left_data.null_indices_bitmap().lock();
+
+    // Case 1: build rows with a NULL value key are UNKNOWN as soon as any
+    // probe row shares their correlation scope.
+    if let Some(null_value_scope_map) = null_value_scope_map {
+        hashes_buffer.clear();
+        hashes_buffer.resize(state.batch.num_rows(), 0);
+        create_hashes(probe_scope_values, random_state, hashes_buffer)?;
+
+        let build_indices = &null_value_scope_map.build_indices;
+        scan_scope_matches_into_bitmap(
+            null_value_scope_map.map.as_ref(),
+            &null_value_scope_map.scope_values,
+            probe_scope_values,
+            hashes_buffer,
+            batch_size,
+            probe_indices_buffer,
+            build_indices_buffer,
+            // The map indexes only the NULL-valued build rows; translate its
+            // positions back to row indices in the full build batch.
+            |position| build_indices.value(position as usize),
+            &mut null_bitmap,
+        )?;
+    }
+
+    // Case 2: NULL-valued probe rows make every build row in their correlation
+    // scope an UNKNOWN candidate.
+    if probe_has_null_values {
+        let null_mask = arrow::compute::is_null(probe_value_key.as_ref())?;
+        let probe_null_scope_values = probe_scope_values
+            .iter()
+            .map(|values| Ok(arrow::compute::filter(values.as_ref(), &null_mask)?))
+            .collect::<Result<Vec<_>>>()?;
+
+        hashes_buffer.clear();
+        hashes_buffer.resize(null_mask.true_count(), 0);
+        create_hashes(&probe_null_scope_values, random_state, hashes_buffer)?;
+
+        scan_scope_matches_into_bitmap(
+            scope_map,
+            build_scope_values,
+            &probe_null_scope_values,
+            hashes_buffer,
+            batch_size,
+            probe_indices_buffer,
+            build_indices_buffer,
+            |position| position,
+            &mut null_bitmap,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Scans all correlation-scope matches between `build_scope_values` and
+/// `probe_scope_values` and sets the bit of every matched build row in
+/// `null_bitmap`, translating matched map positions through
+/// `map_position_to_build_row`.
+#[expect(clippy::too_many_arguments)]
+fn scan_scope_matches_into_bitmap(
+    scope_map: &dyn JoinHashMapType,
+    build_scope_values: &[ArrayRef],
+    probe_scope_values: &[ArrayRef],
+    hashes_buffer: &[u64],
+    batch_size: usize,
+    probe_indices_buffer: &mut Vec<u32>,
+    build_indices_buffer: &mut Vec<u64>,
+    map_position_to_build_row: impl Fn(u64) -> u64,
+    null_bitmap: &mut BooleanBufferBuilder,
+) -> Result<()> {
     let mut offset = (0, None);
     loop {
-        let (build_indices, probe_indices, next_offset) = lookup_join_hashmap(
-            scope_hashmap.as_ref(),
+        let (build_indices, _probe_indices, next_offset) = lookup_join_hashmap(
+            scope_map,
             build_scope_values,
             probe_scope_values,
             NullEquality::NullEqualsNothing,
@@ -1174,23 +1245,10 @@ fn mark_null_candidates_for_probe_batch(
             build_indices_buffer,
         )?;
 
-        if !build_indices.is_empty() {
-            build_indices.iter().zip(probe_indices.iter()).for_each(
-                |(build_idx, probe_idx)| {
-                    let build_idx = build_idx
-                        .expect("scope lookup should produce non-null build indices")
-                        as usize;
-                    let probe_idx = probe_idx
-                        .expect("scope lookup should produce non-null probe indices")
-                        as usize;
-
-                    if probe_value_key.is_null(probe_idx)
-                        || build_value_key.is_null(build_idx)
-                    {
-                        null_bitmap.set_bit(build_idx, true);
-                    }
-                },
-            );
+        for build_idx in build_indices.iter() {
+            let build_idx =
+                build_idx.expect("scope lookup should produce non-null build indices");
+            null_bitmap.set_bit(map_position_to_build_row(build_idx) as usize, true);
         }
 
         let Some(next_offset) = next_offset else {
