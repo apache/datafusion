@@ -2434,24 +2434,11 @@ impl NestedLoopJoinStream {
 
         // Early return if join type can't have unmatched rows
         let join_type_no_produce_left = !need_produce_result_in_final(self.join_type);
-        // Early return if another partition is the designated emitter.
-        //
-        // The shared probe-threads counter must be decremented exactly once per
-        // probe stream. That decrement (and the decision of which stream emits
-        // unmatched-left rows) is owned by the `ProbeEnd` state, which is
-        // entered exactly once per left chunk; here we only read the recorded
-        // decision. Because this state can be re-entered (e.g. when a ready
-        // batch is flushed via an early return in `handle_emit_left_unmatched`
-        // before the state advances), keeping the decrement in `ProbeEnd` is
-        // what guarantees it happens exactly once. A double decrement would
-        // drive the counter to zero before all partitions finished probing and
-        // let a partition emit unmatched-left rows early (spurious NULL-padded
-        // rows).
-        let handled_by_other_partition = !self.is_unmatched_left_emitter;
         // Stop processing unmatched rows, the caller will go to the next state
         let finished = self.left_emit_idx >= left_batch.num_rows();
 
-        if join_type_no_produce_left || handled_by_other_partition || finished {
+        // `ProbeEnd` already recorded whether this stream emits unmatched-left rows.
+        if join_type_no_produce_left || !self.is_unmatched_left_emitter || finished {
             return Ok(false);
         }
 
