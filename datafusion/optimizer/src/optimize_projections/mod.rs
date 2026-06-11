@@ -764,12 +764,12 @@ fn split_join_requirements(
             // The mark column is synthetic (produced by the join itself),
             // so discard it and route only to the left child.
             let (left_indices, _mark) = indices.split_off(left_len);
-            (left_indices, RequiredIndices::new())
+            (left_indices, RequiredIndices::new().append(&[0]))
         }
         JoinType::RightMark => {
             // Same as LeftMark, but for the right child.
             let (right_indices, _mark) = indices.split_off(right_len);
-            (RequiredIndices::new(), right_indices)
+            (RequiredIndices::new().append(&[0]), right_indices)
         }
         // All requirements can be re-routed to left child directly.
         JoinType::LeftAnti | JoinType::LeftSemi => (indices, RequiredIndices::new()),
@@ -2384,6 +2384,71 @@ mod tests {
               TableScan: a projection=[a, b, c]
               TableScan: b projection=[a]
           TableScan: c projection=[a, b, c]
+        "
+        )
+    }
+
+    // Regression test for https://github.com/apache/datafusion/issues/22477
+    // `= ANY` / `<> ALL` decorrelate into several stacked LeftMark joins whose
+    // (pushed-down) filters reference no right column. OptimizeProjections must
+    // not prune each mark join's right child to zero columns: a zero-column
+    // child has no table reference, so `mark_field` would emit an unqualified
+    // `mark` and the stacked marks would collide on the duplicate bare name.
+    // Here each mark stays qualified (`__correlated_sq_N.mark`) and the plan
+    // optimizes without error.
+    #[test]
+    fn optimize_projections_stacked_mark_joins_keep_qualified_mark() -> Result<()> {
+        let person = test_table_scan_with_name("person")?;
+
+        let aliased_scan = |table: &str, alias: &str| -> Result<LogicalPlan> {
+            LogicalPlanBuilder::from(test_table_scan_with_name(table)?)
+                .project(vec![col(format!("{table}.a"))])?
+                .alias(alias)?
+                .build()
+        };
+
+        // Three stacked LeftMark joins with trivially-`true` filters (the
+        // filter-less shape left behind by push_down_filter), feeding a filter
+        // that references all three marks.
+        let plan = LogicalPlanBuilder::from(person)
+            .join_on(
+                aliased_scan("s1", "__correlated_sq_1")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .join_on(
+                aliased_scan("s2", "__correlated_sq_2")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .join_on(
+                aliased_scan("s3", "__correlated_sq_3")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .filter(
+                col("__correlated_sq_1.mark")
+                    .or(col("__correlated_sq_2.mark"))
+                    .and(not(col("__correlated_sq_3.mark"))),
+            )?
+            .project(vec![col("person.a")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: person.a
+          Filter: (__correlated_sq_1.mark OR __correlated_sq_2.mark) AND NOT __correlated_sq_3.mark
+            LeftMark Join:  Filter: Boolean(true)
+              LeftMark Join:  Filter: Boolean(true)
+                LeftMark Join:  Filter: Boolean(true)
+                  TableScan: person projection=[a]
+                  SubqueryAlias: __correlated_sq_1
+                    TableScan: s1 projection=[a]
+                SubqueryAlias: __correlated_sq_2
+                  TableScan: s2 projection=[a]
+              SubqueryAlias: __correlated_sq_3
+                TableScan: s3 projection=[a]
         "
         )
     }
