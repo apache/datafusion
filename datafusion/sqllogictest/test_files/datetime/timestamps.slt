@@ -5390,6 +5390,14 @@ SELECT TRY_CAST(DATE '3000-01-01' AS TIMESTAMP(9));
 ----
 NULL
 
+query P
+SELECT TRY_CAST(ts AS TIMESTAMP(9)) AS ts
+FROM (
+    VALUES (arrow_cast(9223372037, 'Timestamp(s)'))
+) t(ts);
+----
+NULL
+
 # Float truncation behavior
 query P
 SELECT to_timestamp_seconds(arrow_cast(-1.9, 'Float64'));
