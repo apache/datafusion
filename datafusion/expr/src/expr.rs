@@ -437,14 +437,14 @@ pub enum Expr {
 #[derive(Clone, Eq, PartialOrd, Debug)]
 pub struct HigherOrderFunction {
     /// The function
-    pub func: Arc<dyn HigherOrderUDF>,
+    pub func: Arc<HigherOrderUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
 }
 
 impl HigherOrderFunction {
     /// Create a new `HigherOrderFunction` from a [`HigherOrderUDF`]
-    pub fn new(func: Arc<dyn HigherOrderUDF>, args: Vec<Expr>) -> Self {
+    pub fn new(func: Arc<HigherOrderUDF>, args: Vec<Expr>) -> Self {
         Self { func, args }
     }
 
@@ -452,7 +452,7 @@ impl HigherOrderFunction {
         self.func.name()
     }
 
-    /// Invokes the inner function [`HigherOrderUDF::lambda_parameters`]
+    /// Invokes the inner function [`crate::HigherOrderUDFImpl::lambda_parameters`]
     /// using the arguments of this invocation. This expression lambda
     /// variables must be already resolved either by coming from the
     /// default sql planner or by calling [Expr::resolve_lambda_variables]
@@ -662,7 +662,7 @@ pub fn intersect_metadata_for_union<'a>(
             }
             Some(current) => {
                 // Only keep keys that exist in both with the same value
-                current.retain(|k, v| metadata.get(k) == Some(v));
+                current.retain(|k, v| metadata.get(k) == Some(&*v));
             }
         }
     }

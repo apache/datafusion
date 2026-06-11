@@ -944,7 +944,7 @@ impl Interval {
             // Cardinality calculations are not implemented for this data type yet:
             None
         }
-        .map(|result| result + 1)
+        .and_then(|result| result.checked_add(1))
     }
 
     /// Reflects an [`Interval`] around the point zero.
@@ -4157,7 +4157,22 @@ mod tests {
             ScalarValue::TimestampNanosecond(Some(2_000_000_000), None),
         )?;
         assert_eq!(interval.cardinality().unwrap(), 1_000_000_001);
+        Ok(())
+    }
 
+    #[test]
+    fn test_cardinality_full_integer_range_does_not_overflow() -> Result<()> {
+        let interval = Interval::try_new(
+            ScalarValue::Int64(Some(i64::MIN)),
+            ScalarValue::Int64(Some(i64::MAX)),
+        )?;
+        assert_eq!(interval.cardinality(), None);
+
+        let interval = Interval::try_new(
+            ScalarValue::UInt64(Some(0)),
+            ScalarValue::UInt64(Some(u64::MAX)),
+        )?;
+        assert_eq!(interval.cardinality(), None);
         Ok(())
     }
 

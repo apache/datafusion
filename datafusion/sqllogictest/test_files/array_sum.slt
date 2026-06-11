@@ -1,0 +1,152 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+## array_sum
+
+# Basic case
+query R
+select array_sum([1.0, 2.0, 3.0]);
+----
+6
+
+# Single element
+query R
+select array_sum([5.0]);
+----
+5
+
+# Negative values
+query R
+select array_sum([-1.0, -2.0, -3.0]);
+----
+-6
+
+# Positive and negative cancel
+query R
+select array_sum([1.0, -1.0, 2.0, -2.0]);
+----
+0
+
+# Empty array returns NULL (matches PostgreSQL, DuckDB list_sum, SQL Standard SUM-of-empty-set)
+query R
+select array_sum(arrow_cast(make_array(), 'List(Float64)'));
+----
+NULL
+
+# Bare NULL input returns NULL row
+query R
+select array_sum(NULL);
+----
+NULL
+
+# NULL elements are skipped (SQL aggregate convention)
+query R
+select array_sum([1.0, NULL, 3.0]);
+----
+4
+
+# Single NULL among numeric: skip the NULL
+query R
+select array_sum([NULL, 10.0]);
+----
+10
+
+# All-NULL array returns NULL row (matches SQL SUM over all-NULL)
+query R
+select array_sum(arrow_cast([NULL, NULL], 'List(Float64)'));
+----
+NULL
+
+# LargeList support
+query R
+select array_sum(arrow_cast([1.0, 2.0, 3.0], 'LargeList(Float64)'));
+----
+6
+
+# FixedSizeList input (coerced to List)
+query R
+select array_sum(arrow_cast([1.0, 2.0, 3.0], 'FixedSizeList(3, Float64)'));
+----
+6
+
+# Float32 inner type (coerced to Float64)
+query R
+select array_sum(arrow_cast([1.0, 2.0, 3.0], 'List(Float32)'));
+----
+6
+
+# Int64 inner type (coerced to Float64)
+query R
+select array_sum(arrow_cast([1, 2, 3], 'List(Int64)'));
+----
+6
+
+# Integer literals (coerced to Float64)
+query R
+select array_sum([1, 2, 3]);
+----
+6
+
+# Unsupported non-list input (plan error)
+query error array_sum does not support type
+select array_sum(1);
+
+# Multi-row query with mix of normal, single-element, NULL elements, empty, NULL row
+query R
+select array_sum(column1) from (values
+    (make_array(1.0, 2.0, 3.0)),
+    (make_array(0.0)),
+    (make_array(1.0, NULL, 4.0)),
+    (arrow_cast(make_array(), 'List(Float64)')),
+    (NULL)
+) as t(column1);
+----
+6
+0
+5
+NULL
+NULL
+
+# Wrong arity (zero args)
+query error array_sum function requires 1 argument, got 0
+select array_sum();
+
+# Wrong arity (two args)
+query error array_sum function requires 1 argument, got 2
+select array_sum([1.0], [2.0]);
+
+# Return type is Float64
+query RT
+select array_sum([1.0, 2.0, 3.0]), arrow_typeof(array_sum([1.0, 2.0, 3.0]));
+----
+6 Float64
+
+# list_sum alias produces the same result
+query R
+select list_sum([1.0, 2.0, 3.0]);
+----
+6
+
+# list_sum alias with NULL row propagates correctly
+query R
+select list_sum(column1) from (values
+    (make_array(1.0, 2.0)),
+    (NULL)
+) as t(column1);
+----
+3
+NULL

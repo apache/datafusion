@@ -553,3 +553,87 @@ async fn test_count_distinct_optimization() -> Result<()> {
 
     Ok(())
 }
+
+/// Regression test for https://github.com/apache/datafusion/issues/22554
+///
+/// TopK aggregation for DISTINCT queries was unconditionally dropping NULL
+/// group keys, producing wrong results with NULLS FIRST / NULLS LAST ordering.
+#[tokio::test]
+async fn topk_distinct_preserves_nulls() -> Result<()> {
+    let ctx = SessionContext::new_with_config(SessionConfig::new());
+
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, true)])),
+        vec![Arc::new(StringArray::from(vec![None, Some(""), Some("a")]))],
+    )?;
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+
+    // ASC NULLS FIRST LIMIT 1 → NULL should come first
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS FIRST LIMIT 1")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(&["+---+", "| v |", "+---+", "|   |", "+---+"], &result);
+    assert!(result[0].column(0).is_null(0), "first row should be NULL");
+
+    // ASC NULLS FIRST LIMIT 2 → NULL, then empty string
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS FIRST LIMIT 2")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(result[0].num_rows(), 2);
+    assert!(result[0].column(0).is_null(0));
+    assert!(!result[0].column(0).is_null(1));
+
+    // ASC NULLS LAST LIMIT 1 → empty string (smallest non-null)
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS LAST LIMIT 1")
+        .await?
+        .collect()
+        .await?;
+    assert!(
+        !result[0].column(0).is_null(0),
+        "first row should NOT be NULL"
+    );
+
+    // Full result with NULLS LAST should include NULL at end
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS LAST LIMIT 3")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(result[0].num_rows(), 3);
+    assert!(result[0].column(0).is_null(2), "last row should be NULL");
+
+    // Integer column
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)])),
+        vec![Arc::new(Int64Array::from(vec![None, Some(3), Some(1)]))],
+    )?;
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    ctx.register_table("t_int", Arc::new(table))?;
+
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t_int ORDER BY v ASC NULLS FIRST LIMIT 1")
+        .await?
+        .collect()
+        .await?;
+    assert!(
+        result[0].column(0).is_null(0),
+        "integer NULL should be first"
+    );
+
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t_int ORDER BY v DESC NULLS LAST LIMIT 2")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(result[0].num_rows(), 2);
+    assert!(!result[0].column(0).is_null(0));
+    assert!(!result[0].column(0).is_null(1));
+
+    Ok(())
+}

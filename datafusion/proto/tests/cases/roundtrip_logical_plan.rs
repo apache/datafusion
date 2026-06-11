@@ -68,7 +68,9 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
-use datafusion_common::format::ExplainFormat;
+use datafusion_common::format::{
+    ExplainAnalyzeCategories, ExplainFormat, MetricCategory, MetricType,
+};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
@@ -83,7 +85,9 @@ use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, NullTreatment,
     ScalarFunction, Unnest, WildcardOptions,
 };
-use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
+use datafusion_expr::logical_plan::{
+    ExplainOption, Extension, UserDefinedLogicalNodeCore,
+};
 use datafusion_expr::{
     Accumulator, AggregateUDF, ColumnarValue, DmlStatement, ExprFunctionExt,
     ExprSchemable, LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder, Operator,
@@ -300,6 +304,74 @@ async fn roundtrip_explain_format_tree() -> Result<()> {
         plan => panic!("expected Explain plan, got {plan:?}"),
     }
 
+    Ok(())
+}
+
+/// Build an `EXPLAIN`/`EXPLAIN ANALYZE` plan with statement-level overrides
+/// set directly via the builder, then assert the proto round-trip preserves
+/// every field. Going through the builder avoids depending on parser support
+/// for the parenthesized option syntax in this test crate.
+async fn assert_explain_roundtrip(option: ExplainOption) -> Result<()> {
+    let ctx = SessionContext::new();
+    let input = ctx.sql("SELECT 1 AS x").await?.into_optimized_plan()?;
+    let plan = LogicalPlanBuilder::from(input)
+        .explain_option_format(option)?
+        .build()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan, round_trip);
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_explain_show_statistics_override() -> Result<()> {
+    for show_statistics in [None, Some(true), Some(false)] {
+        assert_explain_roundtrip(
+            ExplainOption::default()
+                .with_format(ExplainFormat::Indent)
+                .with_show_statistics(show_statistics),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_analyze_level_override() -> Result<()> {
+    for analyze_level in [None, Some(MetricType::Summary), Some(MetricType::Dev)] {
+        assert_explain_roundtrip(
+            ExplainOption::default()
+                .with_analyze(true)
+                .with_analyze_level(analyze_level),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_analyze_categories_override() -> Result<()> {
+    let cases = [
+        None,
+        Some(ExplainAnalyzeCategories::All),
+        Some(ExplainAnalyzeCategories::Only(vec![])),
+        Some(ExplainAnalyzeCategories::Only(vec![MetricCategory::Rows])),
+        Some(ExplainAnalyzeCategories::Only(vec![
+            MetricCategory::Rows,
+            MetricCategory::Bytes,
+            MetricCategory::Timing,
+            MetricCategory::Uncategorized,
+        ])),
+    ];
+    for analyze_categories in cases {
+        assert_explain_roundtrip(
+            ExplainOption::default()
+                .with_analyze(true)
+                .with_analyze_categories(analyze_categories),
+        )
+        .await?;
+    }
     Ok(())
 }
 
