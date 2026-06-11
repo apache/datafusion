@@ -329,21 +329,21 @@ impl Column {
 
 impl From<&str> for Column {
     fn from(c: &str) -> Self {
-        Self::from_qualified_name(c)
+        Self::from_qualified_name_ignore_case(c)
     }
 }
 
 /// Create a column, cloning the string
 impl From<&String> for Column {
     fn from(c: &String) -> Self {
-        Self::from_qualified_name(c)
+        Self::from_qualified_name_ignore_case(c)
     }
 }
 
 /// Create a column, reusing the existing string
 impl From<String> for Column {
     fn from(c: String) -> Self {
-        Self::from_qualified_name(c)
+        Self::from_qualified_name_ignore_case(c)
     }
 }
 
