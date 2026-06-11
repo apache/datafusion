@@ -1670,6 +1670,9 @@ impl DefaultPhysicalPlanner {
 
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
+                // Null-aware joins are pinned to CollectLeft hash joins (see
+                // `HashJoinExec::null_aware`): never repartition them, and
+                // never route them to the sort-merge path below.
                 let can_repartition_join = session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && !*null_aware;

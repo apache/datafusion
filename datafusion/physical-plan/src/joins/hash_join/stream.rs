@@ -326,8 +326,13 @@ pub(super) struct HashJoinStream {
     /// Scratch space for build indices during hash lookup
     build_indices_buffer: Vec<u64>,
 
+    /// Scratch space for scope-key hashes in the null-aware mark pass, reused
+    /// across probe batches. Separate from `hashes_buffer`, which still holds
+    /// the probe batch's full-key hashes during the chunked lookup loop.
     null_mark_hashes_buffer: Vec<u64>,
+    /// Scratch space for probe indices during null-aware scope lookups
     null_mark_probe_indices_buffer: Vec<u32>,
+    /// Scratch space for build indices during null-aware scope lookups
     null_mark_build_indices_buffer: Vec<u64>,
 
     /// Specifies whether the right side has an ordering to potentially preserve
@@ -805,6 +810,9 @@ impl HashJoinStream {
             return Ok(StatefulStreamResult::Continue);
         }
 
+        // For correlated null-aware LeftMark (`on[1..]` scope keys, hence
+        // values len > 1), record this batch's UNKNOWN candidates once, before
+        // the first chunked lookup (offset == (0, None)).
         if self.null_aware
             && self.join_type == JoinType::LeftMark
             && state.values.len() > 1
