@@ -1444,38 +1444,33 @@ pub(crate) fn build_null_aware_left_mark_column(
     probe_side_has_null: bool,
     probe_side_non_empty: bool,
 ) -> ArrayRef {
-    Arc::new(
-        build_indices
-            .iter()
-            .enumerate()
-            .map(|(output_idx, build_idx)| {
-                if probe_indices.is_valid(output_idx) {
-                    Some(true)
-                } else {
-                    let build_idx = build_idx.expect(
-                        "LeftMark final indices should always contain build-side rows",
-                    ) as usize;
-                    if let Some(null_indices_bitmap) = null_indices_bitmap {
-                        if null_indices_bitmap.get_bit(build_idx) {
-                            None
-                        } else {
-                            Some(false)
-                        }
-                    } else if build_key_column.is_null(build_idx) {
-                        if probe_side_non_empty {
-                            None
-                        } else {
-                            Some(false)
-                        }
-                    } else if probe_side_has_null {
-                        None
-                    } else {
-                        Some(false)
-                    }
-                }
-            })
-            .collect::<BooleanArray>(),
-    ) as ArrayRef
+    // Whether an unmatched build row's mark is NULL (UNKNOWN) instead of FALSE:
+    // correlated joins precomputed this per row in `null_indices_bitmap`; the
+    // uncorrelated rules are cases 1-4 in the doc above.
+    let unmatched_mark_is_null = |build_idx: usize| match null_indices_bitmap {
+        Some(bitmap) => bitmap.get_bit(build_idx),
+        None if build_key_column.is_null(build_idx) => probe_side_non_empty,
+        None => probe_side_has_null,
+    };
+
+    let marks: BooleanArray = build_indices
+        .iter()
+        .zip(probe_indices.iter())
+        .map(|(build_idx, probe_idx)| {
+            if probe_idx.is_some() {
+                return Some(true);
+            }
+            let build_idx = build_idx
+                .expect("LeftMark final indices should always contain build-side rows")
+                as usize;
+            if unmatched_mark_is_null(build_idx) {
+                None
+            } else {
+                Some(false)
+            }
+        })
+        .collect();
+    Arc::new(marks)
 }
 
 /// Returns a new [RecordBatch] for a probe batch when no probe row can find a
