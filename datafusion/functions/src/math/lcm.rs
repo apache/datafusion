@@ -23,7 +23,7 @@ use arrow::datatypes::{
 use crate::math::common::{lcm_signed, lcm_signed_int};
 use crate::utils::{calculate_binary_decimal_math_cast, calculate_binary_math_cast};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -86,14 +86,14 @@ impl ScalarUDFImpl for LcmFunc {
             (lhs, rhs) if lhs.is_integer() && rhs.is_integer() => Ok(DataType::Int64),
             (lhs, rhs) if lhs.is_decimal() || rhs.is_decimal() => {
                 decimal_coercion(lhs, rhs).map(Ok).unwrap_or_else(|| {
-                    exec_err!(
+                    plan_err!(
                         "Unsupported argument types {lhs:?} and {rhs:?} for function {}",
                         self.name()
                     )
                 })
             }
             (lhs, rhs) => {
-                exec_err!(
+                plan_err!(
                     "Unsupported argument types {lhs:?} and {rhs:?} for function {}",
                     self.name()
                 )
