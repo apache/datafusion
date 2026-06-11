@@ -1,0 +1,23 @@
+name Q13
+group hj
+
+load sql_benchmarks/hj/init/load.sql
+
+assert I
+SELECT count(*) > 0 FROM customer
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q13: 1% Density, 100% Hit rate
+-- density: 0.01,
+-- prob_hit: 1.0,
+-- build_size: "100K",
+-- probe_size: "60M",
+SELECT l.k
+FROM (SELECT l_suppkey * 100 as k
+      FROM lineitem) l
+         JOIN (SELECT s_suppkey * 100 as k
+               FROM supplier) s ON l.k = s.k;
