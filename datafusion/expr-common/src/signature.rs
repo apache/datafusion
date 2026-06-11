@@ -1043,14 +1043,6 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 ///
 /// * `Exact` - Only accepts arguments that exactly match the desired type
 /// * `Implicit` - Accepts the desired type and can coerce from specified source types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
-pub enum EncodingPreservation {
-    /// Do not request preservation of a physical encoding.
-    None,
-    /// Preserve dictionary encoding and coerce only the dictionary values.
-    Dictionary,
-}
-
 #[derive(Debug, Clone, Eq, PartialOrd)]
 pub enum Coercion {
     /// Coercion that only accepts arguments exactly matching the desired type.
@@ -1070,6 +1062,16 @@ pub enum Coercion {
         /// Physical encoding preservation requested by the function.
         encoding_preservation: EncodingPreservation,
     },
+}
+
+/// Controls whether a [`Coercion`] preserves an argument's physical encoding
+/// (e.g. dictionary) instead of materializing it to the coerced value type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+pub enum EncodingPreservation {
+    /// Do not request preservation of a physical encoding.
+    None,
+    /// Preserve dictionary encoding and coerce only the dictionary values.
+    Dictionary,
 }
 
 impl Coercion {
