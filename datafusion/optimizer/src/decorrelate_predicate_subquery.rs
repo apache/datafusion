@@ -427,6 +427,10 @@ fn build_join(
     };
 
     let join_filter = match (join_filter_opt, &aliased_in_predicate) {
+        // Keep the in-predicate as the first conjunct: equijoin extraction
+        // converts conjuncts into join keys in order, and null-aware mark
+        // execution requires `on[0]` to be the scalar NOT IN value key (see
+        // `HashJoinExec::null_aware`).
         (Some(join_filter), Some(in_predicate)) => in_predicate.clone().and(join_filter),
         (Some(join_filter), None) => join_filter,
         (None, Some(in_predicate)) => in_predicate.clone(),
