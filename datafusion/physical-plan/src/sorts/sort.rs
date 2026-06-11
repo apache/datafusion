@@ -2317,7 +2317,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_return_stream_with_batches_in_the_requested_size_and_update_metrics() -> Result<()> {
+    async fn should_return_stream_with_batches_in_the_requested_size_and_update_metrics()
+    -> Result<()> {
         let batch_size = 100;
 
         let create_task_ctx = |_: &[RecordBatch]| {
@@ -2329,13 +2330,16 @@ mod tests {
         };
 
         // Smaller than batch size and require more than a single batch to get the requested batch size
-        test_sort_output_batch_size_and_base_metrics(10, batch_size / 4, create_task_ctx).await?;
+        test_sort_output_batch_size_and_base_metrics(10, batch_size / 4, create_task_ctx)
+            .await?;
 
         // Not evenly divisible by batch size
-        test_sort_output_batch_size_and_base_metrics(10, batch_size + 7, create_task_ctx).await?;
+        test_sort_output_batch_size_and_base_metrics(10, batch_size + 7, create_task_ctx)
+            .await?;
 
         // Evenly divisible by batch size and is larger than 2 output batches
-        test_sort_output_batch_size_and_base_metrics(10, batch_size * 3, create_task_ctx).await?;
+        test_sort_output_batch_size_and_base_metrics(10, batch_size * 3, create_task_ctx)
+            .await?;
 
         Ok(())
     }
@@ -2355,8 +2359,12 @@ mod tests {
 
         // Smaller than batch size and require more than a single batch to get the requested batch size
         {
-            let metrics =
-                test_sort_output_batch_size_and_base_metrics(10, batch_size / 4, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size / 4,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_eq!(
                 metrics.spill_count(),
@@ -2367,8 +2375,12 @@ mod tests {
 
         // Not evenly divisible by batch size
         {
-            let metrics =
-                test_sort_output_batch_size_and_base_metrics(10, batch_size + 7, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size + 7,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_eq!(
                 metrics.spill_count(),
@@ -2379,8 +2391,12 @@ mod tests {
 
         // Evenly divisible by batch size and is larger than 2 output batches
         {
-            let metrics =
-                test_sort_output_batch_size_and_base_metrics(10, batch_size * 3, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size * 3,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_eq!(
                 metrics.spill_count(),
@@ -2485,24 +2501,36 @@ mod tests {
 
         // Smaller than batch size and require more than a single batch to get the requested batch size
         {
-            let metrics =
-                test_sort_output_batch_size_and_base_metrics(10, batch_size / 4, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size / 4,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
         }
 
         // Not evenly divisible by batch size
         {
-            let metrics =
-                test_sort_output_batch_size_and_base_metrics(10, batch_size + 7, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size + 7,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
         }
 
         // Evenly divisible by batch size and is larger than 2 batches
         {
-            let metrics =
-                test_sort_output_batch_size_and_base_metrics(10, batch_size * 3, create_task_ctx).await?;
+            let metrics = test_sort_output_batch_size_and_base_metrics(
+                10,
+                batch_size * 3,
+                create_task_ctx,
+            )
+            .await?;
 
             assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
         }
@@ -2521,7 +2549,7 @@ mod tests {
         let task_ctx = create_task_ctx(batches.as_slice());
 
         let output_rows = batches.iter().map(|item| item.num_rows()).sum();
-        
+
         let expected_batch_size = task_ctx.session_config().batch_size();
 
         let schema = batches[0].schema();
@@ -2540,12 +2568,16 @@ mod tests {
             last_expected_batch_size = expected_batch_size;
         }
         assert_eq!(last_batch.num_rows(), last_expected_batch_size);
-        
-        assert_baseline_metrics_for_non_empty_output(&metrics, output_rows, expected_batch_size);
+
+        assert_baseline_metrics_for_non_empty_output(
+            &metrics,
+            output_rows,
+            expected_batch_size,
+        );
 
         Ok(metrics)
     }
-    
+
     #[tokio::test]
     async fn empty_sort_stream_should_report_end_time() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
@@ -2561,7 +2593,11 @@ mod tests {
             })
             .expect("Must have end time metric since it exists in the baseline");
 
-        assert_eq!(metrics.spill_count().unwrap_or_default(), 0, "expected to not have spills");
+        assert_eq!(
+            metrics.spill_count().unwrap_or_default(),
+            0,
+            "expected to not have spills"
+        );
         assert_ne!(end_time.value(), None);
 
         Ok(())
@@ -2604,7 +2640,7 @@ mod tests {
 
         assert_eq!(output_batches.value(), output_rows.div_ceil(batch_size));
     }
-        
+
     async fn run_sort_on_input(
         task_ctx: TaskContext,
         order_by_col: &str,

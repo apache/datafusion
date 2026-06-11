@@ -226,27 +226,39 @@ impl MultiLevelMergeBuilder {
         match (self.sorted_spill_files.len(), self.sorted_streams.len()) {
             // No data so empty batch
             (0, 0) => {
-                let empty_stream = Box::pin(EmptyRecordBatchStream::new(Arc::clone(
-                &self.schema,
-                )));
-                Ok(Box::pin(ObservedStream::new(empty_stream, self.metrics.clone(), None)))
-            },
+                let empty_stream =
+                    Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
+                Ok(Box::pin(ObservedStream::new(
+                    empty_stream,
+                    self.metrics.clone(),
+                    None,
+                )))
+            }
 
             // Only in-memory stream, return that
             (0, 1) => {
                 let output_stream = self.sorted_streams.remove(0);
-                Ok(Box::pin(ObservedStream::new(output_stream, self.metrics.clone(), None)))
-            },
+                Ok(Box::pin(ObservedStream::new(
+                    output_stream,
+                    self.metrics.clone(),
+                    None,
+                )))
+            }
 
             // Only single sorted spill file so return it
             (1, 0) => {
                 let spill_file = self.sorted_spill_files.remove(0);
 
                 // Not reserving any memory for this disk as we are not holding it in memory
-                let output_stream = self.spill_manager
+                let output_stream = self
+                    .spill_manager
                     .read_spill_as_stream(spill_file.file, None)?;
 
-                Ok(Box::pin(ObservedStream::new(output_stream, self.metrics.clone(), None)))
+                Ok(Box::pin(ObservedStream::new(
+                    output_stream,
+                    self.metrics.clone(),
+                    None,
+                )))
             }
 
             // Only in memory streams, so merge them all in a single pass
