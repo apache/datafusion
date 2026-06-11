@@ -684,6 +684,50 @@ mod tests {
     }
 
     #[test]
+    fn test_timestamp_widening_exactness() {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        )]);
+
+        let column_expr = col("ts", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::TimestampNanosecond(Some(123_000_000), None));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::GtEq, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        assert!(result.transformed);
+        let optimized_binary = result.data.downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*optimized_binary.op(), Operator::GtEq);
+        assert!(!is_cast_expr(optimized_binary.left()));
+        let right_literal = optimized_binary.right().downcast_ref::<Literal>().unwrap();
+        assert_eq!(
+            right_literal.value(),
+            &ScalarValue::TimestampMillisecond(Some(123), None)
+        );
+
+        let column_expr = col("ts", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::TimestampNanosecond(Some(123_456_789), None));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::GtEq, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+        assert!(!result.transformed);
+    }
+
+    #[test]
     fn test_complex_nested_expression() {
         let schema = test_schema();
 

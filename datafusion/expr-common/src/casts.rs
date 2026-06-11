@@ -131,7 +131,15 @@ pub fn cast_predicate_exact_literal(
         return None;
     }
 
-    try_cast_literal_to_type(lit_value, source_type)
+    let source_value = try_cast_literal_to_type(lit_value, source_type)?;
+    if is_timestamp_cast(source_type, target_type) {
+        let round_tripped = try_cast_literal_to_type(&source_value, target_type)?;
+        if &round_tripped != lit_value {
+            return None;
+        }
+    }
+
+    Some(source_value)
 }
 
 /// Returns true when casting a timestamp from `source_type` to `target_type`
@@ -147,6 +155,13 @@ pub fn is_timestamp_precision_narrowing_cast(
     };
 
     timestamp_unit_scale(source_unit) > timestamp_unit_scale(target_unit)
+}
+
+fn is_timestamp_cast(source_type: &DataType, target_type: &DataType) -> bool {
+    matches!(
+        (source_type, target_type),
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
+    )
 }
 
 fn exact_preimage_for_cast_predicate(
@@ -1253,6 +1268,23 @@ mod tests {
                 &ts_ns,
                 &ts_ms,
                 Operator::Eq,
+                &ScalarValue::TimestampMillisecond(Some(0), None),
+            )
+            .unwrap(),
+            Some(CastPredicatePreimage::Range(
+                Interval::try_new(
+                    ScalarValue::TimestampNanosecond(Some(-999_999), None),
+                    ScalarValue::TimestampNanosecond(Some(1_000_000), None),
+                )
+                .unwrap()
+            ))
+        );
+
+        assert_eq!(
+            cast_predicate_preimage(
+                &ts_ns,
+                &ts_ms,
+                Operator::Eq,
                 &ScalarValue::TimestampMillisecond(Some(-1), None),
             )
             .unwrap(),
@@ -1264,6 +1296,54 @@ mod tests {
                 .unwrap()
             ))
         );
+    }
+
+    #[test]
+    fn test_cast_predicate_preimage_timestamp_widening_exact_only() {
+        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
+        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+
+        assert_eq!(
+            cast_predicate_preimage(
+                &ts_ms,
+                &ts_ns,
+                Operator::Eq,
+                &ScalarValue::TimestampNanosecond(Some(123_000_000), None),
+            )
+            .unwrap(),
+            Some(CastPredicatePreimage::Exact(
+                ScalarValue::TimestampMillisecond(Some(123), None)
+            ))
+        );
+
+        assert_eq!(
+            cast_predicate_preimage(
+                &ts_ms,
+                &ts_ns,
+                Operator::Eq,
+                &ScalarValue::TimestampNanosecond(Some(123_456_789), None),
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_cast_predicate_preimage_timestamp_null_literal_unsupported() {
+        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
+        let null_ms = ScalarValue::TimestampMillisecond(None, None);
+
+        for op in [
+            Operator::Eq,
+            Operator::IsDistinctFrom,
+            Operator::IsNotDistinctFrom,
+        ] {
+            assert_eq!(
+                cast_predicate_preimage(&ts_ns, &ts_ms, op, &null_ms).unwrap(),
+                None
+            );
+        }
     }
 
     #[test]

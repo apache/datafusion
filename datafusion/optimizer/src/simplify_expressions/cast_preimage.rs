@@ -192,7 +192,7 @@ mod tests {
     use arrow::datatypes::{Field, TimeUnit};
     use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
     use datafusion_expr::simplify::SimplifyContext;
-    use datafusion_expr::{cast, col, in_list};
+    use datafusion_expr::{binary_expr, cast, col, in_list};
 
     #[test]
     fn test_cast_predicate_exact_literal_unwrap() {
@@ -276,6 +276,81 @@ mod tests {
             cast(col("ts_nano"), timestamp_millis_type()).lt_eq(lit_timestamp_millis(-1));
         let expected = col("ts_nano").lt(lit_timestamp_nano(-999_999));
         assert_eq!(optimize_test(expr, &schema), expected);
+
+        let expr =
+            cast(col("ts_nano"), timestamp_millis_type()).lt(lit_timestamp_millis(0));
+        let expected = col("ts_nano").lt(lit_timestamp_nano(-999_999));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        let expr =
+            cast(col("ts_nano"), timestamp_millis_type()).lt_eq(lit_timestamp_millis(0));
+        let expected = col("ts_nano").lt(lit_timestamp_nano(1_000_000));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        let expr =
+            cast(col("ts_nano"), timestamp_millis_type()).gt(lit_timestamp_millis(0));
+        let expected = col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        let expr =
+            cast(col("ts_nano"), timestamp_millis_type()).gt_eq(lit_timestamp_millis(0));
+        let expected = col("ts_nano").gt_eq(lit_timestamp_nano(-999_999));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        let expr =
+            cast(col("ts_nano"), timestamp_millis_type()).not_eq(lit_timestamp_millis(0));
+        let expected = col("ts_nano")
+            .lt(lit_timestamp_nano(-999_999))
+            .or(col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000)));
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_cast_preimage_timestamp_precision_narrowing_distinctness() {
+        let schema = expr_test_schema();
+
+        let expr = binary_expr(
+            cast(col("ts_nano"), timestamp_millis_type()),
+            Operator::IsNotDistinctFrom,
+            lit_timestamp_millis(0),
+        );
+        let expected = col("ts_nano")
+            .gt_eq(lit_timestamp_nano(-999_999))
+            .and(col("ts_nano").lt(lit_timestamp_nano(1_000_000)));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        let expr = binary_expr(
+            cast(col("ts_nano"), timestamp_millis_type()),
+            Operator::IsDistinctFrom,
+            lit_timestamp_millis(0),
+        );
+        let expected = col("ts_nano")
+            .lt(lit_timestamp_nano(-999_999))
+            .or(col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000)));
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_cast_preimage_timestamp_widening_requires_exact_literal() {
+        let schema = expr_test_schema();
+
+        let expr = cast(col("ts_milli"), timestamp_nano_type())
+            .eq(lit_timestamp_nano(123_000_000));
+        let expected = col("ts_milli").eq(lit_timestamp_millis(123));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        let expr = cast(col("ts_milli"), timestamp_nano_type())
+            .eq(lit_timestamp_nano(123_456_789));
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
+
+        let expr = cast(col("ts_milli"), timestamp_nano_type())
+            .gt_eq(lit_timestamp_nano(123_000_000));
+        let expected = col("ts_milli").gt_eq(lit_timestamp_millis(123));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        let expr = cast(col("ts_milli"), timestamp_nano_type())
+            .gt_eq(lit_timestamp_nano(123_456_789));
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
     }
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
@@ -293,6 +368,7 @@ mod tests {
             DFSchema::from_unqualified_fields(
                 vec![
                     Field::new("c1", DataType::Int32, false),
+                    Field::new("ts_milli", timestamp_millis_type(), false),
                     Field::new("ts_nano", timestamp_nano_type(), false),
                 ]
                 .into(),
