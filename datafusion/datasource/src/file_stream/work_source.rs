@@ -49,11 +49,17 @@ pub(super) enum WorkSource {
 
 impl WorkSource {
     /// Pop the next work item from this work source.
-    pub(super) fn pop_work(&mut self) -> Option<WorkItem> {
+    ///
+    /// Returns [`PopResult::Pending`] for [`WorkSource::Shared`] when the
+    /// queues are empty but a sibling is still planning a file that may yet
+    /// be split and donated. The caller must re-schedule its waker and yield
+    /// instead of terminating.
+    pub(super) fn pop_work(&mut self) -> PopResult {
         match self {
-            Self::Local(files) => {
-                files.pop_front().map(|file| WorkItem::File(Box::new(file)))
-            }
+            Self::Local(files) => match files.pop_front() {
+                Some(file) => PopResult::Ready(WorkItem::File(Box::new(file)), None),
+                None => PopResult::Done,
+            },
             Self::Shared(shared) => shared.pop_work(),
         }
     }
@@ -91,6 +97,42 @@ impl WorkSource {
     }
 }
 
+/// Outcome of a pop attempt against a [`WorkSource`].
+pub(super) enum PopResult {
+    /// Work popped. The optional [`FileLease`] must be held while the file
+    /// may still donate morsels; while it is alive, idle siblings keep
+    /// polling instead of treating the shared source as drained.
+    Ready(WorkItem, Option<FileLease>),
+    /// No work currently available, but a sibling is still planning a file
+    /// that may donate morsels. The caller must re-schedule its waker and
+    /// yield.
+    Pending,
+    /// No work available and no donors in flight — fully drained.
+    Done,
+}
+
+/// RAII guard for a file popped from a [`SharedWorkSource`].
+///
+/// While alive, idle sibling streams keep polling for donated morsels
+/// instead of terminating: the holder is still planning the file and may yet
+/// split it and donate the surplus. Dropped once the donation window closes
+/// (the first morsel starts streaming) or the file is abandoned.
+pub(super) struct FileLease {
+    inner: Arc<SharedWorkSourceInner>,
+}
+
+impl std::fmt::Debug for FileLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileLease").finish_non_exhaustive()
+    }
+}
+
+impl Drop for FileLease {
+    fn drop(&mut self) {
+        self.inner.queues.lock().in_flight -= 1;
+    }
+}
+
 /// Shared source of work for sibling `FileStream`s
 ///
 /// The queue is created once per execution and shared by all reorderable
@@ -123,6 +165,10 @@ struct WorkQueues {
     /// Number of sibling streams that have already run out of work and
     /// finished.
     finished_workers: usize,
+    /// Number of popped files whose [`FileLease`] is still alive. Non-zero
+    /// means a donor is still planning a file and may yet donate morsels, so
+    /// idle siblings must keep polling rather than terminate.
+    in_flight: usize,
 }
 
 impl SharedWorkSource {
@@ -162,16 +208,28 @@ impl SharedWorkSource {
     /// Pop the next work item from the shared queues.
     ///
     /// Donated morsels are preferred over unopened files so partially-planned
-    /// work finishes first.
-    fn pop_work(&self) -> Option<WorkItem> {
+    /// work finishes first. Popping a file registers a [`FileLease`]: while
+    /// it is alive, siblings that find the queues empty get
+    /// [`PopResult::Pending`] (the file may still be split and donated)
+    /// rather than [`PopResult::Done`].
+    fn pop_work(&self) -> PopResult {
         let mut queues = self.inner.queues.lock();
         if let Some(morsel) = queues.morsels.pop_front() {
-            return Some(WorkItem::Morsel(morsel));
+            return PopResult::Ready(WorkItem::Morsel(morsel), None);
         }
-        queues
-            .files
-            .pop_front()
-            .map(|file| WorkItem::File(Box::new(file)))
+        if let Some(file) = queues.files.pop_front() {
+            queues.in_flight += 1;
+            return PopResult::Ready(
+                WorkItem::File(Box::new(file)),
+                Some(FileLease {
+                    inner: Arc::clone(&self.inner),
+                }),
+            );
+        }
+        if queues.in_flight > 0 {
+            return PopResult::Pending;
+        }
+        PopResult::Done
     }
 
     /// Record that a consuming stream has finished (ran out of work or hit
@@ -236,17 +294,17 @@ mod tests {
         // 3 files remaining >= 2 workers: no split
         assert!(!hint.should_split());
 
-        assert!(source.pop_work().is_some());
-        assert!(source.pop_work().is_some());
+        assert!(matches!(source.pop_work(), PopResult::Ready(..)));
+        assert!(matches!(source.pop_work(), PopResult::Ready(..)));
         // 1 file remaining < 2 workers: split
         assert!(hint.should_split());
 
-        assert!(source.pop_work().is_some());
+        assert!(matches!(source.pop_work(), PopResult::Ready(..)));
         // queue empty, both workers still active: split
         assert!(hint.should_split());
 
         // one worker finishes; only one active worker remains
-        assert!(source.pop_work().is_none());
+        assert!(matches!(source.pop_work(), PopResult::Done));
         source.mark_finished();
         assert!(!hint.should_split());
     }
@@ -256,9 +314,38 @@ mod tests {
         let source = SharedWorkSource::with_workers(vec![test_file()], 2);
         source.donate_morsels(vec![Box::new(DummyMorsel) as Box<dyn Morsel>].into_iter());
 
-        assert!(matches!(source.pop_work(), Some(WorkItem::Morsel(_))));
-        assert!(matches!(source.pop_work(), Some(WorkItem::File(_))));
-        assert!(source.pop_work().is_none());
+        assert!(matches!(
+            source.pop_work(),
+            PopResult::Ready(WorkItem::Morsel(_), None)
+        ));
+        assert!(matches!(
+            source.pop_work(),
+            PopResult::Ready(WorkItem::File(_), Some(_))
+        ));
+        assert!(matches!(source.pop_work(), PopResult::Done));
+    }
+
+    #[test]
+    fn empty_queues_with_live_file_lease_are_pending() {
+        let source = SharedWorkSource::with_workers(vec![test_file()], 2);
+        let PopResult::Ready(WorkItem::File(_), Some(lease)) = source.pop_work() else {
+            panic!("expected a file with a lease");
+        };
+
+        // The donor is still planning its file and may donate morsels, so an
+        // idle sibling must keep polling rather than terminate.
+        assert!(matches!(source.pop_work(), PopResult::Pending));
+
+        // The donor splits the file, donates a morsel, and (once the first
+        // morsel starts streaming) releases its lease.
+        source.donate_morsels(vec![Box::new(DummyMorsel) as Box<dyn Morsel>].into_iter());
+        drop(lease);
+
+        assert!(matches!(
+            source.pop_work(),
+            PopResult::Ready(WorkItem::Morsel(_), None)
+        ));
+        assert!(matches!(source.pop_work(), PopResult::Done));
     }
 
     #[test]
@@ -274,8 +361,14 @@ mod tests {
         work_source.donate_surplus_morsels(&mut ready);
 
         assert_eq!(ready.len(), 1);
-        assert!(matches!(shared.pop_work(), Some(WorkItem::Morsel(_))));
-        assert!(matches!(shared.pop_work(), Some(WorkItem::Morsel(_))));
-        assert!(shared.pop_work().is_none());
+        assert!(matches!(
+            shared.pop_work(),
+            PopResult::Ready(WorkItem::Morsel(_), None)
+        ));
+        assert!(matches!(
+            shared.pop_work(),
+            PopResult::Ready(WorkItem::Morsel(_), None)
+        ));
+        assert!(matches!(shared.pop_work(), PopResult::Done));
     }
 }

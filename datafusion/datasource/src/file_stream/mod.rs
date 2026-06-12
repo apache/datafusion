@@ -189,6 +189,7 @@ mod tests {
     use std::collections::{BTreeMap, VecDeque};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
 
     use crate::file_stream::{
         FileOpenFuture, FileOpener, FileStream, FileStreamBuilder, OnError,
@@ -1321,6 +1322,82 @@ mod tests {
         ----- File Stream Events -----
         (omitted due to with_file_stream_events(false))
         ");
+
+        Ok(())
+    }
+
+    /// Verifies that an idle sibling waits while a donor is still planning a
+    /// shared file — which may yet be split into donated morsels — instead of
+    /// terminating, and then steals the donated morsel once it appears.
+    #[tokio::test]
+    async fn morsel_idle_sibling_waits_for_donor_morsel_donation() -> Result<()> {
+        // file1 needs an extra poll of I/O before planning produces two
+        // morsels; the surplus morsel is donated to the shared queue.
+        let test = FileStreamMorselTest::new()
+            .with_file_in_partition(
+                PartitionId(0),
+                MockPlanner::builder("file1.parquet")
+                    .add_plan(
+                        PendingPlannerBuilder::new(IoFutureId(1))
+                            .with_polls_to_resolve(PollsToResolve(1)),
+                    )
+                    .add_plan(
+                        MockPlanBuilder::new()
+                            .with_morsel(MorselId(10), 101)
+                            .with_morsel(MorselId(11), 102),
+                    )
+                    .return_none(),
+            )
+            // Declare a second, empty partition that can steal donated work.
+            .with_reads(vec![PartitionId(1)]);
+
+        let config = test.test_config();
+        let shared_work_source = config
+            .create_sibling_state()
+            .and_then(|state| state.as_ref().downcast_ref::<SharedWorkSource>().cloned());
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut donor = FileStreamBuilder::new(&config)
+            .with_partition(0)
+            .with_shared_work_source(shared_work_source.clone())
+            .with_morselizer(Box::new(test.morselizer.clone()))
+            .with_metrics(&metrics)
+            .build()?;
+        let mut idle = FileStreamBuilder::new(&config)
+            .with_partition(1)
+            .with_shared_work_source(shared_work_source)
+            .with_morselizer(Box::new(test.morselizer.clone()))
+            .with_metrics(&metrics)
+            .build()?;
+
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // The donor pops the only shared file and blocks on planning I/O.
+        assert!(donor.poll_next_unpin(&mut cx).is_pending());
+
+        // The idle sibling finds the queue empty, but the donor may still
+        // split its file, so the sibling must wait rather than finish.
+        assert!(
+            idle.poll_next_unpin(&mut cx).is_pending(),
+            "idle sibling must wait for the in-flight donor instead of finishing"
+        );
+
+        // The donor finishes planning: it keeps the first morsel and donates
+        // the second to the shared queue.
+        let Poll::Ready(Some(donor_batch)) = donor.poll_next_unpin(&mut cx) else {
+            panic!("donor should produce its first batch");
+        };
+        assert_eq!(format_result(donor_batch), "Batch: 101");
+
+        // The idle sibling steals the donated morsel.
+        let Poll::Ready(Some(stolen_batch)) = idle.poll_next_unpin(&mut cx) else {
+            panic!("idle sibling should steal the donated morsel");
+        };
+        assert_eq!(format_result(stolen_batch), "Batch: 102");
+
+        // With all work consumed and no donors in flight, both streams finish.
+        assert!(matches!(donor.poll_next_unpin(&mut cx), Poll::Ready(None)));
+        assert!(matches!(idle.poll_next_unpin(&mut cx), Poll::Ready(None)));
 
         Ok(())
     }
