@@ -1801,11 +1801,17 @@ impl ExecutionPlan for AggregateExec {
             .map(|i| Column::new(output_schema.field(i).name(), i))
             .collect();
 
-        // Analyze each filter separately to determine if it can be pushed down
-        let mut safe_filters = Vec::new();
-        let mut unsafe_filters = Vec::new();
+        // Analyze each filter separately to determine if it can be pushed down.
+        // The order of `parent_filters` must be preserved: the filter pushdown
+        // optimizer maps child results back to the original parent filters by
+        // position.
+        let child = self.children()[0];
+        let mut child_desc = ChildFilterDescription::from_child(&parent_filters, child)?;
 
-        for filter in parent_filters {
+        for (filter, child_parent_filter) in parent_filters
+            .into_iter()
+            .zip(child_desc.parent_filters.iter_mut())
+        {
             let filter_columns: HashSet<_> =
                 collect_columns(&filter).into_iter().collect();
 
@@ -1814,7 +1820,7 @@ impl ExecutionPlan for AggregateExec {
                 && !filter_columns.is_subset(&grouping_columns);
 
             if references_non_grouping {
-                unsafe_filters.push(filter);
+                *child_parent_filter = PushedDownPredicate::unsupported(filter);
                 continue;
             }
 
@@ -1835,25 +1841,11 @@ impl ExecutionPlan for AggregateExec {
                 });
 
                 if has_missing_column {
-                    unsafe_filters.push(filter);
+                    *child_parent_filter = PushedDownPredicate::unsupported(filter);
                     continue;
                 }
             }
-
-            // This filter is safe to push down
-            safe_filters.push(filter);
         }
-
-        // Build child filter description with both safe and unsafe filters
-        let child = self.children()[0];
-        let mut child_desc = ChildFilterDescription::from_child(&safe_filters, child)?;
-
-        // Add unsafe filters as unsupported
-        child_desc.parent_filters.extend(
-            unsafe_filters
-                .into_iter()
-                .map(PushedDownPredicate::unsupported),
-        );
 
         // Include self dynamic filter when it's possible
         if phase == FilterPushdownPhase::Post
