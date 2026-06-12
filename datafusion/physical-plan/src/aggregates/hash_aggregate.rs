@@ -60,6 +60,33 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 /// ## Final Stage Behavior
 /// Input: partial states
 /// Output: results for all groups (e.g. for avg(x), it's avg(x) calculated from the state)
+///
+/// # Optimization: DISTINCT LIMIT Soft Limit
+///
+/// This optimization applies to both [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`]
+///
+/// Unordered distinct queries such as:
+///
+/// ```sql
+/// SELECT DISTINCT x FROM t LIMIT 10;
+/// ```
+///
+/// are optimized into a two-stage aggregate like:
+///
+/// ```txt
+/// LimitExec, limit=10
+/// --AggregateExec(Final), group_by=[x], aggr=[], soft_limit=10
+/// ---- RepartitionExec, partitioning=hash(x)
+/// ------ AggregateExec(Partial), group_by=[x], aggr=[], soft_limit=10
+/// -------- Scan(t)
+/// ```
+///
+/// After each input batch, the stream checks whether the soft limit has been
+/// reached. If so, it emits the accumulated groups and stops reading input.
+///
+/// This operator does not guarantee an exact limit because a single batch can
+/// cross the threshold. The downstream limit operator enforces the exact result
+/// size.
 pub(crate) struct PartialHashAggregateStream {
     /// Output schema: group columns followed by partial aggregate state columns.
     schema: SchemaRef,
@@ -78,6 +105,12 @@ pub(crate) struct PartialHashAggregateStream {
 
     /// Tracks partial aggregation row reduction, matching `GroupedHashAggregateStream`.
     reduction_factor: metrics::RatioMetrics,
+
+    /// Optional soft limit on the number of groups to accumulate before output.
+    ///
+    /// Invariant: when this is `Some(..)`, the accumulators inside `hash_table` must
+    /// be empty. See struct comments for details.
+    group_values_soft_limit: Option<usize>,
 }
 
 /// Hash aggregation uses a 2-stage (partial and final) hash aggregation, this stream
@@ -99,6 +132,9 @@ pub(crate) struct FinalHashAggregateStream {
 
     /// Memory reservation for group keys and accumulators.
     reservation: MemoryReservation,
+
+    /// See comments for the same variable in [`PartialHashAggregateStream`]
+    group_values_soft_limit: Option<usize>,
 }
 
 impl PartialHashAggregateStream {
@@ -139,7 +175,20 @@ impl PartialHashAggregateStream {
             baseline_metrics,
             reservation,
             reduction_factor,
+            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
         })
+    }
+
+    /// See comments in [`Self::group_values_soft_limit`] for details.
+    fn hit_soft_group_limit(&self) -> bool {
+        self.group_values_soft_limit
+            .is_some_and(|limit| limit <= self.hash_table.building_group_count())
+    }
+
+    fn start_output(&mut self) -> Result<()> {
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+        self.hash_table.start_output()
     }
 }
 
@@ -169,6 +218,18 @@ impl Stream for PartialHashAggregateStream {
                             return Poll::Ready(Some(Err(e)));
                         }
 
+                        if self.hit_soft_group_limit() {
+                            let timer = elapsed_compute.timer();
+                            let result = self.start_output();
+                            timer.done();
+
+                            if let Err(e) = result {
+                                return Poll::Ready(Some(Err(e)));
+                            }
+
+                            continue;
+                        }
+
                         // TODO: impl memory-limited aggr, when OOM directly send
                         // partial state to final aggregate stage
                         if let Err(e) =
@@ -181,11 +242,8 @@ impl Stream for PartialHashAggregateStream {
                         return Poll::Ready(Some(Err(e)));
                     }
                     Poll::Ready(None) => {
-                        let input_schema = self.input.schema();
-                        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-
                         let timer = elapsed_compute.timer();
-                        let result = self.hash_table.start_output();
+                        let result = self.start_output();
                         timer.done();
 
                         if let Err(e) = result {
@@ -262,7 +320,20 @@ impl FinalHashAggregateStream {
             hash_table,
             baseline_metrics,
             reservation,
+            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
         })
+    }
+
+    /// See comments in [`Self::group_values_soft_limit`] for details.
+    fn hit_soft_group_limit(&self) -> bool {
+        self.group_values_soft_limit
+            .is_some_and(|limit| limit <= self.hash_table.building_group_count())
+    }
+
+    fn start_output(&mut self) -> Result<()> {
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+        self.hash_table.start_output()
     }
 }
 
@@ -291,6 +362,18 @@ impl Stream for FinalHashAggregateStream {
                             return Poll::Ready(Some(Err(e)));
                         }
 
+                        if self.hit_soft_group_limit() {
+                            let timer = elapsed_compute.timer();
+                            let result = self.start_output();
+                            timer.done();
+
+                            if let Err(e) = result {
+                                return Poll::Ready(Some(Err(e)));
+                            }
+
+                            continue;
+                        }
+
                         if let Err(e) =
                             self.reservation.try_resize(self.hash_table.memory_size())
                         {
@@ -301,11 +384,8 @@ impl Stream for FinalHashAggregateStream {
                         return Poll::Ready(Some(Err(e)));
                     }
                     Poll::Ready(None) => {
-                        let input_schema = self.input.schema();
-                        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-
                         let timer = elapsed_compute.timer();
-                        let result = self.hash_table.start_output();
+                        let result = self.start_output();
                         timer.done();
 
                         if let Err(e) = result {

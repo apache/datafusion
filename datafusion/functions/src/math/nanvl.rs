@@ -20,11 +20,11 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, Float16Array, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float16, Float32, Float64};
 use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
+use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -63,12 +63,32 @@ impl Default for NanvlFunc {
 
 impl NanvlFunc {
     pub fn new() -> Self {
+        // Non-float numerics (integers, decimals) and NULL coerce to Float64,
+        // which represents as many inputs as possible before rounding.
+        let non_float = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
+            vec![TypeSignatureClass::Integer, TypeSignatureClass::Decimal],
+            NativeType::Float64,
+        );
+        // Any numeric (including floats) coerces to Float64.
+        let to_float64 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Float16, Float16]),
-                    Exact(vec![Float32, Float32]),
-                    Exact(vec![Float64, Float64]),
+                    // If either argument is a non-float numeric (or NULL), both
+                    // are computed in Float64. Two arms cover either argument
+                    // order.
+                    TypeSignature::Coercible(vec![non_float.clone(), to_float64.clone()]),
+                    TypeSignature::Coercible(vec![to_float64, non_float]),
+                    // Otherwise both arguments are floats; preserve their
+                    // (widest common) precision rather than widening to Float64.
+                    TypeSignature::Exact(vec![Float16, Float16]),
+                    TypeSignature::Exact(vec![Float32, Float32]),
+                    TypeSignature::Exact(vec![Float64, Float64]),
                 ],
                 Volatility::Immutable,
             ),
@@ -86,9 +106,9 @@ impl ScalarUDFImpl for NanvlFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            Float16 => Ok(Float16),
-            Float32 => Ok(Float32),
+        match (&arg_types[0], &arg_types[1]) {
+            (Float16, Float16) => Ok(Float16),
+            (Float32, Float32) => Ok(Float32),
             _ => Ok(Float64),
         }
     }
@@ -97,16 +117,10 @@ impl ScalarUDFImpl for NanvlFunc {
         let [x, y] = take_function_args(self.name(), args.args)?;
 
         match (x, y) {
-            (ColumnarValue::Scalar(ScalarValue::Float16(Some(v))), y) if v.is_nan() => {
-                Ok(y)
-            }
-            (ColumnarValue::Scalar(ScalarValue::Float32(Some(v))), y) if v.is_nan() => {
-                Ok(y)
-            }
-            (ColumnarValue::Scalar(ScalarValue::Float64(Some(v))), y) if v.is_nan() => {
-                Ok(y)
-            }
+            // Scalar x: return y if x is NaN, otherwise x (which may be NULL).
+            (ColumnarValue::Scalar(ref x), y) if scalar_is_nan(x) => Ok(y),
             (x @ ColumnarValue::Scalar(_), _) => Ok(x),
+            // At least one argument is an array: evaluate element-wise.
             (x, y) => {
                 let args = ColumnarValue::values_to_arrays(&[x, y])?;
                 Ok(ColumnarValue::Array(nanvl(&args)?))
@@ -116,6 +130,15 @@ impl ScalarUDFImpl for NanvlFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn scalar_is_nan(scalar: &ScalarValue) -> bool {
+    match scalar {
+        ScalarValue::Float16(Some(v)) => v.is_nan(),
+        ScalarValue::Float32(Some(v)) => v.is_nan(),
+        ScalarValue::Float64(Some(v)) => v.is_nan(),
+        _ => false,
     }
 }
 

@@ -403,6 +403,7 @@ fn array_remove_internal(
             let list_array = array.as_list::<i64>();
             general_remove::<i64>(list_array, element_array, arr_n)
         }
+        DataType::Null => Ok(new_null_array(array.data_type(), array.len())),
         array_type => {
             exec_err!("array_remove_all does not support type '{array_type}'.")
         }
@@ -425,6 +426,7 @@ fn array_remove_with_scalar_args(
             let list_array = array.as_list::<i64>();
             general_remove_with_scalar::<i64>(list_array, scalar_needle, max_removals)
         }
+        DataType::Null => Ok(new_null_array(array.data_type(), array.len())),
         array_type => exec_err!(
             "array_remove/array_remove_n/array_remove_all does not support type '{array_type}'."
         ),

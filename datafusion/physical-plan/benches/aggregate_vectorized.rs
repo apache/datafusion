@@ -21,7 +21,6 @@ use arrow::util::bench_util::{
     create_primitive_array, create_string_view_array_with_len,
     create_string_view_array_with_max_len,
 };
-use arrow::util::test_util::seedable_rng;
 use arrow_schema::DataType;
 use criterion::measurement::WallTime;
 use criterion::{
@@ -30,7 +29,9 @@ use criterion::{
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupColumn;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
+use rand::SeedableRng;
 use rand::distr::{Bernoulli, Distribution};
+use rand::rngs::StdRng;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -128,7 +129,7 @@ fn bytes_bench(
         input,
         "0.75 true",
         {
-            let mut rng = seedable_rng();
+            let mut rng = StdRng::seed_from_u64(42);
             let d = Bernoulli::new(0.75).unwrap();
             (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
         },
@@ -141,7 +142,7 @@ fn bytes_bench(
         input,
         "0.5 true",
         {
-            let mut rng = seedable_rng();
+            let mut rng = StdRng::seed_from_u64(42);
             let d = Bernoulli::new(0.5).unwrap();
             (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
         },
@@ -154,7 +155,7 @@ fn bytes_bench(
         input,
         "0.25 true",
         {
-            let mut rng = seedable_rng();
+            let mut rng = StdRng::seed_from_u64(42);
             let d = Bernoulli::new(0.25).unwrap();
             (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
         },
@@ -236,7 +237,7 @@ fn bench_single_primitive<const NULLABLE: bool>(
         &input,
         "0.75 true",
         {
-            let mut rng = seedable_rng();
+            let mut rng = StdRng::seed_from_u64(42);
             let d = Bernoulli::new(0.75).unwrap();
             (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
         },
@@ -249,7 +250,7 @@ fn bench_single_primitive<const NULLABLE: bool>(
         &input,
         "0.5 true",
         {
-            let mut rng = seedable_rng();
+            let mut rng = StdRng::seed_from_u64(42);
             let d = Bernoulli::new(0.5).unwrap();
             (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
         },
@@ -262,7 +263,7 @@ fn bench_single_primitive<const NULLABLE: bool>(
         &input,
         "0.25 true",
         {
-            let mut rng = seedable_rng();
+            let mut rng = StdRng::seed_from_u64(42);
             let d = Bernoulli::new(0.25).unwrap();
             (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
         },

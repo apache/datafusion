@@ -363,12 +363,17 @@ mod tests {
 
     #[test]
     fn test_xxhash64_fixed_size_binary() {
-        let array = FixedSizeBinaryArray::from(vec![
-            Some(&[0x01, 0x02, 0x03, 0x04][..]),
-            Some(&[0x05, 0x06, 0x07, 0x08][..]),
-            None,
-            Some(&[0x00, 0x00, 0x00, 0x00][..]),
-        ]);
+        let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            vec![
+                Some(&[0x01, 0x02, 0x03, 0x04][..]),
+                Some(&[0x05, 0x06, 0x07, 0x08][..]),
+                None,
+                Some(&[0x00, 0x00, 0x00, 0x00][..]),
+            ]
+            .into_iter(),
+            4,
+        )
+        .unwrap();
         let array_ref: ArrayRef = Arc::new(array);
 
         let mut hashes = vec![DEFAULT_SEED; 4];
