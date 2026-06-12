@@ -32,6 +32,7 @@ pub mod time_trunc;
 pub mod to_utc_timestamp;
 pub mod trunc;
 pub mod unix;
+pub mod weekday;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -59,6 +60,7 @@ make_udf_function!(time_trunc::SparkTimeTrunc, time_trunc);
 make_udf_function!(to_utc_timestamp::SparkToUtcTimestamp, to_utc_timestamp);
 make_udf_function!(trunc::SparkTrunc, trunc);
 make_udf_function!(unix::SparkUnixDate, unix_date);
+make_udf_function!(weekday::SparkWeekDay, weekday);
 make_udf_function!(
     unix::SparkUnixTimestamp,
     unix_micros,
@@ -186,6 +188,11 @@ pub mod expr_fn {
         "Returns the number of seconds since epoch (1970-01-01 00:00:00 UTC) for the given timestamp `ts`.",
         ts
     ));
+    export_functions!((
+        weekday,
+        "Returns the day of the week for date/timestamp as an integer where Monday = 0, Tuesday = 1, ..., Sunday = 6.",
+        arg1
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -212,5 +219,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         unix_micros(),
         unix_millis(),
         unix_seconds(),
+        weekday(),
     ]
 }
