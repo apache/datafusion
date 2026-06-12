@@ -2437,7 +2437,10 @@ impl NestedLoopJoinStream {
         // Stop processing unmatched rows, the caller will go to the next state
         let finished = self.left_emit_idx >= left_batch.num_rows();
 
-        // `ProbeEnd` already recorded whether this stream emits unmatched-left rows.
+        // `ProbeEnd` already recorded whether this stream emits unmatched-left
+        // rows. Every probe partition passes through this state, but only the
+        // one that finished probing last is the emitter, so this flag is false
+        // for the others.
         if join_type_no_produce_left || !self.is_unmatched_left_emitter || finished {
             return Ok(false);
         }
