@@ -42,7 +42,9 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
 use datafusion_functions_aggregate::{count::count_udaf, min_max::min_udaf};
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, expressions::col};
+use datafusion_physical_expr::{
+    LexOrdering, PhysicalSortExpr, expressions::col, utils::conjunction,
+};
 use datafusion_physical_expr::{
     Partitioning, ScalarFunctionExpr, aggregate::AggregateExprBuilder,
 };
@@ -734,6 +736,65 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
         Ok:
           - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=Sorted
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
+    "
+    );
+}
+
+#[test]
+fn test_pushdown_through_aggregates_preserves_parent_filter_order() {
+    // AggregateExec may push filters on grouping columns to its input, but must
+    // keep filters on aggregate outputs above itself. The parent-filter result
+    // order must match the incoming filter order, otherwise an unsupported
+    // aggregate-output filter can be reported as pushed down and removed.
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema()).unwrap()])
+            .schema(schema())
+            .alias("cnt")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
+    let group_by = PhysicalGroupBy::new_single(vec![
+        (col("a", &schema()).unwrap(), "a".to_string()),
+        (col("b", &schema()).unwrap(), "b".to_string()),
+    ]);
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
+            aggregate_expr,
+            vec![None],
+            scan,
+            schema(),
+        )
+        .unwrap(),
+    );
+
+    let aggregate_schema = aggregate.schema();
+    let aggregate_output_filter = col_lit_predicate(
+        "cnt",
+        ScalarValue::Int64(Some(1)),
+        aggregate_schema.as_ref(),
+    );
+    let grouping_key_filter = col_lit_predicate("b", "bar", aggregate_schema.as_ref());
+    let predicate = conjunction(vec![aggregate_output_filter, grouping_key_filter]);
+    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: cnt@2 = 1 AND b@1 = bar
+        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: cnt@2 = 1
+          -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
     );
 }
