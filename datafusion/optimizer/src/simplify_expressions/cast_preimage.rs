@@ -130,7 +130,7 @@ pub(super) fn rewrite_cast_predicate_for_inlist(
     list: Vec<Expr>,
     negated: bool,
 ) -> Result<Transformed<Expr>> {
-    let Some((inner_expr, _target_type)) = cast_input_and_type(expr) else {
+    let Some((inner_expr, target_type)) = cast_input_and_type(expr) else {
         return internal_err!("Expect cast expr");
     };
     let source_type = info.get_data_type(&inner_expr)?;
@@ -140,7 +140,7 @@ pub(super) fn rewrite_cast_predicate_for_inlist(
         .map(|right| match right {
             Expr::Literal(lit_value, _) => {
                 let Some(value) =
-                    cast_predicate_exact_literal(&source_type, &_target_type, &lit_value)
+                    cast_predicate_exact_literal(&source_type, &target_type, &lit_value)
                 else {
                     return internal_err!(
                         "Can't cast the list expr {:?} to type {}",
