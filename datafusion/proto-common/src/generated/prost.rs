@@ -900,6 +900,12 @@ pub struct ParquetOptions {
     pub max_predicate_cache_size_opt: ::core::option::Option<
         parquet_options::MaxPredicateCacheSizeOpt,
     >,
+    /// Target compressed bytes per morsel when splitting low-parallelism scan
+    /// work; unset disables splitting.
+    #[prost(oneof = "parquet_options::MorselSplitSizeOpt", tags = "38")]
+    pub morsel_split_size_opt: ::core::option::Option<
+        parquet_options::MorselSplitSizeOpt,
+    >,
     #[prost(oneof = "parquet_options::MaxRowGroupBytesOpt", tags = "37")]
     pub max_row_group_bytes_opt: ::core::option::Option<
         parquet_options::MaxRowGroupBytesOpt,
@@ -967,6 +973,13 @@ pub mod parquet_options {
     pub enum MaxPredicateCacheSizeOpt {
         #[prost(uint64, tag = "33")]
         MaxPredicateCacheSize(u64),
+    }
+    /// Target compressed bytes per morsel when splitting low-parallelism scan
+    /// work; unset disables splitting.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum MorselSplitSizeOpt {
+        #[prost(uint64, tag = "38")]
+        MorselSplitSize(u64),
     }
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum MaxRowGroupBytesOpt {

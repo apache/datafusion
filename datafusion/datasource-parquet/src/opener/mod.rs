@@ -35,7 +35,9 @@ use crate::{
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
-use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
+use datafusion_datasource::morsel::{
+    Morsel, MorselPlan, MorselPlanner, Morselizer, SplitHint,
+};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::{HashMap, VecDeque};
@@ -70,13 +72,14 @@ use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use log::debug;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
+use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 
 /// Morselizer-level state for virtual columns, precomputed once per scan
 /// partition so each file skips the validator walks, `null_replacements`
@@ -292,6 +295,13 @@ pub(super) struct ParquetMorselizer {
     /// Per-scan virtual-column state (validation already performed). `None`
     /// when no virtual columns are requested — the common path.
     pub(crate) virtual_state: Option<Arc<VirtualColumnsState>>,
+    /// Hint consulted while building the final stream to decide whether the
+    /// remaining work should be split into multiple smaller morsels (roughly
+    /// `morsel_split_size` bytes each) for donation to sibling streams.
+    pub(crate) split_hint: SplitHint,
+    /// Target compressed bytes per morsel when splitting; `None` disables
+    /// splitting. From `datafusion.execution.parquet.morsel_split_size`.
+    pub(crate) morsel_split_size: Option<usize>,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -308,6 +318,10 @@ impl fmt::Debug for ParquetMorselizer {
 impl Morselizer for ParquetMorselizer {
     fn plan_file(&self, file: PartitionedFile) -> Result<Box<dyn MorselPlanner>> {
         Ok(Box::new(ParquetMorselPlanner::try_new(self, file)?))
+    }
+
+    fn set_split_hint(&mut self, hint: SplitHint) {
+        self.split_hint = hint;
     }
 }
 
@@ -380,12 +394,15 @@ enum ParquetOpenState {
     LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
     /// Pruning with preloaded Bloom Filters
     PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
-    /// Builds the final reader stream
+    /// Builds the final reader stream(s)
     ///
     /// TODO: split state as this currently does both I/O and CPU work.
     BuildStream(Box<RowGroupsPrunedParquetOpen>),
-    /// Terminal state: the final opened stream is ready to return.
-    Ready(BoxStream<'static, Result<RecordBatch>>),
+    /// Terminal state: the final opened stream(s) are ready to return.
+    ///
+    /// Usually a single stream for the whole file; multiple streams when the
+    /// remaining work was split into smaller morsels for sibling streams.
+    Ready(Vec<BoxStream<'static, Result<RecordBatch>>>),
     /// Terminal state: reading complete
     Done,
 }
@@ -450,8 +467,32 @@ struct PreparedParquetOpen {
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
+    split_hint: SplitHint,
+    morsel_split_size: Option<usize>,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+}
+
+impl PreparedParquetOpen {
+    /// Return the target morsel size, in compressed bytes, when the remaining
+    /// work of this file should be split into multiple morsels; `None`
+    /// otherwise.
+    ///
+    /// Splitting is only attempted when ordering does not matter (no
+    /// row-group reordering heuristics in play), there is no limit (a limit
+    /// is best served by a single stream that stops early), and the scan's
+    /// [`SplitHint`] reports that parallelism is currently low.
+    fn morsel_split_size(&self) -> Option<u64> {
+        if self.limit.is_some()
+            || self.preserve_order
+            || self.reverse_row_groups
+            || self.sort_order_for_reorder.is_some()
+        {
+            return None;
+        }
+        let target = self.morsel_split_size? as u64;
+        self.split_hint.should_split().then_some(target)
+    }
 }
 
 /// State of [`ParquetOpenState`]
@@ -560,9 +601,9 @@ impl ParquetOpenState {
                 ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
             ),
             ParquetOpenState::BuildStream(prepared) => {
-                Ok(ParquetOpenState::Ready(prepared.build_stream()?))
+                Ok(ParquetOpenState::Ready(prepared.build_streams()?))
             }
-            ParquetOpenState::Ready(stream) => Ok(ParquetOpenState::Ready(stream)),
+            ParquetOpenState::Ready(streams) => Ok(ParquetOpenState::Ready(streams)),
             ParquetOpenState::Done => {
                 panic!("ParquetOpenFuture polled after completion");
             }
@@ -678,9 +719,13 @@ impl MorselPlanner for ParquetMorselPlanner {
                     )))
                 })))
             }
-            ParquetOpenState::Ready(stream) => {
-                let morsels: Vec<Box<dyn Morsel>> =
-                    vec![Box::new(ParquetStreamMorsel::new(stream))];
+            ParquetOpenState::Ready(streams) => {
+                let morsels: Vec<Box<dyn Morsel>> = streams
+                    .into_iter()
+                    .map(|stream| {
+                        Box::new(ParquetStreamMorsel::new(stream)) as Box<dyn Morsel>
+                    })
+                    .collect();
                 Ok(Some(MorselPlan::new().with_morsels(morsels)))
             }
             ParquetOpenState::Done => Ok(None),
@@ -823,6 +868,8 @@ impl ParquetMorselizer {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
+            split_hint: self.split_hint.clone(),
+            morsel_split_size: self.morsel_split_size,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
         })
@@ -1053,7 +1100,16 @@ impl FiltersPreparedParquetOpen {
         // metadata load above may not have read the page index structures yet.
         // If we need them for reading and they aren't yet loaded, we need to
         // load them now.
-        if self.page_pruning_predicate.is_some() {
+        //
+        // Besides page pruning, the offset index is also needed to split this
+        // file into multiple morsels: sub-row-group cuts are aligned to page
+        // boundaries so the resulting streams do not fetch and decompress
+        // shared pages. `morsel_split_size()` consults the live `SplitHint`,
+        // so this extra (small) read is only paid at the tail of a scan when
+        // a split is actually anticipated.
+        if self.page_pruning_predicate.is_some()
+            || self.loaded.prepared.morsel_split_size().is_some()
+        {
             self.loaded.reader_metadata = load_page_index(
                 self.loaded.reader_metadata,
                 &mut self.loaded.prepared.async_file_reader,
@@ -1250,8 +1306,14 @@ impl BloomFiltersLoadedParquetOpen {
 }
 
 impl RowGroupsPrunedParquetOpen {
-    /// Build the final parquet stream once all pruning work is complete.
-    fn build_stream(self) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+    /// Build the final parquet stream(s) once all pruning work is complete.
+    ///
+    /// Normally this returns a single stream for the whole file. When the
+    /// scan's [`SplitHint`] reports that parallelism is low (fewer remaining
+    /// work items than streams), the remaining work is instead split into
+    /// multiple independent streams of roughly [`MORSEL_SPLIT_TARGET_BYTES`]
+    /// each, so the surplus morsels can be donated to idle sibling streams.
+    fn build_streams(self) -> Result<Vec<BoxStream<'static, Result<RecordBatch>>>> {
         let RowGroupsPrunedParquetOpen {
             prepared,
             mut row_groups,
@@ -1262,7 +1324,7 @@ impl RowGroupsPrunedParquetOpen {
             page_pruning_predicate,
         } = prepared;
         let MetadataLoadedParquetOpen {
-            prepared,
+            mut prepared,
             reader_metadata,
             options: _,
         } = loaded;
@@ -1339,8 +1401,6 @@ impl RowGroupsPrunedParquetOpen {
                 Ok(prepared_plan)
             };
 
-        let arrow_reader_metrics = ArrowReaderMetrics::enabled();
-
         // Build the decoder projection (mask + per-batch transform) in a
         // single call. Encapsulating it behind `DecoderProjection` keeps the
         // opener's orchestration body focused on filter / decoder / stream
@@ -1353,101 +1413,148 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
-        let (decoder, pending_decoders, remaining_limit) = {
-            let pushdown_predicate = prepared
-                .pushdown_filters
-                .then_some(prepared.predicate.as_ref())
-                .flatten();
-            let mut row_filter_generator = RowFilterGenerator::new(
-                pushdown_predicate,
-                &prepared.physical_file_schema,
-                file_metadata.as_ref(),
-                prepared.reorder_predicates,
-                &prepared.file_metrics,
-            );
-
-            // Split into consecutive runs of row groups that share the same filter
-            // requirement. Fully matched row groups skip the RowFilter; others need it.
-            // Reverse the run order for reverse scans so the combined decoder stream
-            // preserves the requested global row group order.
-            let mut runs = access_plan.split_runs(row_filter_generator.has_row_filter());
-            if prepared.reverse_row_groups {
-                runs.reverse();
+        // Decide whether to split the remaining work into multiple morsels to
+        // increase tail-of-scan parallelism. Splitting is only attempted when
+        // ordering does not matter (no row-group reordering heuristics in
+        // play) and there is no limit (a limit is best served by a single
+        // stream that stops early). Sub-row-group cuts are aligned to page
+        // boundaries (from the offset index, when loaded) so morsels on both
+        // sides of a cut do not fetch and decompress the same page.
+        let access_plans = match prepared.morsel_split_size() {
+            Some(target_bytes) => {
+                let page_boundaries = page_aligned_row_boundaries(
+                    file_metadata.as_ref(),
+                    decoder_projection.projection_mask(),
+                );
+                access_plan.split_by_size(
+                    rg_metadata,
+                    target_bytes,
+                    page_boundaries.as_deref(),
+                )
             }
-            let run_count = runs.len();
-            let decoder_limit = prepared.limit.filter(|_| run_count == 1);
-            let remaining_limit = prepared.limit.filter(|_| run_count > 1);
-
-            let decoder_config = DecoderBuilderConfig {
-                projection_mask: decoder_projection.projection_mask(),
-                batch_size: prepared.batch_size,
-                arrow_reader_metrics: &arrow_reader_metrics,
-                force_filter_selections: prepared.force_filter_selections,
-                decoder_limit,
-            };
-
-            // Build a decoder per run.
-            let mut decoders = VecDeque::with_capacity(runs.len());
-            for run in runs {
-                let prepared_access_plan = prepare_access_plan(run.access_plan)?;
-                let mut builder =
-                    decoder_config.build(prepared_access_plan, reader_metadata.clone());
-                if run.needs_filter {
-                    if let Some(row_filter) = row_filter_generator.next_filter() {
-                        builder = builder.with_row_filter(row_filter);
-                    }
-                    if let Some(max_predicate_cache_size) =
-                        prepared.max_predicate_cache_size
-                    {
-                        builder = builder
-                            .with_max_predicate_cache_size(max_predicate_cache_size);
-                    }
-                }
-                decoders.push_back(builder.build()?);
-            }
-
-            let decoder = decoders
-                .pop_front()
-                .expect("at least one decoder must be created");
-            (decoder, decoders, remaining_limit)
+            None => vec![access_plan],
         };
 
-        let predicate_cache_inner_records =
-            prepared.file_metrics.predicate_cache_inner_records.clone();
-        let predicate_cache_records =
-            prepared.file_metrics.predicate_cache_records.clone();
+        // The dynamic-filter early-stopping wrapper holds per-file pruner
+        // state, so attach it to the first stream only.
+        let mut file_pruner = prepared.file_pruner.take();
+        // The first stream reuses the file's existing reader; additional
+        // streams get fresh readers from the factory.
+        let mut first_reader = Some(prepared.async_file_reader);
 
-        let files_ranges_pruned_statistics =
-            prepared.file_metrics.files_ranges_pruned_statistics.clone();
-        let stream = PushDecoderStreamState {
-            decoder,
-            pending_decoders,
-            remaining_limit,
-            reader: prepared.async_file_reader,
-            decoder_projection,
-            arrow_reader_metrics,
-            predicate_cache_inner_records,
-            predicate_cache_records,
-            baseline_metrics: prepared.baseline_metrics,
-        }
-        .into_stream();
+        let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
-        // Wrap the stream so a dynamic filter can stop the file scan early, but
-        // only when the pruner is still watching a filter that can change
-        // mid-scan. For a static (or already-complete) predicate the up-front
-        // `prune_file` check already captured everything that can be pruned, so
-        // per-batch re-checking would only add overhead.
-        match prepared.file_pruner {
-            Some(file_pruner) if file_pruner.is_watching() => {
-                Ok(EarlyStoppingStream::new(
-                    stream,
-                    file_pruner,
-                    files_ranges_pruned_statistics,
-                )
-                .boxed())
+        let pushdown_predicate = prepared
+            .pushdown_filters
+            .then_some(prepared.predicate.as_ref())
+            .flatten();
+        let mut row_filter_generator = RowFilterGenerator::new(
+            pushdown_predicate,
+            &prepared.physical_file_schema,
+            file_metadata.as_ref(),
+            prepared.reorder_predicates,
+            &prepared.file_metrics,
+        );
+
+        let mut streams = Vec::with_capacity(access_plans.len());
+        for access_plan in access_plans {
+            let reader = match first_reader.take() {
+                Some(reader) => reader,
+                None => prepared.parquet_file_reader_factory.create_reader(
+                    prepared.partition_index,
+                    prepared.partitioned_file.clone(),
+                    prepared.metadata_size_hint,
+                    &prepared.metrics,
+                )?,
+            };
+
+            let (decoder, pending_decoders, remaining_limit) = {
+                // Split into consecutive runs of row groups that share the same filter
+                // requirement. Fully matched row groups skip the RowFilter; others need it.
+                // Reverse the run order for reverse scans so the combined decoder stream
+                // preserves the requested global row group order.
+                let mut runs =
+                    access_plan.split_runs(row_filter_generator.has_row_filter());
+                if prepared.reverse_row_groups {
+                    runs.reverse();
+                }
+                let run_count = runs.len();
+                let decoder_limit = prepared.limit.filter(|_| run_count == 1);
+                let remaining_limit = prepared.limit.filter(|_| run_count > 1);
+
+                let decoder_config = DecoderBuilderConfig {
+                    projection_mask: decoder_projection.projection_mask(),
+                    batch_size: prepared.batch_size,
+                    arrow_reader_metrics: &arrow_reader_metrics,
+                    force_filter_selections: prepared.force_filter_selections,
+                    decoder_limit,
+                };
+
+                // Build a decoder per run.
+                let mut decoders = VecDeque::with_capacity(runs.len());
+                for run in runs {
+                    let prepared_access_plan = prepare_access_plan(run.access_plan)?;
+                    let mut builder = decoder_config
+                        .build(prepared_access_plan, reader_metadata.clone());
+                    if run.needs_filter {
+                        if let Some(row_filter) = row_filter_generator.next_filter() {
+                            builder = builder.with_row_filter(row_filter);
+                        }
+                        if let Some(max_predicate_cache_size) =
+                            prepared.max_predicate_cache_size
+                        {
+                            builder = builder
+                                .with_max_predicate_cache_size(max_predicate_cache_size);
+                        }
+                    }
+                    decoders.push_back(builder.build()?);
+                }
+
+                let decoder = decoders
+                    .pop_front()
+                    .expect("at least one decoder must be created");
+                (decoder, decoders, remaining_limit)
+            };
+
+            let stream = PushDecoderStreamState {
+                decoder,
+                pending_decoders,
+                remaining_limit,
+                reader,
+                decoder_projection: decoder_projection.clone(),
+                arrow_reader_metrics: arrow_reader_metrics.clone(),
+                predicate_cache_inner_records: prepared
+                    .file_metrics
+                    .predicate_cache_inner_records
+                    .clone(),
+                predicate_cache_records: prepared
+                    .file_metrics
+                    .predicate_cache_records
+                    .clone(),
+                baseline_metrics: prepared.baseline_metrics.clone(),
             }
-            _ => Ok(stream),
+            .into_stream();
+
+            // Wrap the stream so a dynamic filter can stop the file scan early, but
+            // only when the pruner is still watching a filter that can change
+            // mid-scan. For a static (or already-complete) predicate the up-front
+            // `prune_file` check already captured everything that can be pruned, so
+            // per-batch re-checking would only add overhead.
+            let stream = match file_pruner.take() {
+                Some(file_pruner) if file_pruner.is_watching() => {
+                    EarlyStoppingStream::new(
+                        stream,
+                        file_pruner,
+                        prepared.file_metrics.files_ranges_pruned_statistics.clone(),
+                    )
+                    .boxed()
+                }
+                _ => stream,
+            };
+            streams.push(stream);
         }
+
+        Ok(streams)
     }
 }
 
@@ -1511,6 +1618,48 @@ fn constant_value_from_stats(
     }
 
     None
+}
+
+/// Return, for each row group, the row offsets where a sub-row-group morsel
+/// split may be cut without sharing a page between the resulting morsels.
+///
+/// Pages of different columns do not align on the same rows, so exact
+/// alignment for every column is impossible; the boundaries are taken from
+/// the projected column with the largest compressed size (the dominant I/O
+/// and decompression cost). Other columns share at most one page per cut.
+///
+/// Returns `None` when the offset index is not loaded; callers must then not
+/// split sub-row-group, because without page locations the reader fetches
+/// whole column chunks for every piece, duplicating that I/O once per piece.
+fn page_aligned_row_boundaries(
+    file_metadata: &ParquetMetaData,
+    projection_mask: &ProjectionMask,
+) -> Option<Vec<Vec<usize>>> {
+    let offset_index = file_metadata.offset_index()?;
+    let boundaries = file_metadata
+        .row_groups()
+        .iter()
+        .zip(offset_index)
+        .map(|(rg, rg_offset_index)| {
+            let largest_projected_column = rg
+                .columns()
+                .iter()
+                .enumerate()
+                .filter(|(leaf_idx, _)| projection_mask.leaf_included(*leaf_idx))
+                .max_by_key(|(_, column)| column.compressed_size());
+            match largest_projected_column {
+                Some((leaf_idx, _)) => rg_offset_index[leaf_idx]
+                    .page_locations()
+                    .iter()
+                    .skip(1) // the first page starts at row 0, not a cut point
+                    .map(|page| page.first_row_index as usize)
+                    .collect(),
+                // No projected file columns: nothing to gain from splitting.
+                None => Vec::new(),
+            }
+        })
+        .collect();
+    Some(boundaries)
 }
 
 /// Return the initial [`ParquetAccessPlan`]
@@ -1842,6 +1991,9 @@ mod test {
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
+                split_hint: SplitHint::disabled(),
+                // Matches the `morsel_split_size` config default
+                morsel_split_size: Some(1024 * 1024),
             })
         }
     }
@@ -1882,6 +2034,79 @@ mod test {
                 }
             }
         }
+    }
+
+    /// Like [`open_file`], but drives planning to completion and returns the
+    /// streams of *all* morsels produced. More than one stream is returned
+    /// when the remaining work was split into multiple morsels.
+    async fn open_file_morsels(
+        morselizer: &ParquetMorselizer,
+        file: PartitionedFile,
+    ) -> Result<Vec<BoxStream<'static, Result<RecordBatch>>>> {
+        let mut planners = VecDeque::from([morselizer.plan_file(file)?]);
+        let mut streams = vec![];
+
+        while let Some(planner) = planners.pop_front() {
+            if let Some(mut plan) = planner.plan()? {
+                streams.extend(plan.take_morsels().into_iter().map(Morsel::into_stream));
+                planners.extend(plan.take_ready_planners());
+                if let Some(pending_planner) = plan.take_pending_planner() {
+                    planners.push_front(pending_planner.await?);
+                }
+            }
+        }
+        Ok(streams)
+    }
+
+    #[tokio::test]
+    async fn test_split_hint_splits_file_into_multiple_morsels() {
+        use datafusion_datasource::morsel::SplitHint;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // A single ~2.4MB (uncompressed) row group of 600k rows: well above
+        // the ~1MB morsel split target, so it must be split sub-row-group.
+        let num_rows: i32 = 600_000;
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(arrow::array::Int32Array::from_iter_values(
+                0..num_rows,
+            ))],
+        )
+        .unwrap();
+        let data_size =
+            write_parquet_batches(Arc::clone(&store), "test.parquet", vec![batch], None)
+                .await;
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let mut morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .build();
+
+        // Without a split hint the whole file is a single morsel
+        let streams = open_file_morsels(&morselizer, file.clone()).await.unwrap();
+        assert_eq!(streams.len(), 1);
+
+        // With a split hint asking for parallelism the file is split into
+        // multiple morsels that together yield all rows, in order
+        morselizer.set_split_hint(SplitHint::new(|| true));
+        let streams = open_file_morsels(&morselizer, file).await.unwrap();
+        assert!(
+            streams.len() > 1,
+            "expected the scan to be split into multiple morsels"
+        );
+
+        let mut values = vec![];
+        for stream in streams {
+            values.extend(collect_int32_values(stream).await);
+        }
+        assert_eq!(values, (0..num_rows).collect::<Vec<_>>());
     }
 
     fn constant_int_stats() -> (Statistics, SchemaRef) {

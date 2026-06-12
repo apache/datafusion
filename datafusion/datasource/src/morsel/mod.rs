@@ -39,6 +39,7 @@ use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use std::fmt::Debug;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 /// A Morsel of work ready to resolve to a stream of [`RecordBatch`]es.
@@ -66,6 +67,56 @@ pub trait Morselizer: Send + Sync + Debug {
     /// work, such as reading from the file. Any needed I/O should be done using
     /// [`MorselPlan::with_pending_planner`].
     fn plan_file(&self, file: PartitionedFile) -> Result<Box<dyn MorselPlanner>>;
+
+    /// Install a [`SplitHint`] that planning may consult to decide whether a
+    /// file should be split into more, smaller morsels (for example
+    /// sub-row-group splits for Parquet).
+    ///
+    /// Implementations that do not support splitting may ignore this (the
+    /// default).
+    fn set_split_hint(&mut self, _hint: SplitHint) {}
+}
+
+/// A hint that tells a [`Morselizer`] whether splitting remaining work into
+/// more, smaller morsels would currently improve parallelism.
+///
+/// Splitting a file into multiple morsels has overhead (e.g. a separate reader
+/// and row filter per morsel), so it should only happen when sibling streams
+/// would otherwise go idle: typically at the tail of a scan, when fewer work
+/// items remain than there are streams consuming them. The hint is consulted
+/// at planning time, so the decision reflects the state of the scan at that
+/// moment rather than at plan creation.
+#[derive(Clone, Default)]
+pub struct SplitHint {
+    inner: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+}
+
+impl SplitHint {
+    /// Create a hint backed by the given `should_split` callback.
+    pub fn new(should_split: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            inner: Some(Arc::new(should_split)),
+        }
+    }
+
+    /// A hint that never asks for splitting (the default).
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+
+    /// Returns true if producing more, smaller morsels would currently improve
+    /// parallelism.
+    pub fn should_split(&self) -> bool {
+        self.inner.as_ref().is_some_and(|f| f())
+    }
+}
+
+impl Debug for SplitHint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SplitHint")
+            .field("enabled", &self.inner.is_some())
+            .finish()
+    }
 }
 
 /// A Morsel Planner is responsible for creating morsels for a given scan.

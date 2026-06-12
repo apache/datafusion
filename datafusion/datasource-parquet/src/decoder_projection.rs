@@ -53,6 +53,7 @@ use crate::row_filter::build_projection_read_plan;
 /// Built once per file by the opener via [`Self::try_new`]; the
 /// push-decoder stream installs [`Self::projection_mask`] on each decoder
 /// and calls [`Self::map`] on every decoded batch.
+#[derive(Clone)]
 pub(crate) struct DecoderProjection {
     projection_mask: ProjectionMask,
     projector: Projector,

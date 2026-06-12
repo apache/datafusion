@@ -979,6 +979,13 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
+        /// (reading) Target size, in compressed bytes, of the morsels a file
+        /// scan is split into when too little work remains to keep all output
+        /// streams busy (the tail of a scan). Row groups larger than this are
+        /// split at page-aligned row ranges and the surplus morsels are shared
+        /// with idle sibling streams. If NULL, splitting is disabled.
+        pub morsel_split_size: Option<usize>, default = Some(1024 * 1024)
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 

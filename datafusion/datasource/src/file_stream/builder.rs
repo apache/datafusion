@@ -107,9 +107,14 @@ impl<'a> FileStreamBuilder<'a> {
         let Some(partition) = partition else {
             return internal_err!("FileStreamBuilder missing required partition");
         };
-        let Some(morselizer) = morselizer else {
+        let Some(mut morselizer) = morselizer else {
             return internal_err!("FileStreamBuilder missing required morselizer");
         };
+        // Let the morselizer split files into smaller morsels when the shared
+        // queue runs low, so the surplus can be donated to sibling streams.
+        if let Some(shared) = &shared_work_source {
+            morselizer.set_split_hint(shared.split_hint());
+        }
         let Some(metrics) = metrics else {
             return internal_err!("FileStreamBuilder missing required metrics");
         };

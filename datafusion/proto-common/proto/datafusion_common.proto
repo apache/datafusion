@@ -627,6 +627,12 @@ message ParquetOptions {
     uint64 max_predicate_cache_size = 33;
   }
 
+  // Target compressed bytes per morsel when splitting low-parallelism scan
+  // work; unset disables splitting.
+  oneof morsel_split_size_opt {
+    uint64 morsel_split_size = 38;
+  }
+
   oneof max_row_group_bytes_opt {
     uint64 max_row_group_bytes = 37;
   }

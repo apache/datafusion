@@ -456,6 +456,9 @@ mod parquet {
                 max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
                     parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
                 }),
+                morsel_split_size_opt: global_options.global.morsel_split_size.map(|size| {
+                    parquet_options::MorselSplitSizeOpt::MorselSplitSize(size as u64)
+                }),
                 max_row_group_bytes_opt: global_options.global.max_row_group_bytes.map(|size| {
                     parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size.get() as u64)
                 }),
@@ -632,6 +635,13 @@ mod parquet {
                             size,
                         ) => *size as usize,
                     }),
+                morsel_split_size: proto.morsel_split_size_opt.as_ref().map(
+                    |opt| match opt {
+                        parquet_options::MorselSplitSizeOpt::MorselSplitSize(size) => {
+                            *size as usize
+                        }
+                    },
+                ),
                 max_row_group_bytes: proto
                     .max_row_group_bytes_opt
                     .as_ref()

@@ -1130,6 +1130,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
             }).unwrap_or(None),
+            morsel_split_size: value.morsel_split_size_opt.map(|opt| match opt {
+                protobuf::parquet_options::MorselSplitSizeOpt::MorselSplitSize(v) => Some(v as usize),
+            }).unwrap_or(None),
             max_row_group_bytes: value.max_row_group_bytes_opt.and_then(|opt| match opt {
                 protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => MaxRowGroupBytes::try_new(v as usize).ok(),
             }),

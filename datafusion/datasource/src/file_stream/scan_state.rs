@@ -26,7 +26,7 @@ use datafusion_physical_plan::metrics::ScopedTimerGuard;
 use futures::stream::BoxStream;
 use futures::{FutureExt as _, StreamExt as _};
 
-use super::work_source::WorkSource;
+use super::work_source::{WorkItem, WorkSource};
 use super::{FileStreamMetrics, OnError};
 
 /// State [`FileStreamState::Scan`].
@@ -175,6 +175,9 @@ impl ScanState {
                                 let done = 1 + self.work_source.skipped_on_limit();
                                 self.metrics.files_processed.add(done);
                                 *remain = 0;
+                                // This stream stops at the limit and will not
+                                // pick up shared work anymore.
+                                self.work_source.mark_finished();
                                 (batch, true)
                             }
                         }
@@ -234,6 +237,10 @@ impl ScanState {
                 Ok(Some(mut plan)) => {
                     // Queue any newly-ready morsels, planners, or planner I/O.
                     self.ready_morsels.extend(plan.take_morsels());
+                    // If planning split the file into multiple morsels, keep
+                    // the first and share the surplus with sibling streams.
+                    self.work_source
+                        .donate_surplus_morsels(&mut self.ready_morsels);
                     self.ready_planners.extend(plan.take_ready_planners());
                     if let Some(pending_planner) = plan.take_pending_planner() {
                         // should not have planned if we have outstanding I/O
@@ -265,10 +272,21 @@ impl ScanState {
             };
         }
 
-        // No outstanding work remains, so begin planning the next unopened file.
-        let part_file = match self.work_source.pop_front() {
-            Some(part_file) => part_file,
-            None => return ScanAndReturn::Done(None),
+        // No outstanding work remains, so pull the next work item. Donated
+        // morsels from sibling streams are ready for decoding immediately;
+        // files still need to be planned.
+        let part_file = match self.work_source.pop_work() {
+            Some(WorkItem::File(part_file)) => *part_file,
+            Some(WorkItem::Morsel(morsel)) => {
+                self.ready_morsels.push_back(morsel);
+                return ScanAndReturn::Continue;
+            }
+            None => {
+                // This stream terminates and can no longer pick up shared
+                // work.
+                self.work_source.mark_finished();
+                return ScanAndReturn::Done(None);
+            }
         };
 
         self.metrics.time_opening.start();

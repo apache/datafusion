@@ -452,6 +452,116 @@ impl ParquetAccessPlan {
         }
     }
 
+    /// Split this plan into multiple plans, each covering roughly
+    /// `target_bytes` of compressed data.
+    ///
+    /// Row groups larger than the target are split sub-row-group by
+    /// converting them into [`RowGroupAccess::Selection`]s over disjoint row
+    /// ranges; smaller row groups are packed together until a chunk reaches
+    /// the target. Existing selections are kept intact and packed by their
+    /// pro-rated size.
+    ///
+    /// `page_row_boundaries` holds, per row group, the candidate row offsets
+    /// where a sub-row-group split may be cut (ascending, exclusive of `0`
+    /// and `num_rows`), typically the page boundaries of the dominant
+    /// projected column from the offset index. Cutting anywhere else would
+    /// make the streams on both sides of the cut fetch and decompress the
+    /// page containing it. Row groups with no candidate boundaries (e.g. no
+    /// offset index loaded) are never split sub-row-group, since without
+    /// page locations the reader fetches whole column chunks per stream,
+    /// duplicating that I/O once per piece.
+    ///
+    /// Fully-matched markers are preserved so chunks keep skipping row filter
+    /// evaluation where the original plan did.
+    ///
+    /// This is used to increase parallelism at the tail of a scan, where
+    /// sibling streams would otherwise go idle (see
+    /// [`SplitHint`](datafusion_datasource::morsel::SplitHint)): each returned
+    /// plan becomes its own morsel. Always returns at least one plan, and the
+    /// chunks concatenated in order cover exactly the rows of `self`.
+    pub(crate) fn split_by_size(
+        self,
+        row_group_meta_data: &[RowGroupMetaData],
+        target_bytes: u64,
+        page_row_boundaries: Option<&[Vec<usize>]>,
+    ) -> Vec<Self> {
+        let num_row_groups = self.row_groups.len();
+        let fully_matched = self.fully_matched;
+
+        let mut packer = ChunkPacker::new(num_row_groups, target_bytes);
+        for (idx, access) in self.row_groups.into_iter().enumerate() {
+            let rg = &row_group_meta_data[idx];
+            let rg_bytes = rg.compressed_size().max(0) as u64;
+            let rg_rows = rg.num_rows().max(0) as usize;
+            // Estimate the compressed size of a row range by its row fraction.
+            let range_bytes = |rows: usize| {
+                if rg_rows == 0 {
+                    0
+                } else {
+                    rg_bytes * rows as u64 / rg_rows as u64
+                }
+            };
+            match access {
+                RowGroupAccess::Skip => {}
+                RowGroupAccess::Selection(selection) => {
+                    let bytes = range_bytes(selection.row_count());
+                    packer.add(
+                        idx,
+                        RowGroupAccess::Selection(selection),
+                        bytes,
+                        fully_matched[idx],
+                    );
+                }
+                RowGroupAccess::Scan if rg_bytes <= target_bytes => {
+                    packer.add(idx, RowGroupAccess::Scan, rg_bytes, fully_matched[idx]);
+                }
+                RowGroupAccess::Scan => {
+                    // Sub-row-group split: cut the row group into roughly
+                    // target-sized row ranges at page-aligned boundaries.
+                    let boundaries = page_row_boundaries
+                        .and_then(|per_rg| per_rg.get(idx))
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+                    let mut start = 0;
+                    for &boundary in boundaries {
+                        if boundary <= start || boundary >= rg_rows {
+                            continue;
+                        }
+                        let bytes = range_bytes(boundary - start);
+                        if bytes < target_bytes {
+                            // keep growing the current piece
+                            continue;
+                        }
+                        packer.add(
+                            idx,
+                            select_row_range(start, boundary - start, rg_rows),
+                            bytes,
+                            fully_matched[idx],
+                        );
+                        start = boundary;
+                    }
+                    if start == 0 {
+                        // No usable boundary: keep the row group whole.
+                        packer.add(
+                            idx,
+                            RowGroupAccess::Scan,
+                            rg_bytes,
+                            fully_matched[idx],
+                        );
+                    } else if start < rg_rows {
+                        packer.add(
+                            idx,
+                            select_row_range(start, rg_rows - start, rg_rows),
+                            range_bytes(rg_rows - start),
+                            fully_matched[idx],
+                        );
+                    }
+                }
+            }
+        }
+        packer.finish()
+    }
+
     /// Prepare this plan and resolve to the final `PreparedAccessPlan`
     pub(crate) fn prepare(
         self,
@@ -461,6 +571,101 @@ impl ParquetAccessPlan {
         let row_selection = self.into_overall_row_selection(row_group_meta_data)?;
 
         PreparedAccessPlan::new(row_group_indexes, row_selection)
+    }
+}
+
+/// A [`RowGroupAccess`] selecting rows `[start, start + len)` of a row group
+/// with `num_rows` rows.
+fn select_row_range(start: usize, len: usize, num_rows: usize) -> RowGroupAccess {
+    let mut selectors = Vec::with_capacity(3);
+    if start > 0 {
+        selectors.push(RowSelector::skip(start));
+    }
+    selectors.push(RowSelector::select(len));
+    if start + len < num_rows {
+        selectors.push(RowSelector::skip(num_rows - start - len));
+    }
+    RowGroupAccess::Selection(RowSelection::from(selectors))
+}
+
+/// Greedily packs row group pieces into [`ParquetAccessPlan`] chunks of
+/// roughly `target_bytes` each. See [`ParquetAccessPlan::split_by_size`].
+struct ChunkPacker {
+    num_row_groups: usize,
+    target_bytes: u64,
+    chunks: Vec<ParquetAccessPlan>,
+    current: ParquetAccessPlan,
+    current_bytes: u64,
+    current_has_pieces: bool,
+}
+
+impl ChunkPacker {
+    fn new(num_row_groups: usize, target_bytes: u64) -> Self {
+        Self {
+            num_row_groups,
+            target_bytes,
+            chunks: Vec::new(),
+            current: ParquetAccessPlan::new_none(num_row_groups),
+            current_bytes: 0,
+            current_has_pieces: false,
+        }
+    }
+
+    /// Add one piece (a whole row group or a row range within one) to the
+    /// current chunk, starting a new chunk first if the piece would push the
+    /// current chunk past the target size.
+    fn add(
+        &mut self,
+        idx: usize,
+        access: RowGroupAccess,
+        bytes: u64,
+        fully_matched: bool,
+    ) {
+        if self.current_has_pieces && self.current_bytes + bytes > self.target_bytes {
+            self.flush();
+        }
+        match (&mut self.current.row_groups[idx], access) {
+            // Defensive: consecutive sub-row-group pieces of one row group are
+            // each larger than half the target, so they normally land in
+            // different chunks; merge them if they ever share one.
+            (RowGroupAccess::Selection(existing), RowGroupAccess::Selection(new)) => {
+                *existing = existing.union(&new);
+            }
+            (slot @ RowGroupAccess::Skip, access) => *slot = access,
+            // Pieces are produced in row group order and `Scan` pieces cover
+            // the whole row group, so other combinations cannot occur.
+            (existing, access) => unreachable!(
+                "conflicting accesses for row group {idx}: {existing:?} and {access:?}"
+            ),
+        }
+        if fully_matched {
+            self.current.mark_fully_matched(idx);
+        }
+        self.current_bytes += bytes;
+        self.current_has_pieces = true;
+    }
+
+    fn flush(&mut self) {
+        if self.current_has_pieces {
+            let chunk = std::mem::replace(
+                &mut self.current,
+                ParquetAccessPlan::new_none(self.num_row_groups),
+            );
+            self.chunks.push(chunk);
+            self.current_bytes = 0;
+            self.current_has_pieces = false;
+        }
+    }
+
+    /// Flush any partial chunk and return the chunks, always at least one
+    /// (possibly all-skip) plan.
+    fn finish(mut self) -> Vec<ParquetAccessPlan> {
+        self.flush();
+        if self.chunks.is_empty() {
+            self.chunks
+                .push(ParquetAccessPlan::new_none(self.num_row_groups));
+        }
+        self.chunks
     }
 }
 
@@ -847,6 +1052,196 @@ mod test {
             .build()
             .unwrap();
         Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    // ----------------------------------------------------------------
+    // `split_by_size` tests
+    // ----------------------------------------------------------------
+
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+
+    /// Build row group metadata with the given `(num_rows, compressed_bytes)`
+    /// per row group
+    fn rg_metadata_with_sizes(specs: &[(i64, i64)]) -> Vec<RowGroupMetaData> {
+        let schema_descr = get_test_schema_descr();
+        specs
+            .iter()
+            .map(|(num_rows, compressed_bytes)| {
+                let column = ColumnChunkMetaData::builder(schema_descr.column(0))
+                    .set_num_values(*num_rows)
+                    .set_total_compressed_size(*compressed_bytes)
+                    .build()
+                    .unwrap();
+                RowGroupMetaData::builder(schema_descr.clone())
+                    .set_num_rows(*num_rows)
+                    .set_column_metadata(vec![column])
+                    .build()
+                    .unwrap()
+            })
+            .collect()
+    }
+
+    /// Sum of selected rows in `plan` for row group `idx`
+    fn selected_rows(plan: &ParquetAccessPlan, idx: usize, num_rows: usize) -> usize {
+        match &plan.inner()[idx] {
+            RowGroupAccess::Skip => 0,
+            RowGroupAccess::Scan => num_rows,
+            RowGroupAccess::Selection(selection) => selection.row_count(),
+        }
+    }
+
+    #[test]
+    fn test_split_by_size_packs_small_row_groups() {
+        // 3 row groups of 400KB: the first two fit in one ~1MB chunk, the
+        // third starts a new chunk
+        let metadata = rg_metadata_with_sizes(&[(100i64, 400 * KB as i64); 3]);
+        let plan = ParquetAccessPlan::new_all(3);
+
+        let chunks = plan.split_by_size(&metadata, MB, None);
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(
+            chunks[0].inner(),
+            &[
+                RowGroupAccess::Scan,
+                RowGroupAccess::Scan,
+                RowGroupAccess::Skip
+            ]
+        );
+        assert_eq!(
+            chunks[1].inner(),
+            &[
+                RowGroupAccess::Skip,
+                RowGroupAccess::Skip,
+                RowGroupAccess::Scan
+            ]
+        );
+    }
+
+    #[test]
+    fn test_split_by_size_splits_large_row_group_at_page_boundaries() {
+        // one 3.5MB row group with 1000 rows and a page every 100 rows:
+        // pieces grow page by page and are cut once they reach ~1MB
+        // (300 rows), leaving the 100-row tail as its own chunk
+        let metadata = rg_metadata_with_sizes(&[(1000, (3 * MB + MB / 2) as i64)]);
+        let plan = ParquetAccessPlan::new_all(1);
+        let boundaries = vec![(100..1000).step_by(100).collect::<Vec<_>>()];
+
+        let chunks = plan.split_by_size(&metadata, MB, Some(&boundaries));
+
+        assert_eq!(chunks.len(), 4);
+        let mut next_row = 0;
+        for (chunk, expected_rows) in chunks.iter().zip([300, 300, 300, 100]) {
+            let RowGroupAccess::Selection(selection) = &chunk.inner()[0] else {
+                panic!(
+                    "expected sub-row-group selection, got {:?}",
+                    chunk.inner()[0]
+                );
+            };
+            // each chunk covers the next consecutive page-aligned row range
+            assert_eq!(selection.row_count(), expected_rows);
+            let mut row = 0;
+            for selector in selection.iter() {
+                if !selector.skip {
+                    assert_eq!(row, next_row);
+                }
+                row += selector.row_count;
+            }
+            assert_eq!(row, 1000, "selection must cover all rows of the group");
+            next_row += expected_rows;
+        }
+        assert_eq!(next_row, 1000, "chunks must cover the whole row group");
+    }
+
+    #[test]
+    fn test_split_by_size_keeps_row_group_whole_without_page_boundaries() {
+        // Without page boundaries (no offset index), splitting inside a row
+        // group would duplicate page fetches, so the row group stays whole.
+        let metadata = rg_metadata_with_sizes(&[(1000, (3 * MB + MB / 2) as i64)]);
+        let plan = ParquetAccessPlan::new_all(1);
+
+        let chunks = plan.split_by_size(&metadata, MB, None);
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].inner(), &[RowGroupAccess::Scan]);
+    }
+
+    #[test]
+    fn test_split_by_size_preserves_skips_and_selections() {
+        let selection: RowSelection =
+            vec![RowSelector::select(10), RowSelector::skip(90)].into();
+        let plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Scan,
+            RowGroupAccess::Skip,
+            RowGroupAccess::Selection(selection.clone()),
+        ]);
+        let metadata = rg_metadata_with_sizes(&[
+            (100, 2 * KB as i64),
+            (100, 5 * MB as i64), // skipped: size must not matter
+            (100, 2 * KB as i64),
+        ]);
+
+        let chunks = plan.split_by_size(&metadata, MB, None);
+
+        // everything is tiny, so it all packs into a single chunk
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            chunks[0].inner(),
+            &[
+                RowGroupAccess::Scan,
+                RowGroupAccess::Skip,
+                RowGroupAccess::Selection(selection),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_split_by_size_preserves_fully_matched() {
+        let metadata = rg_metadata_with_sizes(&[(1000, 3 * MB as i64)]);
+        let mut plan = ParquetAccessPlan::new_all(1);
+        plan.mark_fully_matched(0);
+        let boundaries = vec![(100..1000).step_by(100).collect::<Vec<_>>()];
+
+        let chunks = plan.split_by_size(&metadata, MB, Some(&boundaries));
+
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            assert!(chunk.is_fully_matched(0));
+        }
+    }
+
+    #[test]
+    fn test_split_by_size_covers_all_rows() {
+        let metadata = rg_metadata_with_sizes(&[
+            (100, 400 * KB as i64),
+            (1000, (2 * MB + MB / 4) as i64),
+            (50, 10 * KB as i64),
+        ]);
+        let plan = ParquetAccessPlan::new_all(3);
+        let boundaries =
+            vec![vec![], (100..1000).step_by(100).collect::<Vec<_>>(), vec![]];
+
+        let chunks = plan.split_by_size(&metadata, MB, Some(&boundaries));
+
+        assert!(chunks.len() > 1);
+        for (idx, num_rows) in [(0, 100), (1, 1000), (2, 50)] {
+            let total: usize = chunks
+                .iter()
+                .map(|chunk| selected_rows(chunk, idx, num_rows))
+                .sum();
+            assert_eq!(total, num_rows, "row group {idx}");
+        }
+    }
+
+    #[test]
+    fn test_split_by_size_empty_plan() {
+        let metadata = rg_metadata_with_sizes(&[(100, 400 * KB as i64); 2]);
+        let plan = ParquetAccessPlan::new_none(2);
+
+        let chunks = plan.split_by_size(&metadata, MB, None);
+
+        assert_eq!(chunks, vec![ParquetAccessPlan::new_none(2)]);
     }
 
     // ----------------------------------------------------------------

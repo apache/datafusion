@@ -31,7 +31,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
-use datafusion_datasource::morsel::Morselizer;
+use datafusion_datasource::morsel::{Morselizer, SplitHint};
 
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
@@ -635,6 +635,10 @@ impl FileSource for ParquetSource {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
+            // Installed later via `Morselizer::set_split_hint` when the scan
+            // has a shared work source.
+            split_hint: SplitHint::disabled(),
+            morsel_split_size: self.table_parquet_options.global.morsel_split_size,
         }))
     }
 
