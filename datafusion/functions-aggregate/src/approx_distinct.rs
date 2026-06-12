@@ -18,20 +18,16 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use crate::hyperloglog::{HLL_HASH_STATE, HyperLogLog, NUM_REGISTERS, count_from_hashes};
-use arrow::array::{Array, BinaryArray, StringViewArray};
 use arrow::array::{
-    AsArray, BinaryBuilder, BooleanArray, GenericBinaryArray, GenericStringArray,
-    OffsetSizeTrait, PrimitiveArray, UInt64Array,
+    Array, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, PrimitiveArray,
+    UInt64Array,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    ArrowPrimitiveType, Date32Type, Date64Type, FieldRef, Int32Type, Int64Type,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt32Type, UInt64Type,
+    ArrowPrimitiveType, DataType, Field, FieldRef, Int64Type, TimeUnit,
 };
-use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{
     DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
     not_impl_err,
@@ -51,8 +47,8 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
 use std::fmt::{Debug, Formatter};
-use std::hash::{BuildHasher, Hash};
-use std::marker::PhantomData;
+use std::hash::Hash;
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 make_udaf_expr_and_func!(
@@ -124,6 +120,73 @@ impl<A: Accumulator> Accumulator for ApproxDistinctBitmapWrapper<A> {
 }
 
 #[derive(Debug)]
+struct HLLAccumulator {
+    hll: HyperLogLog<u8>,
+    hashes: Vec<u64>,
+}
+
+impl HLLAccumulator {
+    pub fn new() -> Self {
+        Self {
+            hll: HyperLogLog::new(),
+            hashes: Vec::new(),
+        }
+    }
+}
+
+impl Accumulator for HLLAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array = values[0].as_ref();
+        self.hashes.clear();
+        self.hashes.resize(array.len(), 0);
+        create_hashes([array], &HLL_HASH_STATE, &mut self.hashes)?;
+
+        match array.logical_nulls() {
+            None => {
+                for &hash in &self.hashes {
+                    self.hll.add_hashed(hash);
+                }
+            }
+            Some(nulls) => {
+                for row in 0..array.len() {
+                    if nulls.is_valid(row) {
+                        self.hll.add_hashed(self.hashes[row]);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        assert_eq!(1, states.len(), "expect only 1 element in the states");
+        let binary_array = downcast_value!(states[0], BinaryArray);
+        for v in binary_array.iter() {
+            let v = v.ok_or_else(|| {
+                internal_datafusion_err!("Impossibly got empty binary array from states")
+            })?;
+            let other = v.try_into()?;
+            self.hll.merge(&other);
+        }
+        Ok(())
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let value = ScalarValue::from(&self.hll);
+        Ok(vec![value])
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::UInt64(Some(self.hll.count() as u64)))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) + self.hashes.capacity() * size_of::<u64>()
+    }
+}
+
+/// Speicalize the numeric case for extra performance.
+#[derive(Debug)]
 struct NumericHLLAccumulator<T>
 where
     T: ArrowPrimitiveType,
@@ -144,159 +207,6 @@ where
     }
 }
 
-#[derive(Debug)]
-struct StringHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
-    hll: HyperLogLog<str>,
-    phantom_data: PhantomData<T>,
-}
-
-impl<T> StringHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
-    pub fn new() -> Self {
-        Self {
-            hll: HyperLogLog::new(),
-            phantom_data: PhantomData,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct StringViewHLLAccumulator {
-    hll: HyperLogLog<str>,
-}
-
-impl StringViewHLLAccumulator {
-    pub fn new() -> Self {
-        Self {
-            hll: HyperLogLog::new(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct BinaryHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
-    hll: HyperLogLog<[u8]>,
-    phantom_data: PhantomData<T>,
-}
-
-impl<T> BinaryHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
-    pub fn new() -> Self {
-        Self {
-            hll: HyperLogLog::new(),
-            phantom_data: PhantomData,
-        }
-    }
-}
-
-macro_rules! default_accumulator_impl {
-    () => {
-        fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-            assert_eq!(1, states.len(), "expect only 1 element in the states");
-            let binary_array = downcast_value!(states[0], BinaryArray);
-            for v in binary_array.iter() {
-                let v = v.ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "Impossibly got empty binary array from states"
-                    )
-                })?;
-                let other = v.try_into()?;
-                self.hll.merge(&other);
-            }
-            Ok(())
-        }
-
-        fn state(&mut self) -> Result<Vec<ScalarValue>> {
-            let value = ScalarValue::from(&self.hll);
-            Ok(vec![value])
-        }
-
-        fn evaluate(&mut self) -> Result<ScalarValue> {
-            Ok(ScalarValue::UInt64(Some(self.hll.count() as u64)))
-        }
-
-        fn size(&self) -> usize {
-            // HLL has static size
-            std::mem::size_of_val(self)
-        }
-    };
-}
-
-impl<T> Accumulator for BinaryHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let array: &GenericBinaryArray<T> =
-            downcast_value!(values[0], GenericBinaryArray, T);
-        // flatten because we would skip nulls
-        self.hll.extend(array.into_iter().flatten());
-        Ok(())
-    }
-
-    default_accumulator_impl!();
-}
-
-impl Accumulator for StringViewHLLAccumulator {
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let array: &StringViewArray = downcast_value!(values[0], StringViewArray);
-
-        if array.data_buffers().is_empty() {
-            // Fast path: with no data buffers every value is inline, so they all
-            // take the u128 path — no need to check the length per row.
-            for (i, &view) in array.views().iter().enumerate() {
-                if !array.is_null(i) {
-                    self.hll.add_hashed(HLL_HASH_STATE.hash_one(view));
-                }
-            }
-        } else {
-            // Mixed batch: decide per row by length. Short strings still use the
-            // u128 path so they match how they'd be hashed in an all-inline
-            // batch; only the genuinely out-of-line strings materialize a &str.
-            for (i, &view) in array.views().iter().enumerate() {
-                if array.is_null(i) {
-                    continue;
-                }
-                // The low 32 bits of the u128 view encode the string length.
-                if (view as u32) <= 12 {
-                    self.hll.add_hashed(HLL_HASH_STATE.hash_one(view));
-                } else {
-                    self.hll.add(array.value(i));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    default_accumulator_impl!();
-}
-
-impl<T> Accumulator for StringHLLAccumulator<T>
-where
-    T: OffsetSizeTrait,
-{
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let array: &GenericStringArray<T> =
-            downcast_value!(values[0], GenericStringArray, T);
-        // flatten because we would skip nulls
-        self.hll.extend(array.into_iter().flatten());
-        Ok(())
-    }
-
-    default_accumulator_impl!();
-}
-
 impl<T> Accumulator for NumericHLLAccumulator<T>
 where
     T: ArrowPrimitiveType + Debug,
@@ -304,12 +214,35 @@ where
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array: &PrimitiveArray<T> = downcast_value!(values[0], PrimitiveArray, T);
-        // flatten because we would skip nulls
         self.hll.extend(array.into_iter().flatten());
         Ok(())
     }
 
-    default_accumulator_impl!();
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        assert_eq!(1, states.len(), "expect only 1 element in the states");
+        let binary_array = downcast_value!(states[0], BinaryArray);
+        for v in binary_array.iter() {
+            let v = v.ok_or_else(|| {
+                internal_datafusion_err!("Impossibly got empty binary array from states")
+            })?;
+            let other = v.try_into()?;
+            self.hll.merge(&other);
+        }
+        Ok(())
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let value = ScalarValue::from(&self.hll);
+        Ok(vec![value])
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::UInt64(Some(self.hll.count() as u64)))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
 }
 
 /// Maximum number of distinct hashes kept in the sparse representation of a
@@ -496,125 +429,6 @@ impl GroupHll {
     }
 }
 
-/// Computes HyperLogLog hashes for the rows of an input array, type by type.
-///
-/// The hashing matches the per-group [`Accumulator`] implementations exactly so
-/// that the grouped and ungrouped paths produce identical estimates.
-trait HllValueHasher: Send + Sync + 'static {
-    /// Invoke `f(row_index, hash)` for every row that is valid according to
-    /// `nulls`. `nulls = None` means every row is valid (caller has
-    /// pre-combined value-nulls and filter into a single buffer).
-    fn for_each_hash(
-        array: &dyn Array,
-        nulls: Option<&NullBuffer>,
-        f: impl FnMut(usize, u64),
-    );
-}
-
-struct NumericHasher<T>(PhantomData<T>);
-
-impl<T> HllValueHasher for NumericHasher<T>
-where
-    T: ArrowPrimitiveType + Send + Sync + 'static,
-    T::Native: Hash,
-{
-    #[inline]
-    fn for_each_hash(
-        array: &dyn Array,
-        nulls: Option<&NullBuffer>,
-        mut f: impl FnMut(usize, u64),
-    ) {
-        let array: &PrimitiveArray<T> = array.as_primitive::<T>();
-        match nulls {
-            None => {
-                for (i, v) in array.values().iter().enumerate() {
-                    f(i, HLL_HASH_STATE.hash_one(v));
-                }
-            }
-            Some(nulls) => {
-                for i in 0..array.len() {
-                    if nulls.is_valid(i) {
-                        f(i, HLL_HASH_STATE.hash_one(array.value(i)));
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct Utf8Hasher<O>(PhantomData<O>);
-
-impl<O: OffsetSizeTrait> HllValueHasher for Utf8Hasher<O> {
-    #[inline]
-    fn for_each_hash(
-        array: &dyn Array,
-        nulls: Option<&NullBuffer>,
-        mut f: impl FnMut(usize, u64),
-    ) {
-        let array: &GenericStringArray<O> = array.as_string::<O>();
-        for i in 0..array.len() {
-            if nulls.is_none_or(|n| n.is_valid(i)) {
-                f(i, HLL_HASH_STATE.hash_one(array.value(i)));
-            }
-        }
-    }
-}
-
-struct Utf8ViewHasher;
-
-impl HllValueHasher for Utf8ViewHasher {
-    #[inline]
-    fn for_each_hash(
-        array: &dyn Array,
-        nulls: Option<&NullBuffer>,
-        mut f: impl FnMut(usize, u64),
-    ) {
-        let array: &StringViewArray = array.as_string_view();
-        // Mirror `StringViewHLLAccumulator`: hash the raw inline view when all
-        // strings are stored inline (≤ 12 bytes), avoiding `&str` materialization.
-        if array.data_buffers().is_empty() {
-            let views = array.views();
-            for i in 0..array.len() {
-                if nulls.is_none_or(|n| n.is_valid(i)) {
-                    f(i, HLL_HASH_STATE.hash_one(views[i]));
-                }
-            }
-        } else {
-            // Mixed batch: short strings (≤ 12 bytes) are still inline and must
-            // be hashed as the raw u128 view to match the all-inline fast path.
-            let views = array.views();
-            for i in 0..array.len() {
-                if nulls.is_none_or(|n| n.is_valid(i)) {
-                    let view = views[i];
-                    if (view as u32) <= 12 {
-                        f(i, HLL_HASH_STATE.hash_one(view));
-                    } else {
-                        f(i, HLL_HASH_STATE.hash_one(array.value(i)));
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct BinaryHasher<O>(PhantomData<O>);
-
-impl<O: OffsetSizeTrait> HllValueHasher for BinaryHasher<O> {
-    #[inline]
-    fn for_each_hash(
-        array: &dyn Array,
-        nulls: Option<&NullBuffer>,
-        mut f: impl FnMut(usize, u64),
-    ) {
-        let array: &GenericBinaryArray<O> = array.as_binary::<O>();
-        for i in 0..array.len() {
-            if nulls.is_none_or(|n| n.is_valid(i)) {
-                f(i, HLL_HASH_STATE.hash_one(array.value(i)));
-            }
-        }
-    }
-}
-
 /// A [`GroupsAccumulator`] for `approx_distinct` that keeps one adaptive
 /// (sparse → dense) HyperLogLog sketch per group.
 ///
@@ -646,20 +460,21 @@ impl<O: OffsetSizeTrait> HllValueHasher for BinaryHasher<O> {
 /// replayed into a dense sketch. New values for `b` update the dense registers
 /// directly, and serialized state is the raw [`NUM_REGISTERS`]-byte register
 /// array.
-struct HllGroupsAccumulator<H: HllValueHasher> {
+struct HllGroupsAccumulator {
     /// Per-group sketches, indexed by `group_index`.
     groups: Vec<GroupHll>,
     /// Incrementally maintained estimate of heap bytes used by `groups`.
     allocated_bytes: usize,
-    phantom: PhantomData<H>,
+    /// Reused workspace for vectorized value hashing.
+    hashes: Vec<u64>,
 }
 
-impl<H: HllValueHasher> HllGroupsAccumulator<H> {
+impl HllGroupsAccumulator {
     fn new() -> Self {
         Self {
             groups: Vec::new(),
             allocated_bytes: 0,
-            phantom: PhantomData,
+            hashes: Vec::new(),
         }
     }
 
@@ -677,7 +492,7 @@ impl<H: HllValueHasher> HllGroupsAccumulator<H> {
     }
 }
 
-impl<H: HllValueHasher> GroupsAccumulator for HllGroupsAccumulator<H> {
+impl GroupsAccumulator for HllGroupsAccumulator {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -686,17 +501,30 @@ impl<H: HllValueHasher> GroupsAccumulator for HllGroupsAccumulator<H> {
         total_num_groups: usize,
     ) -> Result<()> {
         self.ensure_groups(total_num_groups);
-        let groups = &mut self.groups;
+        let array = values[0].as_ref();
+        self.hashes.clear();
+        self.hashes.resize(array.len(), 0);
+        create_hashes([array], &HLL_HASH_STATE, &mut self.hashes)?;
+
         let mut delta: isize = 0;
-        // Pre-combine value-nulls and filter into one mask so the callback
-        // needs no per-row branching.
+        // Pre-combine value-nulls and filter into one mask so the update loop
+        // only visits rows that should affect the sketch.
         let filter_nulls = opt_filter.map(filter_to_nulls);
-        let value_nulls = values[0].logical_nulls();
+        let value_nulls = array.logical_nulls();
         let combined_nulls =
             NullBuffer::union(filter_nulls.as_ref(), value_nulls.as_ref());
-        H::for_each_hash(values[0].as_ref(), combined_nulls.as_ref(), |row, hash| {
-            delta += groups[group_indices[row]].add_hash(hash);
-        });
+        match combined_nulls {
+            None => {
+                for (row, &hash) in self.hashes.iter().enumerate() {
+                    delta += self.groups[group_indices[row]].add_hash(hash);
+                }
+            }
+            Some(nulls) => {
+                for row in nulls.valid_indices() {
+                    delta += self.groups[group_indices[row]].add_hash(self.hashes[row]);
+                }
+            }
+        }
         self.apply_delta(delta);
         Ok(())
     }
@@ -757,7 +585,9 @@ impl<H: HllValueHasher> GroupsAccumulator for HllGroupsAccumulator<H> {
     }
 
     fn size(&self) -> usize {
-        self.groups.capacity() * size_of::<GroupHll>() + self.allocated_bytes
+        self.groups.capacity() * size_of::<GroupHll>()
+            + self.allocated_bytes
+            + self.hashes.capacity() * size_of::<u64>()
     }
 }
 
@@ -901,41 +731,8 @@ impl AggregateUDFImpl for ApproxDistinct {
             | DataType::Int16 => {
                 return get_fixed_domain_approx_accumulator(data_type);
             }
-            DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
-            DataType::UInt64 => Box::new(NumericHLLAccumulator::<UInt64Type>::new()),
-            DataType::Int32 => Box::new(NumericHLLAccumulator::<Int32Type>::new()),
             DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::new()),
-            DataType::Date32 => Box::new(NumericHLLAccumulator::<Date32Type>::new()),
-            DataType::Date64 => Box::new(NumericHLLAccumulator::<Date64Type>::new()),
-            DataType::Time32(TimeUnit::Second) => {
-                Box::new(NumericHLLAccumulator::<Time32SecondType>::new())
-            }
-            DataType::Time32(TimeUnit::Millisecond) => {
-                Box::new(NumericHLLAccumulator::<Time32MillisecondType>::new())
-            }
-            DataType::Time64(TimeUnit::Microsecond) => {
-                Box::new(NumericHLLAccumulator::<Time64MicrosecondType>::new())
-            }
-            DataType::Time64(TimeUnit::Nanosecond) => {
-                Box::new(NumericHLLAccumulator::<Time64NanosecondType>::new())
-            }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                Box::new(NumericHLLAccumulator::<TimestampSecondType>::new())
-            }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                Box::new(NumericHLLAccumulator::<TimestampMillisecondType>::new())
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                Box::new(NumericHLLAccumulator::<TimestampMicrosecondType>::new())
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                Box::new(NumericHLLAccumulator::<TimestampNanosecondType>::new())
-            }
-            DataType::Utf8 => Box::new(StringHLLAccumulator::<i32>::new()),
-            DataType::LargeUtf8 => Box::new(StringHLLAccumulator::<i64>::new()),
-            DataType::Utf8View => Box::new(StringViewHLLAccumulator::new()),
-            DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
-            DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
+            data_type if is_hll_type(data_type) => Box::new(HLLAccumulator::new()),
             DataType::Null => {
                 Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
             }
@@ -949,7 +746,7 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        is_hll_groups_type(args.expr_fields[0].data_type())
+        is_hll_type(args.expr_fields[0].data_type())
     }
 
     fn create_groups_accumulator(
@@ -957,71 +754,13 @@ impl AggregateUDFImpl for ApproxDistinct {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         let data_type = args.expr_fields[0].data_type();
-        let accumulator: Box<dyn GroupsAccumulator> = match data_type {
-            DataType::UInt32 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<UInt32Type>>::new())
-            }
-            DataType::UInt64 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<UInt64Type>>::new())
-            }
-            DataType::Int32 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<Int32Type>>::new())
-            }
-            DataType::Int64 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<Int64Type>>::new())
-            }
-            DataType::Date32 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<Date32Type>>::new())
-            }
-            DataType::Date64 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<Date64Type>>::new())
-            }
-            DataType::Time32(TimeUnit::Second) => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<Time32SecondType>>::new())
-            }
-            DataType::Time32(TimeUnit::Millisecond) => Box::new(HllGroupsAccumulator::<
-                NumericHasher<Time32MillisecondType>,
-            >::new()),
-            DataType::Time64(TimeUnit::Microsecond) => Box::new(HllGroupsAccumulator::<
-                NumericHasher<Time64MicrosecondType>,
-            >::new()),
-            DataType::Time64(TimeUnit::Nanosecond) => Box::new(HllGroupsAccumulator::<
-                NumericHasher<Time64NanosecondType>,
-            >::new()),
-            DataType::Timestamp(TimeUnit::Second, _) => Box::new(HllGroupsAccumulator::<
-                NumericHasher<TimestampSecondType>,
-            >::new()),
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                Box::new(HllGroupsAccumulator::<
-                    NumericHasher<TimestampMillisecondType>,
-                >::new())
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                Box::new(HllGroupsAccumulator::<
-                    NumericHasher<TimestampMicrosecondType>,
-                >::new())
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(
-                HllGroupsAccumulator::<NumericHasher<TimestampNanosecondType>>::new(),
-            ),
-            DataType::Utf8 => Box::new(HllGroupsAccumulator::<Utf8Hasher<i32>>::new()),
-            DataType::LargeUtf8 => {
-                Box::new(HllGroupsAccumulator::<Utf8Hasher<i64>>::new())
-            }
-            DataType::Utf8View => Box::new(HllGroupsAccumulator::<Utf8ViewHasher>::new()),
-            DataType::Binary => {
-                Box::new(HllGroupsAccumulator::<BinaryHasher<i32>>::new())
-            }
-            DataType::LargeBinary => {
-                Box::new(HllGroupsAccumulator::<BinaryHasher<i64>>::new())
-            }
-            other => {
-                return not_impl_err!(
-                    "GroupsAccumulator for 'approx_distinct' is not implemented for data type {other}"
-                );
-            }
-        };
-        Ok(accumulator)
+        if is_hll_type(data_type) {
+            Ok(Box::new(HllGroupsAccumulator::new()))
+        } else {
+            not_impl_err!(
+                "GroupsAccumulator for 'approx_distinct' is not implemented for data type {data_type}"
+            )
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -1029,10 +768,9 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 }
 
-/// Returns true for the data types backed by the HyperLogLog
-/// [`HllGroupsAccumulator`]. The fixed-domain types (booleans / small ints) and
-/// `Null` fall back to the per-group [`Accumulator`] path.
-fn is_hll_groups_type(data_type: &DataType) -> bool {
+/// Returns true for the data types backed by HyperLogLog. The fixed-domain
+/// types (booleans / small ints) and `Null` use separate accumulator paths.
+fn is_hll_type(data_type: &DataType) -> bool {
     matches!(
         data_type,
         DataType::UInt32
@@ -1061,6 +799,7 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
 mod tests {
     use super::*;
     use arrow::array::{AsArray, Int64Array, StringViewArray};
+    use std::hash::BuildHasher;
     use std::sync::Arc;
 
     // A string longer than the 12-byte inline limit
@@ -1086,7 +825,7 @@ mod tests {
         buf
     }
 
-    fn distinct_count(acc: &mut StringViewHLLAccumulator) -> u64 {
+    fn distinct_count(acc: &mut HLLAccumulator) -> u64 {
         match acc.evaluate().unwrap() {
             ScalarValue::UInt64(Some(v)) => v,
             other => panic!("unexpected evaluate result: {other:?}"),
@@ -1221,7 +960,7 @@ mod tests {
         let filter =
             BooleanArray::from(vec![Some(true), None, Some(false), None, Some(true)]);
 
-        let mut acc = HllGroupsAccumulator::<NumericHasher<Int64Type>>::new();
+        let mut acc = HllGroupsAccumulator::new();
         // put all rows in group 0
         let group_indices = vec![0usize; 5];
         acc.update_batch(&[values], &group_indices, Some(&filter), 1)
@@ -1250,7 +989,7 @@ mod tests {
         assert!(!batch2.as_string_view().data_buffers().is_empty());
 
         let group_indices = vec![0usize, 0];
-        let mut acc = HllGroupsAccumulator::<Utf8ViewHasher>::new();
+        let mut acc = HllGroupsAccumulator::new();
         acc.update_batch(&[batch1], &group_indices, None, 1)
             .unwrap();
         acc.update_batch(&[batch2], &group_indices, None, 1)
@@ -1269,7 +1008,7 @@ mod tests {
         // Multiset: {"aaa" x2, "bbb", LONG}, so 3 distinct values.
         let mixed: ArrayRef =
             Arc::new(StringViewArray::from(vec!["aaa", "bbb", LONG, "aaa"]));
-        let mut acc_single = StringViewHLLAccumulator::new();
+        let mut acc_single = HLLAccumulator::new();
         acc_single.update_batch(&[mixed]).unwrap();
 
         // Same multiset, but split so "aaa" lands in both an all-inline batch
@@ -1279,7 +1018,7 @@ mod tests {
         assert!(inline_only.as_string_view().data_buffers().is_empty());
         assert!(!with_buffer.as_string_view().data_buffers().is_empty());
 
-        let mut acc_split = StringViewHLLAccumulator::new();
+        let mut acc_split = HLLAccumulator::new();
         acc_split.update_batch(&[inline_only]).unwrap();
         acc_split.update_batch(&[with_buffer]).unwrap();
 
