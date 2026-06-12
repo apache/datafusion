@@ -884,10 +884,10 @@ Xiangpeng bar NULL bar NULL datafusion数据融合
 Raphael baraphael NULL datafusionДатbarион NULL datafusionДатаФусион
 under_score under_score NULL un iść core NULL un iść core
 percent percent NULL pan Tadeusz ma iść w kąt NULL pan Tadeusz ma iść w kąt
-(empty) (empty) NULL bar NULL (empty)
-(empty) (empty) NULL bar NULL (empty)
-% % NULL bar NULL (empty)
-_ _ NULL bar NULL (empty)
+(empty) (empty) NULL (empty) NULL (empty)
+(empty) (empty) NULL (empty) NULL (empty)
+% % NULL (empty) NULL (empty)
+_ _ NULL (empty) NULL (empty)
 NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
 

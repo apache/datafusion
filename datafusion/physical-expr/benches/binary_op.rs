@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::{array::StringArray, record_batch::RecordBatch};
 use arrow::{
-    array::BooleanArray,
+    array::{BooleanArray, Date32Array, Date64Array},
     datatypes::{DataType, Field, Schema},
 };
-use arrow::{array::StringArray, record_batch::RecordBatch};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::{Operator, and, binary_expr, col, lit, or};
 use datafusion_physical_expr::{
@@ -29,6 +29,9 @@ use datafusion_physical_expr::{
 };
 use std::hint::black_box;
 use std::sync::Arc;
+
+const DATE_ARRAY_LEN: usize = 8192;
+const MILLIS_PER_DAY: i64 = 86_400_000;
 
 /// Generates BooleanArrays with different true/false distributions for benchmarking.
 ///
@@ -309,6 +312,81 @@ fn create_record_batch<const TEST_ALL_FALSE: bool>(
     Ok(rbs)
 }
 
-criterion_group!(benches, benchmark_binary_op_in_short_circuit);
+fn make_date32_batch(null_percent: f64) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Date32, true),
+        Field::new("b", DataType::Date32, true),
+    ]));
+
+    let left = Date32Array::from_iter((0..DATE_ARRAY_LEN).map(|i| {
+        (null_percent == 0.0 || i % (1.0 / null_percent) as usize != 0)
+            .then_some(18_000 + i as i32)
+    }));
+    let right = Date32Array::from_iter((0..DATE_ARRAY_LEN).map(|i| {
+        (null_percent == 0.0 || i % (1.0 / null_percent) as usize != 0)
+            .then_some(17_000 + (i % 365) as i32)
+    }));
+
+    RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(left), Arc::new(right)])
+        .unwrap()
+}
+
+fn make_date64_batch(null_percent: f64) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Date64, true),
+        Field::new("b", DataType::Date64, true),
+    ]));
+
+    let left = Date64Array::from_iter((0..DATE_ARRAY_LEN).map(|i| {
+        (null_percent == 0.0 || i % (1.0 / null_percent) as usize != 0)
+            .then_some((18_000 + i as i64) * MILLIS_PER_DAY)
+    }));
+    let right = Date64Array::from_iter((0..DATE_ARRAY_LEN).map(|i| {
+        (null_percent == 0.0 || i % (1.0 / null_percent) as usize != 0)
+            .then_some((17_000 + (i % 365) as i64) * MILLIS_PER_DAY)
+    }));
+
+    RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(left), Arc::new(right)])
+        .unwrap()
+}
+
+/// Benchmark Date32 column subtraction.
+fn benchmark_date32_subtract(c: &mut Criterion) {
+    for (name, null_percent) in [("no_nulls", 0.0), ("20_percent_nulls", 0.2)] {
+        let batch = make_date32_batch(null_percent);
+        let expr = BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Minus,
+            Arc::new(Column::new("b", 1)),
+        );
+
+        c.bench_function(&format!("date32_subtract/{name}"), |b| {
+            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+        });
+    }
+}
+
+/// Benchmark Date64 column subtraction.
+fn benchmark_date64_subtract(c: &mut Criterion) {
+    for (name, null_percent) in [("no_nulls", 0.0), ("20_percent_nulls", 0.2)] {
+        let batch = make_date64_batch(null_percent);
+        let expr = BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Minus,
+            Arc::new(Column::new("b", 1)),
+        );
+
+        c.bench_function(&format!("date64_subtract/{name}"), |b| {
+            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+        });
+    }
+}
+
+criterion_group!(
+    benches,
+    benchmark_binary_op_in_short_circuit,
+    benchmark_date32_subtract,
+    benchmark_date64_subtract
+);
 
 criterion_main!(benches);

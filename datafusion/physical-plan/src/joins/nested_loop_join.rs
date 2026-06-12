@@ -61,8 +61,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
-    JoinSide, Result, ScalarValue, Statistics, arrow_err, assert_eq_or_internal_err,
-    internal_datafusion_err, internal_err, project_schema, unwrap_or_internal_err,
+    JoinSide, NullEquality, Result, ScalarValue, Statistics, arrow_err,
+    assert_eq_or_internal_err, internal_datafusion_err, internal_err, project_schema,
+    unwrap_or_internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -713,6 +714,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             left_stats,
             right_stats,
             &join_columns,
+            NullEquality::NullEqualsNothing,
             &self.join_type,
             &self.join_schema,
         )?;
@@ -1062,6 +1064,17 @@ pub(crate) struct NestedLoopJoinStream {
 
     /// Memory-limited spill fallback state. See [`SpillState`] for details.
     spill_state: SpillState,
+
+    /// Whether this stream has already reported probe completion for the current
+    /// left chunk via [`JoinLeftData::report_probe_completed`]. The shared
+    /// probe-threads counter must be decremented exactly once per probe stream;
+    /// without this guard a stream that yields a ready batch while finishing the
+    /// `EmitLeftUnmatched` state (and is then re-polled with `left_emit_idx`
+    /// still 0) would decrement the counter twice, driving it to zero
+    /// prematurely and causing a sibling partition to emit unmatched-left rows
+    /// before all partitions finished probing (spurious NULL-padded rows).
+    /// Reset to `false` when starting a new left chunk in memory-limited mode.
+    probe_completed_reported: bool,
 }
 
 pub(crate) struct NestedLoopJoinMetrics {
@@ -1335,6 +1348,7 @@ impl NestedLoopJoinStream {
             handled_empty_output: false,
             should_track_unmatched_right: need_produce_right_in_final(join_type),
             spill_state,
+            probe_completed_reported: false,
         }
     }
 
@@ -1861,6 +1875,10 @@ impl NestedLoopJoinStream {
                         self.buffered_left_data = None;
                         self.left_probe_idx = 0;
                         self.left_emit_idx = 0;
+                        // Each memory-limited chunk gets a fresh per-chunk
+                        // `JoinLeftData`/counter, so allow this stream to report
+                        // completion again for the next chunk.
+                        self.probe_completed_reported = false;
                         self.state = NLJState::BufferingLeft;
                     } else if self.is_memory_limited()
                         && self.should_track_unmatched_right
@@ -2339,7 +2357,9 @@ impl NestedLoopJoinStream {
     /// true -> continue in the same EmitLeftUnmatched state
     /// false -> next state (Done)
     fn process_left_unmatched(&mut self) -> Result<bool> {
-        let left_data = self.get_left_data()?;
+        // Clone the shared `Arc<JoinLeftData>` so the immutable borrow of `self`
+        // ends here and we can update `self.probe_completed_reported` below.
+        let left_data = Arc::clone(self.get_left_data()?);
         let left_batch = left_data.batch();
 
         // ========
@@ -2348,9 +2368,25 @@ impl NestedLoopJoinStream {
 
         // Early return if join type can't have unmatched rows
         let join_type_no_produce_left = !need_produce_result_in_final(self.join_type);
-        // Early return if another thread is already processing unmatched rows
-        let handled_by_other_partition =
-            self.left_emit_idx == 0 && !left_data.report_probe_completed();
+        // Early return if another thread is already processing unmatched rows.
+        //
+        // The shared probe-threads counter must be decremented exactly once per
+        // probe stream. This function can be re-entered with `left_emit_idx`
+        // still 0 (e.g. when a ready batch was flushed via an early return in
+        // `handle_emit_left_unmatched` before the state advanced), so guard the
+        // decrement with `probe_completed_reported` instead of relying solely on
+        // `left_emit_idx == 0`. Decrementing twice would drive the counter to
+        // zero prematurely and let a partition emit unmatched-left rows before
+        // all partitions finished probing, producing spurious NULL-padded rows.
+        let handled_by_other_partition = if self.probe_completed_reported {
+            // Already counted this stream's completion; if we're the designated
+            // emitter we have `left_emit_idx > 0` (or are mid-emit) and continue,
+            // otherwise another partition is handling emission.
+            self.left_emit_idx == 0
+        } else {
+            self.probe_completed_reported = true;
+            self.left_emit_idx == 0 && !left_data.report_probe_completed()
+        };
         // Stop processing unmatched rows, the caller will go to the next state
         let finished = self.left_emit_idx >= left_batch.num_rows();
 
@@ -2366,7 +2402,7 @@ impl NestedLoopJoinStream {
         let end_idx = std::cmp::min(start_idx + self.batch_size, left_batch.num_rows());
 
         if let Some(batch) =
-            self.process_left_unmatched_range(left_data, start_idx, end_idx)?
+            self.process_left_unmatched_range(&left_data, start_idx, end_idx)?
         {
             self.output_buffer.push_batch(batch)?;
         }

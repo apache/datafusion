@@ -15675,6 +15675,9 @@ impl serde::Serialize for PartitionedFile {
         if self.statistics.is_some() {
             len += 1;
         }
+        if self.arrow_schema.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PartitionedFile", len)?;
         if !self.path.is_empty() {
             struct_ser.serialize_field("path", &self.path)?;
@@ -15698,6 +15701,9 @@ impl serde::Serialize for PartitionedFile {
         if let Some(v) = self.statistics.as_ref() {
             struct_ser.serialize_field("statistics", v)?;
         }
+        if let Some(v) = self.arrow_schema.as_ref() {
+            struct_ser.serialize_field("arrowSchema", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -15716,6 +15722,8 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
             "partitionValues",
             "range",
             "statistics",
+            "arrow_schema",
+            "arrowSchema",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -15726,6 +15734,7 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
             PartitionValues,
             Range,
             Statistics,
+            ArrowSchema,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15753,6 +15762,7 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
                             "partitionValues" | "partition_values" => Ok(GeneratedField::PartitionValues),
                             "range" => Ok(GeneratedField::Range),
                             "statistics" => Ok(GeneratedField::Statistics),
+                            "arrowSchema" | "arrow_schema" => Ok(GeneratedField::ArrowSchema),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -15778,6 +15788,7 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
                 let mut partition_values__ = None;
                 let mut range__ = None;
                 let mut statistics__ = None;
+                let mut arrow_schema__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Path => {
@@ -15820,6 +15831,12 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
                             }
                             statistics__ = map_.next_value()?;
                         }
+                        GeneratedField::ArrowSchema => {
+                            if arrow_schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("arrowSchema"));
+                            }
+                            arrow_schema__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(PartitionedFile {
@@ -15829,6 +15846,7 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
                     partition_values: partition_values__.unwrap_or_default(),
                     range: range__,
                     statistics: statistics__,
+                    arrow_schema: arrow_schema__,
                 })
             }
         }

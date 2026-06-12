@@ -145,7 +145,11 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
     }
 
-    fn vectorized_append_inner(&mut self, array: &ArrayRef, rows: &[usize]) {
+    fn vectorized_append_inner(
+        &mut self,
+        array: &ArrayRef,
+        rows: &[usize],
+    ) -> Result<()> {
         let arr = array.as_byte_view::<B>();
         let null_count = array.null_count();
         let num_rows = array.len();
@@ -166,8 +170,50 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.do_append_val_inner(arr, row);
+                if arr.data_buffers().is_empty() {
+                    // Fast path: all strings are inline (≤12 bytes).
+                    // The input array's u128 views are already in the correct format;
+                    // copy them directly instead of going through value() → make_view().
+                    self.views.extend(rows.iter().map(|&row| arr.views()[row]));
+                } else {
+                    // Slow path: some strings are non-inline (>12 bytes).
+                    // Read views directly to avoid array.value(row) overhead and
+                    // reuse the source view's prefix instead of recomputing it via make_view.
+                    self.views.try_reserve(rows.len()).map_err(|e| {
+                        datafusion_common::exec_datafusion_err!(
+                            "failed to reserve {0} views: {e}",
+                            rows.len()
+                        )
+                    })?;
+                    for &row in rows {
+                        let view = arr.views()[row];
+                        let len = view as u32;
+                        if len <= 12 {
+                            // This row happens to be inline; copy view directly.
+                            self.views.push(view);
+                        } else {
+                            let src = ByteView::from(view);
+                            // ensure_in_progress_big_enough must be called before computing
+                            // new_buffer_index / new_offset — it may flush in_progress to completed.
+                            self.ensure_in_progress_big_enough(len as usize);
+                            let new_buffer_index = self.completed.len() as u32;
+                            let new_offset = self.in_progress.len() as u32;
+                            let src_buf = &arr.data_buffers()[src.buffer_index as usize];
+                            self.in_progress.extend_from_slice(
+                                &src_buf[src.offset as usize
+                                    ..(src.offset + src.length) as usize],
+                            );
+                            // Reuse prefix from the source view — avoids re-reading first 4 bytes.
+                            let new_view = ByteView {
+                                length: src.length,
+                                prefix: src.prefix,
+                                buffer_index: new_buffer_index,
+                                offset: new_offset,
+                            }
+                            .as_u128();
+                            self.views.push(new_view);
+                        }
+                    }
                 }
             }
 
@@ -177,6 +223,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                 self.views.resize(new_len, 0);
             }
         }
+        Ok(())
     }
 
     fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize)
@@ -548,8 +595,7 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
-        self.vectorized_append_inner(array, rows);
-        Ok(())
+        self.vectorized_append_inner(array, rows)
     }
 
     fn len(&self) -> usize {

@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Check License Header
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Install HawkEye
       # This CI job is bound by installation time, use `--profile dev` to speed it up
         run: cargo install hawkeye --version 6.2.0 --locked --profile dev
@@ -46,7 +46,7 @@ jobs:
     name: Use prettier to check formatting of documents
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
         with:
           node-version: "20"
@@ -58,13 +58,13 @@ jobs:
     name: Check Markdown Links
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - name: Load tool versions
         run: |
           source ci/scripts/utils/tool_versions.sh
           echo "LYCHEE_VERSION=${LYCHEE_VERSION}" >> "$GITHUB_ENV"
       - name: Install lychee
-        uses: taiki-e/install-action@920ab1831fbf4fb3ef75c8ead83556c918bb7290  # v2.79.8
+        uses: taiki-e/install-action@0631aa6515c7d545823c67cfae7ef4fc7f490154  # v2.81.8
         with:
           tool: lychee@${{ env.LYCHEE_VERSION }}
       - name: Run markdown link check
@@ -74,7 +74,7 @@ jobs:
     name: Validate required_status_checks in .asf.yaml
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       - run: pip install pyyaml
       - run: python3 ci/scripts/check_asf_yaml_status_checks.py
 
@@ -82,7 +82,7 @@ jobs:
     name: Spell Check with Typos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           persist-credentials: false
       # Version fixed on purpose. It uses heuristics to detect typos, so upgrading

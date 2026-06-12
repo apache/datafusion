@@ -35,9 +35,7 @@ use datafusion_expr::{
 
 use crate::optimize_projections::required_indices::RequiredIndices;
 use crate::utils::NamePreserver;
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeContainer};
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
 /// inside the [`LogicalPlan`]. This rule:
@@ -373,29 +371,15 @@ fn optimize_projections(
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
-        LogicalPlan::RecursiveQuery(recursive) => {
-            // Only allow subqueries that reference the current CTE; nested subqueries are not yet
-            // supported for projection pushdown for simplicity.
-            // TODO: be able to do projection pushdown on recursive CTEs with subqueries
-            if plan_contains_other_subqueries(
-                recursive.static_term.as_ref(),
-                &recursive.name,
-            ) || plan_contains_other_subqueries(
-                recursive.recursive_term.as_ref(),
-                &recursive.name,
-            ) {
-                return Ok(Transformed::no(plan));
-            }
-
-            plan.inputs()
-                .into_iter()
-                .map(|input| {
-                    indices
-                        .clone()
-                        .with_projection_beneficial()
-                        .with_plan_exprs(&plan, input.schema())
-                })
-                .collect::<Result<Vec<_>>>()?
+        LogicalPlan::RecursiveQuery(_) => {
+            // optimize the static and recursive terms: treat each recursive CTE term like a
+            // standalone subquery: optimize its internals, but do not push parent required indices
+            // through the RecursiveQuery boundary, as this can otherwise lead to bugs
+            // (see: https://github.com/apache/datafusion/issues/22249)
+            return plan.map_children(|c| {
+                let indices = RequiredIndices::new_for_all_exprs(&c);
+                optimize_projections(c, config, indices)
+            });
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
@@ -890,64 +874,6 @@ pub fn is_projection_unnecessary(
             }
         },
     ))
-}
-
-/// Returns true if the plan subtree contains any subqueries that are not the
-/// CTE reference itself. This treats any non-CTE [`LogicalPlan::SubqueryAlias`]
-/// node (including aliased relations) as a blocker, along with expression-level
-/// subqueries like scalar, EXISTS, or IN. These cases prevent projection
-/// pushdown for now because we cannot safely reason about their column usage.
-fn plan_contains_other_subqueries(plan: &LogicalPlan, cte_name: &str) -> bool {
-    if let LogicalPlan::SubqueryAlias(alias) = plan
-        && alias.alias.table() != cte_name
-        && !subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
-    {
-        return true;
-    }
-
-    let mut found = false;
-    plan.apply_expressions(|expr| {
-        if expr_contains_subquery(expr) {
-            found = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
-    })
-    .expect("expression traversal never fails");
-    if found {
-        return true;
-    }
-
-    plan.inputs()
-        .into_iter()
-        .any(|child| plan_contains_other_subqueries(child, cte_name))
-}
-
-fn expr_contains_subquery(expr: &Expr) -> bool {
-    expr.exists(|e| match e {
-        Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) => Ok(true),
-        _ => Ok(false),
-    })
-    // Safe unwrap since we are doing a simple boolean check
-    .unwrap()
-}
-
-fn subquery_alias_targets_recursive_cte(plan: &LogicalPlan, cte_name: &str) -> bool {
-    match plan {
-        LogicalPlan::TableScan(scan) => scan.table_name.table() == cte_name,
-        LogicalPlan::SubqueryAlias(alias) => {
-            subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
-        }
-        _ => {
-            let inputs = plan.inputs();
-            if inputs.len() == 1 {
-                subquery_alias_targets_recursive_cte(inputs[0], cte_name)
-            } else {
-                false
-            }
-        }
-    }
 }
 
 #[cfg(test)]

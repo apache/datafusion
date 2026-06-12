@@ -51,6 +51,7 @@ use crate::{
 };
 
 use crate::statistics::StatisticsRequest;
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
@@ -61,10 +62,12 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
-    ScalarValue, Spans, TableReference, UnnestOptions, aggregate_functional_dependencies,
-    assert_eq_or_internal_err, assert_or_internal_err, internal_err, plan_err,
+    ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
+    aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_err, plan_err, validate_range_split_points,
 };
 use indexmap::IndexSet;
+use itertools::Itertools as _;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
@@ -354,10 +357,7 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
-            LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
-                // we take the schema of the static term as the schema of the entire recursive query
-                static_term.schema()
-            }
+            LogicalPlan::RecursiveQuery(RecursiveQuery { schema, .. }) => schema,
         }
     }
 
@@ -741,7 +741,14 @@ impl LogicalPlan {
                 };
                 Ok(LogicalPlan::Distinct(distinct))
             }
-            LogicalPlan::RecursiveQuery(_) => Ok(self),
+            LogicalPlan::RecursiveQuery(RecursiveQuery {
+                name,
+                static_term,
+                recursive_term,
+                is_distinct,
+                schema: _,
+            }) => RecursiveQuery::try_new(name, static_term, recursive_term, is_distinct)
+                .map(LogicalPlan::RecursiveQuery),
             LogicalPlan::Analyze(_) => Ok(self),
             LogicalPlan::Explain(_) => Ok(self),
             LogicalPlan::TableScan(_) => Ok(self),
@@ -862,6 +869,32 @@ impl LogicalPlan {
                     let input = self.only_input(inputs)?;
                     Ok(LogicalPlan::Repartition(Repartition {
                         partitioning_scheme: Partitioning::Hash(expr, *n),
+                        input: Arc::new(input),
+                    }))
+                }
+                Partitioning::Range(range) => {
+                    if expr.len() != range.ordering().len() {
+                        return internal_err!(
+                            "Incorrect number of expressions for Range partitioning"
+                        );
+                    }
+                    let input = self.only_input(inputs)?;
+                    let ordering = range
+                        .ordering()
+                        .iter()
+                        .zip(expr)
+                        .map(|(sort_expr, expr)| SortExpr {
+                            expr,
+                            asc: sort_expr.asc,
+                            nulls_first: sort_expr.nulls_first,
+                        })
+                        .collect();
+                    let range = RangePartitioning::try_new(
+                        ordering,
+                        range.split_points().to_vec(),
+                    )?;
+                    Ok(LogicalPlan::Repartition(Repartition {
+                        partitioning_scheme: Partitioning::Range(range),
                         input: Arc::new(input),
                     }))
                 }
@@ -1081,12 +1114,13 @@ impl LogicalPlan {
             }) => {
                 self.assert_no_expressions(expr)?;
                 let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                    name: name.clone(),
-                    static_term: Arc::new(static_term),
-                    recursive_term: Arc::new(recursive_term),
-                    is_distinct: *is_distinct,
-                }))
+                RecursiveQuery::try_new(
+                    name.clone(),
+                    Arc::new(static_term),
+                    Arc::new(recursive_term),
+                    *is_distinct,
+                )
+                .map(LogicalPlan::RecursiveQuery)
             }
             LogicalPlan::Analyze(a) => {
                 self.assert_no_expressions(expr)?;
@@ -2096,6 +2130,9 @@ impl LogicalPlan {
                                 n
                             )
                         }
+                        Partitioning::Range(range) => {
+                            write!(f, "Repartition: {range}")
+                        }
                         Partitioning::DistributeBy(expr) => {
                             let dist_by_expr: Vec<String> =
                                 expr.iter().map(|e| format!("{e}")).collect();
@@ -2262,7 +2299,7 @@ impl PartialOrd for EmptyRelation {
 ///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
@@ -2274,6 +2311,90 @@ pub struct RecursiveQuery {
     /// Should the output of the recursive term be deduplicated (`UNION`) or
     /// not (`UNION ALL`).
     pub is_distinct: bool,
+    /// Schema exposed to parent plans after reconciling the static and recursive terms.
+    pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for RecursiveQuery {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => {
+                match self.static_term.partial_cmp(&other.static_term) {
+                    Some(Ordering::Equal) => {
+                        match self.recursive_term.partial_cmp(&other.recursive_term) {
+                            Some(Ordering::Equal) => {
+                                self.is_distinct.partial_cmp(&other.is_distinct)
+                            }
+                            cmp => cmp,
+                        }
+                    }
+                    cmp => cmp,
+                }
+            }
+            cmp => cmp,
+        }
+        // If the query definition compares equal but the derived schema differs,
+        // return `None` instead of contradicting `PartialEq` with `Some(Equal)`.
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
+}
+
+impl RecursiveQuery {
+    pub fn try_new(
+        name: String,
+        static_term: Arc<LogicalPlan>,
+        recursive_term: Arc<LogicalPlan>,
+        is_distinct: bool,
+    ) -> Result<Self> {
+        let schema =
+            recursive_query_output_schema(static_term.schema(), recursive_term.schema())?;
+        Ok(Self {
+            name,
+            static_term,
+            recursive_term,
+            is_distinct,
+            schema,
+        })
+    }
+}
+
+/// Compute a recursive query's output schema by considering both its static and
+/// recursive terms.
+///
+/// Field names, types, and metadata come from the static term. A field is
+/// nullable if either the static or the recursive term produces a nullable
+/// value in that position, matching how `UNION` reconciles branch nullability.
+///
+/// Functional dependencies are intentionally dropped: the recursive term
+/// appends rows that can duplicate values the static term guarantees unique, so
+/// any FDs carried by the static term may not hold over the combined output.
+fn recursive_query_output_schema(
+    static_schema: &DFSchemaRef,
+    recursive_schema: &DFSchemaRef,
+) -> Result<DFSchemaRef> {
+    if static_schema.fields().len() != recursive_schema.fields().len() {
+        return Err(DataFusionError::Plan(format!(
+            "Non-recursive term and recursive term must have the same number of columns ({} != {})",
+            static_schema.fields().len(),
+            recursive_schema.fields().len()
+        )));
+    }
+
+    let fields = static_schema
+        .iter()
+        .zip(recursive_schema.fields())
+        .map(|((qualifier, static_field), recursive_field)| {
+            let nullable = static_field.is_nullable() || recursive_field.is_nullable();
+            (
+                qualifier.cloned(),
+                static_field.as_ref().clone().with_nullable(nullable).into(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    DFSchema::new_with_metadata(fields, static_schema.metadata().clone())
+        .map(DFSchemaRef::new)
 }
 
 /// Values expression. See
@@ -4308,11 +4429,16 @@ impl Debug for Subquery {
     }
 }
 
-/// Logical partitioning schemes supported by [`LogicalPlan::Repartition`]
+/// Logical partitioning schemes.
 ///
-/// See [`Partitioning`] for more details on partitioning
+/// A scheme can describe either requested repartitioning in
+/// [`LogicalPlan::Repartition`] or a partitioning property declared by a source.
+/// Some schemes are only valid as metadata until planner support is added.
 ///
-/// [`Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
+/// For physical execution partitioning, see
+/// [`datafusion_physical_expr::Partitioning`].
+///
+/// [`datafusion_physical_expr::Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
@@ -4320,8 +4446,116 @@ pub enum Partitioning {
     /// Allocate rows based on a hash of one of more expressions and the specified number
     /// of partitions.
     Hash(Vec<Expr>, usize),
+    /// Partition rows by ranges.
+    /// See [`RangePartitioning`] for the logical contract.
+    Range(RangePartitioning),
     /// The DISTRIBUTE BY clause is used to repartition the data based on the input expressions
     DistributeBy(Vec<Expr>),
+}
+
+impl Partitioning {
+    /// Return the number of partitions, if known.
+    pub fn partition_count(&self) -> Option<usize> {
+        match self {
+            Self::RoundRobinBatch(partition_count) | Self::Hash(_, partition_count) => {
+                Some(*partition_count)
+            }
+            Self::Range(range) => Some(range.partition_count()),
+            Self::DistributeBy(_) => None,
+        }
+    }
+}
+
+/// Logical range partitioning.
+///
+/// [`RangePartitioning`] describes an ordered logical key space with split points.
+///
+/// - `ordering` defines the partitioning key and ordering using logical
+///   [`SortExpr`]s.
+/// - `split_points` define the boundaries between adjacent partitions.
+///
+/// Comparisons use the lexicographic order defined by `ordering`,
+/// including `ASC`/`DESC` and null ordering. Split points must be ordered
+/// according to that ordering, and each split point must have one value per
+/// ordering expression. See [`SplitPoint`] for the shared boundary contract.
+///
+/// The expressions are resolved against the declaring plan's schema. This
+/// constructor does not validate split point value types against the resolved
+/// expression types. Like other user-specified data properties such as
+/// sortedness, if a source declares range partitioning, it is responsible for
+/// placing each row in the partition described by the split points. DataFusion
+/// will not validate this is upheld.
+///
+/// NOTE: Range-aware optimizer and execution behavior will be introduced
+/// incrementally. See
+/// <https://github.com/apache/datafusion/issues/22395>.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct RangePartitioning {
+    /// Ordered logical partitioning key.
+    ordering: Vec<SortExpr>,
+    /// Boundaries between adjacent partitions.
+    split_points: Vec<SplitPoint>,
+}
+
+impl RangePartitioning {
+    /// Creates logical range partitioning metadata and validates split point
+    /// shape and ordering.
+    pub fn try_new(
+        ordering: Vec<SortExpr>,
+        split_points: Vec<SplitPoint>,
+    ) -> Result<Self> {
+        if ordering.is_empty() {
+            return plan_err!("Range partitioning requires non-empty ordering");
+        }
+
+        validate_range_split_points(&split_points, &logical_sort_options(&ordering))?;
+
+        Ok(Self {
+            ordering,
+            split_points,
+        })
+    }
+
+    /// Return the number of partitions.
+    pub fn partition_count(&self) -> usize {
+        self.split_points.len() + 1
+    }
+
+    /// Returns the ordering that defines the range key.
+    pub fn ordering(&self) -> &[SortExpr] {
+        &self.ordering
+    }
+
+    /// Returns the ordered split points between partitions.
+    pub fn split_points(&self) -> &[SplitPoint] {
+        &self.split_points
+    }
+}
+
+fn logical_sort_options(ordering: &[SortExpr]) -> Vec<SortOptions> {
+    ordering
+        .iter()
+        .map(|sort_expr| SortOptions {
+            descending: !sort_expr.asc,
+            nulls_first: sort_expr.nulls_first,
+        })
+        .collect()
+}
+
+impl Display for RangePartitioning {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let ordering = self.ordering().iter().map(ToString::to_string).join(", ");
+        let split_points = self
+            .split_points()
+            .iter()
+            .map(ToString::to_string)
+            .join(", ");
+        write!(
+            f,
+            "Range([{ordering}], [{split_points}], {})",
+            self.partition_count()
+        )
+    }
 }
 
 /// Represent the unnesting operation on a list column, such as the recursion depth and
@@ -4651,6 +4885,45 @@ mod tests {
     use insta::{assert_debug_snapshot, assert_snapshot};
     use std::hash::DefaultHasher;
 
+    /// `LogicalPlan` is moved/swapped on every step of the planning hot path
+    /// (every `mem::take` in an in-place rewriter, every `Arc<LogicalPlan>`
+    /// write, every owned `map_*` traversal). Its size is set by the largest
+    /// variant, so an oversized variant balloons cost for every other variant.
+    ///
+    /// Today the size-setter should be `Join` (~176 bytes); `DdlStatement` is
+    /// boxed precisely so it does not dominate. If you grow a variant, please
+    /// box the new large fields rather than letting this number creep up —
+    /// see the analogous `test_size_of_expr` in `expr.rs`.
+    #[test]
+    fn test_size_of_logical_plan() {
+        // `LogicalPlan` enum on aarch64 / x86_64. Today this matches
+        // `Join`'s 176 bytes (the enum discriminant fits in `Join`'s
+        // alignment padding); if `Join` grows or another variant overtakes
+        // it, this number will move with the new size-setter.
+        assert_eq!(size_of::<LogicalPlan>(), 176);
+        // `DdlStatement` is `Ddl(DdlStatement)`'s payload; keep it below the
+        // `Join` ceiling so it never re-becomes the size-setter.
+        assert!(
+            size_of::<DdlStatement>() < size_of::<Join>(),
+            "DdlStatement ({} bytes) should stay smaller than Join ({} bytes); \
+             box the new large variant rather than letting it dominate `LogicalPlan`.",
+            size_of::<DdlStatement>(),
+            size_of::<Join>(),
+        );
+        // Sanity check the two boxed variants stay boxed (so the payload
+        // sits on the heap, not in the enum).
+        assert_eq!(
+            size_of::<Box<crate::CreateExternalTable>>(),
+            8,
+            "CreateExternalTable should be Box'd inside DdlStatement"
+        );
+        assert_eq!(
+            size_of::<Box<crate::CreateFunction>>(),
+            8,
+            "CreateFunction should be Box'd inside DdlStatement"
+        );
+    }
+
     fn employee_schema() -> Schema {
         Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -4661,6 +4934,134 @@ mod tests {
         ])
     }
 
+    fn i32_split_point(value: i32) -> SplitPoint {
+        SplitPoint::new(vec![ScalarValue::Int32(Some(value))])
+    }
+
+    fn null_i32_split_point() -> SplitPoint {
+        SplitPoint::new(vec![ScalarValue::Int32(None)])
+    }
+
+    #[test]
+    fn logical_range_partitioning_validates_shape() {
+        let range = RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![i32_split_point(10), i32_split_point(20)],
+        )
+        .unwrap();
+        assert_eq!(range.partition_count(), 3);
+
+        let range = RangePartitioning::try_new(
+            vec![col("id").sort(false, true)],
+            vec![i32_split_point(20), i32_split_point(10)],
+        )
+        .unwrap();
+        assert_eq!(range.partition_count(), 3);
+
+        let err = RangePartitioning::try_new(vec![], vec![]).unwrap_err();
+        assert!(err.to_string().contains("non-empty ordering"));
+
+        let err = RangePartitioning::try_new(
+            vec![col("id").sort(true, true), col("salary").sort(true, true)],
+            vec![i32_split_point(10)],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("split point 0 has width 1, but ordering has width 2")
+        );
+
+        let err = RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![i32_split_point(20), i32_split_point(10)],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("split points must be strictly ordered")
+        );
+
+        let err = RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![i32_split_point(10), i32_split_point(10)],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("split points must be strictly ordered")
+        );
+
+        let range = RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![null_i32_split_point(), i32_split_point(10)],
+        )
+        .unwrap();
+        assert_eq!(range.partition_count(), 3);
+    }
+
+    #[test]
+    fn logical_partitioning_reports_known_partition_count() -> Result<()> {
+        let range = RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![i32_split_point(10)],
+        )?;
+
+        assert_eq!(Partitioning::RoundRobinBatch(4).partition_count(), Some(4));
+        assert_eq!(
+            Partitioning::Hash(vec![col("id")], 8).partition_count(),
+            Some(8)
+        );
+        assert_eq!(Partitioning::Range(range).partition_count(), Some(2));
+        assert_eq!(
+            Partitioning::DistributeBy(vec![col("id")]).partition_count(),
+            None
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn logical_range_partitioning_participates_in_expression_rewrite() -> Result<()> {
+        let input =
+            table_scan(Some("employee_csv"), &employee_schema(), None)?.build()?;
+        let plan = LogicalPlan::Repartition(Repartition {
+            input: Arc::new(input),
+            partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+                vec![col("id").sort(true, true)],
+                vec![i32_split_point(10)],
+            )?),
+        });
+
+        let mut visited_exprs = vec![];
+        plan.apply_expressions(|expr| {
+            visited_exprs.push(expr.to_string());
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(visited_exprs, vec!["id"]);
+
+        let plan = plan
+            .map_expressions(|expr| {
+                if expr == col("id") {
+                    Ok(Transformed::yes(col("salary")))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })?
+            .data;
+
+        let LogicalPlan::Repartition(Repartition {
+            partitioning_scheme: Partitioning::Range(range),
+            ..
+        }) = plan
+        else {
+            unreachable!("expected range repartition");
+        };
+        assert_eq!(range.ordering()[0].expr, col("salary"));
+        assert_eq!(range.partition_count(), 2);
+
+        Ok(())
+    }
+
     fn display_plan() -> Result<LogicalPlan> {
         let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
             .build()?;
@@ -4669,6 +5070,74 @@ mod tests {
             .filter(in_subquery(col("state"), Arc::new(plan1)))?
             .project(vec![col("id")])?
             .build()
+    }
+
+    fn recursive_term_scan(name: &str, fields: Vec<Field>) -> Result<Arc<LogicalPlan>> {
+        Ok(Arc::new(
+            table_scan(Some(name), &Schema::new(fields), None)?.build()?,
+        ))
+    }
+
+    #[test]
+    fn recursive_query_widens_nullability_per_column() -> Result<()> {
+        // Column `a` is non-nullable in both terms and must stay non-nullable;
+        // column `b` is non-nullable in the static term but nullable in the
+        // recursive term, so the output must widen it to nullable.
+        let static_term = recursive_term_scan(
+            "static",
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ],
+        )?;
+        let recursive_term = recursive_term_scan(
+            "rec",
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, true),
+            ],
+        )?;
+
+        let query =
+            RecursiveQuery::try_new("t".to_string(), static_term, recursive_term, false)?;
+
+        // Names and types are taken from the static term.
+        assert_eq!(query.schema.field(0).name(), "a");
+        assert_eq!(query.schema.field(1).name(), "b");
+        assert_eq!(query.schema.field(0).data_type(), &DataType::Int32);
+        assert_eq!(query.schema.field(1).data_type(), &DataType::Int32);
+        // Nullability is widened independently per column.
+        assert!(!query.schema.field(0).is_nullable());
+        assert!(query.schema.field(1).is_nullable());
+        // `schema()` returns the widened recursive-query schema.
+        assert_eq!(
+            LogicalPlan::RecursiveQuery(query.clone()).schema(),
+            &query.schema
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_query_rejects_column_count_mismatch() -> Result<()> {
+        let static_term =
+            recursive_term_scan("static", vec![Field::new("a", DataType::Int32, false)])?;
+        let recursive_term = recursive_term_scan(
+            "rec",
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ],
+        )?;
+
+        let err =
+            RecursiveQuery::try_new("t".to_string(), static_term, recursive_term, false)
+                .unwrap_err();
+        assert!(
+            err.strip_backtrace()
+                .contains("must have the same number of columns"),
+            "unexpected error: {err}"
+        );
+        Ok(())
     }
 
     #[test]

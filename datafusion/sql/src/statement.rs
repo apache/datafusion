@@ -1468,7 +1468,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     function_body,
                 };
 
-                let statement = DdlStatement::CreateFunction(CreateFunction {
+                let statement = DdlStatement::CreateFunction(Box::new(CreateFunction {
                     or_replace,
                     temporary,
                     name,
@@ -1476,7 +1476,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     args,
                     params,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                });
+                }));
 
                 Ok(LogicalPlan::Ddl(statement))
             }
@@ -1855,18 +1855,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let constraints =
             self.new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-            PlanCreateExternalTable::builder(name, location, file_type, df_schema)
-                .with_partition_cols(table_partition_cols)
-                .with_if_not_exists(if_not_exists)
-                .with_or_replace(or_replace)
-                .with_temporary(temporary)
-                .with_definition(definition)
-                .with_order_exprs(ordered_exprs)
-                .with_unbounded(unbounded)
-                .with_options(options_map)
-                .with_constraints(constraints)
-                .with_column_defaults(column_defaults)
-                .build(),
+            Box::new(
+                PlanCreateExternalTable::builder(name, location, file_type, df_schema)
+                    .with_partition_cols(table_partition_cols)
+                    .with_if_not_exists(if_not_exists)
+                    .with_or_replace(or_replace)
+                    .with_temporary(temporary)
+                    .with_definition(definition)
+                    .with_order_exprs(ordered_exprs)
+                    .with_unbounded(unbounded)
+                    .with_options(options_map)
+                    .with_constraints(constraints)
+                    .with_column_defaults(column_defaults)
+                    .build(),
+            ),
         )))
     }
 
@@ -2485,17 +2487,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         span: _,
                     }) = val
                     {
-                        let name =
-                            name.replace('$', "").parse::<usize>().map_err(|_| {
-                                plan_datafusion_err!("Can't parse placeholder: {name}")
-                            })? - 1;
+                        let index = match name[1..].parse::<usize>().map_err(|_| {
+                            plan_datafusion_err!("Can't parse placeholder: {name}")
+                        })? {
+                            0 => {
+                                return plan_err!(
+                                    "Invalid placeholder, zero is not a valid index: {name}"
+                                );
+                            }
+                            index => index - 1,
+                        };
                         let field = fields.get(idx).ok_or_else(|| {
                             plan_datafusion_err!(
                                 "Placeholder ${} refers to a non existent column",
                                 idx + 1
                             )
                         })?;
-                        let _ = prepare_param_data_types.insert(name, Arc::clone(field));
+                        let _ = prepare_param_data_types.insert(index, Arc::clone(field));
                     }
                 }
             }

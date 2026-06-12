@@ -36,6 +36,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
+use datafusion::common::config::Dialect;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
@@ -116,6 +117,9 @@ impl TestContext {
 
         if is_spark_path(relative_path) {
             state_builder = state_builder.with_spark_features();
+            if let Some(config) = state_builder.config() {
+                config.options_mut().sql_parser.dialect = Dialect::Spark;
+            }
         }
 
         if matches!(
