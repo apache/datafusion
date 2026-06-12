@@ -3940,18 +3940,36 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
         Ok(())
     }
 
+    /// Decode a custom extension expression from `buf`.
+    ///
+    /// Implementations whose proto carries nested `PhysicalExprNode` fields
+    /// should route those through `proto_converter.proto_to_physical_expr`
+    /// (rather than the free `parse_physical_expr` function) so that an
+    /// active `DeduplicatingDeserializer` can cache-hit on matching
+    /// `expr_id`s and re-share `Arc<dyn PhysicalExpr>` (e.g. a
+    /// `DynamicFilterPhysicalExpr` referenced both from a SortExec.filter
+    /// and from a custom file-source's predicate field).
     fn try_decode_expr(
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn PhysicalExpr>],
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }
 
+    /// Encode a custom extension expression into `buf`.
+    ///
+    /// Implementations whose proto carries nested `PhysicalExprNode` fields
+    /// should route those through `proto_converter.physical_expr_to_proto`
+    /// (rather than the free `serialize_physical_expr` function) so that
+    /// an active `DeduplicatingProtoConverter` can stamp matching `expr_id`s
+    /// for shared inner expressions. See [`Self::try_decode_expr`].
     fn try_encode_expr(
         &self,
         _node: &Arc<dyn PhysicalExpr>,
         _buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
     }

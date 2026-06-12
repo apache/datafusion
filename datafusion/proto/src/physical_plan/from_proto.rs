@@ -412,8 +412,11 @@ pub fn parse_physical_expr_with_converter(
                 .iter()
                 .map(|e| proto_converter.proto_to_physical_expr(e, input_schema, ctx))
                 .collect::<Result<_>>()?;
-            ctx.codec()
-                .try_decode_expr(extension.expr.as_slice(), &inputs)? as _
+            ctx.codec().try_decode_expr(
+                extension.expr.as_slice(),
+                &inputs,
+                proto_converter,
+            )? as _
         }
     };
 

@@ -365,7 +365,7 @@ pub fn serialize_physical_expr_with_converter(
         })
     } else {
         let mut buf: Vec<u8> = vec![];
-        match codec.try_encode_expr(value, &mut buf) {
+        match codec.try_encode_expr(value, &mut buf, proto_converter) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalExprNode> = value
                     .children()
