@@ -540,12 +540,16 @@ fn normalize_range_split_point_value(
         return Ok(value.clone());
     }
 
-    if let Some(value) = try_cast_literal_to_type(value, target_type) {
-        return Ok(value);
+    if let Some(casted) = try_cast_literal_to_type(value, target_type) {
+        // Range split points are physical metadata: normalization must not
+        // advertise a different boundary.
+        if try_cast_literal_to_type(&casted, &value_type).as_ref() == Some(value) {
+            return Ok(casted);
+        }
     }
 
     plan_err!(
-        "Range output partitioning split point {split_idx} value {value_idx} has type {value_type}, but ordering expression has type {target_type}"
+        "Range output partitioning split point {split_idx} value {value_idx} with type {value_type} cannot be represented exactly as ordering expression type {target_type}"
     )
 }
 
@@ -928,7 +932,8 @@ impl ListingTable {
             limit
         };
         let (file_group, inexact_stats) =
-            get_files_with_limit(files, file_limit, ctx.config().collect_statistics()).await?;
+            get_files_with_limit(files, file_limit, ctx.config().collect_statistics())
+                .await?;
 
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
         //

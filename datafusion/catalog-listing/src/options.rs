@@ -53,22 +53,19 @@ pub struct ListingOptions {
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
     pub file_sort_order: Vec<Vec<SortExpr>>,
-    /// Optional declared output partitioning for this table.
+    /// Declared output partitioning for scans from this table.
     ///
-    /// This source declaration supports hash and range partitioning.
-    /// Expressions are logical expressions against the full table schema. This
-    /// declaration is authoritative: when set, [`ListingTable`](crate::ListingTable)
-    /// creates one scan file group per declared output partition instead of the
-    /// scan-time target partition count. Empty file groups are added when needed
-    /// to preserve that count.
+    /// Expressions are logical expressions over the full table schema. When set,
+    /// [`ListingTable`](crate::ListingTable) creates one file group per
+    /// declared output partition, preserving empty groups. When unset, file
+    /// grouping uses the scan-time
+    /// [`SessionConfig::target_partitions`](datafusion_execution::config::SessionConfig::target_partitions).
+    /// Declarations are limited to partitioning that can be represented by
+    /// assigning whole files to file groups.
     ///
-    /// For range partitioning, split point values are validated against the
-    /// ordering expression types when planning the scan. Value-preserving casts
-    /// are accepted, but incompatible or lossy split point values are rejected.
-    ///
-    /// Files are sorted by path before grouping. DataFusion does not validate
-    /// that rows match the declaration, so callers must ensure file group `i`
-    /// contains only rows for declared output partition `i`.
+    /// Files are assigned to groups in path order. DataFusion does not validate
+    /// row placement, and callers must ensure file group `i` contains rows for
+    /// partition `i`.
     pub output_partitioning: Option<Partitioning>,
 }
 
@@ -131,11 +128,9 @@ impl ListingOptions {
         self
     }
 
-    /// Set declared output partitioning on [`ListingOptions`] and returns self.
+    /// Set declared output partitioning.
     ///
-    /// See [`Self::output_partitioning`]. Empty file groups are added when
-    /// needed to preserve the declared partition count. Range split point values
-    /// are validated against the table schema when planning the scan.
+    /// See [`Self::output_partitioning`] for the contract.
     pub fn with_output_partitioning(
         mut self,
         output_partitioning: Option<Partitioning>,

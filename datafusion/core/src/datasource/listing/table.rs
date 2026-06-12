@@ -123,7 +123,7 @@ mod tests {
         },
     };
     use arrow::{compute::SortOptions, record_batch::RecordBatch};
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use datafusion_catalog::TableProvider;
     use datafusion_catalog_listing::{
         ListingOptions, ListingTable, ListingTableConfig, SchemaSource,
@@ -1298,12 +1298,13 @@ mod tests {
     async fn test_list_files_uses_declared_output_partitioning_count() -> Result<()> {
         let files = ["bucket/key-prefix/file0", "bucket/key-prefix/file1"];
 
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
         let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
             .with_file_extension_opt(Some(""))
-            .with_target_partitions(1)
             .with_output_partitioning(Some(LogicalPartitioning::Range(
                 LogicalRangePartitioning::try_new(
                     vec![col("a").sort(true, true)],
@@ -1334,34 +1335,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_listing_options_output_partitioning_overrides_target_partitions() -> Result<()>
-    {
-        let output_partitioning =
-            LogicalPartitioning::Range(LogicalRangePartitioning::try_new(
-                vec![col("a").sort(true, true)],
-                vec![
-                    SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
-                    SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),
-                    SplitPoint::new(vec![ScalarValue::Int32(Some(30))]),
-                ],
-            )?);
-
-        let output_partitioning_first =
-            ListingOptions::new(Arc::new(JsonFormat::default()))
-                .with_output_partitioning(Some(output_partitioning.clone()))
-                .with_target_partitions(1);
-        assert_eq!(output_partitioning_first.target_partitions, 4);
-
-        let target_partitions_first =
-            ListingOptions::new(Arc::new(JsonFormat::default()))
-                .with_target_partitions(1)
-                .with_output_partitioning(Some(output_partitioning));
-        assert_eq!(target_partitions_first.target_partitions, 4);
-
-        Ok(())
-    }
-
     #[tokio::test]
     async fn test_range_output_partitioning_normalizes_split_point_types() -> Result<()> {
         let files = ["bucket/key-prefix/file0"];
@@ -1372,7 +1345,10 @@ mod tests {
         let output_partitioning =
             LogicalPartitioning::Range(LogicalRangePartitioning::try_new(
                 vec![col("a").sort(true, true)],
-                vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+                vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                    Some(123_000_000_000),
+                    None,
+                )])],
             )?);
         let expected_output_partitioning =
             Partitioning::Range(RangePartitioning::try_new(
@@ -1381,7 +1357,10 @@ mod tests {
                     SortOptions::default(),
                 )])
                 .unwrap(),
-                vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
+                vec![SplitPoint::new(vec![ScalarValue::TimestampSecond(
+                    Some(123),
+                    None,
+                )])],
             )?);
 
         let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
@@ -1389,7 +1368,11 @@ mod tests {
             .with_output_partitioning(Some(output_partitioning));
 
         let table_path = ListingTableUrl::parse("test:///bucket/key-prefix/")?;
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        )]));
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(schema);
@@ -1431,7 +1414,48 @@ mod tests {
         let err = table.scan(&ctx.state(), None, &[], None).await.unwrap_err();
         assert_contains!(
             err.to_string(),
-            "Range output partitioning split point 0 value 0 has type Utf8, but ordering expression has type Int32"
+            "Range output partitioning split point 0 value 0 with type Utf8 cannot be represented exactly as ordering expression type Int32"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_range_output_partitioning_rejects_lossy_timestamp_split_point()
+    -> Result<()> {
+        let files = ["bucket/key-prefix/file0"];
+
+        let ctx = SessionContext::new();
+        register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
+
+        let output_partitioning =
+            LogicalPartitioning::Range(LogicalRangePartitioning::try_new(
+                vec![col("a").sort(true, true)],
+                vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                    Some(123_456),
+                    None,
+                )])],
+            )?);
+
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_output_partitioning(Some(output_partitioning));
+
+        let table_path = ListingTableUrl::parse("test:///bucket/key-prefix/")?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        )]));
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(schema);
+        let table = ListingTable::try_new(config)?;
+
+        let err = table.scan(&ctx.state(), None, &[], None).await.unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Range output partitioning split point 0 value 0 with type Timestamp(ns) cannot be represented exactly as ordering expression type Timestamp(s)"
         );
 
         Ok(())

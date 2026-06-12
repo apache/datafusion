@@ -198,20 +198,23 @@ pub struct FileScanConfig {
     /// would be incorrect if there are filters being applied, thus this should be accessed
     /// via [`FileScanConfig::statistics`].
     pub(crate) statistics: Statistics,
-    /// When true, file_groups are organized by partition column values
-    /// and output_partitioning will return Hash partitioning on partition columns.
-    /// This allows the optimizer to skip hash repartitioning for aggregates and joins
-    /// on partition columns.
+    /// When true, `file_groups` are organized by partition column values and
+    /// [`Self::output_partitioning`] derives hash partitioning on those columns.
+    /// This allows the optimizer to skip hash repartitioning for aggregates and
+    /// joins on partition columns.
+    ///
+    /// Because grouping is by whole file, this may reduce I/O parallelism when
+    /// partition sizes are uneven.
     ///
     /// If the number of file partitions > target_partitions, the file partitions will be grouped
     /// in a round-robin fashion such that number of file partitions = target_partitions.
     pub partitioned_by_file_group: bool,
-    /// Optional declared output partitioning of this file scan.
+    /// Declared physical output partitioning for this scan.
     ///
-    /// Expressions are in terms of the full table schema, before scan
-    /// projection or filtering. If the partition count does not match the
-    /// number of file groups, [`DataSource::output_partitioning`] logs a warning
-    /// and falls back to [`Partitioning::UnknownPartitioning`].
+    /// Expressions are against the full table schema, before scan projection or
+    /// filtering. `ListingTable` validates partition count before building the
+    /// scan, and direct builders with mismatched counts fall back to
+    /// `UnknownPartitioning`.
     pub output_partitioning: Option<Partitioning>,
 }
 
@@ -472,9 +475,7 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set declared output partitioning for this scan.
-    ///
-    /// See [`FileScanConfig::output_partitioning`].
+    /// Set declared physical output partitioning for this scan.
     pub fn with_output_partitioning(
         mut self,
         output_partitioning: Option<Partitioning>,
@@ -772,25 +773,15 @@ impl DataSource for FileScanConfig {
         Ok(source.map(|s| Arc::new(s) as _))
     }
 
-    /// Returns the output partitioning for this file scan.
+    /// Returns declared or derived output partitioning for this file scan.
     ///
-    /// When output partitioning is declared, this returns it after remapping
-    /// through the scan projection. If the declared partition count does not
-    /// match the number of file groups, this logs a warning and returns
-    /// [`Partitioning::UnknownPartitioning`] to avoid advertising an invalid
-    /// partitioning property. Otherwise, when `partitioned_by_file_group` is
-    /// true, this returns `Partitioning::Hash` on the Hive partition columns,
-    /// allowing the optimizer to skip repartitioning for compatible aggregates
-    /// and joins.
+    /// Declared partitioning is projected through the scan projection. If it
+    /// cannot be projected, or its partition count differs from `file_groups`,
+    /// this returns `UnknownPartitioning`.
     ///
-    /// Tradeoffs
-    /// - Benefit: Eliminates `RepartitionExec` for compatible queries.
-    /// - Cost: File groups must remain intact, so byte-range file splitting
-    ///   and sibling work stealing are disabled.
-    ///
-    /// Follow-up Work
-    /// - Idea: Could allow byte-range splitting within each output partition,
-    ///   preserving I/O parallelism while maintaining partition semantics.
+    /// Without a declaration, `partitioned_by_file_group` derives hash
+    /// partitioning from Hive partition columns. Otherwise this returns
+    /// `UnknownPartitioning`.
     fn output_partitioning(&self) -> Partitioning {
         let Some(output_partitioning) = self.output_partitioning.clone().or_else(|| {
             self.partitioned_by_file_group.then(|| {
