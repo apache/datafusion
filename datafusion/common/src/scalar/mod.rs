@@ -4292,12 +4292,13 @@ impl ScalarValue {
             .or_else(|| timestamp_to_timestamp_multiplier(&source_type, target_type))
             && let Some(value) = self.temporal_scalar_value_as_i64()
         {
-            if cast_options.safe {
-                if multiplier > 1 && value.checked_mul(multiplier).is_none() {
+            match ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)
+            {
+                Ok(()) => {}
+                Err(_) if cast_options.safe => {
                     return ScalarValue::try_new_null(target_type);
                 }
-            } else {
-                ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)?;
+                Err(e) => return Err(e),
             }
         }
 
