@@ -419,6 +419,335 @@ async fn test_join_with_swap_mark() {
     }
 }
 
+/// Statistics with the given row count and byte size
+fn sized_statistics(num_rows: usize, total_byte_size: usize) -> Statistics {
+    Statistics {
+        num_rows: Precision::Inexact(num_rows),
+        total_byte_size: Precision::Inexact(total_byte_size),
+        column_statistics: vec![ColumnStatistics::new_unknown()],
+    }
+}
+
+/// Create a hash join between single-column inputs `l_col` and `r_col`
+/// carrying the given statistics.
+fn join_with_stats(
+    left_stats: Statistics,
+    right_stats: Statistics,
+    join_type: JoinType,
+    mode: PartitionMode,
+) -> Arc<HashJoinExec> {
+    let left: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        left_stats,
+        Schema::new(vec![Field::new("l_col", DataType::Int32, false)]),
+    ));
+    let right: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        right_stats,
+        Schema::new(vec![Field::new("r_col", DataType::Int32, false)]),
+    ));
+    Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            vec![(
+                Arc::new(Column::new_with_schema("l_col", &left.schema()).unwrap()),
+                Arc::new(Column::new_with_schema("r_col", &right.schema()).unwrap()),
+            )],
+            None,
+            &join_type,
+            None,
+            mode,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    )
+}
+
+/// Assert that the optimized plan is a hash join of the given type whose
+/// build (left) side is the input holding `expected_build_column`.
+fn assert_join_orientation(
+    plan: &Arc<dyn ExecutionPlan>,
+    expected_join_type: JoinType,
+    expected_build_column: &str,
+) {
+    let join = plan
+        .downcast_ref::<HashJoinExec>()
+        .expect("optimized plan should still be a hash join");
+    assert_eq!(*join.join_type(), expected_join_type);
+    assert_eq!(
+        join.left().schema().field(0).name().as_str(),
+        expected_build_column
+    );
+}
+
+/// Semi, anti, and mark joins prefer `RightSemi`, `RightAnti`, or
+/// `RightMark` even when the filter side is moderately larger than the
+/// preserved side: a Left* join swaps when the filter side is within
+/// `semi_join_swap_bias`, and the equivalent Right* join stays put.
+#[tokio::test]
+async fn test_semi_join_canonical_orientation_within_bias() {
+    // The filter side is 1.5x the preserved side, within the default bias of 2
+    let preserved = || sized_statistics(1000, 10_000);
+    let filter = || sized_statistics(1500, 15_000);
+
+    for join_type in [JoinType::LeftSemi, JoinType::LeftAnti, JoinType::LeftMark] {
+        let join =
+            join_with_stats(preserved(), filter(), join_type, PartitionMode::Partitioned);
+        let optimized = JoinSelection::new()
+            .optimize(join, &ConfigOptions::new())
+            .unwrap();
+        assert_join_orientation(&optimized, join_type.swap(), "r_col");
+    }
+
+    for join_type in [
+        JoinType::RightSemi,
+        JoinType::RightAnti,
+        JoinType::RightMark,
+    ] {
+        let join =
+            join_with_stats(filter(), preserved(), join_type, PartitionMode::Partitioned);
+        let optimized = JoinSelection::new()
+            .optimize(join, &ConfigOptions::new())
+            .unwrap();
+        assert_join_orientation(&optimized, join_type, "l_col");
+    }
+}
+
+/// A filter side shown to be more than `semi_join_swap_bias` times larger
+/// than the preserved side is too large to build on, so the optimizer chooses
+/// `LeftSemi`, `LeftAnti`, or `LeftMark`.
+#[tokio::test]
+async fn test_semi_join_canonical_orientation_beyond_bias() {
+    // The filter side is 3x the preserved side, larger than the default bias of 2
+    let preserved = || sized_statistics(1000, 10_000);
+    let filter = || sized_statistics(3000, 30_000);
+
+    for join_type in [JoinType::LeftSemi, JoinType::LeftAnti, JoinType::LeftMark] {
+        let join =
+            join_with_stats(preserved(), filter(), join_type, PartitionMode::Partitioned);
+        let optimized = JoinSelection::new()
+            .optimize(join, &ConfigOptions::new())
+            .unwrap();
+        assert_join_orientation(&optimized, join_type, "l_col");
+    }
+
+    for join_type in [
+        JoinType::RightSemi,
+        JoinType::RightAnti,
+        JoinType::RightMark,
+    ] {
+        let join =
+            join_with_stats(filter(), preserved(), join_type, PartitionMode::Partitioned);
+        let optimized = JoinSelection::new()
+            .optimize(join, &ConfigOptions::new())
+            .unwrap();
+        assert_join_orientation(&optimized, join_type.swap(), "r_col");
+    }
+}
+
+/// Absent statistics show nothing about the input size ratio. Semi, anti, and
+/// mark joins therefore use `RightSemi`, `RightAnti`, and `RightMark` with the
+/// default configuration settings.
+#[tokio::test]
+async fn test_semi_join_absent_stats_prefers_right_join_types() {
+    for join_type in [JoinType::LeftSemi, JoinType::LeftAnti, JoinType::LeftMark] {
+        let join = join_with_stats(
+            empty_statistics(),
+            empty_statistics(),
+            join_type,
+            PartitionMode::Auto,
+        );
+        let optimized = JoinSelection::new()
+            .optimize(join, &ConfigOptions::new())
+            .unwrap();
+        assert_join_orientation(&optimized, join_type.swap(), "r_col");
+    }
+
+    for join_type in [
+        JoinType::RightSemi,
+        JoinType::RightAnti,
+        JoinType::RightMark,
+    ] {
+        let join = join_with_stats(
+            empty_statistics(),
+            empty_statistics(),
+            join_type,
+            PartitionMode::Auto,
+        );
+        let optimized = JoinSelection::new()
+            .optimize(join, &ConfigOptions::new())
+            .unwrap();
+        assert_join_orientation(&optimized, join_type, "l_col");
+    }
+
+    for join_type in [
+        JoinType::Inner,
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+    ] {
+        let join = join_with_stats(
+            empty_statistics(),
+            empty_statistics(),
+            join_type,
+            PartitionMode::Auto,
+        );
+        let optimized = JoinSelection::new()
+            .optimize(join, &ConfigOptions::new())
+            .unwrap();
+        assert_join_orientation(&optimized, join_type, "l_col");
+    }
+}
+
+/// Statistics covering only one input show nothing about the size ratio, so
+/// the `RightSemi`/`RightAnti`/`RightMark` default applies even when the
+/// filter side is known to be big and the preserved side is unknown.
+#[tokio::test]
+async fn test_semi_join_partial_stats_prefers_right_join_types() {
+    let join = join_with_stats(
+        empty_statistics(),
+        big_statistics(),
+        JoinType::LeftSemi,
+        PartitionMode::Partitioned,
+    );
+    let optimized = JoinSelection::new()
+        .optimize(join, &ConfigOptions::new())
+        .unwrap();
+    assert_join_orientation(&optimized, JoinType::RightSemi, "r_col");
+}
+
+/// With `semi_join_swap_bias = 1`, `RightSemi`, `RightAnti`, or
+/// `RightMark` is used unless statistics show that the filter side is larger
+/// than the preserved side.
+#[tokio::test]
+async fn test_semi_join_bias_one_uses_right_unless_filter_is_larger() {
+    let mut config = ConfigOptions::new();
+    config.optimizer.semi_join_swap_bias = 1.0;
+
+    // The filter side is larger than the preserved side, so use Left*.
+    let join = join_with_stats(
+        sized_statistics(1000, 10_000),
+        sized_statistics(1500, 15_000),
+        JoinType::LeftSemi,
+        PartitionMode::Partitioned,
+    );
+    let optimized = JoinSelection::new().optimize(join, &config).unwrap();
+    assert_join_orientation(&optimized, JoinType::LeftSemi, "l_col");
+
+    // Equal statistics do not show that the filter side is larger, so use Right*.
+    let join = join_with_stats(
+        sized_statistics(1000, 10_000),
+        sized_statistics(1000, 10_000),
+        JoinType::LeftSemi,
+        PartitionMode::Partitioned,
+    );
+    let optimized = JoinSelection::new().optimize(join, &config).unwrap();
+    assert_join_orientation(&optimized, JoinType::RightSemi, "r_col");
+
+    // Absent statistics also use Right*.
+    let join = join_with_stats(
+        empty_statistics(),
+        empty_statistics(),
+        JoinType::LeftSemi,
+        PartitionMode::Partitioned,
+    );
+    let optimized = JoinSelection::new().optimize(join, &config).unwrap();
+    assert_join_orientation(&optimized, JoinType::RightSemi, "r_col");
+}
+
+/// A `semi_join_swap_bias` below 1 prefers `LeftSemi`, `LeftAnti`, or
+/// `LeftMark`: the filter side must be smaller than `bias` times the preserved
+/// side before the join is reoriented to Right*. When statistics are absent,
+/// the configured `LeftSemi`/`LeftAnti`/`LeftMark` preference is used.
+#[tokio::test]
+async fn test_semi_join_bias_below_one_prefers_preserved_side() {
+    let mut config = ConfigOptions::new();
+    config.optimizer.semi_join_swap_bias = 0.5;
+
+    // The filter side is smaller than the preserved side, but not smaller
+    // than half of it, so the build stays on the preserved side (the
+    // symmetric comparison would have swapped here)
+    let join = join_with_stats(
+        sized_statistics(1000, 10_000),
+        sized_statistics(800, 8_000),
+        JoinType::LeftSemi,
+        PartitionMode::Partitioned,
+    );
+    let optimized = JoinSelection::new().optimize(join, &config).unwrap();
+    assert_join_orientation(&optimized, JoinType::LeftSemi, "l_col");
+
+    // The same sizes reorient a Right* join to its Left* counterpart
+    let join = join_with_stats(
+        sized_statistics(800, 8_000),
+        sized_statistics(1000, 10_000),
+        JoinType::RightSemi,
+        PartitionMode::Partitioned,
+    );
+    let optimized = JoinSelection::new().optimize(join, &config).unwrap();
+    assert_join_orientation(&optimized, JoinType::LeftSemi, "r_col");
+
+    // Absent statistics use the configured Left* preference
+    let join = join_with_stats(
+        empty_statistics(),
+        empty_statistics(),
+        JoinType::LeftSemi,
+        PartitionMode::Partitioned,
+    );
+    let optimized = JoinSelection::new().optimize(join, &config).unwrap();
+    assert_join_orientation(&optimized, JoinType::LeftSemi, "l_col");
+}
+
+/// Disabling `join_reordering` also disables semi join orientation.
+#[tokio::test]
+async fn test_semi_join_respects_join_reordering_flag() {
+    let mut config = ConfigOptions::new();
+    config.optimizer.join_reordering = false;
+
+    let join = join_with_stats(
+        sized_statistics(1000, 10_000),
+        sized_statistics(1500, 15_000),
+        JoinType::LeftSemi,
+        PartitionMode::Partitioned,
+    );
+    let optimized = JoinSelection::new().optimize(join, &config).unwrap();
+    assert_join_orientation(&optimized, JoinType::LeftSemi, "l_col");
+}
+
+/// Null-aware anti joins have fixed side requirements and are never
+/// reoriented.
+#[tokio::test]
+async fn test_semi_join_null_aware_anti_never_swaps() {
+    let left: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        empty_statistics(),
+        Schema::new(vec![Field::new("l_col", DataType::Int32, false)]),
+    ));
+    let right: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        empty_statistics(),
+        Schema::new(vec![Field::new("r_col", DataType::Int32, false)]),
+    ));
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            vec![(
+                Arc::new(Column::new_with_schema("l_col", &left.schema()).unwrap()),
+                Arc::new(Column::new_with_schema("r_col", &right.schema()).unwrap()),
+            )],
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+            true,
+        )
+        .unwrap(),
+    );
+    let optimized = JoinSelection::new()
+        .optimize(join, &ConfigOptions::new())
+        .unwrap();
+    assert_join_orientation(&optimized, JoinType::LeftAnti, "l_col");
+}
+
 /// Compare the input plan with the plan after running the probe order optimizer.
 macro_rules! assert_optimized {
     ($PLAN: expr, @$EXPECTED_LINES: literal $(,)?) => {
@@ -1258,6 +1587,7 @@ async fn test_cases_without_collect_left_check() -> Result<()> {
     let mut cases = vec![];
     let join_types = vec![JoinType::LeftSemi, JoinType::Inner];
     for join_type in join_types {
+        let expects_filter_side_swap = matches!(join_type, JoinType::LeftSemi);
         cases.push(TestCase {
             case: "Unbounded - Bounded / CollectLeft".to_string(),
             initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
@@ -1294,9 +1624,13 @@ async fn test_cases_without_collect_left_check() -> Result<()> {
             initial_join_type: join_type,
             initial_mode: PartitionMode::CollectLeft,
             expected_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
-            expected_join_type: join_type,
+            expected_join_type: if expects_filter_side_swap {
+                join_type.swap()
+            } else {
+                join_type
+            },
             expected_mode: PartitionMode::CollectLeft,
-            expecting_swap: false,
+            expecting_swap: expects_filter_side_swap,
         });
         cases.push(TestCase {
             case: "Unbounded - Bounded / Partitioned".to_string(),
@@ -1324,9 +1658,13 @@ async fn test_cases_without_collect_left_check() -> Result<()> {
             initial_join_type: join_type,
             initial_mode: PartitionMode::Partitioned,
             expected_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
-            expected_join_type: join_type,
+            expected_join_type: if expects_filter_side_swap {
+                join_type.swap()
+            } else {
+                join_type
+            },
             expected_mode: PartitionMode::Partitioned,
-            expecting_swap: false,
+            expecting_swap: expects_filter_side_swap,
         });
         cases.push(TestCase {
             case: "Unbounded - Unbounded / Partitioned".to_string(),
@@ -1353,6 +1691,7 @@ async fn test_not_support_collect_left() -> Result<()> {
     // [JoinType::LeftSemi]
     let the_ones_not_support_collect_left = vec![JoinType::Left, JoinType::LeftAnti];
     for join_type in the_ones_not_support_collect_left {
+        let expects_filter_side_swap = matches!(join_type, JoinType::LeftAnti);
         cases.push(TestCase {
             case: "Unbounded - Bounded".to_string(),
             initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
@@ -1379,9 +1718,13 @@ async fn test_not_support_collect_left() -> Result<()> {
             initial_join_type: join_type,
             initial_mode: PartitionMode::Partitioned,
             expected_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
-            expected_join_type: join_type,
+            expected_join_type: if expects_filter_side_swap {
+                join_type.swap()
+            } else {
+                join_type
+            },
             expected_mode: PartitionMode::Partitioned,
-            expecting_swap: false,
+            expecting_swap: expects_filter_side_swap,
         });
         cases.push(TestCase {
             case: "Unbounded - Unbounded".to_string(),

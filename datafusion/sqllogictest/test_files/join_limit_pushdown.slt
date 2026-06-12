@@ -139,7 +139,7 @@ logical_plan
 04)----SubqueryAlias: __correlated_sq_1
 05)------TableScan: t1 projection=[a]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(x@0, a@0)], fetch=2
+01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(a@0, x@0)], fetch=2
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -160,7 +160,7 @@ logical_plan
 04)----SubqueryAlias: __correlated_sq_1
 05)------TableScan: t1 projection=[a]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(x@0, a@0)], fetch=1
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(a@0, x@0)], fetch=1
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 

@@ -1498,6 +1498,22 @@ config_namespace! {
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
 
+        /// The bias when choosing between `RightSemi`/`RightAnti`/`RightMark`
+        /// and `LeftSemi`/`LeftAnti`/`LeftMark` for semi, anti, and mark hash
+        /// joins. For these joins, one input's rows form the output ("preserved
+        /// side"), while the other input determines which rows should be kept
+        /// ("filter side"). A `RightSemi` hash join builds the hash table on
+        /// the filter side and streams the preserved side; a `LeftSemi` hash
+        /// join does the inverse. `RightSemi`, `RightAnti`, or `RightMark` is
+        /// used unless statistics show that the filter side is more than this
+        /// factor larger than the preserved side, comparing estimated total
+        /// byte sizes when both sides report them and row counts otherwise.
+        /// When statistics are missing on either side, the configured
+        /// preference is used: a bias value greater than or equal to 1 uses
+        /// `RightSemi`/`RightAnti`/`RightMark`, while a value below 1 uses
+        /// `LeftSemi`/`LeftAnti`/`LeftMark`.
+        pub semi_join_swap_bias: f64, default = 2.0
+
         /// Maximum size in bytes for the build side of a hash join to be pushed down as an InList expression for dynamic filtering.
         /// Build sides larger than this will use hash table lookups instead.
         /// Set to 0 to always use hash table lookups.

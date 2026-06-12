@@ -1340,7 +1340,7 @@ physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[]
 02)--RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 03)----AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[]
-04)------HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(t1_id@0, t2_id@0)]
+04)------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -1460,7 +1460,7 @@ physical_plan
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
 06)----------RepartitionExec: partitioning=Hash([alias1@0], 2), input_partitions=2
 07)------------AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]
-08)--------------HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(t1_id@0, t2_id@0)]
+08)--------------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
 09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 10)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 11)------------------DataSourceExec: partitions=1, partition_sizes=[1]
