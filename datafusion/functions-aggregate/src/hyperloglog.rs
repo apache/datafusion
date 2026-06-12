@@ -86,9 +86,8 @@ where
         }
     }
 
-    /// choice of hash function: foldhash is already an dependency
-    /// and it fits the requirements of being a 64bit hash with
-    /// reasonable performance.
+    /// The HLL hash state is shared through `datafusion_common::hash_utils`
+    /// so sketches remain compatible across accumulators.
     #[inline]
     fn hash_value(&self, obj: &T) -> u64 {
         HLL_HASH_STATE.hash_one(obj)
