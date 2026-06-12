@@ -150,10 +150,7 @@ where
 /// - `R`: Right array primitive type
 /// - `O`: Output array decimal type
 /// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
-#[deprecated(
-    since = "55.0.0",
-    note = "Use `calculate_binary_decimal_math_cast` instead"
-)]
+/// Deprecated. Use `calculate_binary_decimal_math_cast` instead
 pub fn calculate_binary_decimal_math<L, R, O, F>(
     left: &dyn Array,
     right: &ColumnarValue,
