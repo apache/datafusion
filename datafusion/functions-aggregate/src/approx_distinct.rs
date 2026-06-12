@@ -185,7 +185,7 @@ impl Accumulator for HLLAccumulator {
     }
 }
 
-/// Speicalize the numeric case for extra performance.
+/// Specialize the numeric case for extra performance.
 #[derive(Debug)]
 struct NumericHLLAccumulator<T>
 where
