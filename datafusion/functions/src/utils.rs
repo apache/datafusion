@@ -190,7 +190,7 @@ where
 /// - `right`: Right input array or scalar value
 /// - `fun`: Function of type `F`
 /// - `cast_target`: Data type to cast right operand to before applying function
-pub fn calculate_binary_math_cast<L, R, O, F>(
+fn calculate_binary_math_cast<L, R, O, F>(
     left: &dyn Array,
     right: &ColumnarValue,
     fun: F,
