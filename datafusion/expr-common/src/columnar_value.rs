@@ -226,6 +226,26 @@ impl ColumnarValue {
         }
     }
 
+    /// Converts this value into the [`Self::Array`] variant, returning a
+    /// [`ColumnarValue`] that is guaranteed to be [`Self::Array`].
+    ///
+    /// A [`Self::Scalar`] is expanded into an array of `num_rows` by repeating
+    /// the value (which is less efficient than handling the scalar directly); a
+    /// [`Self::Array`] is returned unchanged, without validating its length.
+    ///
+    /// Unlike [`Self::to_array`], which returns the bare [`ArrayRef`], this keeps
+    /// the value wrapped as a [`ColumnarValue`]. This is useful when later logic
+    /// still threads a [`ColumnarValue`] but needs to assume a non-scalar (array)
+    /// input.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of
+    /// the requested size.
+    pub fn to_array_variant(&self, num_rows: usize) -> Result<ColumnarValue> {
+        Ok(ColumnarValue::Array(self.to_array(num_rows)?))
+    }
+
     /// Null columnar values are implemented as a null array in order to pass batch
     /// num_rows
     pub fn create_null_array(num_rows: usize) -> Self {
@@ -495,6 +515,36 @@ mod tests {
             ),
             "Found: {err}"
         );
+    }
+
+    #[test]
+    fn to_array_variant() {
+        // Scalar is expanded into an array of the requested length.
+        let scalar = ColumnarValue::Scalar(ScalarValue::Int32(Some(42)));
+        match scalar.to_array_variant(3).unwrap() {
+            ColumnarValue::Array(arr) => assert_eq!(&arr, &make_array(42, 3)),
+            ColumnarValue::Scalar(_) => panic!("expected the Array variant"),
+        }
+
+        // Array is returned unchanged.
+        let arr = make_array(1, 3);
+        match ColumnarValue::Array(Arc::clone(&arr))
+            .to_array_variant(3)
+            .unwrap()
+        {
+            ColumnarValue::Array(out) => assert_eq!(&out, &arr),
+            ColumnarValue::Scalar(_) => panic!("expected the Array variant"),
+        }
+
+        // Unlike `to_array_of_size`, an existing array is not length-validated:
+        // `num_rows` is ignored when the value is already an array.
+        match ColumnarValue::Array(Arc::clone(&arr))
+            .to_array_variant(5)
+            .unwrap()
+        {
+            ColumnarValue::Array(out) => assert_eq!(&out, &arr),
+            ColumnarValue::Scalar(_) => panic!("expected the Array variant"),
+        }
     }
 
     #[test]

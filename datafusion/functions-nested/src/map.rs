@@ -63,13 +63,6 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn expand_if_scalar(arg: &ColumnarValue, rows: usize) -> Result<ColumnarValue> {
-    match arg {
-        ColumnarValue::Scalar(s) => Ok(ColumnarValue::Array(s.to_array_of_size(rows)?)),
-        ColumnarValue::Array(a) => Ok(ColumnarValue::Array(Arc::clone(a))),
-    }
-}
-
 fn make_map_batch(args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
     let [keys_arg, values_arg] = take_function_args("make_map", args)?;
 
@@ -79,8 +72,8 @@ fn make_map_batch(args: &[ColumnarValue], number_rows: usize) -> Result<Columnar
     // are expanded to arrays which following logic expects
     let (keys_arg, values_arg) = if !can_evaluate_to_const {
         (
-            expand_if_scalar(keys_arg, number_rows)?,
-            expand_if_scalar(values_arg, number_rows)?,
+            keys_arg.to_array_variant(number_rows)?,
+            values_arg.to_array_variant(number_rows)?,
         )
     } else {
         (keys_arg.clone(), values_arg.clone())
