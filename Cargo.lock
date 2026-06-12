@@ -1712,7 +1712,6 @@ dependencies = [
  "datafusion-functions-aggregate",
  "datafusion-functions-nested",
  "datafusion-functions-table",
- "datafusion-functions-variant",
  "datafusion-functions-window",
  "datafusion-functions-window-common",
  "datafusion-macros",
@@ -2306,6 +2305,7 @@ version = "54.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
+ "datafusion",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
@@ -2650,6 +2650,7 @@ dependencies = [
  "clap",
  "datafusion",
  "datafusion-datasource",
+ "datafusion-functions-variant",
  "datafusion-spark",
  "datafusion-substrait",
  "env_logger",

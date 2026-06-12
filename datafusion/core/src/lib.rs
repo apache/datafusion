@@ -719,7 +719,6 @@
 //! * [datafusion_functions]: Scalar function packages
 //! * [datafusion_functions_aggregate]: Aggregate functions such as `MIN`, `MAX`, `SUM`, etc
 //! * [datafusion_functions_nested]: Scalar function packages for `ARRAY`s, `MAP`s and `STRUCT`s
-//! * [datafusion_functions_variant]: Scalar function packages for the Variant logical type
 //! * [datafusion_functions_table]: Table Functions such as `GENERATE_SERIES`
 //! * [datafusion_functions_window]: Window functions such as `ROW_NUMBER`, `RANK`, etc
 //! * [datafusion_optimizer]: [`OptimizerRule`]s and [`AnalyzerRule`]s
@@ -874,12 +873,6 @@ pub mod functions {
 pub mod functions_nested {
     #[cfg(feature = "nested_expressions")]
     pub use datafusion_functions_nested::*;
-}
-
-/// re-export of [`datafusion_functions_variant`] crate, if "variant_expressions" feature is enabled
-pub mod functions_variant {
-    #[cfg(feature = "variant_expressions")]
-    pub use datafusion_functions_variant::*;
 }
 
 /// re-export of [`datafusion_functions_aggregate`] crate

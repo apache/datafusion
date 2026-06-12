@@ -42,10 +42,13 @@ name = "datafusion_functions_variant"
 
 [features]
 default = []
+core = ["datafusion"]
 
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
+# optional dependency for SessionStateBuilderVariant extension trait
+datafusion = { workspace = true, optional = true, default-features = false }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true, default-features = false }
@@ -55,4 +58,6 @@ parquet-variant-compute = { workspace = true }
 parquet-variant-json = { workspace = true }
 
 [dev-dependencies]
+# for SessionStateBuilderVariant tests
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
 serde_json = { workspace = true }

@@ -35,9 +35,27 @@
 //! [Parquet Variant]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 //!
 //! You can register the functions in this crate using the [`register_all`] function.
+//!
+//! # Example: enabling Parquet Variant features with `SessionStateBuilder`
+//!
+//! Enable the `core` feature in your `Cargo.toml`:
+//! ```toml
+//! datafusion-functions-variant = { version = "X", features = ["core"] }
+//! ```
+//!
+//! Then use the [`SessionStateBuilderVariant`] extension trait to register all
+//! Variant scalar functions on a [`SessionStateBuilder`].
+//!
+//! [`SessionStateBuilder`]: https://docs.rs/datafusion/latest/datafusion/execution/struct.SessionStateBuilder.html
 
 mod impl_variant_get;
 mod shared;
+
+#[cfg(feature = "core")]
+mod session_state;
+
+#[cfg(feature = "core")]
+pub use session_state::SessionStateBuilderVariant;
 
 pub mod cast_to_variant;
 pub mod is_variant_null;

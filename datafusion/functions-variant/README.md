@@ -27,9 +27,10 @@ Variant values are stored as Arrow `StructArray`s carrying the `VariantType`
 extension type and are produced/consumed by the [`parquet-variant`] family of
 crates.
 
-Most projects should use the [`datafusion`] crate directly, which re-exports
-this module. If you are already using the [`datafusion`] crate, there is no
-reason to use this crate directly in your project as well.
+This crate is not a dependency of the [`datafusion`] crate. To register the
+Variant functions on a DataFusion session, enable the `core` feature and use
+the `SessionStateBuilderVariant::with_variant_features` extension method on
+`SessionStateBuilder`.
 
 [apache arrow]: https://arrow.apache.org/
 [apache datafusion]: https://datafusion.apache.org/
