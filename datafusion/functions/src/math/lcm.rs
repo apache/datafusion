@@ -21,7 +21,7 @@ use arrow::datatypes::{
 };
 
 use crate::math::common::{lcm_signed, lcm_signed_int};
-use crate::utils::{calculate_binary_decimal_math_cast, calculate_binary_math_cast};
+use crate::utils::{calculate_binary_decimal_math_cast, calculate_binary_math};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
@@ -107,14 +107,12 @@ impl ScalarUDFImpl for LcmFunc {
         let right = &args.args[1];
 
         let arr: ArrayRef = match (left.data_type(), right.data_type()) {
-            (lhs @ DataType::Int64, _) => {
-                calculate_binary_math_cast::<Int64Type, Int64Type, Int64Type, _>(
-                    &left,
-                    right,
-                    lcm_signed_int,
-                    lhs,
-                )?
-            }
+            (DataType::Int64, _) => calculate_binary_math::<
+                Int64Type,
+                Int64Type,
+                Int64Type,
+                _,
+            >(&left, right, lcm_signed_int)?,
             (
                 lhs @ DataType::Decimal32(precision, scale),
                 rhs @ DataType::Decimal32(_, _),
