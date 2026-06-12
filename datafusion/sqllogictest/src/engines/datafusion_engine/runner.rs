@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 use std::{path::PathBuf, time::Duration};
 
@@ -28,6 +30,7 @@ use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
+use futures::FutureExt;
 use indicatif::ProgressBar;
 use log::Level::{Debug, Info};
 use log::{debug, log_enabled, warn};
@@ -154,7 +157,19 @@ impl sqllogictest::AsyncDB for DataFusion {
         let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
 
         let start = Instant::now();
-        let result = run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
+        let result = AssertUnwindSafe(run_query(
+            &self.ctx,
+            is_spark_path(&self.relative_path),
+            sql,
+        ))
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|panic| {
+            Err(DFSqlLogicTestError::Other(format!(
+                "panic: {}",
+                panic_message(panic.as_ref())
+            )))
+        });
         let duration = start.elapsed();
 
         self.currently_executing_sql_tracker.remove_sql(tracked_sql);
@@ -196,6 +211,16 @@ impl sqllogictest::AsyncDB for DataFusion {
         {
             config_change_errors.lock().unwrap().push(error.to_string());
         }
+    }
+}
+
+fn panic_message(panic: &(dyn Any + Send)) -> &str {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        message
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message
+    } else {
+        "unknown panic"
     }
 }
 

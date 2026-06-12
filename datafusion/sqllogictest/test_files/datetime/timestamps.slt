@@ -5390,6 +5390,10 @@ SELECT TRY_CAST(DATE '3000-01-01' AS TIMESTAMP(9));
 ----
 NULL
 
+query error panic: attempt to multiply with overflow
+SELECT TRY_CAST(d AS TIMESTAMP(9))
+FROM (VALUES (DATE '3000-01-01')) t(d);
+
 query P
 SELECT TRY_CAST(ts AS TIMESTAMP(9)) AS ts
 FROM (
