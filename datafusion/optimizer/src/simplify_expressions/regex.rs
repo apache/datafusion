@@ -283,20 +283,23 @@ fn partial_anchored_literal_to_like(v: &[Hir]) -> Option<String> {
 
 /// Extracts a string literal expression assuming that [`is_anchored_literal`]
 /// returned true.
-fn anchored_literal_to_expr(v: &[Hir]) -> Option<Expr> {
+fn anchored_literal_to_expr(v: &[Hir], string_scalar: &StringScalar) -> Option<Expr> {
     match v.len() {
-        2 => Some(lit("")),
+        2 => Some(string_scalar.to_expr("")),
         3 => {
             let HirKind::Literal(l) = v[1].kind() else {
                 return None;
             };
-            like_str_from_literal(l).map(lit)
+            like_str_from_literal(l).map(|s| string_scalar.to_expr(s))
         }
         _ => None,
     }
 }
 
-fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
+fn anchored_alternation_to_exprs(
+    v: &[Hir],
+    string_scalar: &StringScalar,
+) -> Option<Vec<Expr>> {
     if 3 != v.len() {
         return None;
     }
@@ -308,7 +311,8 @@ fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
             for hir in alters {
                 let mut is_safe = false;
                 if let HirKind::Literal(l) = hir.kind()
-                    && let Some(safe_literal) = str_from_literal(l).map(lit)
+                    && let Some(safe_literal) =
+                        str_from_literal(l).map(|s| string_scalar.to_expr(s))
                 {
                     literals.push(safe_literal);
                     is_safe = true;
@@ -321,7 +325,9 @@ fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
 
             return Some(literals);
         } else if let HirKind::Literal(l) = sub.kind() {
-            if let Some(safe_literal) = str_from_literal(l).map(lit) {
+            if let Some(safe_literal) =
+                str_from_literal(l).map(|s| string_scalar.to_expr(s))
+            {
                 return Some(vec![safe_literal]);
             }
             return None;
@@ -351,12 +357,18 @@ fn lower_simple(
             ));
         }
         HirKind::Concat(inner) if is_anchored_literal(inner) => {
-            return anchored_literal_to_expr(inner).map(|right| {
-                mode.expr_matches_literal(Box::new(left.clone()), Box::new(right))
+            return anchored_literal_to_expr(inner, string_scalar).map(|right| {
+                if mode.i {
+                    // Case-insensitive: use ILIKE for exact match (no wildcards)
+                    mode.expr(Box::new(left.clone()), Box::new(right))
+                } else {
+                    // Case-sensitive: use Eq / NotEq
+                    mode.expr_matches_literal(Box::new(left.clone()), Box::new(right))
+                }
             });
         }
-        HirKind::Concat(inner) if is_anchored_capture(inner) => {
-            return anchored_alternation_to_exprs(inner)
+        HirKind::Concat(inner) if !mode.i && is_anchored_capture(inner) => {
+            return anchored_alternation_to_exprs(inner, string_scalar)
                 .map(|right| left.clone().in_list(right, mode.not));
         }
         HirKind::Concat(inner) => {

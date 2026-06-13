@@ -23,7 +23,7 @@ mod struct_builder;
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::Write;
@@ -144,6 +144,30 @@ pub fn date_to_timestamp_multiplier(
             TimeUnit::Nanosecond => Some(NANOS_PER_MILLISECOND),
         },
 
+        _ => None,
+    }
+}
+
+/// Returns the multiplier that converts the input timestamp representation into
+/// the desired timestamp unit, if the conversion requires a multiplication that
+/// can overflow an `i64`.
+pub fn timestamp_to_timestamp_multiplier(
+    source_type: &DataType,
+    target_type: &DataType,
+) -> Option<i64> {
+    let (DataType::Timestamp(source_unit, _), DataType::Timestamp(target_unit, _)) =
+        (source_type, target_type)
+    else {
+        return None;
+    };
+
+    match (source_unit, target_unit) {
+        (TimeUnit::Second, TimeUnit::Millisecond) => Some(1_000),
+        (TimeUnit::Second, TimeUnit::Microsecond) => Some(1_000_000),
+        (TimeUnit::Second, TimeUnit::Nanosecond) => Some(1_000_000_000),
+        (TimeUnit::Millisecond, TimeUnit::Microsecond) => Some(1_000),
+        (TimeUnit::Millisecond, TimeUnit::Nanosecond) => Some(1_000_000),
+        (TimeUnit::Microsecond, TimeUnit::Nanosecond) => Some(1_000),
         _ => None,
     }
 }
@@ -4212,20 +4236,61 @@ impl ScalarValue {
         Some(v.as_ref().map(|v| v.as_str()))
     }
 
-    /// Try to cast this value to a ScalarValue of type `data_type`
+    /// Cast this value to a `ScalarValue` of type `target_type` using the
+    /// default [`CastOptions`].
+    ///
+    /// This is a general-purpose cast with the same semantics as the Arrow
+    /// [`cast_with_options`] kernel and can therefore **lose information** --
+    /// for example casting the floating point value `123.45` to the integer
+    /// `123`.
+    ///
+    /// Returns an error for casts the Arrow kernel cannot perform.
+    ///
+    /// # See Also
+    /// - [`try_cast_literal_to_type`]: for a *value-preserving* cast
+    ///
+    /// [`try_cast_literal_to_type`]: https://docs.rs/datafusion/latest/datafusion/logical_expr_common/casts/fn.try_cast_literal_to_type.html
     pub fn cast_to(&self, target_type: &DataType) -> Result<Self> {
         self.cast_to_with_options(target_type, &DEFAULT_CAST_OPTIONS)
     }
 
-    /// Try to cast this value to a ScalarValue of type `data_type` with [`CastOptions`]
+    /// Cast this value to type `target_type` with the given [`CastOptions`].
+    ///
+    /// # See Also
+    /// - [`ScalarValue::cast_to`] for more details.
+    /// - [`try_cast_literal_to_type`]: for a *value-preserving* cast
+    ///
+    /// [`try_cast_literal_to_type`]: https://docs.rs/datafusion/latest/datafusion/logical_expr_common/casts/fn.try_cast_literal_to_type.html
     pub fn cast_to_with_options(
         &self,
         target_type: &DataType,
         cast_options: &CastOptions<'static>,
     ) -> Result<Self> {
         let source_type = self.data_type();
+
+        // Fast path: an identical target type needs no conversion at all.
+        if &source_type == target_type {
+            return Ok(self.clone());
+        }
+
+        // Fast path: conversions among the string types (`Utf8`, `LargeUtf8`,
+        // `Utf8View`) are value-preserving, so we can rewrap the string
+        // directly instead of building a single-row array and invoking the
+        // arrow cast kernel.
+        if source_type.is_string() && target_type.is_string() {
+            // `self` is one of the string types, so `try_as_str` returns `Some`
+            let value = self.try_as_str().flatten().map(|s| s.to_string());
+            return Ok(match target_type {
+                DataType::Utf8 => ScalarValue::Utf8(value),
+                DataType::LargeUtf8 => ScalarValue::LargeUtf8(value),
+                DataType::Utf8View => ScalarValue::Utf8View(value),
+                _ => unreachable!("matched a string target type above"),
+            });
+        }
+
         if let Some(multiplier) = date_to_timestamp_multiplier(&source_type, target_type)
-            && let Some(value) = self.date_scalar_value_as_i64()
+            .or_else(|| timestamp_to_timestamp_multiplier(&source_type, target_type))
+            && let Some(value) = self.temporal_scalar_value_as_i64()
         {
             ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)?;
         }
@@ -4247,10 +4312,14 @@ impl ScalarValue {
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
-    fn date_scalar_value_as_i64(&self) -> Option<i64> {
+    fn temporal_scalar_value_as_i64(&self) -> Option<i64> {
         match self {
             ScalarValue::Date32(Some(value)) => Some(i64::from(*value)),
             ScalarValue::Date64(Some(value)) => Some(*value),
+            ScalarValue::TimestampSecond(Some(value), _)
+            | ScalarValue::TimestampMillisecond(Some(value), _)
+            | ScalarValue::TimestampMicrosecond(Some(value), _)
+            | ScalarValue::TimestampNanosecond(Some(value), _) => Some(*value),
             _ => None,
         }
     }
@@ -4713,12 +4782,32 @@ impl ScalarValue {
                 .sum::<usize>()
     }
 
+    /// Estimates [size](Self::size) of [`HashMap`] keyed by [`ScalarValue`] in bytes.
+    ///
+    /// Includes the size of the [`HashMap`] container itself. Heap payload of
+    /// `V` is not accounted for; callers storing heap-backed values should
+    /// supplement this estimate.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
+    pub fn size_of_hashmap<V, S>(map: &HashMap<Self, V, S>) -> usize {
+        size_of_val(map)
+            + ((size_of::<ScalarValue>() + size_of::<V>()) * map.capacity())
+            + map.keys().map(|k| k.size() - size_of_val(k)).sum::<usize>()
+    }
+
     /// Compacts the allocation referenced by `self` to the minimum, copying the data if
     /// necessary.
     ///
     /// This can be relevant when `self` is a list or contains a list as a nested value, as
     /// a single list holds an Arc to its entire original array buffer.
     pub fn compact(&mut self) {
+        // copy_array_data + compact_view_buffers + downcast back, all in one step.
+        macro_rules! compact_array {
+            ($arr:expr, $from_type:ty, $($as_method:tt)+) => {
+                *Arc::make_mut($arr) = ScalarValue::compact_view_buffers(
+                    Arc::new(<$from_type>::from(copy_array_data(&$arr.to_data()))) as ArrayRef,
+                ).$($as_method)+.clone()
+            };
+        }
         match self {
             ScalarValue::Null
             | ScalarValue::Boolean(_)
@@ -4762,33 +4851,20 @@ impl ScalarValue {
             | ScalarValue::LargeBinary(_)
             | ScalarValue::BinaryView(_) => (),
             ScalarValue::FixedSizeList(arr) => {
-                let array = copy_array_data(&arr.to_data());
-                *Arc::make_mut(arr) = FixedSizeListArray::from(array);
+                compact_array!(arr, FixedSizeListArray, as_fixed_size_list())
             }
-            ScalarValue::List(arr) => {
-                let array = copy_array_data(&arr.to_data());
-                *Arc::make_mut(arr) = ListArray::from(array);
-            }
+            ScalarValue::List(arr) => compact_array!(arr, ListArray, as_list::<i32>()),
             ScalarValue::LargeList(arr) => {
-                let array = copy_array_data(&arr.to_data());
-                *Arc::make_mut(arr) = LargeListArray::from(array)
+                compact_array!(arr, LargeListArray, as_list::<i64>())
             }
             ScalarValue::ListView(arr) => {
-                let array = copy_array_data(&arr.to_data());
-                *Arc::make_mut(arr) = ListViewArray::from(array);
+                compact_array!(arr, ListViewArray, as_list_view::<i32>())
             }
             ScalarValue::LargeListView(arr) => {
-                let array = copy_array_data(&arr.to_data());
-                *Arc::make_mut(arr) = LargeListViewArray::from(array)
+                compact_array!(arr, LargeListViewArray, as_list_view::<i64>())
             }
-            ScalarValue::Struct(arr) => {
-                let array = copy_array_data(&arr.to_data());
-                *Arc::make_mut(arr) = StructArray::from(array);
-            }
-            ScalarValue::Map(arr) => {
-                let array = copy_array_data(&arr.to_data());
-                *Arc::make_mut(arr) = MapArray::from(array);
-            }
+            ScalarValue::Struct(arr) => compact_array!(arr, StructArray, as_struct()),
+            ScalarValue::Map(arr) => compact_array!(arr, MapArray, as_map()),
             ScalarValue::Union(val, _, _) => {
                 if let Some((_, value)) = val.as_mut() {
                     value.compact();
@@ -4807,6 +4883,95 @@ impl ScalarValue {
     pub fn compacted(mut self) -> Self {
         self.compact();
         self
+    }
+
+    /// Recursively compacts the backing buffers of any [`StringViewArray`] or
+    /// [`BinaryViewArray`] nested within `array`.
+    ///
+    /// View-typed arrays keep an `Arc` reference to their original backing
+    /// buffers, so a single scalar extracted from a large batch still retains
+    /// the entire buffer.  Calling [`.gc()`][StringViewArray::gc] copies only
+    /// the bytes that are actually referenced by the surviving views, releasing
+    /// the rest.
+    ///
+    /// Container types (`List`, `LargeList`, `FixedSizeList`, `ListView`,
+    /// `LargeListView`, `Struct`, `Map`) are handled by recursing into their
+    /// child / values arrays and reconstructing the parent with the compacted
+    /// children.  All other types are returned unchanged.
+    fn compact_view_buffers(array: ArrayRef) -> ArrayRef {
+        // Macro for the i32/i64-offset list pair (List / LargeList).
+        macro_rules! gc_list {
+            ($field:expr, $offset_type:ty, $array_type:ty) => {{
+                let list = array.as_list::<$offset_type>();
+                Arc::new(<$array_type>::new(
+                    Arc::clone($field),
+                    list.offsets().clone(),
+                    ScalarValue::compact_view_buffers(Arc::clone(list.values())),
+                    list.nulls().cloned(),
+                )) as ArrayRef
+            }};
+        }
+        // Macro for the i32/i64-offset list-view pair (ListView / LargeListView).
+        macro_rules! gc_list_view {
+            ($field:expr, $offset_type:ty, $array_type:ty) => {{
+                let list = array.as_list_view::<$offset_type>();
+                Arc::new(<$array_type>::new(
+                    Arc::clone($field),
+                    list.offsets().clone(),
+                    list.sizes().clone(),
+                    ScalarValue::compact_view_buffers(Arc::clone(list.values())),
+                    list.nulls().cloned(),
+                )) as ArrayRef
+            }};
+        }
+
+        match array.data_type() {
+            DataType::Utf8View => Arc::new(array.as_string_view().gc()),
+            DataType::BinaryView => Arc::new(array.as_binary_view().gc()),
+            DataType::Struct(_) => {
+                let s = array.as_struct();
+                let columns = s
+                    .columns()
+                    .iter()
+                    .map(|c| ScalarValue::compact_view_buffers(Arc::clone(c)))
+                    .collect();
+                Arc::new(StructArray::new(
+                    s.fields().clone(),
+                    columns,
+                    s.nulls().cloned(),
+                ))
+            }
+            DataType::List(field) => gc_list!(field, i32, ListArray),
+            DataType::LargeList(field) => gc_list!(field, i64, LargeListArray),
+            DataType::FixedSizeList(field, size) => {
+                let list = array.as_fixed_size_list();
+                Arc::new(FixedSizeListArray::new(
+                    Arc::clone(field),
+                    *size,
+                    ScalarValue::compact_view_buffers(Arc::clone(list.values())),
+                    list.nulls().cloned(),
+                ))
+            }
+            DataType::ListView(field) => gc_list_view!(field, i32, ListViewArray),
+            DataType::LargeListView(field) => {
+                gc_list_view!(field, i64, LargeListViewArray)
+            }
+            DataType::Map(field, ordered) => {
+                let map = array.as_map();
+                let entries = ScalarValue::compact_view_buffers(Arc::new(
+                    map.entries().clone(),
+                )
+                    as ArrayRef);
+                Arc::new(MapArray::new(
+                    Arc::clone(field),
+                    map.offsets().clone(),
+                    entries.as_struct().clone(),
+                    map.nulls().cloned(),
+                    *ordered,
+                ))
+            }
+            _ => array,
+        }
     }
 
     /// Returns the minimum value for the given numeric `DataType`.
@@ -5259,6 +5424,35 @@ macro_rules! format_option {
     }};
 }
 
+macro_rules! format_decimal {
+    ($F:expr, $TYPE:ty, $VALUE:expr, $PRECISION:expr, $SCALE:expr) => {{
+        match $VALUE {
+            Some(value) => write!(
+                $F,
+                "{}",
+                <$TYPE>::format_decimal(*value, *$PRECISION, *$SCALE)
+            ),
+            None => write!($F, "NULL"),
+        }
+    }};
+}
+
+macro_rules! format_decimal_debug {
+    ($F:expr, $TYPE_NAME:literal, $TYPE:ty, $VALUE:expr, $PRECISION:expr, $SCALE:expr) => {{
+        match $VALUE {
+            Some(value) => write!(
+                $F,
+                "{}({},{},{})",
+                $TYPE_NAME,
+                <$TYPE>::format_decimal(*value, *$PRECISION, *$SCALE),
+                $PRECISION,
+                $SCALE
+            ),
+            None => write!($F, "{}(NULL,{},{})", $TYPE_NAME, $PRECISION, $SCALE),
+        }
+    }};
+}
+
 // Implement Display trait for ScalarValue
 //
 // # Panics
@@ -5268,16 +5462,16 @@ impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal32(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal32Type, v, p, s)?
             }
             ScalarValue::Decimal64(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal64Type, v, p, s)?
             }
             ScalarValue::Decimal128(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal128Type, v, p, s)?
             }
             ScalarValue::Decimal256(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal256Type, v, p, s)?
             }
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float16(e) => format_option!(f, e)?,
@@ -5451,8 +5645,9 @@ fn fmt_list(arr: &dyn Array, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{value_formatter}")
 }
 
-/// writes a byte array to formatter. `[1, 2, 3]` ==> `"1,2,3"`
-fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
+/// Writes a byte array for ScalarValue Debug formatting.
+/// `[1, 2, 3]` -> `"1,2,3"`
+fn fmt_binary_debug(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
     let mut iter = data.iter();
     if let Some(b) = iter.next() {
         write!(f, "{b}")?;
@@ -5466,10 +5661,46 @@ fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
 impl fmt::Debug for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ScalarValue::Decimal32(_, _, _) => write!(f, "Decimal32({self})"),
-            ScalarValue::Decimal64(_, _, _) => write!(f, "Decimal64({self})"),
-            ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({self})"),
-            ScalarValue::Decimal256(_, _, _) => write!(f, "Decimal256({self})"),
+            ScalarValue::Decimal32(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal32",
+                    Decimal32Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
+            ScalarValue::Decimal64(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal64",
+                    Decimal64Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
+            ScalarValue::Decimal128(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal128",
+                    Decimal128Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
+            ScalarValue::Decimal256(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal256",
+                    Decimal256Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
             ScalarValue::Boolean(_) => write!(f, "Boolean({self})"),
             ScalarValue::Float16(_) => write!(f, "Float16({self})"),
             ScalarValue::Float32(_) => write!(f, "Float32({self})"),
@@ -5503,13 +5734,13 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::Binary(None) => write!(f, "Binary({self})"),
             ScalarValue::Binary(Some(b)) => {
                 write!(f, "Binary(\"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::BinaryView(None) => write!(f, "BinaryView({self})"),
             ScalarValue::BinaryView(Some(b)) => {
                 write!(f, "BinaryView(\"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::FixedSizeBinary(size, None) => {
@@ -5517,13 +5748,13 @@ impl fmt::Debug for ScalarValue {
             }
             ScalarValue::FixedSizeBinary(size, Some(b)) => {
                 write!(f, "FixedSizeBinary({size}, \"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({self})"),
             ScalarValue::LargeBinary(Some(b)) => {
                 write!(f, "LargeBinary(\"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::FixedSizeList(_) => write!(f, "FixedSizeList({self})"),
@@ -8652,6 +8883,80 @@ mod tests {
             ScalarValue::from("larger than 12 bytes string"),
             DataType::Utf8View,
         );
+
+        // Cases also covered by `try_cast_literal_to_type` in datafusion-expr-common
+
+        // identity casts (exercise the no-conversion fast path in `cast_to`)
+        check_scalar_cast(ScalarValue::Int32(Some(5)), DataType::Int32);
+        check_scalar_cast(ScalarValue::from("foo"), DataType::Utf8);
+        check_scalar_cast(ScalarValue::Utf8(None), DataType::Utf8);
+        check_scalar_cast(
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("foo")),
+            ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        );
+
+        // integer widening / narrowing (in range)
+        check_scalar_cast(ScalarValue::Int32(Some(123)), DataType::Int64);
+        check_scalar_cast(ScalarValue::Int64(Some(123)), DataType::Int32);
+        check_scalar_cast(ScalarValue::UInt32(Some(123)), DataType::Int64);
+        check_scalar_cast(ScalarValue::Int32(Some(123)), DataType::UInt64);
+
+        // integer <-> decimal
+        check_scalar_cast(ScalarValue::Int32(Some(123)), DataType::Decimal128(10, 0));
+        check_scalar_cast(ScalarValue::Decimal128(Some(123), 3, 0), DataType::Int64);
+        // decimal rescale
+        check_scalar_cast(
+            ScalarValue::Decimal128(Some(12300), 5, 2),
+            DataType::Decimal128(8, 5),
+        );
+
+        // timestamp unit conversion
+        check_scalar_cast(
+            ScalarValue::TimestampNanosecond(Some(123456), None),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        );
+        // timestamp timezone conversion
+        check_scalar_cast(
+            ScalarValue::TimestampSecond(Some(12345), None),
+            DataType::Timestamp(TimeUnit::Second, Some("+00:00".into())),
+        );
+        // int64 <-> timestamp
+        check_scalar_cast(
+            ScalarValue::Int64(Some(12345)),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
+        check_scalar_cast(
+            ScalarValue::TimestampSecond(Some(12345), Some("+00:00".into())),
+            DataType::Int64,
+        );
+
+        // additional string conversions
+        check_scalar_cast(ScalarValue::from("foo"), DataType::LargeUtf8);
+        check_scalar_cast(ScalarValue::LargeUtf8(Some("foo".into())), DataType::Utf8);
+        check_scalar_cast(
+            ScalarValue::LargeUtf8(Some("foo".into())),
+            DataType::Utf8View,
+        );
+        check_scalar_cast(ScalarValue::Utf8View(Some("foo".into())), DataType::Utf8);
+
+        // dictionary unwrap
+        check_scalar_cast(
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("foo")),
+            ),
+            DataType::Utf8,
+        );
+
+        // binary -> fixed size binary
+        check_scalar_cast(
+            ScalarValue::Binary(Some(vec![1, 2, 3])),
+            DataType::FixedSizeBinary(3),
+        );
+
         check_scalar_cast(
             {
                 let element_field =
@@ -8741,6 +9046,16 @@ mod tests {
         // turn it back to a scalar
         let cast_scalar = ScalarValue::try_from_array(&cast_array, 0).unwrap();
         assert_eq!(cast_scalar.data_type(), desired_type);
+
+        // `ScalarValue::cast_to` (which has array-free fast paths) must produce
+        // exactly the same result as casting through the arrow kernel above.
+        let cast_to_scalar = scalar
+            .cast_to(&desired_type)
+            .expect("Failed to cast_to scalar");
+        assert_eq!(
+            cast_to_scalar, cast_scalar,
+            "cast_to({scalar:?} -> {desired_type:?}) disagreed with the arrow cast kernel"
+        );
 
         // Some time later the "cast" scalar is turned back into an array:
         let array = cast_scalar
@@ -9517,6 +9832,36 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_display_and_debug() {
+        let decimal32 = ScalarValue::Decimal32(Some(123), 3, 2);
+        assert_eq!(decimal32.to_string(), "1.23");
+        assert_eq!(format!("{decimal32:?}"), "Decimal32(1.23,3,2)");
+
+        let decimal64 = ScalarValue::Decimal64(Some(-12345), 5, 3);
+        assert_eq!(decimal64.to_string(), "-12.345");
+        assert_eq!(format!("{decimal64:?}"), "Decimal64(-12.345,5,3)");
+
+        let decimal128 = ScalarValue::Decimal128(Some(1), 1, 1);
+        assert_eq!(decimal128.to_string(), "0.1");
+        assert_eq!(format!("{decimal128:?}"), "Decimal128(0.1,1,1)");
+
+        let decimal128_trailing_zero = ScalarValue::Decimal128(Some(120), 3, 2);
+        assert_eq!(decimal128_trailing_zero.to_string(), "1.20");
+        assert_eq!(
+            format!("{decimal128_trailing_zero:?}"),
+            "Decimal128(1.20,3,2)"
+        );
+
+        let decimal256 = ScalarValue::Decimal256(Some(i256::from(100123)), 28, 3);
+        assert_eq!(decimal256.to_string(), "100.123");
+        assert_eq!(format!("{decimal256:?}"), "Decimal256(100.123,28,3)");
+
+        let null_decimal = ScalarValue::Decimal128(None, 10, 2);
+        assert_eq!(null_decimal.to_string(), "NULL");
+        assert_eq!(format!("{null_decimal:?}"), "Decimal128(NULL,10,2)");
+    }
+
+    #[test]
     fn test_struct_display_null() {
         let fields = vec![Field::new("a", DataType::Int32, false)];
         let s = ScalarStructBuilder::new_null(fields);
@@ -9835,6 +10180,19 @@ mod tests {
     #[test]
     fn cast_date_to_timestamp_overflow_returns_error() {
         let scalar = ScalarValue::Date32(Some(i32::MAX));
+        let err = scalar
+            .cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None))
+            .expect_err("expected cast to fail");
+        assert!(
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn cast_timestamp_to_timestamp_overflow_returns_error() {
+        let scalar = ScalarValue::TimestampSecond(Some(i64::MAX), None);
         let err = scalar
             .cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None))
             .expect_err("expected cast to fail");
@@ -10707,5 +11065,201 @@ mod tests {
                 ]),
             ]
         );
+    }
+
+    // ── compact / compact_view_buffers ───────────────────────────────────────
+
+    /// Builds a `StringViewArray` with `n` strings that are all longer than
+    /// 12 bytes so they are stored in backing buffers rather than inline.
+    fn make_long_strings(n: usize) -> StringViewArray {
+        let mut b = StringViewBuilder::new();
+        for i in 0..n {
+            b.append_value(format!("long_string_value_pad_{i:04}"));
+        }
+        b.finish()
+    }
+
+    /// Total bytes across all backing buffers of a `StringViewArray`.
+    fn utf8view_buffer_bytes(a: &StringViewArray) -> usize {
+        a.data_buffers().iter().map(|b| b.len()).sum()
+    }
+
+    #[test]
+    fn test_compact_list_utf8view() {
+        const N: usize = 50;
+        let strings = make_long_strings(N);
+        let one_len = strings.value(0).len();
+        assert!(utf8view_buffer_bytes(&strings) >= N * one_len);
+
+        let single_row_list_array =
+            SingleRowListArrayBuilder::new(Arc::new(strings.slice(0, 1)) as ArrayRef)
+                .build_list_array();
+        let mut scalar = ScalarValue::List(Arc::new(single_row_list_array));
+        scalar.compact();
+
+        let ScalarValue::List(arr) = &scalar else {
+            panic!("expected List")
+        };
+        assert_eq!(
+            utf8view_buffer_bytes(arr.values().as_string_view()),
+            one_len
+        );
+        assert_eq!(arr.values().as_string_view().value(0), strings.value(0));
+    }
+
+    #[test]
+    fn test_compact_large_list_utf8view() {
+        const N: usize = 50;
+        let strings = make_long_strings(N);
+        let one_len = strings.value(0).len();
+        assert!(utf8view_buffer_bytes(&strings) >= N * one_len);
+
+        let single_row_list_array =
+            SingleRowListArrayBuilder::new(Arc::new(strings.slice(0, 1)) as ArrayRef)
+                .build_large_list_array();
+        let mut scalar = ScalarValue::LargeList(Arc::new(single_row_list_array));
+        scalar.compact();
+
+        let ScalarValue::LargeList(arr) = &scalar else {
+            panic!("expected LargeList")
+        };
+        assert_eq!(
+            utf8view_buffer_bytes(arr.values().as_string_view()),
+            one_len
+        );
+        assert_eq!(arr.values().as_string_view().value(0), strings.value(0));
+    }
+
+    #[test]
+    fn test_compact_fixed_size_list_utf8view() {
+        const N: usize = 50;
+        let strings = make_long_strings(N);
+        let one_len = strings.value(0).len();
+        assert!(utf8view_buffer_bytes(&strings) >= N * one_len);
+
+        let single_row_list_array =
+            SingleRowListArrayBuilder::new(Arc::new(strings.slice(0, 1)) as ArrayRef)
+                .build_fixed_size_list_array(1);
+        let mut scalar = ScalarValue::FixedSizeList(Arc::new(single_row_list_array));
+        scalar.compact();
+
+        let ScalarValue::FixedSizeList(arr) = &scalar else {
+            panic!("expected FixedSizeList")
+        };
+        assert_eq!(
+            utf8view_buffer_bytes(arr.values().as_string_view()),
+            one_len
+        );
+        assert_eq!(arr.values().as_string_view().value(0), strings.value(0));
+    }
+
+    #[test]
+    fn test_compact_list_view_utf8view() {
+        const N: usize = 50;
+        let strings = make_long_strings(N);
+        let one_len = strings.value(0).len();
+        assert!(utf8view_buffer_bytes(&strings) >= N * one_len);
+
+        let single_row_list_array =
+            SingleRowListArrayBuilder::new(Arc::new(strings.slice(0, 1)) as ArrayRef)
+                .build_list_view_array();
+        let mut scalar = ScalarValue::ListView(Arc::new(single_row_list_array));
+        scalar.compact();
+
+        let ScalarValue::ListView(arr) = &scalar else {
+            panic!("expected ListView")
+        };
+        assert_eq!(
+            utf8view_buffer_bytes(arr.values().as_string_view()),
+            one_len
+        );
+        assert_eq!(arr.values().as_string_view().value(0), strings.value(0));
+    }
+
+    #[test]
+    fn test_compact_large_list_view_utf8view() {
+        const N: usize = 50;
+        let strings = make_long_strings(N);
+        let one_len = strings.value(0).len();
+        assert!(utf8view_buffer_bytes(&strings) >= N * one_len);
+
+        let single_row_list_array =
+            SingleRowListArrayBuilder::new(Arc::new(strings.slice(0, 1)) as ArrayRef)
+                .build_large_list_view_array();
+        let mut scalar = ScalarValue::LargeListView(Arc::new(single_row_list_array));
+        scalar.compact();
+
+        let ScalarValue::LargeListView(arr) = &scalar else {
+            panic!("expected LargeListView")
+        };
+        assert_eq!(
+            utf8view_buffer_bytes(arr.values().as_string_view()),
+            one_len
+        );
+        assert_eq!(arr.values().as_string_view().value(0), strings.value(0));
+    }
+
+    #[test]
+    fn test_compact_struct_utf8view() {
+        const N: usize = 50;
+        let strings = make_long_strings(N);
+        let one_len = strings.value(0).len();
+
+        let field = Arc::new(Field::new("name", DataType::Utf8View, true));
+        let struct_arr = StructArray::new(
+            Fields::from(vec![Arc::clone(&field)]),
+            vec![Arc::new(strings.slice(0, 1)) as ArrayRef],
+            None,
+        );
+
+        let mut scalar = ScalarValue::Struct(Arc::new(struct_arr));
+        scalar.compact();
+
+        let ScalarValue::Struct(arr) = &scalar else {
+            panic!("expected Struct")
+        };
+        let col = arr.column(0).as_string_view();
+        assert_eq!(utf8view_buffer_bytes(col), one_len);
+        assert_eq!(col.value(0), strings.value(0));
+    }
+
+    #[test]
+    fn test_compact_map_utf8view() {
+        const N: usize = 50;
+        let strings = make_long_strings(N);
+        let one_len = strings.value(0).len();
+
+        let key_field = Arc::new(Field::new("key", DataType::Utf8View, false));
+        let val_field = Arc::new(Field::new("value", DataType::Int32, true));
+        let entries = StructArray::new(
+            Fields::from(vec![Arc::clone(&key_field), Arc::clone(&val_field)]),
+            vec![
+                Arc::new(strings.slice(0, 1)) as ArrayRef,
+                Arc::new(Int32Array::from(vec![1i32])) as ArrayRef,
+            ],
+            None,
+        );
+        let entries_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![key_field, val_field])),
+            false,
+        ));
+        let map = MapArray::new(
+            entries_field,
+            OffsetBuffer::new(vec![0i32, 1].into()),
+            entries,
+            None,
+            false,
+        );
+
+        let mut scalar = ScalarValue::Map(Arc::new(map));
+        scalar.compact();
+
+        let ScalarValue::Map(arr) = &scalar else {
+            panic!("expected Map")
+        };
+        let keys = arr.entries().column(0).as_string_view();
+        assert_eq!(utf8view_buffer_bytes(keys), one_len);
+        assert_eq!(keys.value(0), strings.value(0));
     }
 }

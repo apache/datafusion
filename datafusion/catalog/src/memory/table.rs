@@ -31,27 +31,24 @@ use arrow::compute::{and, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, DFSchema, SchemaExt, not_impl_err, plan_err};
-use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::{
-    LexOrdering, create_physical_expr, create_physical_sort_exprs,
+    LexOrdering, PhysicalExpr, create_physical_expr, create_physical_sort_exprs,
 };
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PhysicalExpr, PlanProperties, common,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    collect_partitioned,
 };
 use datafusion_session::Session;
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
@@ -146,68 +143,28 @@ impl MemTable {
         state: &dyn Session,
     ) -> Result<Self> {
         let schema = t.schema();
-        let constraints = t.constraints();
+        let constraints = t.constraints().cloned().unwrap_or_default();
+
         let exec = t.scan(state, None, &[], None).await?;
-        let partition_count = exec.output_partitioning().partition_count();
+        let data = collect_partitioned(exec, state.task_ctx()).await?;
 
-        let mut join_set = JoinSet::new();
-
-        for part_idx in 0..partition_count {
-            let task = state.task_ctx();
-            let exec = Arc::clone(&exec);
-            join_set.spawn(async move {
-                let stream = exec.execute(part_idx, task)?;
-                common::collect(stream).await
-            });
-        }
-
-        let mut data: Vec<Vec<RecordBatch>> =
-            Vec::with_capacity(exec.output_partitioning().partition_count());
-
-        while let Some(result) = join_set.join_next().await {
-            match result {
-                Ok(res) => data.push(res?),
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    } else {
-                        unreachable!();
-                    }
-                }
-            }
-        }
-
-        let mut exec = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
-            &data,
-            Arc::clone(&schema),
-            None,
-        )?));
-        if let Some(cons) = constraints {
-            exec = exec.with_constraints(cons.clone());
-        }
-
-        if let Some(num_partitions) = output_partitions {
+        // Optionally repartition the collected batches.
+        let data = if let Some(num_partitions) = output_partitions {
+            let source = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
+                &data,
+                Arc::clone(&schema),
+                None,
+            )?));
             let exec = RepartitionExec::try_new(
-                Arc::new(exec),
+                Arc::new(source),
                 Partitioning::RoundRobinBatch(num_partitions),
             )?;
+            collect_partitioned(Arc::new(exec), state.task_ctx()).await?
+        } else {
+            data
+        };
 
-            // execute and collect results
-            let mut output_partitions = vec![];
-            for i in 0..exec.properties().output_partitioning().partition_count() {
-                // execute this *output* partition and collect all batches
-                let task_ctx = state.task_ctx();
-                let mut stream = exec.execute(i, task_ctx)?;
-                let mut batches = vec![];
-                while let Some(result) = stream.next().await {
-                    batches.push(result?);
-                }
-                output_partitions.push(batches);
-            }
-
-            return MemTable::try_new(Arc::clone(&schema), output_partitions);
-        }
-        MemTable::try_new(Arc::clone(&schema), data)
+        MemTable::try_new(schema, data).map(|table| table.with_constraints(constraints))
     }
 }
 
@@ -626,12 +583,5 @@ impl ExecutionPlan for DmlResultExec {
             Arc::clone(&self.schema),
             stream,
         )))
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 }

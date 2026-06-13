@@ -152,7 +152,7 @@ impl FFI_TableProviderFactory {
         let plan = LogicalPlanNode::decode(cmd_serialized.as_ref())
             .map_err(|e| DataFusionError::Internal(format!("{e:?}")))?;
         match plan.try_into_logical_plan(&task_ctx, logical_codec.as_ref())? {
-            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => Ok(cmd),
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => Ok(*cmd),
             _ => Err(DataFusionError::Internal(
                 "Invalid logical plan in FFI_TableProviderFactory.".to_owned(),
             )),
@@ -272,7 +272,7 @@ impl ForeignTableProviderFactory {
         let logical_codec: Arc<dyn LogicalExtensionCodec> =
             (&self.0.logical_codec).into();
 
-        let plan = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd));
+        let plan = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(Box::new(cmd)));
         let plan: LogicalPlanNode =
             AsLogicalPlan::try_from_logical_plan(&plan, logical_codec.as_ref())?;
 

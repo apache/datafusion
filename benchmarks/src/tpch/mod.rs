@@ -20,7 +20,7 @@
 use arrow::datatypes::SchemaBuilder;
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema},
-    common::plan_err,
+    common::{Constraint, Constraints, plan_err},
     error::Result,
 };
 use std::fs;
@@ -136,6 +136,42 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
 
         _ => unimplemented!(),
     }
+}
+
+static TPCH_PRIMARY_KEYS: &[(&str, &[&str])] = &[
+    ("region", &["r_regionkey"]),
+    ("nation", &["n_nationkey"]),
+    ("part", &["p_partkey"]),
+    ("supplier", &["s_suppkey"]),
+    ("partsupp", &["ps_partkey", "ps_suppkey"]),
+    ("customer", &["c_custkey"]),
+    ("orders", &["o_orderkey"]),
+    ("lineitem", &["l_orderkey", "l_linenumber"]),
+];
+
+/// Get the constraints for a TPC-H table. Only primary keys are returned; TPC-H
+/// also defines foreign keys, but those are currently unsupported.
+fn table_constraints(table: &str, schema: &Schema) -> Constraints {
+    let columns = TPCH_PRIMARY_KEYS
+        .iter()
+        .find(|(name, _)| *name == table)
+        .map(|(_, columns)| *columns)
+        .unwrap_or_else(|| unimplemented!("unknown TPC-H table: {table}"));
+
+    Constraints::new_unverified(vec![primary_key(schema, columns)])
+}
+
+fn primary_key(schema: &Schema, column_names: &[&str]) -> Constraint {
+    let indices = column_names
+        .iter()
+        .map(|column_name| {
+            schema.index_of(column_name).unwrap_or_else(|_| {
+                panic!("primary key column '{column_name}' not found in schema")
+            })
+        })
+        .collect();
+
+    Constraint::PrimaryKey(indices)
 }
 
 /// Get the SQL statements from the specified query file
