@@ -65,11 +65,47 @@ select array_length(arrow_cast(array_repeat(array_repeat(array_repeat(3, 5), 2),
 ----
 3 2
 
-# array_length scalar function #5
+# array_length scalar function #5 empty array dimension (PostgreSQL-compatible)
 query III
 select array_length(make_array()), array_length(make_array(), 1), array_length(make_array(), 2)
 ----
-0 0 NULL
+NULL NULL NULL
+
+query I
+SELECT array_length(ARRAY[]::INT[], 1)
+----
+NULL
+
+# array_length scalar function #5b LargeList empty dimension
+query II
+select array_length(arrow_cast(make_array(), 'LargeList(Int64)')),
+       array_length(arrow_cast(make_array(), 'LargeList(Int64)'), 1)
+----
+NULL NULL
+
+# array_length scalar function #5c empty inner dimension (was 0, now NULL)
+query II
+select array_length(make_array(make_array()), 2),
+       array_length(make_array(make_array(make_array())), 3)
+----
+NULL NULL
+
+# list_length alias empty dimension
+query II
+select list_length(make_array()), list_length(make_array(), 1)
+----
+NULL NULL
+
+# array_length over a column with an empty-array row
+query ?II
+select arr, array_length(arr), array_length(arr, 1)
+from (values (make_array(1,2,3)),
+             (arrow_cast(make_array(), 'List(Int64)')),
+             (NULL::int[])) t(arr)
+----
+[1, 2, 3] 3 3
+[] NULL NULL
+NULL NULL NULL
 
 # array_length scalar function #6 nested array
 query III

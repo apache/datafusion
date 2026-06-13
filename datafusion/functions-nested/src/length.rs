@@ -188,7 +188,9 @@ fn compute_array_length(
 
     loop {
         if current_dimension == dimension {
-            return Ok(Some(value.len() as u64));
+            // PostgreSQL: array_length(anyarray, dimension) returns NULL when that
+            // dimension is empty (`array_length('{}'::int[], 1)`), not zero.
+            return Ok((!value.is_empty()).then(|| value.len() as u64));
         }
 
         match value.data_type() {
