@@ -942,6 +942,89 @@ reset datafusion.execution.listing_table_ignore_subdirectory;
 statement ok
 reset datafusion.execution.parquet.coerce_int96;
 
+###
+### Large IN list pruning — range predicate fallback
+###
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# Create a table with two row groups: [1..10] and [91..100]
+statement ok
+COPY (
+    SELECT i AS val FROM generate_series(1, 10) t(i)
+    UNION ALL
+    SELECT i AS val FROM generate_series(91, 100) t(i)
+)
+TO 'test_files/scratch/parquet/in_list_prune.parquet'
+STORED AS PARQUET
+OPTIONS ('max_row_group_size' 10);
+
+statement ok
+CREATE EXTERNAL TABLE in_list_prune
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/in_list_prune.parquet';
+
+# Small IN list (≤ 20): exact per-value pruning — second row group [91..100] pruned
+# because none of 1..5 fall in [91,100]
+query I
+SELECT val FROM in_list_prune WHERE val IN (1, 2, 3, 4, 5) ORDER BY val;
+----
+1
+2
+3
+4
+5
+
+# Large IN list (> 20): range pruning — values span [1, 25], so row group [91..100]
+# is pruned (its min=91 > 25)
+query I
+SELECT val FROM in_list_prune
+WHERE val IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25)
+ORDER BY val;
+----
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+
+# Large IN list where range spans both row groups: both row groups kept
+# values include 5 (in RG1) and 95 (in RG2), so neither is pruned
+query I
+SELECT val FROM in_list_prune
+WHERE val IN (5,95,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118)
+ORDER BY val;
+----
+5
+95
+
+# Verify pruning is applied: explain shows pruning_predicate uses range
+query TT
+EXPLAIN SELECT val FROM in_list_prune
+WHERE val IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21);
+----
+physical_plan
+01)FilterExec: val@0 IN (SET) ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/in_list_prune.parquet]]}, projection=[val], file_type=parquet, predicate=val@0 IN (SET) ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]), pruning_predicate=val_null_count@1 != row_count@2 AND val_max@0 >= 1 AND val_null_count@1 != row_count@2 AND val_min@3 <= 21, required_guarantees=[val in (1, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 2, 20, 21, 3, 4, 5, 6, 7, 8, 9)]
+
+statement ok
+DROP TABLE in_list_prune;
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
 # Config reset
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema;
