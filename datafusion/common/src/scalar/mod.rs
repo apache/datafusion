@@ -2651,40 +2651,42 @@ impl ScalarValue {
                 Self::TimestampNanosecond(Some(r), _),
             ) => Some(l.abs_diff(*r)),
             (
-                Self::Decimal32(Some(l), lprecision, lscale),
-                Self::Decimal32(Some(r), rprecision, rscale),
+                Self::Decimal32(Some(l), _, lscale),
+                Self::Decimal32(Some(r), _, rscale),
             ) => {
-                if lprecision == rprecision && lscale == rscale {
+                // In order to be aligned with PartialOrd we only
+                // check for equal scale, ignoring precision
+                if lscale == rscale {
                     Some(l.abs_diff(*r) as u64)
                 } else {
                     None
                 }
             }
             (
-                Self::Decimal64(Some(l), lprecision, lscale),
-                Self::Decimal64(Some(r), rprecision, rscale),
+                Self::Decimal64(Some(l), _, lscale),
+                Self::Decimal64(Some(r), _, rscale),
             ) => {
-                if lprecision == rprecision && lscale == rscale {
+                if lscale == rscale {
                     Some(l.abs_diff(*r))
                 } else {
                     None
                 }
             }
             (
-                Self::Decimal128(Some(l), lprecision, lscale),
-                Self::Decimal128(Some(r), rprecision, rscale),
+                Self::Decimal128(Some(l), _, lscale),
+                Self::Decimal128(Some(r), _, rscale),
             ) => {
-                if lprecision == rprecision && lscale == rscale {
+                if lscale == rscale {
                     l.checked_sub(*r)?.checked_abs()?.to_u64()
                 } else {
                     None
                 }
             }
             (
-                Self::Decimal256(Some(l), lprecision, lscale),
-                Self::Decimal256(Some(r), rprecision, rscale),
+                Self::Decimal256(Some(l), _, lscale),
+                Self::Decimal256(Some(r), _, rscale),
             ) => {
-                if lprecision == rprecision && lscale == rscale {
+                if lscale == rscale {
                     l.checked_sub(*r)?.checked_abs()?.to_u64()
                 } else {
                     None
@@ -9546,12 +9548,8 @@ mod tests {
                 ScalarValue::Decimal128(Some(120), 5, 3),
             ),
             (
-                ScalarValue::Decimal128(Some(123), 5, 5),
-                ScalarValue::Decimal128(Some(120), 3, 5),
-            ),
-            (
                 ScalarValue::Decimal256(Some(123.into()), 5, 5),
-                ScalarValue::Decimal256(Some(120.into()), 3, 5),
+                ScalarValue::Decimal256(Some(120.into()), 5, 3),
             ),
             // Distance 2 * 2^50 is larger than usize
             (
@@ -9679,6 +9677,16 @@ mod tests {
         let lhs = ScalarValue::TimestampSecond(Some(i64::MIN), None);
         let rhs = ScalarValue::TimestampSecond(Some(i64::MAX), None);
         assert_eq!(lhs.distance_u64(&rhs), Some(u64::MAX));
+
+        // 6. Decimal scale matching (ignoring precision)
+        let lhs = ScalarValue::Decimal128(Some(100), 10, 2);
+        let rhs = ScalarValue::Decimal128(Some(150), 15, 2);
+        assert_eq!(lhs.distance_u64(&rhs), Some(50));
+        assert_eq!(rhs.distance_u64(&lhs), Some(50));
+
+        let lhs = ScalarValue::Decimal128(Some(100), 10, 2);
+        let rhs = ScalarValue::Decimal128(Some(150), 10, 3);
+        assert_eq!(lhs.distance_u64(&rhs), None);
     }
 
     #[test]
