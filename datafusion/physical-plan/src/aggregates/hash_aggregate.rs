@@ -38,7 +38,7 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::hash_table::{AggregateHashTable, Final, Partial, PartialSkip};
-use super::utils::SkipAggregationProbe;
+use super::skip_partial::SkipAggregationProbe;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };

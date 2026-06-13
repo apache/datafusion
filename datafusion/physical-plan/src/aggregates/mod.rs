@@ -77,9 +77,9 @@ mod hash_table;
 mod no_grouping;
 pub mod order;
 mod row_hash;
+mod skip_partial;
 mod topk;
 mod topk_stream;
-mod utils;
 
 /// Returns true if TopK aggregation data structures support the provided key and value types.
 ///

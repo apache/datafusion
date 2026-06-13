@@ -22,7 +22,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use super::order::GroupOrdering;
-use super::utils::SkipAggregationProbe;
+use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrderingFull;
