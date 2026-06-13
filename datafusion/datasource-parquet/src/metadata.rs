@@ -40,7 +40,11 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::{
+    ProjectionMask, parquet_column, parquet_to_arrow_schema,
+    parquet_to_arrow_schema_and_field_levels,
+};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, RowGroupMetaData,
     SortingColumn,
@@ -49,7 +53,7 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Minimum fraction of row groups that must report NDV statistics for the
 /// merged result to be `Inexact` rather than `Absent`, as the estimate
@@ -770,15 +774,90 @@ fn has_any_exact_match(
 }
 
 /// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
-pub struct CachedParquetMetaData(Arc<ParquetMetaData>);
+pub struct CachedParquetMetaData {
+    metadata: Arc<ParquetMetaData>,
+    /// Lazily-built [`ArrowReaderMetadata`] for this file. Constructing
+    /// this walks every leaf in the parquet schema (the "field-levels"
+    /// step), which is `O(N_columns)` work per file. Caching it lets
+    /// subsequent reader builds for the same file just `Clone` the result
+    /// (an `Arc` bump for the parquet metadata, the arrow schema, and the
+    /// dremel-level info) instead of redoing the walk.
+    arrow_reader_metadata: OnceLock<ArrowReaderMetadata>,
+    /// Single-slot cache for [`ArrowReaderMetadata`] built with a supplied
+    /// schema (e.g. after `apply_file_schema_type_coercions` produced one).
+    /// Keyed by the supplied schema's `Arc` pointer — different supplied
+    /// schemas miss and overwrite the slot. In typical workloads (one query
+    /// touches every file with the same coerced table schema) every file
+    /// pays this rebuild at most once per session.
+    coerced_arm: std::sync::Mutex<Option<(usize, ArrowReaderMetadata)>>,
+}
 
 impl CachedParquetMetaData {
     pub fn new(metadata: Arc<ParquetMetaData>) -> Self {
-        Self(metadata)
+        Self {
+            metadata,
+            arrow_reader_metadata: OnceLock::new(),
+            coerced_arm: std::sync::Mutex::new(None),
+        }
     }
 
     pub fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
-        &self.0
+        &self.metadata
+    }
+
+    /// Return the cached [`ArrowReaderMetadata`] for this file, building it
+    /// on first use.
+    ///
+    /// `ArrowReaderMetadata` stores its schema and field-levels behind
+    /// `Arc`s, so [`ArrowReaderMetadata::clone`] is cheap and is what
+    /// callers should use to consume the cached value.
+    pub fn arrow_reader_metadata(&self) -> Result<&ArrowReaderMetadata> {
+        if let Some(v) = self.arrow_reader_metadata.get() {
+            return Ok(v);
+        }
+        let file_meta = self.metadata.file_metadata();
+        let (schema, levels) = parquet_to_arrow_schema_and_field_levels(
+            file_meta.schema_descr(),
+            ProjectionMask::all(),
+            file_meta.key_value_metadata(),
+        )?;
+        let arm = ArrowReaderMetadata::from_field_levels(
+            Arc::clone(&self.metadata),
+            Arc::new(schema),
+            levels,
+        );
+        // Race: if another thread also computed it, theirs wins.
+        let _ = self.arrow_reader_metadata.set(arm);
+        Ok(self.arrow_reader_metadata.get().expect("just set"))
+    }
+
+    /// Get-or-build an [`ArrowReaderMetadata`] whose arrow schema is
+    /// `supplied_schema`. The result is memoised in a single-slot cache
+    /// keyed by `Arc::as_ptr(&supplied_schema)` — repeat calls with the
+    /// same schema (the common case: every file in a query coerces to the
+    /// same table schema) return a cheap [`ArrowReaderMetadata::clone`]
+    /// instead of re-walking the parquet schema.
+    pub fn coerced_arrow_reader_metadata(
+        &self,
+        supplied_schema: SchemaRef,
+        options: ArrowReaderOptions,
+    ) -> Result<ArrowReaderMetadata> {
+        let key = Arc::as_ptr(&supplied_schema) as usize;
+        {
+            let guard = self.coerced_arm.lock().unwrap();
+            if let Some((cached_key, cached)) = guard.as_ref()
+                && *cached_key == key
+            {
+                return Ok(cached.clone());
+            }
+        }
+        let arm = ArrowReaderMetadata::try_new(
+            Arc::clone(&self.metadata),
+            options.with_schema(Arc::clone(&supplied_schema)),
+        )?;
+        let mut guard = self.coerced_arm.lock().unwrap();
+        *guard = Some((key, arm.clone()));
+        Ok(arm)
     }
 }
 
@@ -788,12 +867,12 @@ impl FileMetadata for CachedParquetMetaData {
     }
 
     fn memory_size(&self) -> usize {
-        self.0.memory_size()
+        self.metadata.memory_size()
     }
 
     fn extra_info(&self) -> HashMap<String, String> {
-        let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        let page_index = self.metadata.column_index().is_some()
+            && self.metadata.offset_index().is_some();
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }
