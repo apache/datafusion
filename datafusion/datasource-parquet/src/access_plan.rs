@@ -217,33 +217,90 @@ impl ParquetAccessPlan {
     /// Returns an error if the selection does not specify exactly the same
     /// number of rows as the file metadata.
     pub fn try_new_from_overall_row_selection(
-        mut selection: RowSelection,
+        selection: RowSelection,
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<Self> {
-        let selection_row_count = selection.row_count() + selection.skipped_row_count();
-        let mut file_row_count = 0usize;
+        let mut selector_iter = selection.iter().copied();
+        let mut current = selector_iter.next();
 
-        let row_groups = row_group_meta_data
-            .iter()
-            .map(|rg_meta| {
-                let row_group_row_count = rg_meta.num_rows() as usize;
-                file_row_count += row_group_row_count;
-                let row_group_selection = selection.split_off(row_group_row_count);
+        let mut selection_rows = 0usize;
+        let mut file_rows = 0usize;
 
-                if !row_group_selection.selects_any() {
-                    RowGroupAccess::Skip
-                } else if row_group_selection.skipped_row_count() == 0 {
-                    RowGroupAccess::Scan
+        let mut row_groups = Vec::with_capacity(row_group_meta_data.len());
+        for rg_meta in row_group_meta_data {
+            let rg_rows = rg_meta.num_rows() as usize;
+            file_rows += rg_rows;
+
+            // `leading` holds the first selector seen in this group when we have
+            // not yet seen a direction change; once both skip and select rows appear
+            // we promote to `mixed` so we can build the full RowSelection Vec.
+            // This avoids a heap allocation for the common all-scan / all-skip case.
+            let mut leading: Option<RowSelector> = None;
+            let mut mixed: Option<Vec<RowSelector>> = None;
+            let mut selected = 0usize;
+            let mut skipped = 0usize;
+            let mut remaining = rg_rows;
+
+            while remaining > 0 {
+                let Some(sel) = current else { break };
+                let take = sel.row_count.min(remaining);
+                selection_rows += take;
+                remaining -= take;
+
+                let rg_sel = RowSelector {
+                    row_count: take,
+                    skip: sel.skip,
+                };
+                if sel.skip {
+                    skipped += take;
                 } else {
-                    RowGroupAccess::Selection(row_group_selection)
+                    selected += take;
                 }
-            })
-            .collect();
 
-        if selection_row_count != file_row_count {
+                if let Some(v) = &mut mixed {
+                    v.push(rg_sel);
+                } else if let Some(lead) = leading.as_mut() {
+                    if lead.skip == rg_sel.skip {
+                        // Merge adjacent same-direction pieces (e.g. a selector
+                        // split at a row-group boundary has the same direction as
+                        // its continuation).
+                        lead.row_count += rg_sel.row_count;
+                    } else {
+                        mixed = Some(vec![*lead, rg_sel]);
+                    }
+                } else {
+                    leading = Some(rg_sel);
+                }
+
+                current = if take < sel.row_count {
+                    Some(RowSelector {
+                        row_count: sel.row_count - take,
+                        skip: sel.skip,
+                    })
+                } else {
+                    selector_iter.next()
+                };
+            }
+
+            let access = if selected == 0 {
+                RowGroupAccess::Skip
+            } else if skipped == 0 {
+                RowGroupAccess::Scan
+            } else {
+                // Both `selected > 0` and `skipped > 0` means a direction change
+                // occurred, which always initialises `mixed`.
+                RowGroupAccess::Selection(mixed.unwrap_or_default().into())
+            };
+            row_groups.push(access);
+        }
+
+        selection_rows += current.map_or(0, |s| s.row_count)
+            + selector_iter.map(|s| s.row_count).sum::<usize>();
+
+        if selection_rows != file_rows {
             return exec_err!(
-                "Invalid Parquet RowSelection. File has {file_row_count} rows, \
-                but selection specifies {selection_row_count} rows."
+                "Invalid Parquet RowSelection. File has {file_rows} rows, \
+                but selection specifies {selection_rows} rows."
             );
         }
 
