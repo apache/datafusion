@@ -2593,6 +2593,15 @@ impl ScalarValue {
             .and_then(|d| usize::try_from(d).ok())
     }
 
+    /// Helper to convert a rounded float distance to u64, returning None if it exceeds u64::MAX, is negative, or is not finite.
+    fn rounded_float_distance_u64(diff: f64) -> Option<u64> {
+        if diff.is_finite() && diff >= 0.0 && diff < u64::MAX as f64 {
+            Some(diff as u64)
+        } else {
+            None
+        }
+    }
+
     /// Absolute distance between two numeric values (of the same type). This method will return
     /// None if either one of the arguments are null. It might also return None if the resulting
     /// distance is greater than [`u64::MAX`]. If the type is a float, then the distance will be
@@ -2612,27 +2621,15 @@ impl ScalarValue {
             // TODO: we might want to look into supporting ceil/floor here for floats.
             (Self::Float16(Some(l)), Self::Float16(Some(r))) => {
                 let diff = (f16::to_f32(*l) - f16::to_f32(*r)).abs().round();
-                if diff <= u64::MAX as f32 {
-                    Some(diff as u64)
-                } else {
-                    None
-                }
+                Self::rounded_float_distance_u64(diff as f64)
             }
             (Self::Float32(Some(l)), Self::Float32(Some(r))) => {
                 let diff = (l - r).abs().round();
-                if diff <= u64::MAX as f32 {
-                    Some(diff as u64)
-                } else {
-                    None
-                }
+                Self::rounded_float_distance_u64(diff as f64)
             }
             (Self::Float64(Some(l)), Self::Float64(Some(r))) => {
                 let diff = (l - r).abs().round();
-                if diff <= u64::MAX as f64 {
-                    Some(diff as u64)
-                } else {
-                    None
-                }
+                Self::rounded_float_distance_u64(diff)
             }
             (Self::Date32(Some(l)), Self::Date32(Some(r))) => Some(l.abs_diff(*r) as u64),
             (Self::Date64(Some(l)), Self::Date64(Some(r))) => Some(l.abs_diff(*r)),
@@ -9633,6 +9630,22 @@ mod tests {
         let rhs = ScalarValue::Float64(Some(1.9e19));
         assert_eq!(lhs.distance_u64(&rhs), None);
 
+        // exact 2^64 boundary (18446744073709551616.0) is greater than u64::MAX, so it should return None
+        let exact_2_64_f64 = ScalarValue::Float64(Some(18446744073709551616.0));
+        assert_eq!(lhs.distance_u64(&exact_2_64_f64), None);
+
+        // exact 2^64 boundary as Float32 should also return None
+        let lhs_f32 = ScalarValue::Float32(Some(0.0));
+        let exact_2_64_f32 = ScalarValue::Float32(Some(18446744073709551616.0));
+        assert_eq!(lhs_f32.distance_u64(&exact_2_64_f32), None);
+
+        // largest float32 value below 2^64 (2^64 - 2^41 = 18446741874686296064.0) should fit
+        let below_2_64_f32 = ScalarValue::Float32(Some(18446741874686296064.0));
+        assert_eq!(
+            lhs_f32.distance_u64(&below_2_64_f32),
+            Some(18446741874686296064)
+        );
+
         // Inf, NegInf, NaN
         let inf = ScalarValue::Float64(Some(f64::INFINITY));
         let neg_inf = ScalarValue::Float64(Some(f64::NEG_INFINITY));
@@ -9640,6 +9653,21 @@ mod tests {
         assert_eq!(lhs.distance_u64(&inf), None);
         assert_eq!(lhs.distance_u64(&neg_inf), None);
         assert_eq!(lhs.distance_u64(&nan), None);
+
+        let inf_f32 = ScalarValue::Float32(Some(f32::INFINITY));
+        let neg_inf_f32 = ScalarValue::Float32(Some(f32::NEG_INFINITY));
+        let nan_f32 = ScalarValue::Float32(Some(f32::NAN));
+        assert_eq!(lhs_f32.distance_u64(&inf_f32), None);
+        assert_eq!(lhs_f32.distance_u64(&neg_inf_f32), None);
+        assert_eq!(lhs_f32.distance_u64(&nan_f32), None);
+
+        let lhs_f16 = ScalarValue::Float16(Some(f16::ZERO));
+        let inf_f16 = ScalarValue::Float16(Some(f16::INFINITY));
+        let neg_inf_f16 = ScalarValue::Float16(Some(f16::NEG_INFINITY));
+        let nan_f16 = ScalarValue::Float16(Some(f16::NAN));
+        assert_eq!(lhs_f16.distance_u64(&inf_f16), None);
+        assert_eq!(lhs_f16.distance_u64(&neg_inf_f16), None);
+        assert_eq!(lhs_f16.distance_u64(&nan_f16), None);
 
         // 5. Date and Timestamp boundaries
         // Date32: i32::MIN to i32::MAX
