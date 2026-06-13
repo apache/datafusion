@@ -145,12 +145,15 @@ where
 
 /// Computes a binary math function for input arrays using a specified function
 /// and applies rescaling to given precision and scale.
-/// Deprecated. Use `calculate_binary_decimal_math_cast` instead
 /// Generic types:
 /// - `L`: Left array decimal type
 /// - `R`: Right array primitive type
 /// - `O`: Output array decimal type
 /// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
+#[deprecated(
+    since = "55.0.0",
+    note = "Use `calculate_binary_decimal_math_cast` instead"
+)]
 pub fn calculate_binary_decimal_math<L, R, O, F>(
     left: &dyn Array,
     right: &ColumnarValue,
