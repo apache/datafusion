@@ -276,6 +276,13 @@ pub struct PlannerContext {
     set_expr_left_schema: Option<DFSchemaRef>,
     /// The parameters of all lambdas seen so far
     lambda_parameters: HashMap<String, FieldRef>,
+    /// Depth of the SQL expression currently being planned, relative to the
+    /// top-level expression. Used to reject pathologically deep expression
+    /// trees (e.g. a long `a OR b OR c OR ...` chain) before they overflow the
+    /// stack in later recursive passes such as `Expr::clone`. Nested
+    /// expressions re-enter the planner, so this base depth accumulates across
+    /// those recursive calls rather than resetting per expression.
+    expr_depth: usize,
 }
 
 impl Default for PlannerContext {
@@ -295,6 +302,7 @@ impl PlannerContext {
             create_table_schema: None,
             set_expr_left_schema: None,
             lambda_parameters: HashMap::new(),
+            expr_depth: 0,
         }
     }
 
@@ -355,6 +363,18 @@ impl PlannerContext {
 
     pub fn table_schema(&self) -> Option<DFSchemaRef> {
         self.create_table_schema.clone()
+    }
+
+    /// The depth of the SQL expression currently being planned, relative to the
+    /// top-level expression. See [`PlannerContext::expr_depth`].
+    pub(crate) fn expr_depth(&self) -> usize {
+        self.expr_depth
+    }
+
+    /// Sets the base expression depth, returning the previous value so callers
+    /// can restore it once a nested expression has been planned.
+    pub(crate) fn set_expr_depth(&mut self, depth: usize) -> usize {
+        std::mem::replace(&mut self.expr_depth, depth)
     }
 
     // Return a clone of the outer FROM schema

@@ -54,6 +54,13 @@ mod substring;
 mod unary_op;
 mod value;
 
+/// Multiplier applied to `datafusion.sql_parser.recursion_limit` to bound the
+/// depth of a binary-operator expression tree. A flat operator chain such as
+/// `a OR b OR c OR ...` only consumes a single level of parser recursion yet
+/// produces a tree whose depth equals the chain length, so the planner's limit
+/// is much larger than the parser's nesting limit.
+const EXPR_DEPTH_LIMIT_MULTIPLIER: usize = 10;
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn sql_expr_to_logical_expr_with_alias(
         &self,
@@ -75,35 +82,75 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         enum StackEntry {
-            SQLExpr(Box<SQLExpr>),
+            // A SQL expression to plan, together with the depth of its node in
+            // the overall expression tree.
+            SQLExpr(Box<SQLExpr>, usize),
             Operator(BinaryOperator),
         }
+
+        // Maximum depth of a binary-operator expression tree. While the tree is
+        // built iteratively here (so building it never overflows), later passes
+        // such as the derived `Expr::clone`, `Drop`, and the optimizer recurse
+        // over it and would overflow the stack on a pathologically deep tree
+        // (e.g. a long `a OR b OR c OR ...` chain). We reject such trees with a
+        // planning error instead of crashing.
+        //
+        // sqlparser's `recursion_limit` only guards *nested* expressions
+        // (`(((...)))`); flat, equal-precedence chains are parsed iteratively
+        // and bypass it, so we apply our own limit here. It is derived from
+        // `recursion_limit` so it remains user-configurable, but scaled up:
+        // a flat chain consumes a single level of parser recursion yet produces
+        // a tree whose depth equals the chain length, so the two limits live on
+        // very different scales.
+        let max_expr_depth = self
+            .context_provider
+            .options()
+            .sql_parser
+            .recursion_limit
+            .saturating_mul(EXPR_DEPTH_LIMIT_MULTIPLIER);
 
         // Virtual stack machine to convert SQLExpr to Expr
         // This allows visiting the expr tree in a depth-first manner which
         // produces expressions in postfix notations, i.e. `a + b` => `a b +`.
         // See https://github.com/apache/datafusion/issues/1444
-        let mut stack = vec![StackEntry::SQLExpr(Box::new(sql))];
+        //
+        // Nested expressions (parentheses, function arguments, ...) re-enter
+        // this method, so the running depth is seeded from `planner_context`
+        // and accumulates across those recursive calls rather than resetting.
+        let base_depth = planner_context.expr_depth();
+        let mut stack = vec![StackEntry::SQLExpr(Box::new(sql), base_depth + 1)];
         let mut eval_stack = vec![];
 
         while let Some(entry) = stack.pop() {
             match entry {
-                StackEntry::SQLExpr(sql_expr) => {
+                StackEntry::SQLExpr(sql_expr, depth) => {
+                    if depth > max_expr_depth {
+                        return plan_err!(
+                            "Expression nesting depth {depth} exceeds the limit of \
+                             {max_expr_depth} (controlled by the \
+                             `datafusion.sql_parser.recursion_limit` setting)"
+                        );
+                    }
                     match *sql_expr {
                         SQLExpr::BinaryOp { left, op, right } => {
                             // Note the order that we push the entries to the stack
                             // is important. We want to visit the left node first.
                             stack.push(StackEntry::Operator(op));
-                            stack.push(StackEntry::SQLExpr(right));
-                            stack.push(StackEntry::SQLExpr(left));
+                            stack.push(StackEntry::SQLExpr(right, depth + 1));
+                            stack.push(StackEntry::SQLExpr(left, depth + 1));
                         }
                         _ => {
+                            // Thread the current depth through so any nested
+                            // expression planned by `_internal` continues to
+                            // accumulate from here.
+                            let prev_depth = planner_context.set_expr_depth(depth);
                             let expr = self.sql_expr_to_logical_expr_internal(
                                 *sql_expr,
                                 schema,
                                 planner_context,
-                            )?;
-                            eval_stack.push(expr);
+                            );
+                            planner_context.set_expr_depth(prev_depth);
+                            eval_stack.push(expr?);
                         }
                     }
                 }
@@ -1367,6 +1414,7 @@ mod tests {
     use sqlparser::parser::Parser;
 
     use datafusion_common::TableReference;
+    use datafusion_common::assert_contains;
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{
@@ -1457,31 +1505,41 @@ mod tests {
         )))
     }
 
+    /// Plan a flat `column1 = 'value0' OR ... OR column1 = 'valueN'` chain of
+    /// `num_expr` predicates, with the expression-depth limit raised high enough
+    /// that the chain is accepted. Returns the planning result.
+    fn plan_or_chain(num_expr: usize) -> Result<Expr> {
+        let schema = DFSchema::empty();
+        let mut planner_context = PlannerContext::default();
+
+        let expr_str = (0..num_expr)
+            .map(|i| format!("column1 = 'value{i:?}'"))
+            .collect::<Vec<String>>()
+            .join(" OR ");
+
+        let dialect = GenericDialect {};
+        let mut parser = Parser::new(&dialect)
+            .try_with_sql(expr_str.as_str())
+            .unwrap();
+        let sql_expr = parser.parse_expr().unwrap();
+
+        let mut context_provider = TestContextProvider::new();
+        // Raise the limit so the iterative builder is exercised at this depth
+        // without tripping the depth guard (the guard itself is covered by
+        // `test_expr_depth_limit_*`).
+        context_provider.options.sql_parser.recursion_limit = num_expr + 1;
+        let sql_to_rel = SqlToRel::new(&context_provider);
+
+        sql_to_rel.sql_expr_to_logical_expr(sql_expr, &schema, &mut planner_context)
+    }
+
     macro_rules! test_stack_overflow {
         ($name:ident, $num_expr:expr) => {
             #[test]
             fn $name() {
-                let schema = DFSchema::empty();
-                let mut planner_context = PlannerContext::default();
-
-                let expr_str = (0..$num_expr)
-                    .map(|i| format!("column1 = 'value{:?}'", i))
-                    .collect::<Vec<String>>()
-                    .join(" OR ");
-
-                let dialect = GenericDialect {};
-                let mut parser = Parser::new(&dialect)
-                    .try_with_sql(expr_str.as_str())
-                    .unwrap();
-                let sql_expr = parser.parse_expr().unwrap();
-
-                let context_provider = TestContextProvider::new();
-                let sql_to_rel = SqlToRel::new(&context_provider);
-
-                // Should not stack overflow
-                sql_to_rel
-                    .sql_expr_to_logical_expr(sql_expr, &schema, &mut planner_context)
-                    .unwrap();
+                // Building the tree is iterative, so even very deep chains must
+                // not overflow the stack here (see issue #1444).
+                plan_or_chain($num_expr).unwrap();
             }
         };
     }
@@ -1494,6 +1552,71 @@ mod tests {
     test_stack_overflow!(test_stack_overflow_2048, 2048);
     test_stack_overflow!(test_stack_overflow_4096, 4096);
     test_stack_overflow!(test_stack_overflow_8192, 8192);
+
+    /// Plan `sql` as an expression against an empty schema using the default
+    /// configuration (so the default expression-depth limit applies).
+    fn plan_expr_with_default_limit(sql: &str) -> Result<Expr> {
+        let schema = DFSchema::empty();
+        let mut planner_context = PlannerContext::default();
+
+        let dialect = GenericDialect {};
+        let mut parser = Parser::new(&dialect).try_with_sql(sql).unwrap();
+        let sql_expr = parser.parse_expr().unwrap();
+
+        let context_provider = TestContextProvider::new();
+        let sql_to_rel = SqlToRel::new(&context_provider);
+        sql_to_rel.sql_expr_to_logical_expr(sql_expr, &schema, &mut planner_context)
+    }
+
+    // The default expression-depth limit is `recursion_limit * 10`.
+    const DEFAULT_EXPR_DEPTH_LIMIT: usize = 50 * EXPR_DEPTH_LIMIT_MULTIPLIER;
+
+    #[test]
+    fn test_expr_depth_limit_within_limit() {
+        // A flat chain of N predicates produces a tree of depth N + 1, so the
+        // deepest chain accepted by the default limit has
+        // `DEFAULT_EXPR_DEPTH_LIMIT - 1` predicates.
+        plan_or_chain(DEFAULT_EXPR_DEPTH_LIMIT - 1).unwrap();
+    }
+
+    #[test]
+    fn test_expr_depth_limit_exceeded_returns_error() {
+        // A pathologically deep chain must fail gracefully with a planning
+        // error rather than overflowing the stack.
+        let expr_str = (0..DEFAULT_EXPR_DEPTH_LIMIT + 10)
+            .map(|i| format!("column1 = 'value{i:?}'"))
+            .collect::<Vec<String>>()
+            .join(" OR ");
+        let err = plan_expr_with_default_limit(&expr_str).unwrap_err();
+        assert_contains!(err.strip_backtrace(), "exceeds the limit");
+        assert_contains!(err.strip_backtrace(), "recursion_limit");
+    }
+
+    #[test]
+    fn test_expr_depth_limit_accumulates_across_nesting() {
+        // Depth must accumulate across nested sub-expressions; otherwise a deep
+        // tree could be assembled from many shallow chains and still overflow
+        // the stack downstream. Each level is a short chain whose left operand
+        // is the (parenthesised) previous level, so every level re-enters the
+        // planner and adds to the running depth. The chain length per level and
+        // the number of nesting levels both stay well under the parser's own
+        // nesting limit (`recursion_limit`, default 50), yet their product
+        // exceeds the expression-depth limit.
+        let per_level = 20;
+        let nesting = 30;
+        assert!(per_level * nesting > DEFAULT_EXPR_DEPTH_LIMIT);
+
+        let chain = (0..per_level)
+            .map(|i| format!("column1 = 'value{i:?}'"))
+            .collect::<Vec<String>>()
+            .join(" OR ");
+        let mut expr_str = chain.clone();
+        for _ in 0..nesting {
+            expr_str = format!("({expr_str}) OR {chain}");
+        }
+        let err = plan_expr_with_default_limit(&expr_str).unwrap_err();
+        assert_contains!(err.strip_backtrace(), "exceeds the limit");
+    }
     #[test]
     fn test_sql_to_expr_with_alias() {
         let schema = DFSchema::empty();
