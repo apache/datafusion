@@ -6626,6 +6626,142 @@ ORDER BY i;
 3 1
 4 NULL
 
+# Covariance/correlation sliding-window regression test. Verifies correct
+# results across row removals and a NULL-gap empty-frame transition.
+query IRRR
+SELECT
+  column1,
+  covar_pop(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  covar_samp(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  corr(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0, 5.0),
+    (2, NULL, NULL),
+    (3, NULL, NULL),
+    (4, 30.0, 10.0),
+    (5, 40.0, 20.0),
+    (6, 50.0, 10.0)
+);
+----
+1 0 NULL NULL
+2 0 NULL NULL
+3 NULL NULL NULL
+4 0 NULL NULL
+5 25 50 1
+6 -25 -50 -1
+
+# Multi-row covariance/correlation sliding-window regression test. Verifies
+# correct accumulation when valid rows enter the frame after a reset.
+query IRRR
+SELECT
+  column1,
+  covar_pop(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  ),
+  covar_samp(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  ),
+  corr(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0, 5.0),
+    (2, NULL, NULL),
+    (3, NULL, NULL),
+    (4, 30.0, 10.0),
+    (5, 40.0, 20.0),
+    (6, 50.0, 10.0)
+);
+----
+1 0 NULL NULL
+2 0 NULL NULL
+3 0 NULL NULL
+4 0 NULL NULL
+5 25 50 1
+6 0 0 0
+
+# Covariance/correlation sliding-window regression test. Rows with NULL in
+# either input column must not contribute to the aggregate state.
+query IRRR
+SELECT
+  column1,
+  covar_pop(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+  ),
+  covar_samp(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+  ),
+  corr(column2, column3) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0, 5.0),
+    (2, 20.0, NULL),
+    (3, NULL, 15.0),
+    (4, 30.0, 10.0),
+    (5, 40.0, 20.0)
+);
+----
+1 0 NULL NULL
+2 0 NULL NULL
+3 0 NULL NULL
+4 25 50 1
+5 25 50 1
+
+# Variance/stddev sliding-window regression test. Verifies that retracting
+# the last valid row resets the aggregate state.
+query IRRRR
+SELECT
+  column1,
+  var_pop(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  var_samp(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  stddev_pop(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  ),
+  stddev_samp(column2) OVER (
+    ORDER BY column1
+    ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+  )
+FROM (
+  VALUES
+    (1, 10.0),
+    (2, NULL),
+    (3, NULL),
+    (4, 30.0),
+    (5, 40.0)
+);
+----
+1 0 NULL 0 NULL
+2 0 NULL 0 NULL
+3 NULL NULL NULL NULL
+4 0 NULL 0 NULL
+5 25 50 5 7.071067811865
+
 # Decimal variant — the integer-division path would otherwise panic on an
 # empty frame.
 query IR
