@@ -220,7 +220,8 @@ impl ParquetAccessPlan {
         selection: RowSelection,
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<Self> {
-        let mut selector_iter = selection.iter().copied();
+        let selectors: Vec<RowSelector> = selection.into();
+        let mut selector_iter = selectors.into_iter();
         let mut current = selector_iter.next();
 
         let mut selection_rows = 0usize;
