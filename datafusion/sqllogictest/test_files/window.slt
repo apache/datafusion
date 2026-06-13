@@ -5981,6 +5981,41 @@ FROM table_distinct_sum_nulls;
 5 5
 
 
+# SUM(DISTINCT) over sliding (bounded) window frames is only implemented
+# for Int64. Other SUM-supported input types must fail with a clear
+# capability error instead of an accumulator-internal one.
+statement ok
+CREATE TABLE table_distinct_sum_types(ts INT, f DOUBLE, d DECIMAL(10, 2)) AS VALUES
+  (1, 1.5, 1.50), (2, 2.5, 2.50), (3, 1.5, 1.50);
+
+query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got Float64
+SELECT SUM(DISTINCT f) OVER (
+  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+) FROM table_distinct_sum_types;
+
+query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got Decimal128\(10, 2\)
+SELECT SUM(DISTINCT d) OVER (
+  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+) FROM table_distinct_sum_types;
+
+query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got UInt64
+SELECT SUM(DISTINCT arrow_cast(ts, 'UInt64')) OVER (
+  ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+) FROM table_distinct_sum_types;
+
+# Unbounded frames take the regular distinct-sum path and keep
+# supporting all SUM input types.
+query R
+SELECT SUM(DISTINCT f) OVER (ORDER BY ts) FROM table_distinct_sum_types;
+----
+1.5
+4
+4
+
+statement ok
+DROP TABLE table_distinct_sum_types;
+
+
 # FILTER clause with window functions
 
 # Verify FILTER clause with non-aggregate window functions fails with a clear message
