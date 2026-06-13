@@ -19,7 +19,6 @@
 
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_plan::projection::ProjectionExprs;
-use std::any::Any;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -262,10 +261,6 @@ impl FileSource for CsvSource {
         Ok(opener)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
     }
@@ -419,9 +414,6 @@ impl FileOpener for CsvOpener {
                         let mut timer = baseline_metrics.elapsed_compute().timer();
                         let result = reader.next();
                         timer.stop();
-                        if let Some(Ok(ref batch)) = result {
-                            baseline_metrics.record_output(batch.num_rows());
-                        }
                         result
                     });
 
@@ -438,14 +430,6 @@ impl FileOpener for CsvOpener {
                         input,
                         DecoderDeserializer::new(CsvDecoder::new(decoder)),
                     );
-
-                    let baseline_metrics = baseline_metrics.clone();
-                    let stream = stream.map(move |res| {
-                        if let Ok(ref batch) = res {
-                            baseline_metrics.record_output(batch.num_rows());
-                        }
-                        res
-                    });
 
                     Ok(stream.map_err(Into::into).boxed())
                 }
