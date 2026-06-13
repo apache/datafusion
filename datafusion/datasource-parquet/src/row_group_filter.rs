@@ -191,7 +191,7 @@ impl RowGroupAccessPlanFilter {
         for &idx in self.access_plan.row_group_indexes().iter() {
             if self.access_plan.is_fully_matched(idx) {
                 let row_group_row_count = match &self.access_plan.inner()[idx] {
-                    RowGroupAccess::Skip => 0,
+                    RowGroupAccess::Skip => continue,
                     RowGroupAccess::Scan => rg_metadata[idx].num_rows() as usize,
                     RowGroupAccess::Selection(selection) => selection.row_count(),
                 };
