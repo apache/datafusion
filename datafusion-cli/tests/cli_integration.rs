@@ -311,6 +311,56 @@ fn test_cli_stdin_location_rejected_when_sql_comes_from_stdin() {
     );
 }
 
+/// `-f /dev/stdin` reads the SQL script from stdin, exactly like the piped
+/// REPL, so stdin still cannot double as a `LOCATION '/dev/stdin'` data source.
+/// The offending statement must fail with the same clear error, and later
+/// statements in the script must still run.
+///
+/// `/dev/stdin` only passes the `-f` file check when stdin is a redirected
+/// regular file (a pipe is not `is_file()`), so the binary is driven with a
+/// temp script file as its stdin rather than a pipe.
+#[cfg(unix)]
+#[test]
+fn test_cli_dash_f_stdin_location_rejected() {
+    use std::process::Stdio;
+
+    let script = env::temp_dir().join(format!(
+        "datafusion_cli_dash_f_stdin_{}.sql",
+        std::process::id()
+    ));
+    fs::write(
+        &script,
+        b"CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin';\n\
+          SELECT 123 + 456;\n",
+    )
+    .unwrap();
+    let stdin = fs::File::open(&script).unwrap();
+
+    let output = cli()
+        .args(["-q", "-f", "/dev/stdin"])
+        .stdin(Stdio::from(stdin))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to spawn datafusion-cli");
+
+    let _ = fs::remove_file(&script);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("SQL commands"),
+        "expected a clear error about stdin carrying SQL.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // The statement after the failed CREATE must still execute rather than
+    // being consumed as table data.
+    assert!(
+        stdout.contains("579"),
+        "expected the following statement to still run.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
 /// Spawns the real `datafusion-cli` binary, pipes `stdin` into it, and returns
 /// its stdout after asserting a successful exit.
 #[cfg(unix)]

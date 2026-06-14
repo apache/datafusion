@@ -42,6 +42,22 @@ use url::Url;
 #[derive(Debug)]
 pub struct StdinCarriesCommands;
 
+/// Filesystem paths that refer to the process's standard input.
+///
+/// These are intentionally limited to the well known pseudo-files exposed by
+/// the operating system so that ordinary files are never accidentally treated
+/// as stdin.
+const STDIN_LOCATIONS: [&str; 3] = ["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
+
+/// Returns `true` if `path` refers to the process's standard input.
+///
+/// Re-exported as [`crate::object_storage::is_stdin_location`] so the CLI entry
+/// point can detect when it reads its SQL from stdin via `-f /dev/stdin` and
+/// avoid also offering stdin as a `LOCATION '/dev/stdin'` data source.
+pub fn is_stdin_location(path: &str) -> bool {
+    STDIN_LOCATIONS.contains(&path)
+}
+
 /// Utilities for exposing the process's standard input as an object store.
 ///
 /// stdin is surfaced as a `stdin://` object store and dispatched alongside the
@@ -54,18 +70,6 @@ impl StdinUtils {
     /// The URL scheme used to expose stdin as an object store, mirroring how
     /// `s3`, `gs`, `http`, etc. are addressed.
     pub(crate) const SCHEME: &'static str = "stdin";
-
-    /// Filesystem paths that refer to the process's standard input.
-    ///
-    /// These are intentionally limited to the well known pseudo-files exposed
-    /// by the operating system so that ordinary files are never accidentally
-    /// treated as stdin.
-    const LOCATIONS: [&'static str; 3] = ["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
-
-    /// Returns `true` if `location` refers to the process's standard input.
-    fn is_stdin_location(location: &str) -> bool {
-        Self::LOCATIONS.contains(&location)
-    }
 
     /// Rewrites the well known stdin pseudo-paths (e.g. `/dev/stdin`) to a
     /// canonical `stdin://` URL so that reading from standard input flows
@@ -82,7 +86,7 @@ impl StdinUtils {
         location: &str,
         format: Option<&ConfigFileType>,
     ) -> String {
-        if !Self::is_stdin_location(location) {
+        if !is_stdin_location(location) {
             return location.to_string();
         }
 

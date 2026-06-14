@@ -34,10 +34,10 @@ use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::{
     ListFilesCacheFunc, MetadataCacheFunc, ParquetMetadataFunc, StatisticsCacheFunc,
 };
-use datafusion_cli::object_storage::StdinCarriesCommands;
 use datafusion_cli::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
 };
+use datafusion_cli::object_storage::{StdinCarriesCommands, is_stdin_location};
 use datafusion_cli::{
     DATAFUSION_CLI_VERSION, exec,
     pool_type::PoolType,
@@ -164,6 +164,15 @@ impl Args {
     /// stdin — interactively or piped.
     fn repl_mode(&self) -> bool {
         self.command.is_empty() && self.file.is_empty()
+    }
+
+    /// Whether the CLI consumes stdin for its own SQL input. This covers the
+    /// REPL (no -c/-f, reading SQL interactively or piped) as well as an
+    /// explicit `-f /dev/stdin` (or the other stdin pseudo-paths), where the
+    /// SQL file *is* stdin. In either case stdin is already spoken for and
+    /// cannot also back a `LOCATION '/dev/stdin'` table.
+    fn reads_sql_from_stdin(&self) -> bool {
+        self.repl_mode() || self.file.iter().any(|f| is_stdin_location(f))
     }
 }
 
@@ -343,10 +352,10 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
     let mut session_config =
         SessionConfig::from(config_options).with_information_schema(true);
 
-    if args.repl_mode() {
-        // In the REPL stdin carries the SQL (including for any rc file run
-        // before it), so it cannot also serve as a data source for
-        // `LOCATION '/dev/stdin'`.
+    if args.reads_sql_from_stdin() {
+        // When stdin carries the session's SQL — the REPL (including any rc
+        // file run before it) or an explicit `-f /dev/stdin` — it cannot also
+        // serve as a data source for `LOCATION '/dev/stdin'`.
         session_config = session_config.with_extension(Arc::new(StdinCarriesCommands));
     }
 

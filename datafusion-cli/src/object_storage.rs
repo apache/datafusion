@@ -18,7 +18,7 @@
 pub mod instrumented;
 pub(crate) mod stdin;
 
-pub use stdin::StdinCarriesCommands;
+pub use stdin::{StdinCarriesCommands, is_stdin_location};
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
