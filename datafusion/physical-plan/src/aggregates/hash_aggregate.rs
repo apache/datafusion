@@ -45,12 +45,12 @@ use crate::metrics::{
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
 
-/// Hash aggregation uses a 2-stage (partial and final) hash aggregation, this stream
-/// is for the partial stage.
+/// Hash aggregation is implemented in two stages: partial and final. This
+/// stream implements the partial stage.
 ///
 /// # Example
 ///
-/// select k, avg(v) from t group by k;
+/// SELECT k, AVG(v) FROM t GROUP BY k;
 ///
 /// ## Plan
 /// AggregateExec(stage=final)
@@ -59,15 +59,18 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 ///
 /// ## Partial Stage Behavior
 /// Input: raw rows
-/// Output: partial states for all groups (e.g. for avg(x), it's sum(x), count(x))
+/// Output: partial states for all groups (for example, `AVG(x)` emits `SUM(x)`
+/// and `COUNT(x)`)
 ///
 /// ## Final Stage Behavior
 /// Input: partial states
-/// Output: results for all groups (e.g. for avg(x), it's avg(x) calculated from the state)
+/// Output: results for all groups (for example, `AVG(x)` calculated from the
+/// state)
 ///
 /// # Optimization: DISTINCT LIMIT Soft Limit
 ///
-/// This optimization applies to both [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`]
+/// This optimization applies to both [`PartialHashAggregateStream`] and
+/// [`FinalHashAggregateStream`].
 ///
 /// Unordered distinct queries such as:
 ///
@@ -179,8 +182,8 @@ impl PartialHashAggregateState {
     }
 }
 
-/// Hash aggregation uses a 2-stage (partial and final) hash aggregation, this stream
-/// is for the final stage.
+/// Hash aggregation is implemented in two stages: partial and final. This
+/// stream implements the final stage.
 ///
 /// See [`PartialHashAggregateStream`] for details.
 pub(crate) struct FinalHashAggregateStream {
@@ -196,7 +199,7 @@ pub(crate) struct FinalHashAggregateStream {
     /// Memory reservation for group keys and accumulators.
     reservation: MemoryReservation,
 
-    /// See comments for the same variable in [`PartialHashAggregateStream`]
+    /// See comments for the same variable in [`PartialHashAggregateStream`].
     group_values_soft_limit: Option<usize>,
 
     /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
@@ -205,7 +208,8 @@ pub(crate) struct FinalHashAggregateStream {
 }
 
 /// States for final hash aggregation processing.
-// Typestate pattern is used, in case the inner logic become more complex in the future.
+// The typestate pattern is used in case the inner logic becomes more complex in
+// the future.
 enum FinalHashAggregateState {
     ReadingInput {
         hash_table: AggregateHashTable<Final>,
@@ -362,6 +366,8 @@ impl PartialHashAggregateStream {
 
     /// Handle ReadingInput state - aggregate input batches into the hash table.
     ///
+    /// See comments at `poll_next()` for details.
+    ///
     /// Returns the next operator state with control flow decision.
     fn handle_reading_input(
         &mut self,
@@ -506,6 +512,8 @@ impl PartialHashAggregateStream {
 
     /// Handle ProducingOutput state - emit partial aggregate state batches.
     ///
+    /// See comments at `poll_next()` for details.
+    ///
     /// Returns the next operator state with control flow decision.
     fn handle_producing_output(
         &mut self,
@@ -554,8 +562,8 @@ impl PartialHashAggregateStream {
             }
             Ok(None) => {
                 let _ = self.reservation.try_resize(0);
-                // If in the previous `Aggregating` stage it has decided to skip partial
-                // aggregation, go the `SkipAggregation` stage; otherwise finish.
+                // If the previous `Aggregating` stage decided to skip partial
+                // aggregation, go to the `SkippingAggregation` stage; otherwise finish.
                 let next_state = match original_state {
                     PartialHashAggregateState::ProducingOutput {
                         skip_hash_table: Some(hash_table),
@@ -574,6 +582,8 @@ impl PartialHashAggregateStream {
     }
 
     /// Handle SkippingAggregation state - convert raw input directly to partial states.
+    ///
+    /// See comments at `poll_next()` for details.
     ///
     /// Returns the next operator state with control flow decision.
     fn handle_skipping_aggregation(
@@ -634,31 +644,52 @@ impl Stream for PartialHashAggregateStream {
     ///
     /// See comments in [`PartialHashAggregateStream`] for high-level ideas.
     ///
-    /// ============================
     /// State transition graph:
-    /// ============================
     ///
-    /// (start) --> ReadingInput
-    /// ----------------------------
-    /// ReadingInput -> ReadingInput (after aggregating an input batch)
-    /// ReadingInput -> ProducingOutput(skip=None) (input exhausted or soft
-    /// limit reached)
-    /// ReadingInput -> ProducingOutput(skip=Some) (partial skip triggered)
+    /// ```text
+    /// (start)
+    ///   -> ReadingInput
+    ///      The stream starts by polling input and aggregating batches into the
+    ///      in-memory hash table.
     ///
-    /// ProducingOutput(skip=None) -> ProducingOutput(skip=None)
-    /// (after yielding one accumulated output batch)
-    /// ProducingOutput(skip=None) -> Done (all accumulated output emitted)
+    /// ReadingInput
+    ///   -> ReadingInput
+    ///      Aggregate one batch, update the inner aggregate hash table, and
+    ///      continue with the next input batch.
+    ///   -> ProducingOutput(skip=None)
+    ///      Input was exhausted, or the soft group limit was reached. Move to
+    ///      the next state to start outputting.
+    ///   -> ProducingOutput(skip=Some)
+    ///      Partial skip aggregation was triggered. First move to the
+    ///      `ProducingOutput` state to drain the accumulated state, then move to
+    ///      the `SkippingAggregation` state to convert input directly to partial
+    ///      state without aggregation.
     ///
-    /// ProducingOutput(skip=Some) -> ProducingOutput(skip=Some)
-    /// (after yielding one accumulated output batch)
-    /// ProducingOutput(skip=Some) -> SkippingAggregation (all accumulated output
-    /// emitted)
+    /// ProducingOutput(skip=None)
+    ///   -> ProducingOutput(skip=None)
+    ///      One accumulated output batch was yielded, repeat to continue producing
+    ///      output incrementally.
+    ///   -> Done
+    ///      All accumulated output was emitted.
     ///
-    /// SkippingAggregation -> SkippingAggregation (after yielding one
-    /// `convert_to_state` batch)
-    /// SkippingAggregation -> Done (input exhausted)
-    /// ----------------------------
-    /// Done -> (end)
+    /// ProducingOutput(skip=Some)
+    ///   -> ProducingOutput(skip=Some)
+    ///      One accumulated output batch was yielded, repeat to continue producing
+    ///      output incrementally.
+    ///   -> SkippingAggregation
+    ///      All accumulated output was emitted. Continue by converting raw
+    ///      input batches directly to partial aggregate state.
+    ///
+    /// SkippingAggregation
+    ///   -> SkippingAggregation
+    ///      One `convert_to_state` batch was yielded; repeat to continue
+    ///      processing.
+    ///   -> Done
+    ///      Input was exhausted.
+    ///
+    /// Done
+    ///   -> (end)
+    /// ```
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -761,6 +792,8 @@ impl FinalHashAggregateStream {
 
     /// Handle ReadingInput state - aggregate partial state batches into the hash table.
     ///
+    /// See comments at `poll_next()` for details.
+    ///
     /// Returns the next operator state with control flow decision.
     fn handle_reading_input(
         &mut self,
@@ -838,6 +871,8 @@ impl FinalHashAggregateStream {
 
     /// Handle ProducingOutput state - emit final aggregate value batches.
     ///
+    /// See comments at `poll_next()` for details.
+    ///
     /// Returns the next operator state with control flow decision.
     fn handle_producing_output(
         &mut self,
@@ -887,20 +922,34 @@ impl Stream for FinalHashAggregateStream {
     ///
     /// See comments in [`FinalHashAggregateStream`] for high-level ideas.
     ///
-    /// ============================
     /// State transition graph:
-    /// ============================
     ///
-    /// (start) --> ReadingInput
-    /// ----------------------------
-    /// ReadingInput -> ReadingInput (after aggregating one partial-state input
-    /// batch)
-    /// ReadingInput -> ProducingOutput (input exhausted or soft limit reached)
+    /// ```text
+    /// (start)
+    ///   -> ReadingInput
+    ///      The stream starts by polling partial-state input and aggregating
+    ///      those states into the final hash table.
     ///
-    /// ProducingOutput -> ProducingOutput (after yielding one final output batch)
-    /// ProducingOutput -> Done (all final output emitted)
-    /// ----------------------------
-    /// Done -> (end)
+    /// ReadingInput
+    ///   -> ReadingInput
+    ///      Aggregate one partial-state input batch, update the inner aggregate
+    ///      hash table, and continue with the next input batch.
+    ///
+    ///   -> ProducingOutput
+    ///      Input was exhausted, or the soft group limit was reached. Move to
+    ///      the next state to start outputting final aggregate values.
+    ///
+    /// ProducingOutput
+    ///   -> ProducingOutput
+    ///      One final output batch was yielded; repeat to continue producing
+    ///      output incrementally.
+    ///
+    ///   -> Done
+    ///      All final output was emitted.
+    ///
+    /// Done
+    ///   -> (end)
+    /// ```
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut Context<'_>,
