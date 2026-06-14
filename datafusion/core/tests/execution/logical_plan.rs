@@ -71,6 +71,7 @@ async fn count_only_nulls() -> Result<()> {
                 order_by: vec![],
                 null_treatment: None,
             },
+            spans: Spans::new(),
         })],
     )?);
 

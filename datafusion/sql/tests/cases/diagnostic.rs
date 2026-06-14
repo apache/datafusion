@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_functions::string;
 use insta::assert_snapshot;
 use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
@@ -32,6 +33,27 @@ use datafusion_sql::{
 use regex::Regex;
 
 use crate::{MockContextProvider, MockSessionState};
+
+fn do_query_with_state(sql: &'static str, state: MockSessionState) -> Diagnostic {
+    let statement = DFParserBuilder::new(sql)
+        .build()
+        .expect("unable to create parser")
+        .parse_statement()
+        .expect("unable to parse query");
+    let options = ParserOptions {
+        collect_spans: true,
+        ..ParserOptions::default()
+    };
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new_with_options(&context, options);
+    match sql_to_rel.statement_to_plan(statement) {
+        Ok(_) => panic!("expected error"),
+        Err(err) => match err.diagnostic() {
+            Some(diag) => diag.clone(),
+            None => panic!("expected diagnostic, but got: {err}"),
+        },
+    }
+}
 
 fn do_query(sql: &'static str) -> Diagnostic {
     let statement = DFParserBuilder::new(sql)
@@ -481,6 +503,7 @@ fn test_syntax_error() -> Result<()> {
     }
 }
 
+
 #[test]
 fn test_eq_null_warning_in_where() -> Result<()> {
     let query = "SELECT * FROM person WHERE /*cmp*/first_name = /*null*/NULL/*null+cmp*/";
@@ -669,5 +692,18 @@ fn test_multiple_null_comparison_warnings() -> Result<()> {
         warnings[1].message,
         @"comparison with NULL using `<>` always evaluates to NULL"
     );
+    Ok(())
+}
+
+#[test]
+fn test_invalid_aggregate_function_argument_types() -> Result<()> {
+    let state = MockSessionState::default().with_aggregate_function(sum_udaf());
+    let query = "SELECT /*a*/sum/*a*/(first_name) FROM person";
+    let spans = get_spans(query);
+    let diag = do_query_with_state(query, state);
+    assert_snapshot!(diag.message, @"invalid argument type(s) for 'sum'");
+    assert_eq!(diag.span, Some(spans["a"]));
+    assert_snapshot!(diag.notes[0].message, @"called with argument type(s): Utf8");
+    assert_snapshot!(diag.helps[0].message, @"candidate function(s): sum(UserDefined)");
     Ok(())
 }

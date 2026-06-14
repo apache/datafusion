@@ -154,6 +154,7 @@ impl ExprPlanner for FieldAccessPlanner {
                                 order_by,
                                 null_treatment,
                             },
+                        ..
                     }) if is_array_agg(&func) => Ok(PlannerResult::Planned(
                         Expr::AggregateFunction(AggregateFunction::new_udf(
                             nth_value_udaf(),
