@@ -707,11 +707,11 @@ select gcd(-15::decimal(38, 0), -3::decimal(38, 0)), gcd(-15::decimal(38, 0), 3:
 ----
 3 3
 
-# floats are coerced to decimals with rounding
+# non-whole number case
 query RT
-select gcd(15.3::decimal(38, 0), 2.9::decimal(38, 0)), arrow_typeof(gcd(15.3::decimal(38, 0), 2.9::decimal(38, 0)));
+select gcd(15.3::decimal(38, 1), 2.9::decimal(38, 1)), arrow_typeof(gcd(15.3::decimal(38, 1), 2.9::decimal(38, 1)));
 ----
-3 Decimal128(38, 0)
+0.1 Decimal128(38, 1)
 
 # both decimal arguments are coerced to widest - decimal(38, 5), return type is that as well
 query RT
