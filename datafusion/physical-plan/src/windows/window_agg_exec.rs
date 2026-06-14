@@ -17,13 +17,19 @@
 
 //! Stream and channel implementations for window function expressions.
 
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
 use crate::execution_plan::{CardinalityEffect, EmissionType};
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
+};
+use crate::spill::get_record_batch_memory_size;
+use crate::spill::in_progress_spill_file::InProgressSpillFile;
+use crate::spill::spill_manager::SpillManager;
 use crate::stream::EmptyRecordBatchStream;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -36,14 +42,17 @@ use crate::{
 };
 
 use arrow::array::ArrayRef;
-use arrow::compute::{concat, concat_batches};
+use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::utils::{evaluate_partition_ranges, transpose};
-use datafusion_common::{Result, assert_eq_or_internal_err};
+use datafusion_common::utils::{evaluate_partition_ranges, get_row_at_idx};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+};
 use datafusion_execution::TaskContext;
+use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
@@ -264,14 +273,29 @@ impl ExecutionPlan for WindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context)?;
+        let input = self.input.execute(partition, Arc::clone(&context))?;
+        let input_schema = input.schema();
+        let can_spill = context.runtime_env().disk_manager.tmp_files_enabled();
+        let reservation = MemoryConsumer::new(format!("WindowAggStream[{partition}]"))
+            .with_can_spill(can_spill)
+            .register(context.memory_pool());
+        let spill_manager = SpillManager::new(
+            context.runtime_env(),
+            SpillMetrics::new(&self.metrics, partition),
+            Arc::clone(&input_schema),
+        )
+        .with_compression_type(context.session_config().spill_compression());
         let stream = Box::pin(WindowAggStream::new(
             Arc::clone(&self.schema),
+            input_schema,
             self.window_expr.clone(),
             input,
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
             self.ordered_partition_by_indices.clone(),
+            reservation,
+            spill_manager,
+            can_spill,
         )?);
         Ok(stream)
     }
@@ -315,27 +339,61 @@ fn compute_window_aggregates(
         .collect()
 }
 
+struct ActivePartition {
+    key: Vec<ScalarValue>,
+    in_memory_batches: Vec<RecordBatch>,
+    memory_bytes: usize,
+    spill_file: Option<InProgressSpillFile>,
+}
+
+enum CompletedPartition {
+    InMemory {
+        batches: Vec<RecordBatch>,
+        memory_bytes: usize,
+    },
+    Spilled {
+        spill_file: RefCountedTempFile,
+    },
+}
+
+struct SpillReadState {
+    stream: SendableRecordBatchStream,
+    batches: Vec<RecordBatch>,
+    memory_bytes: usize,
+}
+
 /// stream for window aggregation plan
 pub struct WindowAggStream {
     schema: SchemaRef,
+    input_schema: SchemaRef,
     input: SendableRecordBatchStream,
-    batches: Vec<RecordBatch>,
     finished: bool,
+    input_finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
+    reservation: MemoryReservation,
+    spill_manager: SpillManager,
+    can_spill: bool,
+    active_partition: Option<ActivePartition>,
+    completed_partitions: VecDeque<CompletedPartition>,
+    spill_read_state: Option<SpillReadState>,
 }
 
 impl WindowAggStream {
     /// Create a new WindowAggStream
     pub fn new(
         schema: SchemaRef,
+        input_schema: SchemaRef,
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
+        reservation: MemoryReservation,
+        spill_manager: SpillManager,
+        can_spill: bool,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
         assert_eq_or_internal_err!(
@@ -345,23 +403,66 @@ impl WindowAggStream {
         );
         Ok(Self {
             schema,
+            input_schema,
             input,
-            batches: vec![],
             finished: false,
+            input_finished: false,
             window_expr,
             baseline_metrics,
             partition_by_sort_keys,
             ordered_partition_by_indices,
+            reservation,
+            spill_manager,
+            can_spill,
+            active_partition: None,
+            completed_partitions: VecDeque::new(),
+            spill_read_state: None,
         })
     }
 
-    fn compute_aggregates(&self) -> Result<Option<RecordBatch>> {
+    fn compute_partition_aggregates(
+        &self,
+        batches: &[RecordBatch],
+    ) -> Result<Option<RecordBatch>> {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
-        let batch = concat_batches(&self.input.schema(), &self.batches)?;
+        let batch = concat_batches(&self.input_schema, batches)?;
         if batch.num_rows() == 0 {
             return Ok(None);
+        }
+
+        // combine with the original cols
+        // note the setup of window aggregates is that they newly calculated window
+        // expression results are always appended to the columns
+        let mut batch_columns = batch.columns().to_vec();
+        // calculate window cols
+        let columns = compute_window_aggregates(&self.window_expr, &batch)?;
+        batch_columns.extend_from_slice(&columns);
+        Ok(Some(RecordBatch::try_new(
+            Arc::clone(&self.schema),
+            batch_columns,
+        )?))
+    }
+
+    fn reserved_bytes_for_batch(batch: &RecordBatch) -> usize {
+        get_record_batch_memory_size(batch)
+    }
+
+    fn err_with_oom_context(e: DataFusionError) -> DataFusionError {
+        match e {
+            DataFusionError::ResourcesExhausted(_) => e.context(
+                "Not enough memory to buffer WindowAggExec partition. \
+                 Configure a spill-capable disk manager or increase \
+                 'datafusion.runtime.memory_limit'.",
+            ),
+            _ => e,
+        }
+    }
+
+    fn process_input_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        if batch.num_rows() == 0 {
+            return Ok(());
         }
 
         let partition_by_sort_keys = self
@@ -371,33 +472,306 @@ impl WindowAggStream {
             .collect::<Result<Vec<_>>>()?;
         let partition_points =
             evaluate_partition_ranges(batch.num_rows(), &partition_by_sort_keys)?;
-
-        let mut partition_results = vec![];
-        // Calculate window cols
-        for partition_point in partition_points {
-            let length = partition_point.end - partition_point.start;
-            partition_results.push(compute_window_aggregates(
-                &self.window_expr,
-                &batch.slice(partition_point.start, length),
-            )?)
-        }
-        let columns = transpose(partition_results)
+        let partition_key_columns = partition_by_sort_keys
             .iter()
-            .map(|elems| concat(&elems.iter().map(|x| x.as_ref()).collect::<Vec<_>>()))
-            .collect::<Vec<_>>()
-            .into_iter()
-            .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
+            .map(|sort_column| Arc::clone(&sort_column.values))
+            .collect::<Vec<_>>();
 
-        // combine with the original cols
-        // note the setup of window aggregates is that they newly calculated window
-        // expression results are always appended to the columns
-        let mut batch_columns = batch.columns().to_vec();
-        // calculate window cols
-        batch_columns.extend_from_slice(&columns);
-        Ok(Some(RecordBatch::try_new(
-            Arc::clone(&self.schema),
-            batch_columns,
-        )?))
+        for partition_point in partition_points {
+            if partition_point.is_empty() {
+                continue;
+            }
+
+            let key = if partition_key_columns.is_empty() {
+                vec![]
+            } else {
+                get_row_at_idx(&partition_key_columns, partition_point.start)?
+            };
+
+            self.ensure_active_partition(key)?;
+
+            let length = partition_point.end - partition_point.start;
+            self.append_to_active_partition(batch.slice(partition_point.start, length))?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_active_partition(&mut self, key: Vec<ScalarValue>) -> Result<()> {
+        match &self.active_partition {
+            Some(active_partition) if active_partition.key == key => Ok(()),
+            Some(_) => {
+                self.finish_active_partition()?;
+                self.active_partition = Some(ActivePartition {
+                    key,
+                    in_memory_batches: vec![],
+                    memory_bytes: 0,
+                    spill_file: None,
+                });
+                Ok(())
+            }
+            None => {
+                self.active_partition = Some(ActivePartition {
+                    key,
+                    in_memory_batches: vec![],
+                    memory_bytes: 0,
+                    spill_file: None,
+                });
+                Ok(())
+            }
+        }
+    }
+
+    fn append_to_active_partition(&mut self, batch: RecordBatch) -> Result<()> {
+        if self
+            .active_partition
+            .as_ref()
+            .expect("active partition should be initialized before appending")
+            .spill_file
+            .is_some()
+        {
+            self.append_to_active_spill(&batch)?;
+            return Ok(());
+        }
+
+        let memory_bytes = Self::reserved_bytes_for_batch(&batch);
+        match self.reservation.try_grow(memory_bytes) {
+            Ok(_) => {
+                let active_partition = self
+                    .active_partition
+                    .as_mut()
+                    .expect("active partition should be initialized before appending");
+                active_partition.memory_bytes += memory_bytes;
+                active_partition.in_memory_batches.push(batch);
+                Ok(())
+            }
+            Err(DataFusionError::ResourcesExhausted(_)) if self.can_spill => {
+                self.spill_active_partition()?;
+                self.append_to_active_spill(&batch)?;
+                Ok(())
+            }
+            Err(e) => Err(Self::err_with_oom_context(e)),
+        }
+    }
+
+    fn append_to_active_spill(&mut self, batch: &RecordBatch) -> Result<()> {
+        let active_partition = self
+            .active_partition
+            .as_mut()
+            .expect("active partition should be initialized before spilling");
+
+        if active_partition.spill_file.is_none() {
+            active_partition.spill_file = Some(
+                self.spill_manager
+                    .create_in_progress_file("WindowAggSpill")?,
+            );
+        }
+
+        active_partition
+            .spill_file
+            .as_mut()
+            .expect("spill file should exist")
+            .append_batch(batch)?;
+        Ok(())
+    }
+
+    fn spill_active_partition(&mut self) -> Result<()> {
+        let active_partition = self
+            .active_partition
+            .as_mut()
+            .expect("active partition should be initialized before spilling");
+
+        if active_partition.spill_file.is_none() {
+            active_partition.spill_file = Some(
+                self.spill_manager
+                    .create_in_progress_file("WindowAggSpill")?,
+            );
+        }
+
+        if let Some(spill_file) = &mut active_partition.spill_file {
+            for batch in &active_partition.in_memory_batches {
+                spill_file.append_batch(batch)?;
+            }
+        }
+
+        active_partition.in_memory_batches.clear();
+        if active_partition.memory_bytes > 0 {
+            self.reservation.shrink(active_partition.memory_bytes);
+            active_partition.memory_bytes = 0;
+        }
+
+        Ok(())
+    }
+
+    fn spill_active_partition_if_buffered(&mut self) -> Result<()> {
+        if !self.can_spill {
+            return Ok(());
+        }
+
+        let should_spill = self
+            .active_partition
+            .as_ref()
+            .map(|active_partition| {
+                active_partition.spill_file.is_none()
+                    && !active_partition.in_memory_batches.is_empty()
+            })
+            .unwrap_or(false);
+
+        if should_spill {
+            self.spill_active_partition()?;
+        }
+
+        Ok(())
+    }
+
+    fn finish_active_partition(&mut self) -> Result<()> {
+        let Some(mut active_partition) = self.active_partition.take() else {
+            return Ok(());
+        };
+
+        if let Some(mut spill_file) = active_partition.spill_file.take() {
+            for batch in &active_partition.in_memory_batches {
+                spill_file.append_batch(batch)?;
+            }
+            active_partition.in_memory_batches.clear();
+            if active_partition.memory_bytes > 0 {
+                self.reservation.shrink(active_partition.memory_bytes);
+            }
+
+            if let Some(spill_file) = spill_file.finish()? {
+                self.completed_partitions
+                    .push_back(CompletedPartition::Spilled { spill_file });
+            }
+        } else if !active_partition.in_memory_batches.is_empty() {
+            self.completed_partitions
+                .push_back(CompletedPartition::InMemory {
+                    batches: active_partition.in_memory_batches,
+                    memory_bytes: active_partition.memory_bytes,
+                });
+        }
+
+        Ok(())
+    }
+
+    fn poll_completed_partition(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        loop {
+            if self.spill_read_state.is_some() {
+                match ready!(self.poll_spill_read(cx)) {
+                    Some(result) => return Poll::Ready(Some(result)),
+                    None => continue,
+                }
+            }
+
+            let Some(completed_partition) = self.completed_partitions.pop_front() else {
+                return Poll::Ready(None);
+            };
+
+            match completed_partition {
+                CompletedPartition::InMemory {
+                    batches,
+                    memory_bytes,
+                } => {
+                    let result = self.compute_partition_aggregates(&batches);
+                    if memory_bytes > 0 {
+                        self.reservation.shrink(memory_bytes);
+                    }
+                    match result {
+                        Ok(Some(batch)) => return Poll::Ready(Some(Ok(batch))),
+                        Ok(None) => continue,
+                        Err(e) => return Poll::Ready(Some(Err(e))),
+                    }
+                }
+                CompletedPartition::Spilled { spill_file } => {
+                    if let Err(e) = self.spill_active_partition_if_buffered() {
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    match self.spill_manager.read_spill_as_stream(spill_file, None) {
+                        Ok(stream) => {
+                            self.spill_read_state = Some(SpillReadState {
+                                stream,
+                                batches: vec![],
+                                memory_bytes: 0,
+                            });
+                        }
+                        Err(e) => return Poll::Ready(Some(Err(e))),
+                    }
+                }
+            }
+        }
+    }
+
+    fn poll_spill_read(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        loop {
+            let next_batch = {
+                let spill_read_state = self
+                    .spill_read_state
+                    .as_mut()
+                    .expect("spill read state should exist");
+                ready!(spill_read_state.stream.poll_next_unpin(cx))
+            };
+
+            match next_batch {
+                Some(Ok(batch)) => {
+                    let memory_bytes = Self::reserved_bytes_for_batch(&batch);
+                    let memory_bytes = match self
+                        .reservation
+                        .try_grow(memory_bytes)
+                        .map(|_| memory_bytes)
+                    {
+                        Ok(memory_bytes) => memory_bytes,
+                        Err(e) => {
+                            let spill_read_state = self
+                                .spill_read_state
+                                .take()
+                                .expect("spill read state should exist when read fails");
+                            if spill_read_state.memory_bytes > 0 {
+                                self.reservation.shrink(spill_read_state.memory_bytes);
+                            }
+                            return Poll::Ready(Some(Err(Self::err_with_oom_context(e))));
+                        }
+                    };
+
+                    let spill_read_state = self
+                        .spill_read_state
+                        .as_mut()
+                        .expect("spill read state should exist");
+                    spill_read_state.memory_bytes += memory_bytes;
+                    spill_read_state.batches.push(batch);
+                }
+                Some(Err(e)) => {
+                    let spill_read_state = self
+                        .spill_read_state
+                        .take()
+                        .expect("spill read state should exist when read fails");
+                    if spill_read_state.memory_bytes > 0 {
+                        self.reservation.shrink(spill_read_state.memory_bytes);
+                    }
+                    return Poll::Ready(Some(Err(e)));
+                }
+                None => {
+                    let spill_read_state = self
+                        .spill_read_state
+                        .take()
+                        .expect("spill read state should exist when read finishes");
+                    let result =
+                        self.compute_partition_aggregates(&spill_read_state.batches);
+                    if spill_read_state.memory_bytes > 0 {
+                        self.reservation.shrink(spill_read_state.memory_bytes);
+                    }
+                    match result {
+                        Ok(Some(batch)) => return Poll::Ready(Some(Ok(batch))),
+                        Ok(None) => return Poll::Ready(None),
+                        Err(e) => return Poll::Ready(Some(Err(e))),
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -424,25 +798,30 @@ impl WindowAggStream {
         }
 
         loop {
+            match ready!(self.poll_completed_partition(cx)) {
+                Some(result) => return Poll::Ready(Some(result)),
+                None if self.input_finished => {
+                    self.finished = true;
+                    return Poll::Ready(None);
+                }
+                None => {}
+            }
+
             return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    self.batches.push(batch);
+                    self.process_input_batch(batch)?;
                     continue;
                 }
                 Some(Err(e)) => Err(e),
                 None => {
                     // Release the input pipeline's resources before computing
                     // the final aggregates.
-                    let input_schema = self.input.schema();
-                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-                    let Some(result) = self.compute_aggregates()? else {
-                        return Poll::Ready(None);
-                    };
-                    self.finished = true;
-                    // Empty record batches should not be emitted.
-                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
-                    debug_assert!(result.num_rows() > 0);
-                    Ok(result)
+                    self.input = Box::pin(EmptyRecordBatchStream::new(Arc::clone(
+                        &self.input_schema,
+                    )));
+                    self.finish_active_partition()?;
+                    self.input_finished = true;
+                    continue;
                 }
             }));
         }
@@ -459,14 +838,22 @@ impl RecordBatchStream for WindowAggStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::collect;
     use crate::test::TestMemoryExec;
     use crate::windows::create_window_expr;
+    use arrow::array::Int64Array;
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{ScalarValue, assert_batches_eq, assert_contains};
+    use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::{
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_window::ntile::ntile_udwf;
+    use datafusion_physical_expr::expressions::Literal;
+    use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
     #[test]
     fn test_window_agg_cardinality_effect() -> Result<()> {
@@ -496,6 +883,174 @@ mod tests {
             window.cardinality_effect(),
             CardinalityEffect::Equal
         ));
+        Ok(())
+    }
+
+    fn test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("p", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+        ]))
+    }
+
+    fn make_batch(partitions: Vec<i64>, values: Vec<i64>) -> Result<RecordBatch> {
+        assert_eq!(partitions.len(), values.len());
+        RecordBatch::try_new(
+            test_schema(),
+            vec![
+                Arc::new(Int64Array::from(partitions)),
+                Arc::new(Int64Array::from(values)),
+            ],
+        )
+        .map_err(Into::into)
+    }
+
+    fn window_ordering(schema: &SchemaRef) -> Result<LexOrdering> {
+        Ok(LexOrdering::new([
+            PhysicalSortExpr::new_default(crate::expressions::col("p", schema)?),
+            PhysicalSortExpr::new_default(crate::expressions::col("v", schema)?),
+        ])
+        .expect("ordering is not empty"))
+    }
+
+    fn window_input(batches: Vec<RecordBatch>) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = test_schema();
+        let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![window_ordering(&schema)?])?;
+        Ok(Arc::new(input))
+    }
+
+    fn ntile_window_expr(schema: &SchemaRef) -> Result<Arc<dyn WindowExpr>> {
+        let args =
+            vec![Arc::new(Literal::new(ScalarValue::UInt64(Some(2))))
+                as Arc<dyn PhysicalExpr>];
+        let partition_by = vec![crate::expressions::col("p", schema)?];
+        let order_by = vec![PhysicalSortExpr {
+            expr: crate::expressions::col("v", schema)?,
+            options: SortOptions::default(),
+        }];
+
+        create_window_expr(
+            &WindowFunctionDefinition::WindowUDF(ntile_udwf()),
+            "ntile".to_string(),
+            &args,
+            &partition_by,
+            &order_by,
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::Following(ScalarValue::UInt64(None)),
+            )),
+            Arc::clone(schema),
+            false,
+            false,
+            None,
+        )
+    }
+
+    fn window_exec(input: Arc<dyn ExecutionPlan>) -> Result<WindowAggExec> {
+        WindowAggExec::try_new(vec![ntile_window_expr(&input.schema())?], input, true)
+    }
+
+    fn partition_boundary_batches() -> Result<Vec<RecordBatch>> {
+        Ok(vec![
+            // Partition 1 starts in this batch and continues in the next.
+            make_batch(vec![0, 0, 1, 1], vec![1, 2, 1, 2])?,
+            // This batch contains the end of partition 1 and all of partition 2.
+            make_batch(vec![1, 2, 2, 2], vec![3, 1, 2, 3])?,
+            make_batch(vec![3, 3], vec![1, 2])?,
+        ])
+    }
+
+    fn task_ctx_with_memory_limit(
+        memory_limit: usize,
+        disk_mode: DiskManagerMode,
+    ) -> Result<Arc<TaskContext>> {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(memory_limit, 1.0)
+            .with_disk_manager_builder(DiskManagerBuilder::default().with_mode(disk_mode))
+            .build_arc()?;
+
+        Ok(Arc::new(TaskContext::default().with_runtime(runtime)))
+    }
+
+    async fn collect_window(
+        batches: Vec<RecordBatch>,
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
+        let window = window_exec(window_input(batches)?)?;
+        let output = collect(window.execute(0, task_ctx)?).await?;
+        let metrics = window.metrics().expect("metrics should exist");
+        Ok((output, metrics))
+    }
+
+    fn assert_ntile_output(batches: &[RecordBatch]) {
+        assert_batches_eq!(
+            [
+                "+---+---+-------+",
+                "| p | v | ntile |",
+                "+---+---+-------+",
+                "| 0 | 1 | 1     |",
+                "| 0 | 2 | 2     |",
+                "| 1 | 1 | 1     |",
+                "| 1 | 2 | 1     |",
+                "| 1 | 3 | 2     |",
+                "| 2 | 1 | 1     |",
+                "| 2 | 2 | 1     |",
+                "| 2 | 3 | 2     |",
+                "| 3 | 1 | 1     |",
+                "| 3 | 2 | 2     |",
+                "+---+---+-------+",
+            ],
+            batches
+        );
+    }
+
+    #[tokio::test]
+    async fn test_window_agg_exec_partition_spill() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(150, DiskManagerMode::OsTmpDirectory)?;
+        let (batches, metrics) =
+            collect_window(partition_boundary_batches()?, task_ctx).await?;
+
+        assert_ntile_output(&batches);
+        assert!(metrics.spill_count().unwrap_or(0) > 0);
+        assert!(metrics.spilled_rows().unwrap_or(0) > 0);
+        assert!(metrics.spilled_bytes().unwrap_or(0) > 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_window_agg_exec_no_spill_when_memory_sufficient() -> Result<()> {
+        let task_ctx =
+            task_ctx_with_memory_limit(10_000_000, DiskManagerMode::OsTmpDirectory)?;
+        let (batches, metrics) =
+            collect_window(partition_boundary_batches()?, task_ctx).await?;
+
+        assert_ntile_output(&batches);
+        assert_eq!(metrics.spill_count().unwrap_or(0), 0);
+        assert_eq!(metrics.spilled_rows().unwrap_or(0), 0);
+        assert_eq!(metrics.spilled_bytes().unwrap_or(0), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_window_agg_exec_spill_requires_disk_manager() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(150, DiskManagerMode::Disabled)?;
+        let err = collect_window(partition_boundary_batches()?, task_ctx)
+            .await
+            .unwrap_err();
+
+        assert_contains!(err.to_string(), "Resources exhausted");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_window_agg_exec_empty_input() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(150, DiskManagerMode::OsTmpDirectory)?;
+        let (batches, metrics) = collect_window(vec![], task_ctx).await?;
+
+        assert!(batches.is_empty());
+        assert_eq!(metrics.spill_count().unwrap_or(0), 0);
         Ok(())
     }
 }
