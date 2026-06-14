@@ -273,14 +273,14 @@ impl ArrayMap {
         )
     }
 
-    /// Returns whether `key` (a raw probe value cast to `u64`) is present in the
-    /// build side, i.e. maps to a non-empty bucket.
+    /// Looks up `key` (a raw probe value cast to `u64`) in the build side,
+    /// returning the 1-based build-side slot if the key maps to a non-empty
+    /// bucket, or `None` otherwise.
     #[inline]
-    fn key_present(&self, key: u64) -> bool {
-        let Some(idx) = Self::key_to_index(key, self.offset, self.data.len()) else {
-            return false;
-        };
-        self.data[idx] != 0
+    fn get_value(&self, key: u64) -> Option<u32> {
+        let idx = Self::key_to_index(key, self.offset, self.data.len())?;
+        let value = self.data[idx];
+        (value != 0).then_some(value)
     }
 
     fn lookup_and_get_indices<T: ArrowNumericType>(
@@ -313,16 +313,10 @@ impl ArrayMap {
                 }
                 // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
                 let prob_val: u64 = unsafe { arr.value_unchecked(prob_idx) }.as_();
-                let Some(idx_in_build_side) =
-                    Self::key_to_index(prob_val, self.offset, self.data.len())
-                else {
+                let Some(build_value) = self.get_value(prob_val) else {
                     continue;
                 };
-
-                if self.data[idx_in_build_side] == 0 {
-                    continue;
-                }
-                build_indices.push((self.data[idx_in_build_side] - 1) as u64);
+                build_indices.push((build_value - 1) as u64);
                 probe_indices.push(prob_idx as u32);
             }
             Ok(None)
@@ -366,16 +360,9 @@ impl ArrayMap {
 
                 // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
                 let prob_val: u64 = unsafe { arr.value_unchecked(prob_side_idx) }.as_();
-                let Some(idx_in_build_side) =
-                    Self::key_to_index(prob_val, self.offset, self.data.len())
-                else {
+                let Some(build_idx) = self.get_value(prob_val) else {
                     continue;
                 };
-                if self.data[idx_in_build_side] == 0 {
-                    continue;
-                }
-
-                let build_idx = self.data[idx_in_build_side];
 
                 if let Some(offset) = traverse_chain(
                     &self.next,
@@ -425,7 +412,7 @@ impl ArrayMap {
             }
             // SAFETY: i is within bounds [0, arr.len())
             let key: u64 = unsafe { arr.value_unchecked(i) }.as_();
-            self.key_present(key)
+            self.get_value(key).is_some()
         });
         Ok(BooleanArray::new(buffer, None))
     }
