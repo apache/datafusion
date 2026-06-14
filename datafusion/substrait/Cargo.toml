@@ -44,8 +44,10 @@ object_store = { workspace = true }
 # We need to match the version in substrait, so we don't use the workspace version here
 pbjson-types = { version = "0.8.0" }
 prost = { workspace = true }
+serde_json = { workspace = true }
 substrait = { version = "0.63.0", features = ["serde"] }
 url = { workspace = true }
+serde_yaml = "0.9.34"
 tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
