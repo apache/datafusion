@@ -405,6 +405,27 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         build_size: "100K",
         probe_size: "60M_RightAnti",
     },
+    // Q22: RightSemi, Medium build (100K rows), ~1% Hit rate, fanout ~100
+    //
+    // Build Side: supplier (100K rows) collapsed onto 1K distinct keys
+    // Probe Side: lineitem (60M rows). Each matching probe row produces many
+    // duplicate probe indices before RightSemi deduplication.
+    HashJoinQuery {
+        sql: r###"SELECT l.k
+        FROM (
+          SELECT CAST(((s_suppkey - 1) % 1000) + 1 AS INT) as k
+          FROM supplier
+        ) s
+        RIGHT SEMI JOIN (
+          SELECT CAST(l_suppkey AS INT) as k
+          FROM lineitem
+        ) l
+        ON s.k = l.k"###,
+        density: 1.0,
+        prob_hit: 0.01,
+        build_size: "100K_(fanout_100)",
+        probe_size: "60M_RightSemi",
+    },
 ];
 
 impl RunOpt {

@@ -157,8 +157,8 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             }
 
             if let Some(bloom_filter_ndv) = options.bloom_filter_ndv {
-                builder =
-                    builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
+                builder = builder
+                    .set_column_bloom_filter_max_ndv(path.clone(), bloom_filter_ndv);
             }
         }
 
@@ -273,7 +273,7 @@ impl ParquetOptions {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
         };
         if let Some(bloom_filter_ndv) = bloom_filter_ndv {
-            builder = builder.set_bloom_filter_ndv(*bloom_filter_ndv);
+            builder = builder.set_bloom_filter_max_ndv(*bloom_filter_ndv);
         };
         if let Some(dictionary_enabled) = dictionary_enabled {
             builder = builder.set_dictionary_enabled(*dictionary_enabled);
@@ -534,8 +534,8 @@ mod tests {
                 }
                 .into(),
             ),
-            bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
-            bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
+            bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp()),
+            bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv()),
         }
     }
 
@@ -830,10 +830,12 @@ mod tests {
         );
         assert_eq!(
             default_writer_props.bloom_filter_properties(&"default".into()),
-            Some(&BloomFilterProperties {
-                fpp: 0.42,
-                ndv: DEFAULT_BLOOM_FILTER_NDV
-            }),
+            Some(
+                &BloomFilterProperties::builder()
+                    .with_fpp(0.42)
+                    .with_max_ndv(DEFAULT_BLOOM_FILTER_NDV)
+                    .build()
+            ),
             "should have only the fpp set, and the ndv at default",
         );
     }
@@ -937,7 +939,7 @@ mod tests {
         // the WriterProperties::default, with only ndv set
         let default_writer_props = WriterProperties::builder()
             .set_bloom_filter_enabled(true)
-            .set_bloom_filter_ndv(42)
+            .set_bloom_filter_max_ndv(42)
             .build();
 
         assert_eq!(
@@ -947,10 +949,12 @@ mod tests {
         );
         assert_eq!(
             default_writer_props.bloom_filter_properties(&"default".into()),
-            Some(&BloomFilterProperties {
-                fpp: DEFAULT_BLOOM_FILTER_FPP,
-                ndv: 42
-            }),
+            Some(
+                &BloomFilterProperties::builder()
+                    .with_fpp(DEFAULT_BLOOM_FILTER_FPP)
+                    .with_max_ndv(42)
+                    .build()
+            ),
             "should have only the ndv set, and the fpp at default",
         );
     }

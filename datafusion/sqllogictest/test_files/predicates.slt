@@ -205,10 +205,169 @@ SELECT * FROM test WHERE column1 ~ 'z'
 Bazzz
 
 query T
+SELECT * FROM test WHERE column1 ~ '^Bazzz$'
+----
+Bazzz
+
+query T
+SELECT * FROM test WHERE column1 ~ '^(foo|Bazzz)$'
+----
+foo
+Bazzz
+
+statement ok
+CREATE TABLE test_regex_utf8view(s VARCHAR) AS VALUES ('foo'), ('Bazzz');
+
+statement ok
+set datafusion.explain.logical_plan_only = true
+
+# `~` anchored literal -> `= Utf8View(..)`
+query TT
+EXPLAIN SELECT * FROM test_regex_utf8view WHERE s ~ '^Bazzz$'
+----
+logical_plan
+01)Filter: test_regex_utf8view.s = Utf8View("Bazzz")
+02)--TableScan: test_regex_utf8view projection=[s]
+
+# `~*` anchored literal -> `ILIKE Utf8View(..)`
+query TT
+EXPLAIN SELECT * FROM test_regex_utf8view WHERE s ~* '^bazzz$'
+----
+logical_plan
+01)Filter: test_regex_utf8view.s ILIKE Utf8View("bazzz")
+02)--TableScan: test_regex_utf8view projection=[s]
+
+# `~` anchored alternation -> OR of `= Utf8View(..)` comparisons.
+query TT
+EXPLAIN SELECT * FROM test_regex_utf8view WHERE s ~ '^(foo|Bazzz)$'
+----
+logical_plan
+01)Filter: test_regex_utf8view.s = Utf8View("foo") OR test_regex_utf8view.s = Utf8View("Bazzz")
+02)--TableScan: test_regex_utf8view projection=[s]
+
+# `~*` anchored alternation -> NOT simplified: it falls back to a regex match,
+# because `IN`/`=` cannot express case-insensitive matching.
+query TT
+EXPLAIN SELECT * FROM test_regex_utf8view WHERE s ~* '^(foo|bazzz)$'
+----
+logical_plan
+01)Filter: test_regex_utf8view.s ~* Utf8View("^(foo|bazzz)$")
+02)--TableScan: test_regex_utf8view projection=[s]
+
+# `!~` -> `!= Utf8View(..)`
+query TT
+EXPLAIN SELECT * FROM test_regex_utf8view WHERE s !~ '^Bazzz$'
+----
+logical_plan
+01)Filter: test_regex_utf8view.s != Utf8View("Bazzz")
+02)--TableScan: test_regex_utf8view projection=[s]
+
+# `!~*` -> `NOT ILIKE Utf8View(..)`
+query TT
+EXPLAIN SELECT * FROM test_regex_utf8view WHERE s !~* '^bazzz$'
+----
+logical_plan
+01)Filter: test_regex_utf8view.s NOT ILIKE Utf8View("bazzz")
+02)--TableScan: test_regex_utf8view projection=[s]
+
+# `!~` anchored alternation -> AND of `!= Utf8View(..)` comparisons.
+query TT
+EXPLAIN SELECT * FROM test_regex_utf8view WHERE s !~ '^(foo|Bazzz)$'
+----
+logical_plan
+01)Filter: test_regex_utf8view.s != Utf8View("foo") AND test_regex_utf8view.s != Utf8View("Bazzz")
+02)--TableScan: test_regex_utf8view projection=[s]
+
+# `!~*` anchored alternation -> NOT simplified: it falls back to a regex match,
+# same reason as the `~*` alternation above.
+query TT
+EXPLAIN SELECT * FROM test_regex_utf8view WHERE s !~* '^(foo|bazzz)$'
+----
+logical_plan
+01)Filter: test_regex_utf8view.s !~* Utf8View("^(foo|bazzz)$")
+02)--TableScan: test_regex_utf8view projection=[s]
+
+statement ok
+set datafusion.explain.logical_plan_only = false
+
+# Result assertions
+query T
+SELECT * FROM test_regex_utf8view WHERE s ~ '^Bazzz$'
+----
+Bazzz
+
+query T
+SELECT * FROM test_regex_utf8view WHERE s ~ '^(foo|Bazzz)$'
+----
+foo
+Bazzz
+
+# Case-insensitive anchored match over Utf8View: must be simplified to ILIKE
+# (not a case-sensitive Eq) and must keep operand types as Utf8View.
+query T
+SELECT * FROM test_regex_utf8view WHERE s ~* '^bazzz$'
+----
+Bazzz
+
+# Case-insensitive anchored alternation over Utf8View
+query T rowsort
+SELECT * FROM test_regex_utf8view WHERE s ~* '^(foo|bazzz)$'
+----
+Bazzz
+foo
+
+query T rowsort
+SELECT * FROM test_regex_utf8view WHERE s !~ '^Bazzz$'
+----
+foo
+
+query T rowsort
+SELECT * FROM test_regex_utf8view WHERE s !~* '^bazzz$'
+----
+foo
+
+# Both rows match the alternation, so the negated forms return nothing.
+query T rowsort
+SELECT * FROM test_regex_utf8view WHERE s !~ '^(foo|Bazzz)$'
+----
+
+query T rowsort
+SELECT * FROM test_regex_utf8view WHERE s !~* '^(foo|bazzz)$'
+----
+
+statement ok
+DROP TABLE test_regex_utf8view;
+
+query T
 SELECT * FROM test WHERE column1 ~* 'z'
 ----
 Bazzz
 ZZZZZ
+
+query T
+SELECT * FROM test WHERE column1 ~* '^barrr$'
+----
+Barrr
+
+query T
+SELECT * FROM test WHERE column1 ~* '^(barrr|bazzz)$'
+----
+Barrr
+Bazzz
+
+query T rowsort
+SELECT * FROM test WHERE column1 !~ '^Bazzz$'
+----
+Barrr
+ZZZZZ
+foo
+
+query T rowsort
+SELECT * FROM test WHERE column1 !~* '^barrr$'
+----
+Bazzz
+ZZZZZ
+foo
 
 query T
 SELECT * FROM test WHERE column1 !~ 'z'

@@ -1,0 +1,7 @@
+subgroup neutral
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+SUBGROUP=neutral
+QPAD=60
+DATASET=ints
+NAME=neutral_q60_cheap_uniform

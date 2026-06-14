@@ -1,0 +1,34 @@
+# Shared template for every predicate_eval benchmark. Each qNN.benchmark sets
+# its `subgroup` directive and then includes this template with parameters:
+#   SUBGROUP  subgroup name, also the query sub-directory          (e.g. costsel)
+#   QPAD      zero-padded query id, also the query file stem       (e.g. 01)
+#   DATASET   load script stem under load/                         (e.g. markers)
+#   NAME      criterion display name                               (e.g. costsel_q01_regexp_selective_last)
+# Optional (consumed by the load scripts via ${...:-default}):
+#   PRED_ROWS      synthetic row count                                  (default 1_000_000)
+#   PRED_FILL      filler chars per marker = string-column width knob    (default 30)
+#
+# The run SQL lives in queries/${SUBGROUP}/q${QPAD}.sql so the WHERE clause is
+# readable on its own. The table is always named `t`, so the assert and cleanup
+# are uniform across datasets.
+#
+# The suite is implementation-agnostic and sets no engine config of its own: it
+# measures DataFusion's built-in left-deep `AND` short-circuit by default. To
+# evaluate a predicate-ordering system under test, set its native config via the
+# environment (the bench harness builds its SessionContext with
+# SessionConfig::from_env), e.g.
+#   DATAFUSION_EXECUTION_ADAPTIVE_FILTER_REORDERING=true
+
+load sql_benchmarks/predicate_eval/load/${DATASET}.sql
+
+name ${NAME}
+group predicate_eval
+
+assert I
+SELECT count(*) > 0 FROM t;
+----
+true
+
+run sql_benchmarks/predicate_eval/queries/${SUBGROUP}/q${QPAD}.sql
+
+cleanup sql_benchmarks/predicate_eval/init/cleanup.sql
