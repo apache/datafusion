@@ -65,7 +65,7 @@ tempfile = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"], optional = true }
 thiserror = "2.0.18"
 tokio = { workspace = true }
-tokio-postgres = { version = "0.7.17", optional = true }
+tokio-postgres = { version = "0.7.18", optional = true }
 
 [features]
 avro = ["datafusion/avro"]

@@ -348,6 +348,13 @@ impl Accumulator for VarianceAccumulator {
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let arr = as_float64_array(&values[0])?;
         for value in arr.iter().flatten() {
+            if self.count <= 1 {
+                self.count = 0;
+                self.mean = 0.0;
+                self.m2 = 0.0;
+                continue;
+            }
+
             let new_count = self.count - 1;
             let delta1 = self.mean - value;
             let new_mean = delta1 / new_count as f64 + self.mean;
