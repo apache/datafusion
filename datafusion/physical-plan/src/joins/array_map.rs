@@ -89,7 +89,7 @@ macro_rules! downcast_supported_integer {
 /// ```
 /// The resulting `range` (10) correctly represents the size of the interval `[-5, 5]`.
 ///
-/// **2. Index Lookup (in `get_matched_indices`)**
+/// **2. Index Lookup (in `get_matched_indices_with_limit_offset`)**
 ///
 /// For a probe value of `0` (which is stored as `0u64`):
 /// ```text
@@ -173,7 +173,7 @@ impl ArrayMap {
     /// ignoring any rows where the key is `NULL`.
     ///
     pub(crate) fn try_new(array: &ArrayRef, min_val: u64, max_val: u64) -> Result<Self> {
-        let range = max_val.wrapping_sub(min_val);
+        let range = Self::calculate_range(min_val, max_val);
         if range >= usize::MAX as u64 {
             return internal_err!("ArrayMap key range is too large to be allocated.");
         }
@@ -352,7 +352,7 @@ impl ArrayMap {
                     return Ok(Some((prob_side_idx, None)));
                 }
 
-                if arr.is_null(prob_side_idx) {
+                if have_null && arr.is_null(prob_side_idx) {
                     continue;
                 }
 
@@ -391,14 +391,14 @@ impl ArrayMap {
 
         downcast_supported_integer!(
             array.data_type() => (
-                contain_hashes_helper,
+                contain_keys_helper,
                 self,
                 array
             )
         )
     }
 
-    fn contain_hashes_helper<T: ArrowNumericType>(
+    fn contain_keys_helper<T: ArrowNumericType>(
         &self,
         array: &ArrayRef,
     ) -> Result<BooleanArray>
