@@ -796,6 +796,31 @@ select nanvl(null, null);
 ----
 NULL
 
+# nanvl evaluates in the common (widest) float type of its arguments. Mixing
+# narrower floats widens losslessly (Float16 + Float32 -> Float32), while
+# integers, decimals, and NULL are coerced to Float64.
+query TTTTTTTT
+select
+  arrow_typeof(nanvl(arrow_cast(1.0, 'Float16'), arrow_cast(2.0, 'Float16'))),
+  arrow_typeof(nanvl(arrow_cast(1.0, 'Float32'), arrow_cast(2.0, 'Float32'))),
+  arrow_typeof(nanvl(arrow_cast(1.0, 'Float16'), arrow_cast(2.0, 'Float32'))),
+  arrow_typeof(nanvl(arrow_cast(1.0, 'Float16'), arrow_cast(2.0, 'Float64'))),
+  arrow_typeof(nanvl(arrow_cast(1.0, 'Float32'), arrow_cast(2.0, 'Float64'))),
+  arrow_typeof(nanvl(1, 2)),
+  arrow_typeof(nanvl(1, arrow_cast(2.0, 'Float32'))),
+  arrow_typeof(nanvl(null, null));
+----
+Float16 Float32 Float32 Float64 Float64 Float64 Float64 Float64
+
+# nanvl with an integer argument is computed in double precision, even when the
+# other argument is Float32.
+query BB
+select
+  nanvl(16777217, 1) = nanvl(arrow_cast(16777217, 'Float64'), 1.0),
+  nanvl(16777217, arrow_cast(1.0, 'Float32')) = nanvl(arrow_cast(16777217, 'Float64'), 1.0);
+----
+true true
+
 # nanvl with columns (round is needed to normalize the outputs of different operating systems)
 query RRR rowsort
 select round(nanvl(asin(f + a), 2), 5), round(nanvl(asin(b + c), 3), 5), round(nanvl(asin(d + e), 4), 5) from small_floats;
