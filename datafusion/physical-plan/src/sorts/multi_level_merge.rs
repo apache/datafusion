@@ -440,16 +440,16 @@ impl MultiLevelMergeBuilder {
 
                         // buffer_len == 1 and we still can't seat the minimum of 2 streams.
                         if number_of_spills_to_read_for_current_phase == 0 {
-                            // We couldn't even reserve a single stream — one record batch
+                            // We couldn't even reserve a single stream - one record batch
                             // is larger than the whole merge budget. That's the lone-batch
-                            // case, not the 2-stream merge skew we rescue here; surface it.
+                            // case, not the 2-stream merge skew we rescue here - surface it.
                             return Err(err);
                         }
 
                         // We seated one stream (index 0) but not the second (index 1, the
                         // batch that just failed to reserve). Those are by definition the
                         // only two streams we are trying to merge, so re-spill the larger
-                        // of them with a smaller batch size and retry — the smaller max
+                        // of them with a smaller batch size and retry, the smaller max
                         // batch lowers the per-stream reservation enough to seat both.
                         let split_index = usize::from(
                             self.sorted_spill_files[1].max_record_batch_memory
@@ -475,8 +475,9 @@ impl MultiLevelMergeBuilder {
 
     /// Re-spill the spill file at `index` with half its batch size, putting it back
     /// at the same position. We read the file back and re-spill it through the normal
-    /// spill API (which owns batch layout); slicing each batch in two halves the
-    /// largest written batch, which lowers the per-stream merge reservation so the
+    /// spill API (which owns batch layout).
+    /// Slicing each batch in two halves the largest written batch,
+    /// which lowers the per-stream merge reservation so the
     /// next attempt can seat both streams. One stream's worth of memory is reserved
     /// for the duration and freed afterwards. Makes the merge resilient to skew.
     async fn split_spill_file_in_half(&mut self, index: usize) -> Result<()> {
@@ -492,7 +493,7 @@ impl MultiLevelMergeBuilder {
             .spill_manager
             .read_spill_as_stream(target.file, Some(old_max))?;
         // Re-spill with half the batch size: slice every batch in two. The spill
-        // writer owns the batch layout; we only change how many rows per batch.
+        // writer owns the batch layout, we only change how many rows per batch.
         let mut halved: SendableRecordBatchStream =
             Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&self.schema),
@@ -522,7 +523,7 @@ impl MultiLevelMergeBuilder {
         };
 
         // If halving could not reduce the largest batch (e.g. a single row that is
-        // itself wider than the budget), there is nothing more we can do — surface
+        // itself wider than the budget), there is nothing more we can do - surface
         // the out-of-memory condition instead of looping forever.
         if new_max >= old_max {
             return resources_err!(
@@ -530,6 +531,12 @@ impl MultiLevelMergeBuilder {
                  exceeds the available merge memory and cannot be split further"
             );
         }
+
+        // Also halve the merge output batch size so the next merge pass emits
+        // narrower batches. Otherwise the merged stream would rebuild a full-size
+        // (potentially giant) batch and, when spilled back as an intermediate run,
+        // reintroduce the exact skew we just resolved.
+        self.batch_size = (self.batch_size / 2).max(1);
 
         self.sorted_spill_files.insert(
             index,
@@ -777,6 +784,52 @@ mod tests {
         assert!(
             err.to_string().contains("cannot be split further"),
             "expected the un-splittable guard error, got: {err}"
+        );
+
+        Ok(())
+    }
+
+    /// Proves the re-spill also halves the merge output batch size: after one
+    /// re-spill the merged run is emitted in 4096-row batches (not the original
+    /// 8192), so it cannot rebuild a full-size batch and reintroduce the skew.
+    #[tokio::test]
+    async fn respill_halves_the_merge_output_batch_size() -> Result<()> {
+        let env = Arc::new(RuntimeEnv::default());
+        let schema = test_schema();
+        let spill_manager = build_spill_manager(&env, &schema);
+
+        let n: i64 = 16384;
+        let f0 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
+        let f1 = make_sorted_spill_file(&spill_manager, &schema, (0..n).collect());
+        let m = f0.max_record_batch_memory.max(f1.max_record_batch_memory);
+
+        // 3.5*m forces exactly one re-spill (split one run, then both fit), which
+        // halves the merge output batch size.
+        let initial_batch_size = 8192;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(m * 7 / 2));
+
+        let builder = build_merge_builder(
+            spill_manager,
+            Arc::clone(&schema),
+            vec![f0, f1],
+            &pool,
+            initial_batch_size,
+        );
+        let stream = builder.create_spillable_merge_stream();
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+
+        // All rows are still present.
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, (2 * n) as usize);
+
+        // The largest emitted batch is the halved size, not the original 8192 —
+        // without halving `self.batch_size` the merge would rebuild 8192-row batches.
+        let expected_batch_size = initial_batch_size / 2;
+        let max_batch_rows = batches.iter().map(|b| b.num_rows()).max().unwrap_or(0);
+        assert_eq!(
+            max_batch_rows, expected_batch_size,
+            "after one re-spill the merge must emit {expected_batch_size}-row \
+             batches, got a largest batch of {max_batch_rows} rows"
         );
 
         Ok(())
