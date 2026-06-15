@@ -60,19 +60,11 @@ use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnv;
-#[cfg(feature = "memory-accounting")]
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
 
 mod range_partitioning;
-
-/// Target partition count used for every SLT file's `SessionConfig`. Hardcoded
-/// so query plans are deterministic across machines. The SLT binary also
-/// sizes each file's per-file Tokio runtime to this value so partition streams
-/// each get a worker rather than contending.
-pub const SLT_TARGET_PARTITIONS: usize = 4;
 
 /// Context for running tests
 pub struct TestContext {
@@ -99,33 +91,6 @@ impl TypePlanner for SqlLogicTestTypePlanner {
     }
 }
 
-/// Construct the per-file `RuntimeEnv`. With the `memory-accounting` feature
-/// on and a non-zero `memory_tracker_limit()` configured, this wraps the
-/// usual `TrackConsumersPool(GreedyMemoryPool)` in an `AccountingMemoryPool`
-/// so the allocator-level bank retunes on every `SET datafusion.runtime.
-/// memory_limit`. Otherwise falls back to the historical default.
-fn build_runtime_env() -> RuntimeEnv {
-    #[cfg(feature = "memory-accounting")]
-    {
-        use datafusion::execution::memory_pool::{GreedyMemoryPool, TrackConsumersPool};
-        use std::num::NonZeroUsize;
-
-        let limit = crate::memory_tracker_limit();
-        if limit > 0 {
-            let tracked = TrackConsumersPool::new(
-                GreedyMemoryPool::new(limit),
-                NonZeroUsize::new(5).unwrap(),
-            );
-            let wrapped = crate::AccountingMemoryPool::new(Arc::new(tracked), limit);
-            return RuntimeEnvBuilder::new()
-                .with_memory_pool(Arc::new(wrapped))
-                .build()
-                .expect("RuntimeEnvBuilder::build with accounting pool");
-        }
-    }
-    RuntimeEnv::default()
-}
-
 impl TestContext {
     pub fn new(ctx: SessionContext) -> Self {
         Self {
@@ -142,8 +107,8 @@ impl TestContext {
     pub async fn try_new_for_test_file(relative_path: &Path) -> Option<Self> {
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
-            .with_target_partitions(SLT_TARGET_PARTITIONS);
-        let runtime = Arc::new(build_runtime_env());
+            .with_target_partitions(4);
+        let runtime = Arc::new(RuntimeEnv::default());
 
         let mut state_builder = SessionStateBuilder::new()
             .with_config(config)

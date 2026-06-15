@@ -37,6 +37,7 @@
 //! * [`LogicalPlan::with_new_exprs`]: Create a new plan with different expressions
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
+use crate::logical_plan::plan::RangePartitioning;
 use crate::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
     DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
@@ -427,6 +428,7 @@ impl LogicalPlan {
                 Partitioning::Hash(expr, _) | Partitioning::DistributeBy(expr) => {
                     expr.apply_elements(f)
                 }
+                Partitioning::Range(range) => range.ordering().to_vec().apply_elements(f),
                 Partitioning::RoundRobinBatch(_) => Ok(TreeNodeRecursion::Continue),
             },
             LogicalPlan::Window(Window { window_expr, .. }) => {
@@ -532,6 +534,19 @@ impl LogicalPlan {
                 Partitioning::DistributeBy(expr) => expr
                     .map_elements(f)?
                     .update_data(Partitioning::DistributeBy),
+                Partitioning::Range(range) => {
+                    let split_points = range.split_points().to_vec();
+                    range
+                        .ordering()
+                        .to_vec()
+                        .map_elements(f)?
+                        .map_data(|ordering| {
+                            Ok(Partitioning::Range(RangePartitioning::try_new(
+                                ordering,
+                                split_points,
+                            )?))
+                        })?
+                }
                 Partitioning::RoundRobinBatch(_) => Transformed::no(partitioning_scheme),
             }
             .update_data(|partitioning_scheme| {

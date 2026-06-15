@@ -281,6 +281,10 @@ impl Accumulator for CorrelationAccumulator {
         self.stddev2.retract_batch(&values[1..2])?;
         Ok(())
     }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Default)]
