@@ -386,10 +386,20 @@ fn optimize_projections(
             let right_len = join.right.schema().fields().len();
             let (left_req_indices, right_req_indices) =
                 split_join_requirements(left_len, right_len, indices, &join.join_type);
-            let left_indices =
+            let mut left_indices =
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
-            let right_indices =
+            let mut right_indices =
                 right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
+            // Ensure an empty mark join still has a column to qualify mark
+            match join.join_type {
+                JoinType::LeftMark if right_indices.indices().is_empty() => {
+                    right_indices = right_indices.append(&[0]);
+                }
+                JoinType::RightMark if left_indices.indices().is_empty() => {
+                    left_indices = left_indices.append(&[0]);
+                }
+                _ => {}
+            }
             // Joins benefit from "small" input tables (lower memory usage).
             // Therefore, each child benefits from projection:
             vec![
@@ -764,12 +774,12 @@ fn split_join_requirements(
             // The mark column is synthetic (produced by the join itself),
             // so discard it and route only to the left child.
             let (left_indices, _mark) = indices.split_off(left_len);
-            (left_indices, RequiredIndices::new().append(&[0]))
+            (left_indices, RequiredIndices::new())
         }
         JoinType::RightMark => {
             // Same as LeftMark, but for the right child.
             let (right_indices, _mark) = indices.split_off(right_len);
-            (RequiredIndices::new().append(&[0]), right_indices)
+            (RequiredIndices::new(), right_indices)
         }
         // All requirements can be re-routed to left child directly.
         JoinType::LeftAnti | JoinType::LeftSemi => (indices, RequiredIndices::new()),
