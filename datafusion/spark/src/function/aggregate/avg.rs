@@ -226,6 +226,15 @@ mod tests {
         )
     }
 
+    fn assert_state_validity_and_counts(state: &[ArrayRef], expected_validity: &[bool]) {
+        let (sums, counts) = spark_avg_state(state);
+        let expected_counts: Vec<i64> = vec![1; expected_validity.len()];
+
+        assert_validity(sums, expected_validity);
+        assert_eq!(counts.values().as_ref(), expected_counts.as_slice());
+        assert_validity(counts, expected_validity);
+    }
+
     #[test]
     fn supports_convert_to_state() {
         assert!(make_acc().supports_convert_to_state());
@@ -256,13 +265,7 @@ mod tests {
         ]))];
         let state = acc.convert_to_state(&values, None).unwrap();
 
-        let (sums, counts) = spark_avg_state(&state);
-
-        assert_validity(sums, &[true, false, true]);
-
-        assert_eq!(counts.value(0), 1);
-        assert_validity(counts, &[true, false, true]);
-        assert_eq!(counts.value(2), 1);
+        assert_state_validity_and_counts(&state, &[true, false, true]);
     }
 
     #[test]
@@ -273,13 +276,7 @@ mod tests {
         let filter = BooleanArray::from(vec![true, false, true]);
         let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
 
-        let (sums, counts) = spark_avg_state(&state);
-
-        assert_validity(sums, &[true, false, true]);
-
-        assert_eq!(counts.value(0), 1);
-        assert_validity(counts, &[true, false, true]);
-        assert_eq!(counts.value(2), 1);
+        assert_state_validity_and_counts(&state, &[true, false, true]);
     }
 
     #[test]
@@ -290,13 +287,7 @@ mod tests {
         let filter = BooleanArray::from(vec![Some(true), None, Some(true)]);
         let state = acc.convert_to_state(&values, Some(&filter)).unwrap();
 
-        let (sums, counts) = spark_avg_state(&state);
-
-        assert_validity(sums, &[true, false, true]);
-
-        assert_eq!(counts.value(0), 1);
-        assert_validity(counts, &[true, false, true]);
-        assert_eq!(counts.value(2), 1);
+        assert_state_validity_and_counts(&state, &[true, false, true]);
     }
 
     #[test]
