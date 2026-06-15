@@ -46,6 +46,7 @@ use tempfile::NamedTempFile;
 
 mod content_defined_chunking;
 mod custom_reader;
+mod dynamic_row_group_pruning;
 #[cfg(feature = "parquet_encryption")]
 mod encryption;
 mod expr_adapter;
@@ -147,6 +148,12 @@ struct TestOutput {
 }
 
 impl TestOutput {
+    /// Pretty-printed result batches, useful for asserting concrete row
+    /// values in regression tests.
+    fn pretty_results(&self) -> &str {
+        &self.pretty_results
+    }
+
     /// retrieve the value of the named metric, if any
     fn metric_value(&self, metric_name: &str) -> Option<usize> {
         if let Some(pm) = self.pruning_metric(metric_name) {
@@ -257,6 +264,13 @@ impl TestOutput {
     fn limit_pruned_row_groups(&self) -> Option<usize> {
         self.pruning_metric("limit_pruned_row_groups")
             .map(|pm| pm.total_pruned())
+    }
+
+    /// The number of row groups pruned at runtime by the dynamic
+    /// row-group pruner (e.g. driven by a TopK `SortExec` threshold
+    /// pushed down via `DynamicFilterPhysicalExpr`).
+    fn row_groups_pruned_dynamic_filter(&self) -> Option<usize> {
+        self.metric_value("row_groups_pruned_dynamic_filter")
     }
 
     fn description(&self) -> String {
