@@ -806,9 +806,9 @@ trait AvgStateLayout: Debug + Send + 'static {
         T: ArrowPrimitiveType,
         CountType: ArrowPrimitiveType;
 
-    fn decode_partial_state<'a, T, CountType>(
-        values: &'a [ArrayRef],
-    ) -> (&'a PrimitiveArray<CountType>, &'a PrimitiveArray<T>)
+    fn decode_partial_state<T, CountType>(
+        values: &[ArrayRef],
+    ) -> (&PrimitiveArray<CountType>, &PrimitiveArray<T>)
     where
         T: ArrowPrimitiveType,
         CountType: ArrowPrimitiveType;
@@ -826,9 +826,9 @@ impl AvgStateLayout for BuiltInAvgLayout {
         vec![Arc::new(counts) as ArrayRef, Arc::new(sums) as ArrayRef]
     }
 
-    fn decode_partial_state<'a, T, CountType>(
-        values: &'a [ArrayRef],
-    ) -> (&'a PrimitiveArray<CountType>, &'a PrimitiveArray<T>)
+    fn decode_partial_state<T, CountType>(
+        values: &[ArrayRef],
+    ) -> (&PrimitiveArray<CountType>, &PrimitiveArray<T>)
     where
         T: ArrowPrimitiveType,
         CountType: ArrowPrimitiveType,
@@ -852,9 +852,9 @@ impl AvgStateLayout for SparkAvgLayout {
         vec![Arc::new(sums) as ArrayRef, Arc::new(counts) as ArrayRef]
     }
 
-    fn decode_partial_state<'a, T, CountType>(
-        values: &'a [ArrayRef],
-    ) -> (&'a PrimitiveArray<CountType>, &'a PrimitiveArray<T>)
+    fn decode_partial_state<T, CountType>(
+        values: &[ArrayRef],
+    ) -> (&PrimitiveArray<CountType>, &PrimitiveArray<T>)
     where
         T: ArrowPrimitiveType,
         CountType: ArrowPrimitiveType,
