@@ -52,6 +52,7 @@ use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use datafusion_macros::user_doc;
 use log::debug;
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
@@ -759,14 +760,13 @@ impl Accumulator for DurationAvgAccumulator {
 /// F: Function that calculates the average value from a sum of
 /// T::Native and a total count.
 ///
-/// `COUNT_FIRST` controls the state field order:
-/// * `true`: `[count, sum]` for built-in AVG
-/// * `false`: `[sum, count]` for Spark AVG
+/// `Layout` controls the state field order.
 #[derive(Debug)]
-struct AvgGroupsAccumulator<T, CountType, F, const COUNT_FIRST: bool>
+struct AvgGroupsAccumulator<T, CountType, Layout, F>
 where
     T: ArrowNumericType + Send,
     CountType: ArrowPrimitiveType + Send,
+    Layout: AvgStateLayout,
     F: Fn(T::Native, CountType::Native) -> Result<T::Native> + Send + 'static,
 {
     /// The type of the internal sum
@@ -786,17 +786,96 @@ where
 
     /// Function that computes the final average (value / count)
     avg_fn: F,
+
+    /// AVG state layout marker.
+    layout: PhantomData<Layout>,
 }
 
-type BuiltInAvgGroupsAccumulator<T, F> = AvgGroupsAccumulator<T, UInt64Type, F, true>;
-type SparkAvgGroupsAccumulator<F> =
-    AvgGroupsAccumulator<Float64Type, Int64Type, F, false>;
+#[derive(Debug)]
+struct BuiltInAvgLayout;
 
-impl<T, CountType, F, const COUNT_FIRST: bool>
-    AvgGroupsAccumulator<T, CountType, F, COUNT_FIRST>
+#[derive(Debug)]
+struct SparkAvgLayout;
+
+trait AvgStateLayout: Debug + Send + 'static {
+    fn state_arrays<T, CountType>(
+        sums: PrimitiveArray<T>,
+        counts: PrimitiveArray<CountType>,
+    ) -> Vec<ArrayRef>
+    where
+        T: ArrowPrimitiveType,
+        CountType: ArrowPrimitiveType;
+
+    fn partial_state<'a, T, CountType>(
+        values: &'a [ArrayRef],
+    ) -> (&'a PrimitiveArray<CountType>, &'a PrimitiveArray<T>)
+    where
+        T: ArrowPrimitiveType,
+        CountType: ArrowPrimitiveType;
+}
+
+impl AvgStateLayout for BuiltInAvgLayout {
+    fn state_arrays<T, CountType>(
+        sums: PrimitiveArray<T>,
+        counts: PrimitiveArray<CountType>,
+    ) -> Vec<ArrayRef>
+    where
+        T: ArrowPrimitiveType,
+        CountType: ArrowPrimitiveType,
+    {
+        vec![Arc::new(counts) as ArrayRef, Arc::new(sums) as ArrayRef]
+    }
+
+    fn partial_state<'a, T, CountType>(
+        values: &'a [ArrayRef],
+    ) -> (&'a PrimitiveArray<CountType>, &'a PrimitiveArray<T>)
+    where
+        T: ArrowPrimitiveType,
+        CountType: ArrowPrimitiveType,
+    {
+        (
+            values[0].as_primitive::<CountType>(),
+            values[1].as_primitive::<T>(),
+        )
+    }
+}
+
+impl AvgStateLayout for SparkAvgLayout {
+    fn state_arrays<T, CountType>(
+        sums: PrimitiveArray<T>,
+        counts: PrimitiveArray<CountType>,
+    ) -> Vec<ArrayRef>
+    where
+        T: ArrowPrimitiveType,
+        CountType: ArrowPrimitiveType,
+    {
+        vec![Arc::new(sums) as ArrayRef, Arc::new(counts) as ArrayRef]
+    }
+
+    fn partial_state<'a, T, CountType>(
+        values: &'a [ArrayRef],
+    ) -> (&'a PrimitiveArray<CountType>, &'a PrimitiveArray<T>)
+    where
+        T: ArrowPrimitiveType,
+        CountType: ArrowPrimitiveType,
+    {
+        (
+            values[1].as_primitive::<CountType>(),
+            values[0].as_primitive::<T>(),
+        )
+    }
+}
+
+type BuiltInAvgGroupsAccumulator<T, F> =
+    AvgGroupsAccumulator<T, UInt64Type, BuiltInAvgLayout, F>;
+type SparkAvgGroupsAccumulator<F> =
+    AvgGroupsAccumulator<Float64Type, Int64Type, SparkAvgLayout, F>;
+
+impl<T, CountType, Layout, F> AvgGroupsAccumulator<T, CountType, Layout, F>
 where
     T: ArrowNumericType + Send,
     CountType: ArrowPrimitiveType + Send,
+    Layout: AvgStateLayout,
     F: Fn(T::Native, CountType::Native) -> Result<T::Native> + Send + 'static,
 {
     fn new(sum_data_type: &DataType, return_data_type: &DataType, avg_fn: F) -> Self {
@@ -812,17 +891,7 @@ where
             sums: vec![],
             null_state: NullState::new(),
             avg_fn,
-        }
-    }
-
-    fn state_arrays(
-        sums: PrimitiveArray<T>,
-        counts: PrimitiveArray<CountType>,
-    ) -> Vec<ArrayRef> {
-        if COUNT_FIRST {
-            vec![Arc::new(counts) as ArrayRef, Arc::new(sums) as ArrayRef]
-        } else {
-            vec![Arc::new(sums) as ArrayRef, Arc::new(counts) as ArrayRef]
+            layout: PhantomData,
         }
     }
 }
@@ -843,11 +912,12 @@ where
     ))
 }
 
-impl<T, CountType, F, const COUNT_FIRST: bool> GroupsAccumulator
-    for AvgGroupsAccumulator<T, CountType, F, COUNT_FIRST>
+impl<T, CountType, Layout, F> GroupsAccumulator
+    for AvgGroupsAccumulator<T, CountType, Layout, F>
 where
     T: ArrowNumericType + Send,
     CountType: ArrowPrimitiveType + Send,
+    Layout: AvgStateLayout,
     F: Fn(T::Native, CountType::Native) -> Result<T::Native> + Send + 'static,
 {
     fn update_batch(
@@ -933,7 +1003,7 @@ where
         let sums = PrimitiveArray::<T>::new(sums.into(), nulls) // zero copy
             .with_data_type(self.sum_data_type.clone());
 
-        Ok(Self::state_arrays(sums, counts))
+        Ok(Layout::state_arrays(sums, counts))
     }
 
     fn merge_batch(
@@ -944,17 +1014,8 @@ where
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
-        let (partial_counts, partial_sums) = if COUNT_FIRST {
-            (
-                values[0].as_primitive::<CountType>(),
-                values[1].as_primitive::<T>(),
-            )
-        } else {
-            (
-                values[1].as_primitive::<CountType>(),
-                values[0].as_primitive::<T>(),
-            )
-        };
+        let (partial_counts, partial_sums) =
+            Layout::partial_state::<T, CountType>(values);
 
         // update counts with partial counts
         self.counts
@@ -1006,7 +1067,7 @@ where
         let counts = set_nulls(counts, nulls.clone());
         let sums = set_nulls(sums, nulls);
 
-        Ok(Self::state_arrays(sums, counts))
+        Ok(Layout::state_arrays(sums, counts))
     }
 
     fn supports_convert_to_state(&self) -> bool {
