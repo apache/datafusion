@@ -25,7 +25,7 @@ use std::sync::Arc;
 use crate::joins::MapOffset;
 use crate::joins::join_hash_map::{
     contain_hashes, get_matched_indices, get_matched_indices_with_limit_offset,
-    update_from_iter,
+    get_matching_indices_with_limit_offset, update_from_iter,
 };
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use crate::metrics::{
@@ -34,14 +34,16 @@ use crate::metrics::{
 use crate::{ExecutionPlan, metrics};
 
 use arrow::array::{
-    ArrowPrimitiveType, BooleanArray, BooleanBufferBuilder, NativeAdapter,
+    ArrayRef, ArrowPrimitiveType, BooleanArray, BooleanBufferBuilder, NativeAdapter,
     PrimitiveArray, RecordBatch,
 };
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::memory::estimate_memory_size;
-use datafusion_common::{HashSet, JoinSide, Result, ScalarValue, arrow_datafusion_err};
+use datafusion_common::{
+    HashSet, JoinSide, NullEquality, Result, ScalarValue, arrow_datafusion_err,
+};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
@@ -102,8 +104,38 @@ impl JoinHashMapType for PruningJoinHashMap {
         contain_hashes(&self.map, hash_values)
     }
 
+    fn get_matching_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        build_values: &[ArrayRef],
+        probe_values: &[ArrayRef],
+        null_equality: NullEquality,
+        limit: usize,
+        offset: MapOffset,
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Result<Option<MapOffset>> {
+        let next: Vec<u64> = self.next.iter().copied().collect();
+        get_matching_indices_with_limit_offset::<u64>(
+            &self.map,
+            &next,
+            hash_values,
+            build_values,
+            probe_values,
+            null_equality,
+            limit,
+            offset,
+            input_indices,
+            match_indices,
+        )
+    }
+
     fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    fn may_contain_hash_chains(&self) -> bool {
+        self.map.len() != self.next.len()
     }
 
     fn len(&self) -> usize {

@@ -458,6 +458,16 @@ fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
     count
 }
 
+fn can_use_probe_existence_fast_path(
+    join_type: JoinType,
+    filter: &Option<JoinFilter>,
+) -> bool {
+    matches!(
+        join_type,
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark
+    ) && filter.is_none()
+}
+
 impl HashJoinStream {
     #[expect(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -781,9 +791,37 @@ impl HashJoinStream {
             return Ok(StatefulStreamResult::Continue);
         }
 
+        let use_probe_existence_fast_path =
+            can_use_probe_existence_fast_path(self.join_type, &self.filter);
+
         // get the matched by join keys indices
         let (left_indices, right_indices, next_offset) = match build_side.left_data.map()
         {
+            Map::HashMap(map)
+                if use_probe_existence_fast_path && map.may_contain_hash_chains() =>
+            {
+                let next_offset = map.get_matching_indices_with_limit_offset(
+                    &self.hashes_buffer,
+                    build_side.left_data.values(),
+                    &state.values,
+                    self.null_equality,
+                    self.batch_size,
+                    state.offset,
+                    &mut self.probe_indices_buffer,
+                    &mut self.build_indices_buffer,
+                )?;
+                (
+                    UInt64Array::from(std::mem::replace(
+                        &mut self.build_indices_buffer,
+                        Vec::with_capacity(self.batch_size),
+                    )),
+                    UInt32Array::from(std::mem::replace(
+                        &mut self.probe_indices_buffer,
+                        Vec::with_capacity(self.batch_size),
+                    )),
+                    next_offset,
+                )
+            }
             Map::HashMap(map) => lookup_join_hashmap(
                 map.as_ref(),
                 build_side.left_data.values(),
@@ -795,6 +833,26 @@ impl HashJoinStream {
                 &mut self.probe_indices_buffer,
                 &mut self.build_indices_buffer,
             )?,
+            Map::ArrayMap(array_map) if use_probe_existence_fast_path => {
+                let next_offset = array_map.get_matching_indices_with_limit_offset(
+                    &state.values,
+                    self.batch_size,
+                    state.offset,
+                    &mut self.probe_indices_buffer,
+                    &mut self.build_indices_buffer,
+                )?;
+                (
+                    UInt64Array::from(std::mem::replace(
+                        &mut self.build_indices_buffer,
+                        Vec::with_capacity(self.batch_size),
+                    )),
+                    UInt32Array::from(std::mem::replace(
+                        &mut self.probe_indices_buffer,
+                        Vec::with_capacity(self.batch_size),
+                    )),
+                    next_offset,
+                )
+            }
             Map::ArrayMap(array_map) => {
                 let next_offset = array_map.get_matched_indices_with_limit_offset(
                     &state.values,

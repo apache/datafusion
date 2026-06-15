@@ -22,11 +22,15 @@
 use std::fmt::{self, Debug};
 use std::ops::Sub;
 
-use arrow::array::BooleanArray;
+use arrow::array::{ArrayRef, BooleanArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::ArrowNativeType;
+use arrow_schema::SortOptions;
+use datafusion_common::{NullEquality, Result};
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
+
+use crate::joins::utils::JoinKeyComparator;
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///
@@ -126,11 +130,27 @@ pub trait JoinHashMapType: Send + Sync {
         match_indices: &mut Vec<u64>,
     ) -> Option<MapOffset>;
 
+    #[expect(clippy::too_many_arguments)]
+    fn get_matching_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        build_values: &[ArrayRef],
+        probe_values: &[ArrayRef],
+        null_equality: NullEquality,
+        limit: usize,
+        offset: MapOffset,
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Result<Option<MapOffset>>;
+
     /// Returns a BooleanArray indicating which of the provided hashes exist in the map.
     fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray;
 
     /// Returns `true` if the join hash map contains no entries.
     fn is_empty(&self) -> bool;
+
+    /// Returns `true` if the join hash map may contain chained indices for a hash.
+    fn may_contain_hash_chains(&self) -> bool;
 
     /// Returns the number of entries in the join hash map.
     fn len(&self) -> usize;
@@ -205,8 +225,37 @@ impl JoinHashMapType for JoinHashMapU32 {
         contain_hashes(&self.map, hash_values)
     }
 
+    fn get_matching_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        build_values: &[ArrayRef],
+        probe_values: &[ArrayRef],
+        null_equality: NullEquality,
+        limit: usize,
+        offset: MapOffset,
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Result<Option<MapOffset>> {
+        get_matching_indices_with_limit_offset::<u32>(
+            &self.map,
+            &self.next,
+            hash_values,
+            build_values,
+            probe_values,
+            null_equality,
+            limit,
+            offset,
+            input_indices,
+            match_indices,
+        )
+    }
+
     fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    fn may_contain_hash_chains(&self) -> bool {
+        self.map.len() != self.next.len()
     }
 
     fn len(&self) -> usize {
@@ -283,8 +332,37 @@ impl JoinHashMapType for JoinHashMapU64 {
         contain_hashes(&self.map, hash_values)
     }
 
+    fn get_matching_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        build_values: &[ArrayRef],
+        probe_values: &[ArrayRef],
+        null_equality: NullEquality,
+        limit: usize,
+        offset: MapOffset,
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Result<Option<MapOffset>> {
+        get_matching_indices_with_limit_offset::<u64>(
+            &self.map,
+            &self.next,
+            hash_values,
+            build_values,
+            probe_values,
+            null_equality,
+            limit,
+            offset,
+            input_indices,
+            match_indices,
+        )
+    }
+
     fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    fn may_contain_hash_chains(&self) -> bool {
+        self.map.len() != self.next.len()
     }
 
     fn len(&self) -> usize {
@@ -472,9 +550,77 @@ pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> Bool
     BooleanArray::new(buffer, None)
 }
 
+#[expect(clippy::too_many_arguments)]
+pub fn get_matching_indices_with_limit_offset<T>(
+    map: &HashTable<(u64, T)>,
+    next_chain: &[T],
+    hash_values: &[u64],
+    build_values: &[ArrayRef],
+    probe_values: &[ArrayRef],
+    null_equality: NullEquality,
+    limit: usize,
+    offset: MapOffset,
+    input_indices: &mut Vec<u32>,
+    match_indices: &mut Vec<u64>,
+) -> Result<Option<MapOffset>>
+where
+    T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
+    T: ArrowNativeType,
+{
+    input_indices.clear();
+    match_indices.clear();
+
+    debug_assert!(
+        offset.1.is_none(),
+        "existence lookup never resumes within a single probe row"
+    );
+
+    let sort_options = vec![SortOptions::default(); build_values.len()];
+    let comparator =
+        JoinKeyComparator::new(build_values, probe_values, &sort_options, null_equality)?;
+    let zero = T::usize_as(0);
+    let one = T::usize_as(1);
+
+    for row_idx in offset.0..hash_values.len() {
+        let hash = hash_values[row_idx];
+        let Some((_, chain_idx)) = map.find(hash, |(h, _)| hash == *h) else {
+            continue;
+        };
+
+        let mut match_row_idx = *chain_idx - one;
+        loop {
+            let build_idx = match_row_idx.into() as usize;
+            if comparator.is_equal(build_idx, row_idx) {
+                input_indices.push(row_idx as u32);
+                match_indices.push(build_idx as u64);
+
+                if input_indices.len() == limit {
+                    return if row_idx + 1 == hash_values.len() {
+                        Ok(None)
+                    } else {
+                        Ok(Some((row_idx + 1, None)))
+                    };
+                }
+                break;
+            }
+
+            let next = next_chain[build_idx];
+            if next == zero {
+                break;
+            }
+            match_row_idx = next - one;
+        }
+    }
+
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{ArrayRef, Int32Array};
+    use std::sync::Arc;
 
     #[test]
     fn test_contain_hashes() {
@@ -493,5 +639,49 @@ mod tests {
                 assert!(!array.value(i), "Hash {hash} should NOT exist in the map");
             }
         }
+    }
+
+    #[test]
+    fn test_get_matching_indices_checks_key_equality_on_hash_collision() -> Result<()> {
+        let mut hash_map = JoinHashMapU32::with_capacity(2);
+        hash_map.update_from_iter(Box::new([7u64, 7u64].iter().enumerate()), 0);
+
+        let build_values = vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef];
+        let probe_values = vec![Arc::new(Int32Array::from(vec![2, 3, 1])) as ArrayRef];
+        let hash_values = vec![7, 7, 7];
+
+        let mut input_indices = Vec::new();
+        let mut match_indices = Vec::new();
+        let next_offset = hash_map.get_matching_indices_with_limit_offset(
+            &hash_values,
+            &build_values,
+            &probe_values,
+            NullEquality::NullEqualsNothing,
+            1,
+            (0, None),
+            &mut input_indices,
+            &mut match_indices,
+        )?;
+
+        assert_eq!(input_indices, vec![0]);
+        assert_eq!(match_indices, vec![1]);
+        assert_eq!(next_offset, Some((1, None)));
+
+        let next_offset = hash_map.get_matching_indices_with_limit_offset(
+            &hash_values,
+            &build_values,
+            &probe_values,
+            NullEquality::NullEqualsNothing,
+            10,
+            next_offset.unwrap(),
+            &mut input_indices,
+            &mut match_indices,
+        )?;
+
+        assert_eq!(input_indices, vec![2]);
+        assert_eq!(match_indices, vec![0]);
+        assert_eq!(next_offset, None);
+
+        Ok(())
     }
 }

@@ -264,6 +264,35 @@ impl ArrayMap {
         )
     }
 
+    pub fn get_matching_indices_with_limit_offset(
+        &self,
+        prob_side_keys: &[ArrayRef],
+        limit: usize,
+        current_offset: MapOffset,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) -> Result<Option<MapOffset>> {
+        if prob_side_keys.len() != 1 {
+            return internal_err!(
+                "ArrayMap expects 1 join key, but got {}",
+                prob_side_keys.len()
+            );
+        }
+        let array = &prob_side_keys[0];
+
+        downcast_supported_integer!(
+            array.data_type() => (
+                lookup_and_get_matching_indices,
+                self,
+                array,
+                limit,
+                current_offset,
+                probe_indices,
+                build_indices
+            )
+        )
+    }
+
     fn lookup_and_get_indices<T: ArrowNumericType>(
         &self,
         array: &ArrayRef,
@@ -368,6 +397,61 @@ impl ArrayMap {
             }
             Ok(None)
         }
+    }
+
+    fn lookup_and_get_matching_indices<T: ArrowNumericType>(
+        &self,
+        array: &ArrayRef,
+        limit: usize,
+        current_offset: MapOffset,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) -> Result<Option<MapOffset>>
+    where
+        T::Native: Copy + AsPrimitive<u64>,
+    {
+        probe_indices.clear();
+        build_indices.clear();
+
+        debug_assert!(
+            current_offset.1.is_none(),
+            "existence lookup never resumes within a single probe row"
+        );
+
+        let arr = array.as_primitive::<T>();
+        let have_null = arr.null_count() > 0;
+
+        for prob_idx in current_offset.0..arr.len() {
+            if have_null && arr.is_null(prob_idx) {
+                continue;
+            }
+
+            // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
+            let prob_val: u64 = unsafe { arr.value_unchecked(prob_idx) }.as_();
+            let idx_in_build_side = prob_val.wrapping_sub(self.offset) as usize;
+
+            if idx_in_build_side >= self.data.len() {
+                continue;
+            }
+
+            let build_idx = self.data[idx_in_build_side];
+            if build_idx == 0 {
+                continue;
+            }
+
+            probe_indices.push(prob_idx as u32);
+            build_indices.push((build_idx - 1) as u64);
+
+            if probe_indices.len() == limit {
+                return if prob_idx + 1 == arr.len() {
+                    Ok(None)
+                } else {
+                    Ok(Some((prob_idx + 1, None)))
+                };
+            }
+        }
+
+        Ok(None)
     }
 
     pub fn contain_keys(&self, probe_side_keys: &[ArrayRef]) -> Result<BooleanArray> {
@@ -503,6 +587,40 @@ mod tests {
         assert_eq!(prob_indices, vec![1, 1, 3]);
         assert_eq!(build_indices, vec![0, 1, 0]);
         assert_eq!(result_offset, Some((3, Some(2))));
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_map_matching_indices_emit_once_per_probe_key() -> Result<()> {
+        let build: ArrayRef = Arc::new(Int32Array::from(vec![1, 1, 2]));
+        let map = ArrayMap::try_new(&build, 1, 2)?;
+        let probe = [Arc::new(Int32Array::from(vec![1, 2, 3, 1])) as ArrayRef];
+
+        let mut prob_idx = Vec::new();
+        let mut build_idx = Vec::new();
+        let next = map.get_matching_indices_with_limit_offset(
+            &probe,
+            2,
+            (0, None),
+            &mut prob_idx,
+            &mut build_idx,
+        )?;
+
+        assert_eq!(prob_idx, vec![0, 1]);
+        assert_eq!(build_idx, vec![0, 2]);
+        assert_eq!(next, Some((2, None)));
+
+        let next = map.get_matching_indices_with_limit_offset(
+            &probe,
+            2,
+            next.unwrap(),
+            &mut prob_idx,
+            &mut build_idx,
+        )?;
+
+        assert_eq!(prob_idx, vec![3]);
+        assert_eq!(build_idx, vec![0]);
+        assert_eq!(next, None);
         Ok(())
     }
 
