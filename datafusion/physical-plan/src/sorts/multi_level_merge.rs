@@ -490,7 +490,16 @@ impl MultiLevelMergeBuilder {
     /// next attempt can seat both streams. One stream's worth of memory is reserved
     /// for the duration and freed afterwards. Makes the merge resilient to skew.
     async fn split_spill_file_in_half(&mut self, index: usize) -> Result<()> {
-        let target = self.sorted_spill_files.remove(index);
+        // Extract the target in O(1) instead of `remove(index)`, which would shift
+        // every following spill file. Swap it to the back and pop it; the matching
+        // swap after re-spilling restores the original order, so the vec ends up
+        // exactly as it started, just with the target file shrunk.
+        let last = self.sorted_spill_files.len() - 1;
+        self.sorted_spill_files.swap(index, last);
+        let target = self
+            .sorted_spill_files
+            .pop()
+            .expect("index is in bounds, so the vec is non-empty");
         let old_max = target.max_record_batch_memory;
 
         // Reserve enough to hold a single stream of this file while we re-spill it.
@@ -547,13 +556,14 @@ impl MultiLevelMergeBuilder {
         // reintroduce the exact skew we just resolved.
         self.batch_size = (self.batch_size / 2).max(1);
 
-        self.sorted_spill_files.insert(
-            index,
-            SortedSpillFile {
-                file,
-                max_record_batch_memory: new_max,
-            },
-        );
+        // Push the re-spilled (smaller) file and swap it back into `index`, undoing
+        // the swap-to-back above so the order is preserved.
+        self.sorted_spill_files.push(SortedSpillFile {
+            file,
+            max_record_batch_memory: new_max,
+        });
+        let last = self.sorted_spill_files.len() - 1;
+        self.sorted_spill_files.swap(index, last);
 
         Ok(())
     }
