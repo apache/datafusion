@@ -210,7 +210,7 @@ unsafe extern "C" fn partition_statistics_fn_wrapper(
 ) -> FFI_Result<SVec<u8>> {
     let partition: Option<usize> = partition.into();
     plan.inner()
-        .statistics_with_args(&StatisticsArgs::new(partition))
+        .statistics_with_args(&StatisticsArgs::new().with_partition(partition))
         .map(|stats| SVec::from(serialize_statistics(stats.as_ref()).as_slice()))
         .into()
 }
@@ -753,8 +753,7 @@ pub mod tests {
         // A plan without explicit statistics reports new_unknown.
         let bare = export_empty_exec_over_ffi(&schema, None)?;
         assert_eq!(
-            bare.statistics_with_args(&StatisticsArgs::new(None))?
-                .as_ref(),
+            bare.statistics_with_args(&StatisticsArgs::new())?.as_ref(),
             &Statistics::new_unknown(&schema)
         );
 
@@ -763,13 +762,13 @@ pub mod tests {
             export_empty_exec_over_ffi(&schema, Some(original_stats.clone()))?;
         assert_eq!(
             with_stats
-                .statistics_with_args(&StatisticsArgs::new(None))?
+                .statistics_with_args(&StatisticsArgs::new())?
                 .as_ref(),
             &original_stats
         );
         assert_eq!(
             with_stats
-                .statistics_with_args(&StatisticsArgs::new(Some(1)))?
+                .statistics_with_args(&StatisticsArgs::new().with_partition(Some(1)))?
                 .as_ref(),
             &original_stats
         );
