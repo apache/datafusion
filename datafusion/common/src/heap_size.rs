@@ -410,24 +410,6 @@ impl DFHeapSize for UnionFields {
     }
 }
 
-impl DFHeapSize for UnionMode {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for TimeUnit {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for IntervalUnit {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
 impl DFHeapSize for Field {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         self.name().heap_size(ctx)
@@ -452,98 +434,40 @@ impl DFHeapSize for IntervalDayTime {
     }
 }
 
-impl DFHeapSize for DateTime<Utc> {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
+/// Implement [`DFHeapSize`] for types that own no heap allocations.
+macro_rules! impl_zero_heap_size {
+    ($($t:ty),+ $(,)?) => {
+        $(
+            impl DFHeapSize for $t {
+                fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
+                    0 // no heap allocations
+                }
+            }
+        )+
+    };
 }
 
-impl DFHeapSize for bool {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-impl DFHeapSize for u8 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for u16 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for u32 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for u64 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for i8 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for i16 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for i32 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-impl DFHeapSize for i64 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for i128 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for i256 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for f16 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for f32 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-impl DFHeapSize for f64 {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
-
-impl DFHeapSize for usize {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        0 // no heap allocations
-    }
-}
+impl_zero_heap_size!(
+    bool,
+    u8,
+    u16,
+    u32,
+    u64,
+    usize,
+    i8,
+    i16,
+    i32,
+    i64,
+    i128,
+    i256,
+    f16,
+    f32,
+    f64,
+    UnionMode,
+    TimeUnit,
+    IntervalUnit,
+    DateTime<Utc>,
+);
 
 #[cfg(test)]
 mod tests {
@@ -619,6 +543,20 @@ mod tests {
         assert_eq!(size(&0f32), 0);
         assert_eq!(size(&0f64), 0);
         assert_eq!(size(&f16::from_f32(0.0)), 0);
+    }
+
+    #[test]
+    fn test_heap_size_union_mode() {
+        assert_eq!(size(&UnionMode::Sparse), 0);
+        assert_eq!(size(&UnionMode::Dense), 0);
+    }
+
+    #[test]
+    fn test_heap_size_time_units() {
+        assert_eq!(size(&TimeUnit::Second), 0);
+        assert_eq!(size(&IntervalUnit::YearMonth), 0);
+        assert_eq!(size(&DateTime::<Utc>::UNIX_EPOCH), 0);
+        assert_eq!(size(&Utc::now()), 0);
     }
 
     #[test]
