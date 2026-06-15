@@ -222,6 +222,14 @@ fn cast_to_string_equality_preimage(
     }
 }
 
+/// Computes the source-domain preimage interval for timestamp precision
+/// narrowing casts.
+///
+/// The preimage is computed entirely in the source timestamp domain and
+/// preserves `source_tz`.  The target timezone is intentionally *not* copied
+/// into the generated bounds: this models the raw timestamp values after
+/// truncation and avoids comparing source columns against target-timezone
+/// literals.
 fn timestamp_precision_narrowing_preimage(
     source_type: &DataType,
     target_type: &DataType,
