@@ -806,7 +806,7 @@ trait AvgStateLayout: Debug + Send + 'static {
         T: ArrowPrimitiveType,
         CountType: ArrowPrimitiveType;
 
-    fn partial_state<'a, T, CountType>(
+    fn decode_partial_state<'a, T, CountType>(
         values: &'a [ArrayRef],
     ) -> (&'a PrimitiveArray<CountType>, &'a PrimitiveArray<T>)
     where
@@ -826,7 +826,7 @@ impl AvgStateLayout for BuiltInAvgLayout {
         vec![Arc::new(counts) as ArrayRef, Arc::new(sums) as ArrayRef]
     }
 
-    fn partial_state<'a, T, CountType>(
+    fn decode_partial_state<'a, T, CountType>(
         values: &'a [ArrayRef],
     ) -> (&'a PrimitiveArray<CountType>, &'a PrimitiveArray<T>)
     where
@@ -852,7 +852,7 @@ impl AvgStateLayout for SparkAvgLayout {
         vec![Arc::new(sums) as ArrayRef, Arc::new(counts) as ArrayRef]
     }
 
-    fn partial_state<'a, T, CountType>(
+    fn decode_partial_state<'a, T, CountType>(
         values: &'a [ArrayRef],
     ) -> (&'a PrimitiveArray<CountType>, &'a PrimitiveArray<T>)
     where
@@ -1015,7 +1015,7 @@ where
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
         let (partial_counts, partial_sums) =
-            Layout::partial_state::<T, CountType>(values);
+            Layout::decode_partial_state::<T, CountType>(values);
 
         // update counts with partial counts
         self.counts

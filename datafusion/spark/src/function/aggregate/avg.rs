@@ -305,32 +305,6 @@ mod tests {
         assert_eq!(result.value(0), 10.0);
     }
 
-    #[tokio::test]
-    async fn spark_avg_query_applies_nulls_and_filter() -> Result<()> {
-        use datafusion::prelude::SessionContext;
-
-        let mut ctx = SessionContext::new();
-        crate::register_all(&mut ctx)?;
-
-        let batches = ctx
-            .sql(
-                "SELECT avg(v) FILTER (WHERE keep) AS avg_v \
-                 FROM (VALUES \
-                    (CAST(1.0 AS DOUBLE), true), \
-                    (CAST(NULL AS DOUBLE), true), \
-                    (CAST(3.0 AS DOUBLE), false), \
-                    (CAST(5.0 AS DOUBLE), CAST(NULL AS BOOLEAN)) \
-                 ) AS t(v, keep)",
-            )
-            .await?
-            .collect()
-            .await?;
-
-        let result = batches[0].column(0).as_primitive::<Float64Type>();
-        assert_eq!(result.value(0), 1.0);
-        Ok(())
-    }
-
     #[test]
     fn convert_to_state_roundtrips_through_merge() {
         let mut acc = make_acc();

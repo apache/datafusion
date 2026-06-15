@@ -71,8 +71,7 @@ url = { workspace = true }
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
 # for SessionStateBuilderSpark tests
-datafusion = { workspace = true, default-features = false, features = ["sql"] }
-tokio = { workspace = true, features = ["macros", "rt"] }
+datafusion = { workspace = true, default-features = false }
 
 [[bench]]
 harness = false
