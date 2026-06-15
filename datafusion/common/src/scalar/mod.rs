@@ -2587,7 +2587,6 @@ impl ScalarValue {
     /// rounded to the nearest integer.
     ///
     /// Note: the datatype itself must support subtraction.
-    #[deprecated(since = "54.0.0", note = "Use distance_u64 instead")]
     pub fn distance(&self, other: &ScalarValue) -> Option<usize> {
         self.distance_u64(other)
             .and_then(|d| usize::try_from(d).ok())
