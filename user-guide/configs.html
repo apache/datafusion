@@ -706,7 +706,7 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>When set to true, skips verifying that the schema produced by planning the input of <code class="docutils literal notranslate"><span class="pre">LogicalPlan::Aggregate</span></code> exactly matches the schema of the input plan. When set to false, if the schema does not match exactly (including nullability and metadata), a planning error will be raised. This is used to workaround bugs in the planner that are now caught by the new schema verification step.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.enable_migration_aggregate</p></td>
-<td><p>false</p></td>
+<td><p>true</p></td>
 <td><p>Temporary switch for aggregate stream implementations that are being migrated from <code class="docutils literal notranslate"><span class="pre">GroupedHashAggregateStream</span></code>. When set to true, DataFusion tries the migrated implementations when their preconditions are satisfied. When set to false, grouped aggregation falls back to <code class="docutils literal notranslate"><span class="pre">GroupedHashAggregateStream</span></code>. This option will be removed after the migration is finished. See <a class="github reference external" href="https://github.com/apache/datafusion/issues/22710">apache/datafusion#22710</a> for details.</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.spill_compression</p></td>
