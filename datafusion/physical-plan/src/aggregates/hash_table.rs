@@ -22,9 +22,10 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use super::group_values::{GroupByMetrics, GroupValues, new_group_values};
 use super::order::GroupOrdering;
@@ -34,10 +35,11 @@ use super::{
     group_id_array, max_duplicate_ordinal,
 };
 use crate::PhysicalExpr;
-use crate::metrics::{MetricBuilder, MetricCategory};
 
 /// Marker for raw rows -> partial state aggregation.
 pub(super) struct Partial;
+/// Marker for raw rows -> partial state conversion without aggregation.
+pub(super) struct PartialSkip;
 /// Marker for partial state -> final value aggregation.
 pub(super) struct Final;
 
@@ -76,6 +78,10 @@ pub(super) struct AggregateHashTable<AggrMode> {
 }
 
 struct HashAggregateAccumulator {
+    /// Aggregate expression used to create a fresh accumulator for related
+    /// hash tables, such as the partial-skip table.
+    aggregate_expr: Arc<AggregateFunctionExpr>,
+
     /// Arguments to pass to this accumulator.
     ///
     /// Example: `CORR(x, y)` stores two expressions here, while `SUM(x)` stores one.
@@ -147,15 +153,27 @@ enum AggregateHashTableState {
 
 impl HashAggregateAccumulator {
     fn new(
+        aggregate_expr: Arc<AggregateFunctionExpr>,
         arguments: Vec<Arc<dyn PhysicalExpr>>,
         filter: Option<Arc<dyn PhysicalExpr>>,
         accumulator: Box<dyn GroupsAccumulator>,
     ) -> Self {
         Self {
+            aggregate_expr,
             arguments,
             filter,
             accumulator,
         }
+    }
+
+    fn empty_like(&self) -> Result<Self> {
+        let accumulator = create_group_accumulator(&self.aggregate_expr)?;
+        Ok(Self::new(
+            Arc::clone(&self.aggregate_expr),
+            self.arguments.clone(),
+            self.filter.clone(),
+            accumulator,
+        ))
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<EvaluatedHashAggregateAccumulator> {
@@ -223,6 +241,15 @@ impl HashAggregateAccumulator {
         self.accumulator.supports_convert_to_state()
     }
 
+    fn convert_to_state(
+        &mut self,
+        values: &EvaluatedHashAggregateAccumulator,
+    ) -> Result<Vec<ArrayRef>> {
+        let opt_filter = values.filter.as_ref().map(|filter| filter.as_boolean());
+        self.accumulator
+            .convert_to_state(&values.arguments, opt_filter)
+    }
+
     fn null_arguments(&self, input_schema: &SchemaRef) -> Result<Vec<ArrayRef>> {
         self.arguments
             .iter()
@@ -272,6 +299,7 @@ impl<Mode> AggregateHashTable<Mode> {
             .map(|((agg_expr, arguments), filter)| {
                 let accumulator = create_group_accumulator(agg_expr)?;
                 Ok(HashAggregateAccumulator::new(
+                    Arc::clone(agg_expr),
                     arguments,
                     filter,
                     accumulator,
@@ -342,6 +370,7 @@ impl<Mode> AggregateHashTable<Mode> {
         }
     }
 
+    /// How many distinct groups has been accumulated now.
     pub(super) fn building_group_count(&self) -> usize {
         self.state.building().group_values.len()
     }
@@ -410,27 +439,49 @@ impl AggregateHashTable<Partial> {
         output_schema: SchemaRef,
         batch_size: usize,
     ) -> Result<Self> {
-        let table = Self::new_with_filters(
+        Self::new_with_filters(
             agg,
             partition,
             output_schema,
             batch_size,
             agg.filter_expr.iter().cloned().collect(),
-        )?;
+        )
+    }
 
-        if table
-            .state
+    pub(super) fn can_skip_aggregation(&self) -> bool {
+        self.state
             .building()
             .accumulators
             .iter()
             .all(|acc| acc.supports_convert_to_state())
-        {
-            let _skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Rows)
-                .counter("skipped_aggregation_rows", partition);
-        }
+    }
 
-        Ok(table)
+    /// In skip-partial-aggregation optimization, when a decision has made to skip
+    /// partial stage, build a typed hash table only for aggregation state conversion
+    /// row-by-row.
+    pub(super) fn partial_skip_table(&self) -> Result<AggregateHashTable<PartialSkip>> {
+        let state = self.state.building();
+        let group_schema = state.group_by.group_schema(&self.input_schema)?;
+        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let accumulators = state
+            .accumulators
+            .iter()
+            .map(HashAggregateAccumulator::empty_like)
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(AggregateHashTable {
+            group_by_metrics: self.group_by_metrics.clone(),
+            input_schema: Arc::clone(&self.input_schema),
+            output_schema: Arc::clone(&self.output_schema),
+            batch_size: self.batch_size,
+            state: AggregateHashTableState::Building(BuildingHashTableState {
+                group_by: Arc::clone(&state.group_by),
+                group_values,
+                batch_group_indices: Default::default(),
+                accumulators,
+            }),
+            _mode: PhantomData,
+        })
     }
 
     pub(super) fn aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
@@ -548,6 +599,40 @@ impl AggregateHashTable<Partial> {
         }
 
         Ok(())
+    }
+}
+
+impl AggregateHashTable<PartialSkip> {
+    pub(super) fn convert_batch_to_state(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<RecordBatch> {
+        let evaluated_batch = self.evaluate_batch(batch)?;
+
+        assert_eq_or_internal_err!(
+            evaluated_batch.grouping_set_args.len(),
+            1,
+            "group_values expected to have single element"
+        );
+        let mut output = evaluated_batch
+            .grouping_set_args
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+
+        let state = self.state.building_mut();
+        for (acc, values) in state
+            .accumulators
+            .iter_mut()
+            .zip(evaluated_batch.accumulator_args.iter())
+        {
+            output.extend(acc.convert_to_state(values)?);
+        }
+
+        Ok(RecordBatch::try_new(
+            Arc::clone(&self.output_schema),
+            output,
+        )?)
     }
 }
 
