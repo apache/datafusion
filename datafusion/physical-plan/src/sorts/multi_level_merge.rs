@@ -119,13 +119,22 @@ use futures::{Stream, StreamExt};
 /// ## Memory Management Strategy
 ///
 /// This multi-level merge make sure that we can handle any amount of data to sort as long as
-/// we have enough memory to merge at least 2 streams at a time.
+/// we have enough memory to merge at least 2 streams at a time, even when individual record
+/// batches are skewed (very wide).
 ///
 /// 1. **Worst-Case Memory Reservation**: Reserves memory based on the largest
 ///    batch size encountered in each spill file to merge, ensuring sufficient memory is always
 ///    available during merge operations.
 /// 2. **Adaptive Buffer Sizing**: Reduces buffer sizes when memory is constrained
 /// 3. **Spill-to-Disk**: Spill to disk when we cannot merge all files in memory
+/// 4. **Re-spilling Skewed Runs**: If even at the smallest read-buffer size we still cannot
+///    reserve memory for the minimum of 2 streams - because a single run's largest batch is so
+///    wide that two streams' worth of reservation exceeds the budget - the larger of the two
+///    runs is re-spilled with each batch sliced in half. This shrinks its largest batch,
+///    lowering the per-stream reservation, and the merge pass is retried. The merge output
+///    batch size is halved as well so the merged run cannot rebuild a full-size batch and
+///    reintroduce the skew. If a batch cannot be split any further (a single row wider than the
+///    budget), the merge surfaces `ResourcesExhausted` instead of looping forever.
 pub(crate) struct MultiLevelMergeBuilder {
     spill_manager: SpillManager,
     schema: SchemaRef,
