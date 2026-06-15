@@ -923,7 +923,7 @@ impl GroupedHashAggregateStream {
 
                     // if aggregation is over intermediate states,
                     // use merge
-                    acc.merge_batch(values, group_indices, None, total_num_groups)?;
+                    acc.merge_batch(values, group_indices, total_num_groups)?;
                 }
                 self.group_by_metrics
                     .aggregation_time
@@ -1111,17 +1111,31 @@ impl GroupedHashAggregateStream {
             // Prime each accumulator for the registered group count with no data.
             //
             // We build 1-row null arrays for each aggregate argument and pass them
-            // with an all-false filter.  The filter ensures no row is accumulated
-            // into any group, which keeps every group in its "zero" initial state
-            // (NULL for SUM/AVG/MIN/MAX, 0 for COUNT).
+            // with an all-false filter to update_batch.  The filter ensures no row
+            // is accumulated into any group, which keeps every group in its "zero"
+            // initial state (NULL for SUM/AVG/MIN/MAX, 0 for COUNT).
             //
             // Using a 1-row batch rather than 0 rows is required to avoid a fast
             // path in `NullState::accumulate` that treats "0 nulls in a 0-row
             // array" as "all groups have been seen", which would cause SUM to
             // return 0 instead of NULL.
             //
-            // Argument types are inferred directly from the expression metadata so
-            // we never need to construct a full `RecordBatch`.
+            // This path always runs in a Raw input mode, so `update_batch` (not
+            // `merge_batch`) is the right entry point:
+            //
+            // - `has_grouping_set()` can only be true for the Partial / Single /
+            //   SinglePartitioned modes, whose `input_mode()` is `Raw`. The final
+            //   modes rebuild their group-by via `PhysicalGroupBy::as_final()`,
+            //   which clears `has_grouping_set`, so this method returns early for
+            //   them and never reaches here.
+            //
+            // Since every row is filtered out, the actual data content never
+            // matters. The assert documents and guards the invariant above.
+            debug_assert_eq!(
+                self.mode.input_mode(),
+                AggregateInputMode::Raw,
+                "init_empty_grouping_sets must only run in a Raw input mode"
+            );
             let total_groups = self.group_values.len();
             let null_args: Vec<Vec<ArrayRef>> = self
                 .aggregate_arguments
@@ -1137,11 +1151,7 @@ impl GroupedHashAggregateStream {
                 .collect::<Result<Vec<_>>>()?;
             let false_filter = BooleanArray::from(vec![false]);
             for (acc, args) in self.accumulators.iter_mut().zip(null_args.iter()) {
-                if self.mode.input_mode() == AggregateInputMode::Raw {
-                    acc.update_batch(args, &[0], Some(&false_filter), total_groups)?;
-                } else {
-                    acc.merge_batch(args, &[0], Some(&false_filter), total_groups)?;
-                }
+                acc.update_batch(args, &[0], Some(&false_filter), total_groups)?;
             }
         }
 
