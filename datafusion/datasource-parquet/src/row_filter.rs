@@ -65,7 +65,7 @@
 //! - `WHERE s['value'] > 5` — pushed down (accesses a primitive leaf)
 //! - `WHERE s IS NOT NULL`  — not pushed down (references the whole struct)
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow::array::BooleanArray;
@@ -796,15 +796,22 @@ fn build_filter_schema(
     struct_field_accesses: &[StructFieldAccess],
 ) -> SchemaRef {
     let regular_set: BTreeSet<usize> = regular_indices.iter().copied().collect();
+    let mut paths_by_root: BTreeMap<usize, Vec<&[String]>> = BTreeMap::new();
+    for StructFieldAccess {
+        root_index,
+        field_path,
+    } in struct_field_accesses
+    {
+        paths_by_root
+            .entry(*root_index)
+            .or_default()
+            .push(field_path.as_slice());
+    }
 
     let all_indices = regular_indices
         .iter()
         .copied()
-        .chain(
-            struct_field_accesses
-                .iter()
-                .map(|&StructFieldAccess { root_index, .. }| root_index),
-        )
+        .chain(paths_by_root.keys().copied())
         .collect::<BTreeSet<_>>();
 
     let fields = all_indices
@@ -821,24 +828,11 @@ fn build_filter_schema(
                 return Arc::new(field.clone());
             }
 
-            // collect all field paths that access this root struct column
-            let field_paths = struct_field_accesses
-                .iter()
-                .filter_map(
-                    |&StructFieldAccess {
-                         root_index,
-                         ref field_path,
-                     }| {
-                        (root_index == idx).then_some(field_path.as_slice())
-                    },
-                )
-                .collect::<Vec<_>>();
-
-            if field_paths.is_empty() {
+            let Some(field_paths) = paths_by_root.get(&idx) else {
                 return Arc::new(field.clone());
-            }
+            };
 
-            let pruned_data_type = prune_struct_type(field.data_type(), &field_paths);
+            let pruned_data_type = prune_struct_type(field.data_type(), field_paths);
             Arc::new(Field::new(
                 field.name(),
                 pruned_data_type,
@@ -858,36 +852,25 @@ fn prune_struct_type(dt: &DataType, paths: &[&[String]]) -> DataType {
         return dt.clone();
     };
 
-    let needed = paths
-        .iter()
-        .filter_map(|p| p.first().map(|s| s.as_str()))
-        .collect::<BTreeSet<_>>();
+    let paths_by_field = paths.iter().filter_map(|path| path.split_first()).fold(
+        BTreeMap::<&str, Vec<&[String]>>::new(),
+        |mut acc, (field, sub_path)| {
+            acc.entry(field.as_str()).or_default().push(sub_path);
+            acc
+        },
+    );
 
     let pruned_fields = fields
         .iter()
         .filter_map(|f| {
-            if !needed.contains(f.name().as_str()) {
-                return None;
-            }
+            let sub_paths = paths_by_field.get(f.name().as_str())?;
 
-            let sub_paths = paths
-                .iter()
-                .filter_map(|path| {
-                    if path.first().map(|s| s.as_str()) == Some(f.name()) {
-                        Some(&path[1..])
-                    } else {
-                        None
-                    }
-                })
-                .filter(|sub| !sub.is_empty())
-                .collect::<Vec<_>>();
-
-            let out = if sub_paths.is_empty() {
+            let out = if sub_paths.iter().any(|sub| sub.is_empty()) {
                 // Leaf of access path — keep the field as-is.
                 Arc::clone(f)
             } else {
                 // Recurse into nested struct.
-                let pruned = prune_struct_type(f.data_type(), &sub_paths);
+                let pruned = prune_struct_type(f.data_type(), sub_paths);
                 Arc::new(Field::new(f.name(), pruned, f.is_nullable()))
             };
 
