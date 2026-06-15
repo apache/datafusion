@@ -728,6 +728,126 @@ mod tests {
     }
 
     #[test]
+    fn test_timestamp_precision_narrowing_range_preimage_is_distinct_from() {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        )]);
+
+        let column_expr = col("ts", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::TimestampMillisecond(Some(1000), None));
+        let binary_expr = Arc::new(BinaryExpr::new(
+            cast_expr,
+            Operator::IsDistinctFrom,
+            literal_expr,
+        ));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        assert!(result.transformed);
+
+        // Expected: OR( OR(expr < lower, expr >= upper), IS NULL(expr) )
+        let outer_or = result.data.downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*outer_or.op(), Operator::Or);
+
+        // Right side of outer OR → IS NULL
+        assert!(
+            outer_or
+                .right()
+                .downcast_ref::<crate::expressions::IsNullExpr>()
+                .is_some()
+        );
+
+        // Left side of outer OR → OR(expr < lower, expr >= upper)
+        let inner_or = outer_or.left().downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*inner_or.op(), Operator::Or);
+
+        // Left-left: expr < lower
+        let lt_binary = inner_or.left().downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*lt_binary.op(), Operator::Lt);
+        let lt_literal = lt_binary.right().downcast_ref::<Literal>().unwrap();
+        assert_eq!(
+            lt_literal.value(),
+            &ScalarValue::TimestampNanosecond(Some(1_000_000_000), None)
+        );
+
+        // Left-right: expr >= upper
+        let gte_binary = inner_or.right().downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*gte_binary.op(), Operator::GtEq);
+        let gte_literal = gte_binary.right().downcast_ref::<Literal>().unwrap();
+        assert_eq!(
+            gte_literal.value(),
+            &ScalarValue::TimestampNanosecond(Some(1_001_000_000), None)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_precision_narrowing_range_preimage_is_not_distinct_from() {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        )]);
+
+        let column_expr = col("ts", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            None,
+        ));
+        let literal_expr = lit(ScalarValue::TimestampMillisecond(Some(1000), None));
+        let binary_expr = Arc::new(BinaryExpr::new(
+            cast_expr,
+            Operator::IsNotDistinctFrom,
+            literal_expr,
+        ));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        assert!(result.transformed);
+
+        // Expected: AND( AND(IS NOT NULL(expr), expr >= lower), expr < upper )
+        let outer_and = result.data.downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*outer_and.op(), Operator::And);
+
+        // Right side of outer AND → expr < upper
+        let upper_binary = outer_and.right().downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*upper_binary.op(), Operator::Lt);
+        let upper_literal = upper_binary.right().downcast_ref::<Literal>().unwrap();
+        assert_eq!(
+            upper_literal.value(),
+            &ScalarValue::TimestampNanosecond(Some(1_001_000_000), None)
+        );
+
+        // Left side of outer AND → AND(IS NOT NULL(expr), expr >= lower)
+        let inner_and = outer_and.left().downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*inner_and.op(), Operator::And);
+
+        // Left-left: IS NOT NULL
+        assert!(
+            inner_and
+                .left()
+                .downcast_ref::<crate::expressions::IsNotNullExpr>()
+                .is_some()
+        );
+
+        // Left-right: expr >= lower
+        let gte_binary = inner_and.right().downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*gte_binary.op(), Operator::GtEq);
+        let gte_literal = gte_binary.right().downcast_ref::<Literal>().unwrap();
+        assert_eq!(
+            gte_literal.value(),
+            &ScalarValue::TimestampNanosecond(Some(1_000_000_000), None)
+        );
+    }
+
+    #[test]
     fn test_complex_nested_expression() {
         let schema = test_schema();
 
