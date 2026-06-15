@@ -228,10 +228,9 @@ mod tests {
 
     fn assert_state_validity_and_counts(state: &[ArrayRef], expected_validity: &[bool]) {
         let (sums, counts) = spark_avg_state(state);
-        let expected_counts: Vec<i64> = vec![1; expected_validity.len()];
 
         assert_validity(sums, expected_validity);
-        assert_eq!(counts.values().as_ref(), expected_counts.as_slice());
+        assert!(counts.values().iter().all(|&count| count == 1));
         assert_validity(counts, expected_validity);
     }
 
@@ -304,6 +303,32 @@ mod tests {
         let result = acc.evaluate(EmitTo::All).unwrap();
         let result = result.as_primitive::<Float64Type>();
         assert_eq!(result.value(0), 10.0);
+    }
+
+    #[tokio::test]
+    async fn spark_avg_query_applies_nulls_and_filter() -> Result<()> {
+        use datafusion::prelude::SessionContext;
+
+        let mut ctx = SessionContext::new();
+        crate::register_all(&mut ctx)?;
+
+        let batches = ctx
+            .sql(
+                "SELECT avg(v) FILTER (WHERE keep) AS avg_v \
+                 FROM (VALUES \
+                    (CAST(1.0 AS DOUBLE), true), \
+                    (CAST(NULL AS DOUBLE), true), \
+                    (CAST(3.0 AS DOUBLE), false), \
+                    (CAST(5.0 AS DOUBLE), CAST(NULL AS BOOLEAN)) \
+                 ) AS t(v, keep)",
+            )
+            .await?
+            .collect()
+            .await?;
+
+        let result = batches[0].column(0).as_primitive::<Float64Type>();
+        assert_eq!(result.value(0), 1.0);
+        Ok(())
     }
 
     #[test]
