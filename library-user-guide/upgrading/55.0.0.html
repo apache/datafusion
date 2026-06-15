@@ -469,6 +469,50 @@ will now appear as <code class="docutils literal notranslate"><span class="pre">
 <p>Query result values already used human-readable decimal formatting and are
 unchanged.</p>
 </section>
+<section id="groupsaccumulator-merge-batch-no-longer-takes-opt-filter">
+<h3><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code><a class="headerlink" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code> argument has been removed from
+<code class="docutils literal notranslate"><span class="pre">datafusion_expr_common::groups_accumulator::GroupsAccumulator::merge_batch</span></code>:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="w"> </span> fn merge_batch(
+<span class="w"> </span>     &amp;mut self,
+<span class="w"> </span>     values: &amp;[ArrayRef],
+<span class="w"> </span>     group_indices: &amp;[usize],
+<span class="gd">-     opt_filter: Option&lt;&amp;BooleanArray&gt;,</span>
+<span class="w"> </span>     total_num_groups: usize,
+<span class="w"> </span> ) -&gt; Result&lt;()&gt;;
+</pre></div>
+</div>
+<p>Aggregate <code class="docutils literal notranslate"><span class="pre">FILTER</span></code> clauses only apply to raw input rows during the partial
+(update) phase, so by the time intermediate states are merged there is nothing
+left to filter per row. In practice <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code> was always <code class="docutils literal notranslate"><span class="pre">None</span></code> here, so
+removing it makes the API self-explanatory and impossible to misuse.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Anyone with a custom <code class="docutils literal notranslate"><span class="pre">GroupsAccumulator</span></code> implementation.</p></li>
+<li><p>Anyone calling <code class="docutils literal notranslate"><span class="pre">merge_batch</span></code> directly.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Drop the <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code> argument from your <code class="docutils literal notranslate"><span class="pre">merge_batch</span></code> signature and from any
+call sites:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="w"> </span> fn merge_batch(
+<span class="w"> </span>     &amp;mut self,
+<span class="w"> </span>     values: &amp;[ArrayRef],
+<span class="w"> </span>     group_indices: &amp;[usize],
+<span class="gd">-     opt_filter: Option&lt;&amp;BooleanArray&gt;,</span>
+<span class="w"> </span>     total_num_groups: usize,
+<span class="w"> </span> ) -&gt; Result&lt;()&gt; {
+<span class="w"> </span>     // ...
+<span class="w"> </span> }
+</pre></div>
+</div>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- acc.merge_batch(values, group_indices, None, total_num_groups)?;</span>
+<span class="gi">+ acc.merge_batch(values, group_indices, total_num_groups)?;</span>
+</pre></div>
+</div>
+<p>If your implementation previously inspected <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code> (for example asserting
+it was <code class="docutils literal notranslate"><span class="pre">None</span></code>), that code can simply be deleted.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/22775">issue #22775</a> for details.</p>
+</section>
 <section id="is-dynamic-physical-expr-is-deprecated">
 <h3><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated<a class="headerlink" href="#is-dynamic-physical-expr-is-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr_common::physical_expr::is_dynamic_physical_expr</span></code> is
@@ -697,6 +741,7 @@ silently or raised a non-configurable error.</p></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-55-0-0">DataFusion 55.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dialect-available-replaced-by-dialect-available"><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decimal-scalar-formatting-uses-human-readable-values">Decimal scalar formatting uses human-readable values</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-dynamic-physical-expr-is-deprecated"><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#queryplanner-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
