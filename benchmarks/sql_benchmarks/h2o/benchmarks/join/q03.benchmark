@@ -1,0 +1,30 @@
+subgroup join
+
+name Q03
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} join ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_join_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run
+SELECT x.id1      as xid1,
+       medium.id1 as mediumid1,
+       x.id2,
+       x.id3,
+       x.id4      as xid4,
+       medium.id4 as mediumid4,
+       x.id5      as xid5,
+       medium.id5 as mediumid5,
+       x.id6,
+       x.v1,
+       medium.v2
+FROM x
+LEFT JOIN medium ON x.id2 = medium.id2;
+
+result sql_benchmarks/h2o/results/join/${H2O_BENCH_SIZE:-small}/q03.csv

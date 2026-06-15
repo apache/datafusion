@@ -175,7 +175,7 @@ fn build_fixed_size_binary_table(
     let batch = RecordBatch::try_new(
         Arc::new(schema),
         vec![
-            Arc::new(FixedSizeBinaryArray::from(a.1.clone())),
+            Arc::new(FixedSizeBinaryArray::try_from_iter(a.1.iter().copied()).unwrap()),
             Arc::new(Int32Array::from(b.1.clone())),
             Arc::new(Int32Array::from(c.1.clone())),
         ],

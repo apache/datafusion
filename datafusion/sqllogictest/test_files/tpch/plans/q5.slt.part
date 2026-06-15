@@ -47,7 +47,7 @@ logical_plan
 02)--Projection: nation.n_name, sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue
 03)----Aggregate: groupBy=[[nation.n_name]], aggr=[[sum(lineitem.l_extendedprice * (Decimal128(1,20,0) - lineitem.l_discount)) AS sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
 04)------Projection: lineitem.l_extendedprice, lineitem.l_discount, nation.n_name
-05)--------Inner Join: nation.n_regionkey = region.r_regionkey
+05)--------LeftSemi Join: nation.n_regionkey = region.r_regionkey
 06)----------Projection: lineitem.l_extendedprice, lineitem.l_discount, nation.n_name, nation.n_regionkey
 07)------------Inner Join: supplier.s_nationkey = nation.n_nationkey
 08)--------------Projection: lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey
@@ -73,7 +73,7 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[n_name@0 as n_name], aggr=[sum(lineitem.l_extendedprice * 1 - lineitem.l_discount) as sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 05)--------RepartitionExec: partitioning=Hash([n_name@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[n_name@2 as n_name], aggr=[sum(lineitem.l_extendedprice * 1 - lineitem.l_discount) as sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
-07)------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(n_regionkey@3, r_regionkey@0)], projection=[l_extendedprice@0, l_discount@1, n_name@2]
+07)------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(n_regionkey@3, r_regionkey@0)], projection=[l_extendedprice@0, l_discount@1, n_name@2]
 08)--------------RepartitionExec: partitioning=Hash([n_regionkey@3], 4), input_partitions=4
 09)----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@2, n_nationkey@0)], projection=[l_extendedprice@0, l_discount@1, n_name@4, n_regionkey@5]
 10)------------------RepartitionExec: partitioning=Hash([s_nationkey@2], 4), input_partitions=4

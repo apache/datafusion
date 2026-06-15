@@ -695,39 +695,36 @@ mod test {
             nested_loop_join.statistics_with_args(&StatisticsArgs::new())?;
         // With empty join columns, estimate_join_statistics returns Inexact row count
         // based on the outer side (right side for RightSemi)
-        let mut expected_full_statistics = create_partition_statistics(
+        let expected_full_statistics = create_partition_statistics(
             4,
             32,
             1,
             4,
             Some((DATE_2025_03_01, DATE_2025_03_04)),
-        );
-        expected_full_statistics.num_rows = Precision::Inexact(4);
-        expected_full_statistics.total_byte_size = Precision::Absent;
+        )
+        .to_inexact();
         assert_eq!(*full_statistics, expected_full_statistics);
 
         // Test partition_statistics(Some(idx)) - returns partition-specific statistics
         // Partition 1: ids [3,4], dates [2025-03-01, 2025-03-02]
-        let mut expected_statistic_partition_1 = create_partition_statistics(
+        let expected_statistic_partition_1 = create_partition_statistics(
             2,
             16,
             3,
             4,
             Some((DATE_2025_03_01, DATE_2025_03_02)),
-        );
-        expected_statistic_partition_1.num_rows = Precision::Inexact(2);
-        expected_statistic_partition_1.total_byte_size = Precision::Absent;
+        )
+        .to_inexact();
 
         // Partition 2: ids [1,2], dates [2025-03-03, 2025-03-04]
-        let mut expected_statistic_partition_2 = create_partition_statistics(
+        let expected_statistic_partition_2 = create_partition_statistics(
             2,
             16,
             1,
             2,
             Some((DATE_2025_03_03, DATE_2025_03_04)),
-        );
-        expected_statistic_partition_2.num_rows = Precision::Inexact(2);
-        expected_statistic_partition_2.total_byte_size = Precision::Absent;
+        )
+        .to_inexact();
 
         let statistics = (0..nested_loop_join.output_partitioning().partition_count())
             .map(|idx| {
@@ -1054,6 +1051,43 @@ mod test {
             empty_table.clone(),
             scan_schema.clone(),
         )?);
+
+        let expect_partial_stat = Statistics {
+            num_rows: Precision::Exact(1),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+        assert_eq!(
+            expect_partial_stat,
+            *agg_partial.statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))?
+        );
+        assert_eq!(
+            expect_partial_stat,
+            *agg_partial.statistics_with_args(&StatisticsArgs::new().with_partition(Some(1)))?
+        );
+
+        let expect_partial_overall_stat = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+        assert_eq!(
+            expect_partial_overall_stat,
+            *agg_partial.statistics_with_args(&StatisticsArgs::new())?
+        );
+
+        // Verify that the partial aggregate emits one accumulator-state row per
+        // output partition, even when the corresponding input partitions are empty.
+        let partitions = execute_stream_partitioned(
+            agg_partial.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(2, partitions.len());
+        for partition_stream in partitions {
+            let result: Vec<RecordBatch> = partition_stream.try_collect().await?;
+            let rows = result.iter().map(|batch| batch.num_rows()).sum::<usize>();
+            assert_eq!(1, rows);
+        }
 
         let coalesce = Arc::new(CoalescePartitionsExec::new(agg_partial.clone()));
 
