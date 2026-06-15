@@ -19,7 +19,6 @@
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
 pub mod accumulate;
-pub mod avg;
 pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;

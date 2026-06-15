@@ -16,9 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, BooleanArray, Int64Array,
-    PrimitiveArray,
-    builder::PrimitiveBuilder,
+    Array, ArrayRef,
     cast::AsArray,
     types::{Float64Type, Int64Type},
 };
@@ -29,10 +27,11 @@ use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Coercion, EmitTo, GroupsAccumulator, ReversedUDAF,
-    Signature, TypeSignatureClass, Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, GroupsAccumulator, ReversedUDAF, Signature,
+    TypeSignatureClass, Volatility,
 };
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::avg::convert_to_avg_state;
+use datafusion_functions_aggregate::average::spark_avg_groups_accumulator;
+use std::mem::size_of_val;
 use std::sync::Arc;
 
 /// AVG aggregate expression
@@ -128,10 +127,7 @@ impl AggregateUDFImpl for SparkAvg {
         // instantiate specialized accumulator based for the type
         match (&data_type, args.return_type()) {
             (DataType::Float64, DataType::Float64) => {
-                Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
-                    args.return_field.data_type(),
-                    |sum: f64, count: i64| Ok(sum / count as f64),
-                )))
+                Ok(spark_avg_groups_accumulator(args.return_field.data_type()))
             }
             (dt, return_type) => {
                 not_impl_err!("AvgGroupsAccumulator for ({dt} --> {return_type})")
@@ -202,189 +198,15 @@ impl Accumulator for AvgAccumulator {
     }
 }
 
-/// An accumulator to compute the average of `[PrimitiveArray<T>]`.
-/// Stores values as native types, and does overflow checking
-///
-/// F: Function that calculates the average value from a sum of
-/// T::Native and a total count
-#[derive(Debug)]
-struct AvgGroupsAccumulator<T, F>
-where
-    T: ArrowNumericType + Send,
-    F: Fn(T::Native, i64) -> Result<T::Native> + Send + 'static,
-{
-    /// The type of the returned average
-    return_data_type: DataType,
-
-    /// Count per group (use i64 to make Int64Array)
-    counts: Vec<i64>,
-
-    /// Sums per group, stored as the native type
-    sums: Vec<T::Native>,
-
-    /// Function that computes the final average (value / count)
-    avg_fn: F,
-}
-
-impl<T, F> AvgGroupsAccumulator<T, F>
-where
-    T: ArrowNumericType + Send,
-    F: Fn(T::Native, i64) -> Result<T::Native> + Send + 'static,
-{
-    pub fn new(return_data_type: &DataType, avg_fn: F) -> Self {
-        Self {
-            return_data_type: return_data_type.clone(),
-            counts: vec![],
-            sums: vec![],
-            avg_fn,
-        }
-    }
-}
-
-impl<T, F> GroupsAccumulator for AvgGroupsAccumulator<T, F>
-where
-    T: ArrowNumericType + Send,
-    F: Fn(T::Native, i64) -> Result<T::Native> + Send + 'static,
-{
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        group_indices: &[usize],
-        _opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-    ) -> Result<()> {
-        assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = values[0].as_primitive::<T>();
-        let data = values.values();
-
-        // increment counts, update sums
-        self.counts.resize(total_num_groups, 0);
-        self.sums.resize(total_num_groups, T::default_value());
-
-        let iter = group_indices.iter().zip(data.iter());
-        if values.null_count() == 0 {
-            for (&group_index, &value) in iter {
-                let sum = &mut self.sums[group_index];
-                *sum = (*sum).add_wrapping(value);
-                self.counts[group_index] += 1;
-            }
-        } else {
-            for (idx, (&group_index, &value)) in iter.enumerate() {
-                if values.is_null(idx) {
-                    continue;
-                }
-                let sum = &mut self.sums[group_index];
-                *sum = (*sum).add_wrapping(value);
-
-                self.counts[group_index] += 1;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn merge_batch(
-        &mut self,
-        values: &[ArrayRef],
-        group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-    ) -> Result<()> {
-        assert_eq!(values.len(), 2, "two arguments to merge_batch");
-        // first batch is partial sums, second is counts
-        let partial_sums = values[0].as_primitive::<T>();
-        let partial_counts = values[1].as_primitive::<Int64Type>();
-
-        self.counts.resize(total_num_groups, 0);
-        self.sums.resize(total_num_groups, T::default_value());
-
-        for (idx, &group_index) in group_indices.iter().enumerate() {
-            // Skip null state entries emitted by convert_to_state for
-            // filtered / null input rows, and rows filtered during merge.
-            if partial_counts.is_null(idx)
-                || partial_sums.is_null(idx)
-                || opt_filter
-                    .is_some_and(|filter| filter.is_null(idx) || !filter.value(idx))
-            {
-                continue;
-            }
-            self.counts[group_index] += partial_counts.value(idx);
-            let sum = &mut self.sums[group_index];
-            *sum = sum.add_wrapping(partial_sums.value(idx));
-        }
-
-        Ok(())
-    }
-
-    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed(&mut self.counts);
-        let sums = emit_to.take_needed(&mut self.sums);
-        let mut builder = PrimitiveBuilder::<T>::with_capacity(sums.len());
-        let iter = sums.into_iter().zip(counts);
-
-        for (sum, count) in iter {
-            if count != 0 {
-                builder.append_value((self.avg_fn)(sum, count)?)
-            } else {
-                builder.append_null();
-            }
-        }
-        let array: PrimitiveArray<T> = builder.finish();
-
-        Ok(Arc::new(array))
-    }
-
-    // return arrays for sums and counts
-    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let counts = emit_to.take_needed(&mut self.counts);
-        let counts = Int64Array::new(counts.into(), None);
-
-        let sums = emit_to.take_needed(&mut self.sums);
-        let sums = PrimitiveArray::<T>::new(sums.into(), None)
-            .with_data_type(self.return_data_type.clone());
-
-        Ok(vec![
-            Arc::new(sums) as ArrayRef,
-            Arc::new(counts) as ArrayRef,
-        ])
-    }
-
-    fn convert_to_state(
-        &self,
-        values: &[ArrayRef],
-        opt_filter: Option<&BooleanArray>,
-    ) -> Result<Vec<ArrayRef>> {
-        let sums = values[0]
-            .as_primitive::<T>()
-            .clone()
-            .with_data_type(self.return_data_type.clone());
-        let (sums, counts) = convert_to_avg_state::<T, Int64Type>(sums, 1, opt_filter);
-
-        // [sum, count] - must match state() and merge_batch()
-        Ok(vec![
-            Arc::new(sums) as ArrayRef,
-            Arc::new(counts) as ArrayRef,
-        ])
-    }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
-    fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<i64>() + self.sums.capacity() * size_of::<T>()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Float64Array;
+    use arrow::array::types::Int64Type;
+    use arrow::array::{Array, BooleanArray, Float64Array, PrimitiveArray};
+    use datafusion_expr::EmitTo;
 
-    fn make_acc() -> AvgGroupsAccumulator<Float64Type, impl Fn(f64, i64) -> Result<f64>> {
-        AvgGroupsAccumulator::<Float64Type, _>::new(&DataType::Float64, |sum, count| {
-            Ok(sum / count as f64)
-        })
+    fn make_acc() -> Box<dyn GroupsAccumulator> {
+        spark_avg_groups_accumulator(&DataType::Float64)
     }
 
     fn assert_validity(array: &dyn Array, expected: &[bool]) {
