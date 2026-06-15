@@ -1059,11 +1059,13 @@ mod test {
         };
         assert_eq!(
             expect_partial_stat,
-            *agg_partial.statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))?
+            *agg_partial
+                .statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))?
         );
         assert_eq!(
             expect_partial_stat,
-            *agg_partial.statistics_with_args(&StatisticsArgs::new().with_partition(Some(1)))?
+            *agg_partial
+                .statistics_with_args(&StatisticsArgs::new().with_partition(Some(1)))?
         );
 
         let expect_partial_overall_stat = Statistics {
