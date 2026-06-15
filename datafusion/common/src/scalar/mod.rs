@@ -4337,7 +4337,14 @@ impl ScalarValue {
             .or_else(|| timestamp_to_timestamp_multiplier(&source_type, target_type))
             && let Some(value) = self.temporal_scalar_value_as_i64()
         {
-            ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)?;
+            match ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)
+            {
+                Ok(()) => {}
+                Err(_) if cast_options.safe => {
+                    return ScalarValue::try_new_null(target_type);
+                }
+                Err(e) => return Err(e),
+            }
         }
 
         let scalar_array = self.to_array()?;
@@ -10345,6 +10352,24 @@ mod tests {
     }
 
     #[test]
+    fn safe_cast_date_to_timestamp_overflow_returns_null() {
+        let scalar = ScalarValue::Date32(Some(i32::MAX));
+        let safe_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let casted = scalar
+            .cast_to_with_options(
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                &safe_options,
+            )
+            .expect("expected safe cast to return null");
+
+        assert_eq!(casted, ScalarValue::TimestampNanosecond(None, None));
+    }
+
+    #[test]
     fn cast_timestamp_to_timestamp_overflow_returns_error() {
         let scalar = ScalarValue::TimestampSecond(Some(i64::MAX), None);
         let err = scalar
@@ -10355,6 +10380,24 @@ mod tests {
                 .contains("converted value exceeds the representable i64 range"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn safe_cast_timestamp_to_timestamp_overflow_returns_null() {
+        let scalar = ScalarValue::TimestampSecond(Some(i64::MAX), None);
+        let safe_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let casted = scalar
+            .cast_to_with_options(
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                &safe_options,
+            )
+            .expect("expected safe cast to return null");
+
+        assert_eq!(casted, ScalarValue::TimestampNanosecond(None, None));
     }
 
     #[test]
