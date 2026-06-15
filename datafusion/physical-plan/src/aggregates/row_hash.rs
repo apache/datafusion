@@ -1394,6 +1394,8 @@ mod tests {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
 
+    // Migrated to PartialHashAggregateStream coverage in hash_aggregate.rs;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {
         // Fix for https://github.com/apache/datafusion/issues/18701
@@ -1500,6 +1502,9 @@ mod tests {
         Ok(())
     }
 
+    // TODO: migrate to PartialHashAggregateStream when it supports
+    // InputOrderMode::PartiallySorted; kept here for the legacy
+    // GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_emit_early_with_partially_sorted() -> Result<()> {
         // Reproducer for #20445: EmitEarly with PartiallySorted panics in
