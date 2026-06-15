@@ -385,3 +385,73 @@ x,1,2,y
 ## Struct argument is rejected (not coerced to string)
 query error
 SELECT concat_ws(',', named_struct('a', 1));
+
+## ── Plan-time simplifications ───────────────────────────────
+
+## Folded by simplify() — ConstEvaluator can't (mixed literal + column).
+query TT
+EXPLAIN SELECT concat_ws(CAST(NULL AS STRING), a, b) AS r FROM VALUES ('x', 'y'), ('p', 'q') AS t(a, b);
+----
+logical_plan
+01)Projection: Utf8(NULL) AS r
+02)--SubqueryAlias: t
+03)----Projection:
+04)------Values: (Utf8("x"), Utf8("y")), (Utf8("p"), Utf8("q"))
+physical_plan
+01)ProjectionExec: expr=[NULL as r]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+## Folded by ConstEvaluator (all args literal); simplify() is redundant here.
+query TT
+EXPLAIN SELECT concat_ws(CAST(NULL AS STRING), 'a', 'b', 'c') AS r;
+----
+logical_plan
+01)Projection: Utf8(NULL) AS r
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[NULL as r]
+02)--PlaceholderRowExec
+
+query TT
+EXPLAIN SELECT concat_ws(',') AS r;
+----
+logical_plan
+01)Projection: Utf8("") AS r
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[ as r]
+02)--PlaceholderRowExec
+
+## Not folded — separator is a column.
+query TT
+EXPLAIN SELECT concat_ws(s, 'a', 'b') AS r FROM VALUES (','), ('-') AS t(s);
+----
+logical_plan
+01)Projection: concat_ws(t.s, Utf8("a"), Utf8("b")) AS r
+02)--SubqueryAlias: t
+03)----Projection: column1 AS s
+04)------Values: (Utf8(",")), (Utf8("-"))
+physical_plan
+01)ProjectionExec: expr=[concat_ws(column1@0, a, b) as r]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+## Runtime sanity (same result regardless of plan-time folding).
+query T
+SELECT concat_ws(CAST(NULL AS STRING), 'a', 'b', 'c');
+----
+NULL
+
+query T
+SELECT concat_ws(',');
+----
+(empty)
+
+query T
+SELECT concat_ws(',', NULL);
+----
+(empty)
+
+query T
+SELECT concat_ws(',', NULL, NULL);
+----
+(empty)

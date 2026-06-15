@@ -35,8 +35,9 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 use crate::function::error_utils::{
@@ -122,6 +123,30 @@ impl ScalarUDFImpl for SparkConcatWs {
         }
 
         spark_concat_ws(&args.args, args.number_rows)
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &SimplifyContext,
+    ) -> Result<ExprSimplifyResult> {
+        if let Some(Expr::Literal(scalar, _)) = args.first()
+            && scalar.is_null()
+        {
+            return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+                ScalarValue::Utf8(None),
+                None,
+            )));
+        }
+
+        if matches!(args.as_slice(), [Expr::Literal(_, _)]) {
+            return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+                ScalarValue::Utf8(Some(String::new())),
+                None,
+            )));
+        }
+
+        Ok(ExprSimplifyResult::Original(args))
     }
 }
 
