@@ -1071,29 +1071,29 @@ pub enum Coercion {
 
 /// Controls whether a [`Coercion`] preserves an argument's physical encoding
 /// (e.g. dictionary) instead of materializing it to the coerced value type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
-pub enum EncodingPreservation {
-    /// Do not request preservation of a physical encoding.
-    None,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Hash)]
+pub struct EncodingPreservation {
+    preserve_dictionary: bool,
+}
+
+impl EncodingPreservation {
     /// Preserve dictionary encoding and coerce only the dictionary values.
-    Dictionary,
+    pub const fn with_dictionary(mut self) -> Self {
+        self.preserve_dictionary = true;
+        self
+    }
+
+    /// Returns whether dictionary encoding should be preserved.
+    pub const fn preserve_dictionary(self) -> bool {
+        self.preserve_dictionary
+    }
 }
 
 impl Coercion {
     pub fn new_exact(desired_type: TypeSignatureClass) -> Self {
         Self::Exact {
             desired_type,
-            encoding_preservation: EncodingPreservation::None,
-        }
-    }
-
-    pub fn new_exact_preserving_encoding(
-        desired_type: TypeSignatureClass,
-        encoding_preservation: EncodingPreservation,
-    ) -> Self {
-        Self::Exact {
-            desired_type,
-            encoding_preservation,
+            encoding_preservation: EncodingPreservation::default(),
         }
     }
 
@@ -1112,7 +1112,7 @@ impl Coercion {
                 allowed_source_types,
                 default_casted_type,
             },
-            encoding_preservation: EncodingPreservation::None,
+            encoding_preservation: EncodingPreservation::default(),
         }
     }
 
@@ -2245,10 +2245,14 @@ mod tests {
 
     #[test]
     fn test_coercion_encoding_preservation_affects_equality() {
+        assert!(!EncodingPreservation::default().preserve_dictionary());
+        let preserve_dictionary = EncodingPreservation::default().with_dictionary();
+        assert!(preserve_dictionary.preserve_dictionary());
+
         let default = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
         let preserving = default
             .clone()
-            .with_encoding_preservation(EncodingPreservation::Dictionary);
+            .with_encoding_preservation(preserve_dictionary);
 
         assert_ne!(default, preserving);
     }

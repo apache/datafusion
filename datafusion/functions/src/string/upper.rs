@@ -56,10 +56,12 @@ impl UpperFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_exact_preserving_encoding(
-                    TypeSignatureClass::Native(logical_string()),
-                    EncodingPreservation::Dictionary,
-                )],
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+                        .with_encoding_preservation(
+                            EncodingPreservation::default().with_dictionary(),
+                        ),
+                ],
                 Volatility::Immutable,
             ),
         }
