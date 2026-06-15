@@ -877,12 +877,12 @@ fn get_valid_types(
                 current_type: &DataType,
                 encoding_preservation: EncodingPreservation,
             ) -> &DataType {
-                match (encoding_preservation, current_type) {
-                    (
-                        EncodingPreservation::Dictionary,
-                        DataType::Dictionary(_, value_type),
-                    ) => value_type,
-                    _ => current_type,
+                if encoding_preservation.preserve_dictionary()
+                    && let DataType::Dictionary(_, value_type) = current_type
+                {
+                    value_type
+                } else {
+                    current_type
                 }
             }
 
@@ -891,18 +891,13 @@ fn get_valid_types(
                 casted_type: DataType,
                 encoding_preservation: EncodingPreservation,
             ) -> DataType {
-                match (encoding_preservation, current_type, &casted_type) {
-                    (
-                        EncodingPreservation::Dictionary,
-                        DataType::Dictionary(_, _),
-                        DataType::Dictionary(_, _),
-                    ) => casted_type,
-                    (
-                        EncodingPreservation::Dictionary,
-                        DataType::Dictionary(key_type, _),
-                        _,
-                    ) => DataType::Dictionary(key_type.clone(), Box::new(casted_type)),
-                    _ => casted_type,
+                if encoding_preservation.preserve_dictionary()
+                    && let DataType::Dictionary(key_type, _) = current_type
+                    && !matches!(casted_type, DataType::Dictionary(_, _))
+                {
+                    DataType::Dictionary(key_type.clone(), Box::new(casted_type))
+                } else {
+                    casted_type
                 }
             }
 
@@ -1893,7 +1888,9 @@ mod tests {
         }
 
         let coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
-            .with_encoding_preservation(EncodingPreservation::Dictionary);
+            .with_encoding_preservation(
+                EncodingPreservation::default().with_dictionary(),
+            );
 
         assert_eq!(
             dictionary_input(DataType::LargeUtf8, coercion.clone())?,
@@ -1910,7 +1907,9 @@ mod tests {
                     vec![TypeSignatureClass::Native(logical_binary())],
                     NativeType::String,
                 )
-                .with_encoding_preservation(EncodingPreservation::Dictionary),
+                .with_encoding_preservation(
+                    EncodingPreservation::default().with_dictionary(),
+                ),
             )?,
             vec![DataType::Dictionary(
                 Box::new(DataType::Int8),
