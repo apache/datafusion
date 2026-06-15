@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmarks for `GroupValues` over multiple `Dictionary<Int64, Utf8>` columns.
+//! Benchmarks for `GroupValues` over multiple `Dictionary<UInt64, Utf8>` columns.
 //! Covers 4 and 8 group-by columns, batch sizes of 8 KiB and 64 KiB rows,
 //! and cardinalities realistic for multi-column GROUP BY workloads (20 / 100 / 500 / 1 000).
 
