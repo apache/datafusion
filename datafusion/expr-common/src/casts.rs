@@ -1789,4 +1789,70 @@ mod tests {
             ExpectedCast::NoValue,
         );
     }
+
+    #[test]
+    fn test_cast_predicate_preimage_extreme_literals() {
+        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
+
+        // i64::MAX in milliseconds expands beyond i64 range in nanoseconds,
+        // so the preimage should return None rather than panicking.
+        assert_eq!(
+            cast_predicate_preimage(
+                &ts_ns,
+                &ts_ms,
+                Operator::Eq,
+                &ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
+            )
+            .unwrap(),
+            None
+        );
+
+        // i64::MIN in milliseconds expands beyond i64 range in nanoseconds.
+        assert_eq!(
+            cast_predicate_preimage(
+                &ts_ns,
+                &ts_ms,
+                Operator::Eq,
+                &ScalarValue::TimestampMillisecond(Some(i64::MIN), None),
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_cast_predicate_preimage_timezone_preservation() {
+        let source_type =
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+05:30".into()));
+        let target_type = DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()));
+        let lit = ScalarValue::TimestampMillisecond(Some(1000), Some("UTC".into()));
+
+        let result =
+            cast_predicate_preimage(&source_type, &target_type, Operator::Eq, &lit)
+                .unwrap();
+
+        match result {
+            Some(CastPredicatePreimage::Range(interval)) => {
+                let (lower, upper) = interval.into_bounds();
+                assert_eq!(
+                    lower,
+                    ScalarValue::TimestampNanosecond(
+                        Some(1_000_000_000),
+                        Some("+05:30".into())
+                    ),
+                    "lower bound should preserve source timezone +05:30"
+                );
+                assert_eq!(
+                    upper,
+                    ScalarValue::TimestampNanosecond(
+                        Some(1_001_000_000),
+                        Some("+05:30".into())
+                    ),
+                    "upper bound should preserve source timezone +05:30"
+                );
+            }
+            other => panic!("Expected CastPredicatePreimage::Range but got {other:?}"),
+        }
+    }
 }

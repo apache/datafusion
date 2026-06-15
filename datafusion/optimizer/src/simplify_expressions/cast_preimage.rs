@@ -353,6 +353,41 @@ mod tests {
         assert_eq!(optimize_test(expr.clone(), &schema), expr);
     }
 
+    #[test]
+    fn test_cast_preimage_timestamp_literal_left_range() {
+        let schema = expr_test_schema();
+
+        // lit_timestamp_millis(1000) < cast(col("ts_nano"), timestamp_millis_type())
+        // should swap and rewrite to ts_nano >= 1_001_000_000ns
+        let expr =
+            lit_timestamp_millis(1000).lt(cast(col("ts_nano"), timestamp_millis_type()));
+        let expected = col("ts_nano").gt_eq(lit_timestamp_nano(1_001_000_000));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        // lit_timestamp_millis(1000) <= cast(col("ts_nano"), timestamp_millis_type())
+        // should swap and rewrite to ts_nano >= 1_000_000_000ns
+        let expr = lit_timestamp_millis(1000)
+            .lt_eq(cast(col("ts_nano"), timestamp_millis_type()));
+        let expected = col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000_000));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        // lit_timestamp_millis(1000) > cast(col("ts_nano"), timestamp_millis_type())
+        // should swap and rewrite to ts_nano < 1_000_000_000ns
+        let expr =
+            lit_timestamp_millis(1000).gt(cast(col("ts_nano"), timestamp_millis_type()));
+        let expected = col("ts_nano").lt(lit_timestamp_nano(1_000_000_000));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        // lit_timestamp_millis(1000) = cast(col("ts_nano"), timestamp_millis_type())
+        // should swap and rewrite to range preimage
+        let expr =
+            lit_timestamp_millis(1000).eq(cast(col("ts_nano"), timestamp_millis_type()));
+        let expected = col("ts_nano")
+            .gt_eq(lit_timestamp_nano(1_000_000_000))
+            .and(col("ts_nano").lt(lit_timestamp_nano(1_001_000_000)));
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let simplifier = ExprSimplifier::new(
             SimplifyContext::builder()
