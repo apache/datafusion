@@ -77,6 +77,7 @@ mod hash_table;
 mod no_grouping;
 pub mod order;
 mod row_hash;
+mod skip_partial;
 mod topk;
 mod topk_stream;
 
@@ -3988,6 +3989,8 @@ mod tests {
         Ok(())
     }
 
+    // Migrated to PartialHashAggregateStream coverage below;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_skip_aggregation_after_first_batch() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -4070,6 +4073,8 @@ mod tests {
         Ok(())
     }
 
+    // Migrated to PartialHashAggregateStream coverage below;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_skip_aggregation_after_threshold() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -4157,6 +4162,189 @@ mod tests {
             +-----+-------------------+
             ");
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_skip_aggregation_after_first_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("val", DataType::Int32, true),
+        ]));
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
+
+        let input_data = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 3, 4])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+        ];
+
+        let input =
+            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            schema,
+        )?);
+
+        let session_config = SessionConfig::default()
+            .set_bool("datafusion.execution.enable_migration_aggregate", true)
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                &ScalarValue::Int64(Some(2)),
+            )
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(0.1)),
+            );
+
+        let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
+        let output = collect(aggregate_exec.execute(0, Arc::clone(&ctx))?).await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&output), @r"
+            +-----+-------------------+
+            | key | COUNT(val)[count] |
+            +-----+-------------------+
+            | 1   | 1                 |
+            | 2   | 1                 |
+            | 2   | 1                 |
+            | 3   | 1                 |
+            | 3   | 1                 |
+            | 4   | 1                 |
+            +-----+-------------------+
+            ");
+        }
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let skipped_rows = metrics
+            .sum_by_name("skipped_aggregation_rows")
+            .map(|m| m.as_usize())
+            .unwrap_or(0);
+        assert_eq!(skipped_rows, 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_skip_aggregation_after_threshold() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("val", DataType::Int32, true),
+        ]));
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
+
+        let input_data = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 3, 4])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 3, 4])),
+                    Arc::new(Int32Array::from(vec![0, 0, 0])),
+                ],
+            )
+            .unwrap(),
+        ];
+
+        let input =
+            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            schema,
+        )?);
+
+        let session_config = SessionConfig::default()
+            .set_bool("datafusion.execution.enable_migration_aggregate", true)
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                &ScalarValue::Int64(Some(5)),
+            )
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(0.1)),
+            );
+
+        let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
+        let output = collect(aggregate_exec.execute(0, Arc::clone(&ctx))?).await?;
+
+        allow_duplicates! {
+        assert_snapshot!(batches_to_sort_string(&output), @r"
+        +-----+-------------------+
+        | key | COUNT(val)[count] |
+        +-----+-------------------+
+        | 1   | 1                 |
+        | 2   | 1                 |
+        | 2   | 2                 |
+        | 3   | 1                 |
+        | 3   | 2                 |
+        | 4   | 1                 |
+        | 4   | 1                 |
+        +-----+-------------------+
+        ");
+        }
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let skipped_rows = metrics
+            .sum_by_name("skipped_aggregation_rows")
+            .map(|m| m.as_usize())
+            .unwrap_or(0);
+        assert_eq!(skipped_rows, 3);
 
         Ok(())
     }
