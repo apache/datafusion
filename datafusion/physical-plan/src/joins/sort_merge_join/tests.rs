@@ -2474,12 +2474,8 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
             assert_eq!(
                 runtime.memory_pool.reserved(),
                 0,
-                concat!(
-                    "memory should be fully released after {join_type:?} completes ",
-                    "(batch_size={batch_size}): infallible grow during restore must be balanced"
-                ),
-                join_type = join_type,
-                batch_size = batch_size,
+                "memory should be fully released after {join_type:?} completes 
+                (batch_size={batch_size}): infallible grow during restore must be balanced"
             );
             // Run the test with no spill configuration as
             let task_ctx_no_spill =
