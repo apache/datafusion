@@ -26,6 +26,7 @@ use datafusion_physical_expr::{
     expressions::{Column, Literal},
     projection::{ProjectionExpr, ProjectionExprs},
 };
+use datafusion_physical_expr_adapter::schema_rewriter::rewrite_input_file_name_in_projection;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 
@@ -69,6 +70,8 @@ impl ProjectionOpener {
 impl FileOpener for ProjectionOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let partition_values = partitioned_file.partition_values.clone();
+        let file_name = partitioned_file.object_meta.location.to_string();
+
         // Modify any references to partition columns in the projection expressions
         // and substitute them with literal values from PartitionedFile.partition_values
         let projection = if self.partition_columns.is_empty() {
@@ -80,6 +83,8 @@ impl FileOpener for ProjectionOpener {
                 partition_values,
             )
         };
+        // Replace `input_file_name()` with a per-file literal if present.
+        let projection = rewrite_input_file_name_in_projection(projection, file_name)?;
         let projector = projection.make_projector(&self.input_schema)?;
 
         let inner = self.inner.open(partitioned_file)?;

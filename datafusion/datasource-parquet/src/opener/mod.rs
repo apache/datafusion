@@ -38,6 +38,7 @@ use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
+use datafusion_physical_expr_adapter::schema_rewriter::rewrite_input_file_name_in_projection;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
@@ -769,6 +770,10 @@ impl ParquetMorselizer {
                 .map(|p| replace_columns_with_literals(p, &literal_columns))
                 .transpose()?;
         }
+
+        // Replace any `input_file_name()` UDFs in the projection with a literal for this file.
+        projection =
+            rewrite_input_file_name_in_projection(projection, file_name.clone())?;
 
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
             .with_category(MetricCategory::Rows)

@@ -33,10 +33,12 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
 };
 use datafusion_expr::ScalarUDFImpl;
+use datafusion_functions::core::input_file_name::InputFileNameFunc;
 use datafusion_functions::core::{
     file_row_index::FileRowIndexFunc, getfield::GetFieldFunc,
 };
 use datafusion_physical_expr::PhysicalExprSimplifier;
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs, Projector};
 use datafusion_physical_expr::{
     ScalarFunctionExpr,
@@ -190,6 +192,20 @@ pub fn rewrite_file_row_index_projection(
     })?;
 
     ProjectionExprs::new(base_exprs).try_merge(&rewritten_projection)
+}
+
+pub fn rewrite_input_file_name_in_projection(
+    projection: ProjectionExprs,
+    file_name: String,
+) -> Result<ProjectionExprs> {
+    let file_name_lit = Arc::new(Literal::new(ScalarValue::Utf8(Some(file_name))))
+        as Arc<dyn PhysicalExpr>;
+
+    projection.try_map_exprs(|expr| {
+        rewrite_scalar_udf::<InputFileNameFunc, _>(expr, |_e| {
+            Ok(Arc::clone(&file_name_lit))
+        })
+    })
 }
 
 /// Trait for adapting [`PhysicalExpr`] expressions to match a target schema.
@@ -422,7 +438,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             None => return Ok(None),
         };
 
-        let lit = match field_name_expr.downcast_ref::<expressions::Literal>() {
+        let lit = match field_name_expr.downcast_ref::<Literal>() {
             Some(lit) => lit,
             None => return Ok(None),
         };
@@ -475,7 +491,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         };
 
         let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
-        Ok(Some(Arc::new(expressions::Literal::new_with_metadata(
+        Ok(Some(Arc::new(Literal::new_with_metadata(
             null_value,
             Some(FieldMetadata::from(logical_struct_field.as_ref())),
         ))))
@@ -522,12 +538,10 @@ impl DefaultPhysicalExprAdapterRewriter {
             // If the column is missing from the physical schema fill it in with nulls.
             // For a different behavior, provide a custom `PhysicalExprAdapter` implementation.
             let null_value = ScalarValue::Null.cast_to(logical_field.data_type())?;
-            return Ok(Transformed::yes(Arc::new(
-                expressions::Literal::new_with_metadata(
-                    null_value,
-                    Some(FieldMetadata::from(logical_field)),
-                ),
-            )));
+            return Ok(Transformed::yes(Arc::new(Literal::new_with_metadata(
+                null_value,
+                Some(FieldMetadata::from(logical_field)),
+            ))));
         };
 
         let fields_match = logical_field == physical_field.as_ref();
