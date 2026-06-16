@@ -72,6 +72,7 @@ use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
+use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_functions::core::getfield::GetFieldFunc;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
@@ -260,6 +261,9 @@ struct PushdownChecker<'schema> {
     non_primitive_columns: bool,
     /// Does the expression reference any columns not present in the file schema?
     projected_columns: bool,
+    /// Does the expression references a ScalarUDF that requires some rewrite
+    /// and therefore can't be pushed down into the row-filter.
+    has_unpushable_udfs: bool,
     /// Indices into the file schema of columns required to evaluate the expression.
     /// Does not include struct columns accessed via `get_field`.
     required_columns: Vec<usize>,
@@ -276,6 +280,7 @@ impl<'schema> PushdownChecker<'schema> {
         Self {
             non_primitive_columns: false,
             projected_columns: false,
+            has_unpushable_udfs: false,
             required_columns: Vec::new(),
             struct_field_accesses: Vec::new(),
             allow_list_columns,
@@ -372,7 +377,7 @@ impl<'schema> PushdownChecker<'schema> {
 
     #[inline]
     fn prevents_pushdown(&self) -> bool {
-        self.non_primitive_columns || self.projected_columns
+        self.non_primitive_columns || self.projected_columns || self.has_unpushable_udfs
     }
 
     /// Consumes the checker and returns sorted, deduplicated column indices
@@ -482,6 +487,13 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
             && let Some(recursion) = self.check_single_column(column.name())
         {
             return Ok(recursion);
+        }
+
+        if ScalarFunctionExpr::try_downcast_func::<FileRowIndexFunc>(node.as_ref())
+            .is_some()
+        {
+            self.has_unpushable_udfs = true;
+            return Ok(TreeNodeRecursion::Jump);
         }
 
         Ok(TreeNodeRecursion::Continue)

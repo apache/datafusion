@@ -872,7 +872,6 @@ impl GroupsAccumulator for TestGroupsAccumulator {
         &mut self,
         _values: &[ArrayRef],
         _group_indices: &[usize],
-        _opt_filter: Option<&arrow::array::BooleanArray>,
         _total_num_groups: usize,
     ) -> Result<()> {
         Ok(())
