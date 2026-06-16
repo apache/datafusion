@@ -28,7 +28,6 @@ use datafusion_common::Result;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_expr::EmitTo;
 use hashbrown::HashTable;
-use hashbrown::hash_table::Entry as HashTableEntry;
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -88,16 +87,18 @@ macro_rules! decode_scalar_string {
         Ok(Arc::new(builder.finish()) as ArrayRef)
     }};
 }
-/// Entry stored inside `unique_dict_value_mapping`. Caching `hash` on the entry
 struct DictEntry {
     hash: u64,
     group_id: usize,
-    bytes: Vec<u8>,
+    offset: usize,
+    len: usize,
 }
 
 pub struct GroupValuesDictionary<K: ArrowDictionaryKeyType + Send> {
-    // stores the order new unique elements are seen for self.emit()
-    seen_elements: Vec<Option<Vec<u8>>>,
+    /// Packed byte storage for all group values.
+    row_buffer: Vec<u8>,
+    /// `row_offsets[g]` = start of group `g` in `row_buffer`;
+    row_offsets: Vec<usize>,
     value_dt: DataType,
     _phantom: PhantomData<K>,
     // keeps track of which values weve already seen, keyed by raw value hash.
@@ -117,7 +118,8 @@ pub struct GroupValuesDictionary<K: ArrowDictionaryKeyType + Send> {
 impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
     pub fn new(data_type: &DataType) -> Self {
         Self {
-            seen_elements: Vec::new(),
+            row_buffer: Vec::new(),
+            row_offsets: Vec::new(),
             unique_dict_value_mapping: HashTable::new(),
             value_dt: data_type.clone(),
             _phantom: PhantomData,
@@ -128,25 +130,28 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
         }
     }
 
-    /// Returns the existing `group_id` for the value with this hash and bytes,
-    /// or inserts a new entry and returns the freshly assigned group_id.
     fn lookup_or_insert_in_table(&mut self, hash: u64, raw: &[u8]) -> usize {
-        match self
-            .unique_dict_value_mapping
-            .entry(hash, |e| e.bytes == raw, |e| e.hash)
-        {
-            HashTableEntry::Occupied(o) => o.get().group_id,
-            HashTableEntry::Vacant(v) => {
-                let new_group_id = self.seen_elements.len();
-                self.seen_elements.push(Some(raw.to_vec())); // replace this with raw buffer to avoid this double copy #TODO see https://github.com/apache/datafusion/issues/22078
-                v.insert(DictEntry {
-                    hash,
-                    group_id: new_group_id,
-                    bytes: raw.to_vec(),
-                });
-                new_group_id
-            }
+        let row_buffer = &self.row_buffer;
+        if let Some(e) = self.unique_dict_value_mapping.find(hash, |e| {
+            e.hash == hash && &row_buffer[e.offset..e.offset + e.len] == raw
+        }) {
+            return e.group_id;
         }
+        let new_group_id = self.row_offsets.len();
+        let offset = self.row_buffer.len();
+        self.row_offsets.push(offset);
+        self.row_buffer.extend_from_slice(raw);
+        self.unique_dict_value_mapping.insert_unique(
+            hash,
+            DictEntry {
+                hash,
+                group_id: new_group_id,
+                offset,
+                len: raw.len(),
+            },
+            |e| e.hash,
+        );
+        new_group_id
     }
     fn compute_value_hashes(&mut self, values: &ArrayRef) -> Result<()> {
         self.values_cache.1.clear();
@@ -220,52 +225,64 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValuesDictionary<K> {
         if let Some(group_id) = self.null_group_id {
             group_id
         } else {
-            let new_group_id = self.seen_elements.len();
-            self.seen_elements.push(None);
+            let new_group_id = self.row_offsets.len();
+            self.row_offsets.push(self.row_buffer.len()); // null: empty span
             self.null_group_id = Some(new_group_id);
             new_group_id
         }
     }
-    fn transform_into_array(&self, raw: &[Option<Vec<u8>>]) -> Result<ArrayRef> {
-        let item_capacity = raw.len();
-        let data_capacity = item_capacity * AVG_BYTES_PER_DICT_VALUE;
+
+    fn transform_into_array(
+        &self,
+        n: usize,
+        null_group_id: Option<usize>,
+    ) -> Result<ArrayRef> {
+        let data_capacity = n * AVG_BYTES_PER_DICT_VALUE;
+        let raw = (0..n).map(|i| {
+            if Some(i) == null_group_id {
+                return None;
+            }
+            let start = self.row_offsets[i];
+            // last group has no i+1 entry; its end is the buffer tail.
+            let end = self
+                .row_offsets
+                .get(i + 1)
+                .copied()
+                .unwrap_or(self.row_buffer.len());
+            Some(&self.row_buffer[start..end])
+        });
         match &self.value_dt {
-            DataType::Utf8 => decode_scalar_string!(
-                raw,
-                StringBuilder::with_capacity(item_capacity, data_capacity)
-            ),
+            DataType::Utf8 => {
+                decode_scalar_string!(raw, StringBuilder::with_capacity(n, data_capacity))
+            }
             DataType::LargeUtf8 => decode_scalar_string!(
                 raw,
-                LargeStringBuilder::with_capacity(item_capacity, data_capacity)
+                LargeStringBuilder::with_capacity(n, data_capacity)
             ),
-            DataType::Utf8View => decode_scalar_string!(
-                raw,
-                StringViewBuilder::with_capacity(item_capacity)
-            ),
+            DataType::Utf8View => {
+                decode_scalar_string!(raw, StringViewBuilder::with_capacity(n))
+            }
             DataType::List(field) => match field.data_type() {
                 DataType::Utf8 => decode_list!(
                     raw,
                     ListBuilder::with_capacity(
-                        StringBuilder::with_capacity(item_capacity, data_capacity),
-                        item_capacity,
+                        StringBuilder::with_capacity(n, data_capacity),
+                        n,
                     )
                     .with_field(Arc::clone(field))
                 ),
                 DataType::LargeUtf8 => decode_list!(
                     raw,
                     ListBuilder::with_capacity(
-                        LargeStringBuilder::with_capacity(item_capacity, data_capacity),
-                        item_capacity,
+                        LargeStringBuilder::with_capacity(n, data_capacity),
+                        n,
                     )
                     .with_field(Arc::clone(field))
                 ),
                 DataType::Utf8View => decode_list!(
                     raw,
-                    ListBuilder::with_capacity(
-                        StringViewBuilder::with_capacity(item_capacity),
-                        item_capacity,
-                    )
-                    .with_field(Arc::clone(field))
+                    ListBuilder::with_capacity(StringViewBuilder::with_capacity(n), n,)
+                        .with_field(Arc::clone(field))
                 ),
                 other => Err(NotImplemented(format!(
                     "transform_into_array not implemented for List<{other:?}>"
@@ -295,22 +312,11 @@ fn valid_bounds<K: ArrowDictionaryKeyType>(n: usize) -> bool {
 
 impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> {
     fn size(&self) -> usize {
-        let seen_elements_size = self.seen_elements.capacity()
-            * size_of::<Option<Vec<u8>>>()
-            + self
-                .seen_elements
-                .iter()
-                .filter_map(|opt| opt.as_ref())
-                .map(|inner| inner.capacity())
-                .sum::<usize>();
+        let row_data_size =
+            self.row_buffer.capacity() + self.row_offsets.capacity() * size_of::<usize>();
 
-        let unique_mapping_size = self.unique_dict_value_mapping.capacity()
-            * size_of::<DictEntry>()
-            + self
-                .unique_dict_value_mapping
-                .iter()
-                .map(|e| e.bytes.capacity())
-                .sum::<usize>();
+        let unique_mapping_size =
+            self.unique_dict_value_mapping.capacity() * size_of::<DictEntry>();
 
         let values_cache_size = self.values_cache.1.capacity() * size_of::<u64>()
             + self
@@ -320,13 +326,19 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
                 .map(|a| a.to_data().get_slice_memory_size().unwrap_or(0))
                 .unwrap_or(0);
 
-        size_of::<Self>() + seen_elements_size + unique_mapping_size + values_cache_size
+        let key_to_group_size = self.key_to_group.capacity() * size_of::<Option<usize>>();
+
+        size_of::<Self>()
+            + row_data_size
+            + unique_mapping_size
+            + values_cache_size
+            + key_to_group_size
     }
     fn len(&self) -> usize {
-        self.seen_elements.len()
+        self.row_offsets.len()
     }
     fn is_empty(&self) -> bool {
-        self.seen_elements.is_empty()
+        self.row_offsets.is_empty()
     }
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         assert_eq!(
@@ -390,46 +402,19 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
         Ok(())
     }
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let (elements_to_emit, null_id) = match emit_to {
-            EmitTo::All => {
-                let original_null_id = self.null_group_id;
-                self.null_group_id = None;
-                self.unique_dict_value_mapping.clear();
-                (std::mem::take(&mut self.seen_elements), original_null_id)
-            }
-            EmitTo::First(n) => {
-                let n = n.min(self.seen_elements.len());
-                let first_n = self.seen_elements.drain(..n).collect::<Vec<_>>(); // again read from raw buffer directly
-                let original_null_id = self.null_group_id.filter(|&id| id < n);
-                // update null_group_id if the null group was in the first n
-                if let Some(null_id) = self.null_group_id {
-                    if null_id < n {
-                        self.null_group_id = None;
-                    } else {
-                        self.null_group_id = Some(null_id - n);
-                    }
-                }
-                // shift all remaining group indices down by n in the table
-                self.unique_dict_value_mapping.retain(|e| {
-                    if e.group_id < n {
-                        false
-                    } else {
-                        e.group_id -= n;
-                        true
-                    }
-                });
-                (first_n, original_null_id)
-            }
+        let n = match emit_to {
+            EmitTo::All => self.row_offsets.len(),
+            EmitTo::First(k) => k.min(self.row_offsets.len()),
         };
+        let null_id = self.null_group_id.filter(|&id| id < n);
 
-        let n = elements_to_emit.len();
         if !valid_bounds::<K>(n) {
             return Err(Internal(format!(
                 "group count {n} overflows key type {:?}",
                 K::DATA_TYPE
             )));
         }
-        let values_array = self.transform_into_array(&elements_to_emit)?; // ingest a buffer + n then produce an array. should also update the len+offset of other entries #TODO see https://github.com/apache/datafusion/issues/22078
+        let values_array = self.transform_into_array(n, null_id)?;
 
         let mut keys_builder = PrimitiveBuilder::<K>::with_capacity(n);
         if let Some(null_id) = null_id {
@@ -447,17 +432,58 @@ impl<K: ArrowDictionaryKeyType + Send> GroupValues for GroupValuesDictionary<K> 
         }
         let dict_array =
             DictionaryArray::<K>::try_new(keys_builder.finish(), values_array)?;
+
+        match emit_to {
+            EmitTo::All => {
+                self.null_group_id = None;
+                self.unique_dict_value_mapping.clear();
+                self.row_buffer.clear();
+                self.row_offsets.clear();
+            }
+            EmitTo::First(_) => {
+                if let Some(nid) = self.null_group_id {
+                    if nid < n {
+                        self.null_group_id = None;
+                    } else {
+                        self.null_group_id = Some(nid - n);
+                    }
+                }
+                let retain_start = self
+                    .row_offsets
+                    .get(n)
+                    .copied()
+                    .unwrap_or(self.row_buffer.len());
+                self.row_offsets.drain(0..n);
+                for off in &mut self.row_offsets {
+                    *off -= retain_start;
+                }
+                self.row_buffer.drain(0..retain_start);
+                self.unique_dict_value_mapping.retain(|e| {
+                    if e.group_id < n {
+                        return false;
+                    }
+                    e.group_id -= n;
+                    e.offset -= retain_start;
+                    true
+                });
+            }
+        }
+
         Ok(vec![Arc::new(dict_array)])
     }
     fn clear_shrink(&mut self, num_rows: usize) {
-        self.seen_elements.clear();
-        self.seen_elements.shrink_to(num_rows);
+        self.row_buffer.clear();
+        self.row_buffer
+            .shrink_to(num_rows * AVG_BYTES_PER_DICT_VALUE);
+        self.row_offsets.clear();
+        self.row_offsets.shrink_to(num_rows);
         self.null_group_id = None;
         self.unique_dict_value_mapping.clear();
         self.unique_dict_value_mapping
             .shrink_to(num_rows, |e| e.hash);
         self.values_cache.0 = None;
         self.key_to_group.clear();
+        self.key_to_group.shrink_to(num_rows);
         self.values_cache.1.clear();
         self.values_cache.1.shrink_to(num_rows);
     }
@@ -833,6 +859,38 @@ mod test {
 
     mod streaming_emit {
         use super::*;
+
+        #[test]
+        fn test_null_only_group_emit_first() {
+            let mut gv = GroupValuesDictionary::<Int32Type>::new(&DataType::Utf8);
+            let mut groups = Vec::new();
+
+            // intern a single null value (key is null; the value slot is irrelevant)
+            let values = make_utf8_values(vec![Some("x")]);
+            let dict = make_dict_array(values, vec![None]);
+            gv.intern(&[dict], &mut groups)
+                .expect("intern should succeed");
+
+            assert_eq!(gv.len(), 1);
+            assert_eq!(groups, vec![0]);
+
+            // emit First(1) -- the null group is the ONLY group
+            let result = gv.emit(EmitTo::First(1)).expect("emit should succeed");
+            assert_eq!(result.len(), 1);
+
+            let emitted = result[0]
+                .as_any()
+                .downcast_ref::<DictionaryArray<Int32Type>>()
+                .expect("Expected DictionaryArray");
+
+            // The emitted DictionaryArray should have 1 element, and it should be null
+            assert_eq!(emitted.len(), 1);
+            assert!(emitted.is_null(0), "the emitted row should be null");
+
+            // post-emit state: everything should be cleared
+            assert_eq!(gv.len(), 0);
+            assert!(gv.is_empty());
+        }
 
         #[test]
         fn test_emit_first_shifts_and_retains() {
