@@ -646,8 +646,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let options = ListingOptions::new(file_format)
                     .with_file_extension(&scan.file_extension)
                     .with_table_partition_cols(partition_columns)
-                    .with_collect_stat(scan.collect_stat)
-                    .with_target_partitions(scan.target_partitions as usize)
                     .with_file_sort_order(all_sort_orders);
 
                 let config =
@@ -1409,7 +1407,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 table_name: Some(protobuf::TableReference::from_proto(
                                     table_name.clone(),
                                 )),
-                                collect_stat: options.collect_stat,
                                 file_extension: options.file_extension.clone(),
                                 table_partition_cols: partition_columns,
                                 paths: listing_table
@@ -1420,7 +1417,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 schema: Some(schema),
                                 projection,
                                 filters,
-                                target_partitions: options.target_partitions as u32,
                                 file_sort_order: exprs_vec,
                             },
                         )),

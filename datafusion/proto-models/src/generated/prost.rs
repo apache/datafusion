@@ -119,10 +119,6 @@ pub struct ListingTableScanNode {
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "7")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
-    #[prost(bool, tag = "8")]
-    pub collect_stat: bool,
-    #[prost(uint32, tag = "9")]
-    pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
     #[prost(
