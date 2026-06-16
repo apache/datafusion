@@ -3989,6 +3989,8 @@ mod tests {
         Ok(())
     }
 
+    // Migrated to PartialHashAggregateStream coverage below;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_skip_aggregation_after_first_batch() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -4071,6 +4073,8 @@ mod tests {
         Ok(())
     }
 
+    // Migrated to PartialHashAggregateStream coverage below;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_skip_aggregation_after_threshold() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![

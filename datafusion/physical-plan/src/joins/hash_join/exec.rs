@@ -845,6 +845,14 @@ impl HashJoinExec {
             return false;
         }
 
+        // Bounds and membership filters derived from the build side do not
+        // account for null-equal matching: a probe-side NULL key evaluates
+        // such predicates to NULL and would be pruned, even though it can
+        // match a build-side NULL when nulls compare equal.
+        if self.null_equality == NullEquality::NullEqualsNull {
+            return false;
+        }
+
         // `preserve_file_partitions` can report Hash partitioning for Hive-style
         // file groups, but those partitions are not actually hash-distributed.
         // Partitioned dynamic filters rely on hash routing, so disable them in
@@ -1141,6 +1149,8 @@ impl DisplayAs for HashJoinExec {
                 let display_fetch = self
                     .fetch
                     .map_or_else(String::new, |f| format!(", fetch={f}"));
+                let display_null_aware =
+                    if self.null_aware { ", null_aware" } else { "" };
                 let on = self
                     .on
                     .iter()
@@ -1149,7 +1159,7 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}",
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}{}",
                     self.mode,
                     self.join_type,
                     on,
@@ -1157,6 +1167,7 @@ impl DisplayAs for HashJoinExec {
                     display_projections,
                     display_null_equality,
                     display_fetch,
+                    display_null_aware,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -1177,6 +1188,10 @@ impl DisplayAs for HashJoinExec {
 
                 if self.null_equality() == NullEquality::NullEqualsNull {
                     writeln!(f, "NullsEqual: true")?;
+                }
+
+                if self.null_aware {
+                    writeln!(f, "null_aware")?;
                 }
 
                 if let Some(filter) = self.filter.as_ref() {
@@ -6421,6 +6436,35 @@ mod tests {
             df.expression_id()
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_filter_pushdown_rejects_null_equal_join() -> Result<()> {
+        let (_, _, on) = build_schema_and_on()?;
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightSemi,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+            false,
+        )?;
+
+        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
         Ok(())
     }
 
