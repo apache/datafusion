@@ -216,10 +216,12 @@ impl ExecutionPlan for CoalesceBatchesExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(&self.input, args.partition())?,
-        );
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 

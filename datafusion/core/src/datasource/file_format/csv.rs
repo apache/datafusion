@@ -45,7 +45,7 @@ mod tests {
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::write::BatchSerializer;
     use datafusion_expr::{col, lit};
-    use datafusion_physical_plan::statistics::StatisticsArgs;
+    use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
     use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use arrow::array::{
@@ -217,11 +217,14 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
+                .num_rows,
             Precision::Absent
         );
         assert_eq!(
-            exec.statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
                 .total_byte_size,
             Precision::Absent
         );

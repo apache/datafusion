@@ -281,10 +281,12 @@ impl ExecutionPlan for WindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let input_stat = Arc::unwrap_or_clone(
-            args.compute_child_statistics(&self.input, args.partition())?,
-        );
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let input_stat = input_stats[0].as_ref().clone();
         let win_cols = self.window_expr.len();
         let input_cols = self.input.schema().fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...

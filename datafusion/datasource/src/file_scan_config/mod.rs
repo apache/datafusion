@@ -2276,7 +2276,7 @@ mod tests {
         // of just the projected ones.
 
         use crate::source::DataSourceExec;
-        use datafusion_physical_plan::statistics::StatisticsArgs;
+        use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
         // Create a schema with 4 columns
         let schema = Arc::new(Schema::new(vec![
@@ -2330,8 +2330,11 @@ mod tests {
         let exec = DataSourceExec::from_data_source(config);
 
         // Get statistics for partition 0
-        let partition_stats = exec
-            .statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))
+        let partition_stats = StatisticsContext::new()
+            .compute(
+                exec.as_ref(),
+                &StatisticsArgs::new().with_partition(Some(0)),
+            )
             .unwrap();
 
         // Verify that only 2 columns are in the statistics (the projected ones)

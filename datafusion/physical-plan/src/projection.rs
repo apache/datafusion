@@ -349,10 +349,12 @@ impl ExecutionPlan for ProjectionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let input_stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(&self.input, args.partition())?,
-        );
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let input_stats = input_stats[0].as_ref().clone();
         let output_schema = self.schema();
         Ok(Arc::new(
             self.projector
@@ -1186,7 +1188,7 @@ mod tests {
     use crate::common::collect;
 
     use crate::filter_pushdown::PushedDown;
-    use crate::statistics::StatisticsArgs;
+    use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
@@ -1377,8 +1379,8 @@ mod tests {
 
         let projection = ProjectionExec::try_new(exprs, input).unwrap();
 
-        let stats = projection
-            .statistics_with_args(&StatisticsArgs::new())
+        let stats = StatisticsContext::new()
+            .compute(&projection, &StatisticsArgs::new())
             .unwrap();
 
         assert_eq!(stats.num_rows, Precision::Exact(10));

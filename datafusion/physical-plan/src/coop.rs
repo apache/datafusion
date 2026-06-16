@@ -299,8 +299,12 @@ impl ExecutionPlan for CooperativeExec {
         Ok(make_cooperative(child_stream))
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        args.compute_child_statistics(&self.input, args.partition())
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 
     fn supports_limit_pushdown(&self) -> bool {

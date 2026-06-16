@@ -236,8 +236,12 @@ impl ExecutionPlan for ScalarSubqueryExec {
         vec![false; self.subqueries.len() + 1]
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        args.compute_child_statistics(&self.input, args.partition())
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {

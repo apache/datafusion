@@ -52,7 +52,7 @@ use crate::projection::{
     try_pushdown_through_join,
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
@@ -1450,72 +1450,43 @@ impl ExecutionPlan for HashJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let stats = match (args.partition(), self.mode) {
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        match (partition, self.mode) {
             // Left side is broadcast, so it always needs overall stats
             // Right side is partitioned, so it needs per-partition stats
             (Some(_), PartitionMode::CollectLeft) => {
-                let left_stats = args.compute_child_statistics(&self.left, None)?;
-                let right_stats =
-                    args.compute_child_statistics(&self.right, args.partition())?;
-
-                estimate_join_statistics(
-                    Arc::unwrap_or_clone(left_stats),
-                    Arc::unwrap_or_clone(right_stats),
-                    &self.on,
-                    self.null_equality,
-                    &self.join_type,
-                    &self.join_schema,
-                )?
+                vec![ChildStats::At(None), ChildStats::At(partition)]
             }
-
             // For Partitioned mode, both sides are hash-partitioned symmetrically,
             // so each output partition uses the matching partition from both sides.
             (Some(_), PartitionMode::Partitioned) => {
-                let left_stats =
-                    args.compute_child_statistics(&self.left, args.partition())?;
-                let right_stats =
-                    args.compute_child_statistics(&self.right, args.partition())?;
-
-                estimate_join_statistics(
-                    Arc::unwrap_or_clone(left_stats),
-                    Arc::unwrap_or_clone(right_stats),
-                    &self.on,
-                    self.null_equality,
-                    &self.join_type,
-                    &self.join_schema,
-                )?
+                vec![ChildStats::At(partition), ChildStats::At(partition)]
             }
-
             // Overall stats requested, look up overall child stats.
-            (None, _) => {
-                let left_stats = args.compute_child_statistics(&self.left, None)?;
-                let right_stats = args.compute_child_statistics(&self.right, None)?;
-                estimate_join_statistics(
-                    Arc::unwrap_or_clone(left_stats),
-                    Arc::unwrap_or_clone(right_stats),
-                    &self.on,
-                    self.null_equality,
-                    &self.join_type,
-                    &self.join_schema,
-                )?
-            }
-
+            (None, _) => vec![ChildStats::At(None), ChildStats::At(None)],
             // Auto mode hasn't decided partitioning yet, so it needs
             // overall stats from both sides.
             (Some(_), PartitionMode::Auto) => {
-                let left_stats = args.compute_child_statistics(&self.left, None)?;
-                let right_stats = args.compute_child_statistics(&self.right, None)?;
-                estimate_join_statistics(
-                    Arc::unwrap_or_clone(left_stats),
-                    Arc::unwrap_or_clone(right_stats),
-                    &self.on,
-                    self.null_equality,
-                    &self.join_type,
-                    &self.join_schema,
-                )?
+                vec![ChildStats::At(None), ChildStats::At(None)]
             }
-        };
+        }
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let left_stats = Arc::clone(&input_stats[0]);
+        let right_stats = Arc::clone(&input_stats[1]);
+        let stats = estimate_join_statistics(
+            Arc::unwrap_or_clone(left_stats),
+            Arc::unwrap_or_clone(right_stats),
+            &self.on,
+            self.null_equality,
+            &self.join_type,
+            &self.join_schema,
+        )?;
         // Project statistics if there is a projection
         let stats = stats.project(self.projection.as_ref());
         // Apply fetch limit to statistics

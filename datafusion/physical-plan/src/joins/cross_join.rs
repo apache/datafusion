@@ -31,7 +31,7 @@ use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs,
 };
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
@@ -372,14 +372,19 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        // Left side is always broadcast, so it always needs overall stats
-        let left_stats =
-            Arc::unwrap_or_clone(args.compute_child_statistics(&self.left, None)?);
-        // Right side is partitioned, so it needs per-partition stats
-        let right_stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(&self.right, args.partition())?,
-        );
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        // Left side is always broadcast, so it always needs overall stats.
+        // Right side is partitioned, so it needs per-partition stats.
+        vec![ChildStats::At(None), ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let left_stats = input_stats[0].as_ref().clone();
+        let right_stats = input_stats[1].as_ref().clone();
 
         Ok(Arc::new(stats_cartesian_product(left_stats, right_stats)))
     }
