@@ -736,7 +736,6 @@ mod tests {
     /// Two sorted runs whose largest batches are too big to both
     /// be seated in the merge budget at once are re-spilled (halved) until they
     /// fit, and the merge then completes with fully sorted, complete output.
-    /// Before the fix this returned `ResourcesExhausted` instead of merging.
     #[tokio::test]
     async fn skewed_runs_are_respilled_so_the_merge_fits() -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());
