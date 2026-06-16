@@ -398,7 +398,7 @@ impl Stream for AlignedBoundaryStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{CHUNK_SIZES, make_chunked_store};
+    use crate::test_util::{CHUNK_SIZES, make_chunked_store};
     use futures::TryStreamExt;
 
     async fn collect_stream(stream: AlignedBoundaryStream) -> Vec<u8> {

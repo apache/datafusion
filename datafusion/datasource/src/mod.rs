@@ -57,11 +57,10 @@ pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;
 use datafusion_common::stats::Precision;
-use datafusion_common::{ColumnStatistics, Result, TableReference, exec_datafusion_err};
+use datafusion_common::{ColumnStatistics, Result, TableReference};
 use datafusion_common::{ScalarValue, Statistics};
 use datafusion_physical_expr::LexOrdering;
-use futures::{Stream, StreamExt};
-use object_store::{GetOptions, GetRange, ObjectStore};
+use futures::Stream;
 use object_store::{ObjectMeta, path::Path};
 pub use table_schema::{TableSchema, TableSchemaBuilder};
 // Remove when add_row_stats is remove
@@ -430,45 +429,6 @@ pub enum RangeCalculation {
     TerminateEarly,
 }
 
-/// Asynchronously finds the position of the first newline character in a specified byte range
-/// within an object, such as a file, in an object store.
-///
-/// This function scans the contents of the object starting from the specified `start` position
-/// up to the `end` position, looking for the first occurrence of a newline character.
-/// It returns the position of the first newline relative to the start of the range.
-///
-/// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
-///
-/// The function returns an `Error` if any issues arise while reading from the object store or processing the data stream.
-async fn find_first_newline(
-    object_store: &Arc<dyn ObjectStore>,
-    location: &Path,
-    start: u64,
-    end: u64,
-    newline: u8,
-) -> Result<u64> {
-    let options = GetOptions {
-        range: Some(GetRange::Bounded(start..end)),
-        ..Default::default()
-    };
-
-    let result = object_store.get_opts(location, options).await?;
-    let mut result_stream = result.into_stream();
-
-    let mut index = 0;
-
-    while let Some(chunk) = result_stream.next().await.transpose()? {
-        if let Some(position) = chunk.iter().position(|&byte| byte == newline) {
-            let position = position as u64;
-            return Ok(index + position);
-        }
-
-        index += chunk.len() as u64;
-    }
-
-    Ok(index)
-}
-
 /// Generates test files with min-max statistics in different overlap patterns.
 ///
 /// Used by tests and benchmarks.
@@ -592,7 +552,7 @@ mod tests {
     use datafusion_execution::object_store::{
         DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
-    use object_store::{ObjectStoreExt, local::LocalFileSystem, path::Path};
+    use object_store::{local::LocalFileSystem, path::Path};
     use std::{collections::HashMap, ops::Not, sync::Arc};
     use url::Url;
 

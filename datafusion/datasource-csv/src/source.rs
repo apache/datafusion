@@ -21,9 +21,8 @@ use datafusion_datasource::boundary_stream::AlignedBoundaryStream;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_plan::projection::ProjectionExprs;
 use std::fmt;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::sync::Arc;
-use std::task::Poll;
 
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -360,6 +359,7 @@ impl FileOpener for CsvOpener {
         }
 
         let store = Arc::clone(&self.object_store);
+        let terminator = self.config.terminator();
         let baseline_metrics =
             BaselineMetrics::new(&self.config.metrics, self.partition_index);
 
@@ -388,7 +388,7 @@ impl FileOpener for CsvOpener {
                     raw_start,
                     raw_end,
                     file_size,
-                    b'\n',
+                    terminator.unwrap_or(b'\n'),
                 )
                 .await?
                 .map_err(DataFusionError::from);
