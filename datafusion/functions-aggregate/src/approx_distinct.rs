@@ -949,7 +949,7 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        is_hll_groups_type(args.expr_fields[0].data_type())
+        create_hll_groups_accumulator(args.expr_fields[0].data_type()).is_some()
     }
 
     fn create_groups_accumulator(
@@ -957,71 +957,12 @@ impl AggregateUDFImpl for ApproxDistinct {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         let data_type = args.expr_fields[0].data_type();
-        let accumulator: Box<dyn GroupsAccumulator> = match data_type {
-            DataType::UInt32 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<UInt32Type>>::new())
-            }
-            DataType::UInt64 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<UInt64Type>>::new())
-            }
-            DataType::Int32 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<Int32Type>>::new())
-            }
-            DataType::Int64 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<Int64Type>>::new())
-            }
-            DataType::Date32 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<Date32Type>>::new())
-            }
-            DataType::Date64 => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<Date64Type>>::new())
-            }
-            DataType::Time32(TimeUnit::Second) => {
-                Box::new(HllGroupsAccumulator::<NumericHasher<Time32SecondType>>::new())
-            }
-            DataType::Time32(TimeUnit::Millisecond) => Box::new(HllGroupsAccumulator::<
-                NumericHasher<Time32MillisecondType>,
-            >::new()),
-            DataType::Time64(TimeUnit::Microsecond) => Box::new(HllGroupsAccumulator::<
-                NumericHasher<Time64MicrosecondType>,
-            >::new()),
-            DataType::Time64(TimeUnit::Nanosecond) => Box::new(HllGroupsAccumulator::<
-                NumericHasher<Time64NanosecondType>,
-            >::new()),
-            DataType::Timestamp(TimeUnit::Second, _) => Box::new(HllGroupsAccumulator::<
-                NumericHasher<TimestampSecondType>,
-            >::new()),
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                Box::new(HllGroupsAccumulator::<
-                    NumericHasher<TimestampMillisecondType>,
-                >::new())
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                Box::new(HllGroupsAccumulator::<
-                    NumericHasher<TimestampMicrosecondType>,
-                >::new())
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(
-                HllGroupsAccumulator::<NumericHasher<TimestampNanosecondType>>::new(),
+        match create_hll_groups_accumulator(data_type) {
+            Some(acc) => Ok(acc),
+            None => not_impl_err!(
+                "GroupsAccumulator for 'approx_distinct' is not implemented for data type {data_type}"
             ),
-            DataType::Utf8 => Box::new(HllGroupsAccumulator::<Utf8Hasher<i32>>::new()),
-            DataType::LargeUtf8 => {
-                Box::new(HllGroupsAccumulator::<Utf8Hasher<i64>>::new())
-            }
-            DataType::Utf8View => Box::new(HllGroupsAccumulator::<Utf8ViewHasher>::new()),
-            DataType::Binary => {
-                Box::new(HllGroupsAccumulator::<BinaryHasher<i32>>::new())
-            }
-            DataType::LargeBinary => {
-                Box::new(HllGroupsAccumulator::<BinaryHasher<i64>>::new())
-            }
-            other => {
-                return not_impl_err!(
-                    "GroupsAccumulator for 'approx_distinct' is not implemented for data type {other}"
-                );
-            }
-        };
-        Ok(accumulator)
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -1029,32 +970,75 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 }
 
-/// Returns true for the data types backed by the HyperLogLog
-/// [`HllGroupsAccumulator`]. The fixed-domain types (booleans / small ints) and
-/// `Null` fall back to the per-group [`Accumulator`] path.
-fn is_hll_groups_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Date32
-            | DataType::Date64
-            | DataType::Time32(TimeUnit::Second)
-            | DataType::Time32(TimeUnit::Millisecond)
-            | DataType::Time64(TimeUnit::Microsecond)
-            | DataType::Time64(TimeUnit::Nanosecond)
-            | DataType::Timestamp(TimeUnit::Second, _)
-            | DataType::Timestamp(TimeUnit::Millisecond, _)
-            | DataType::Timestamp(TimeUnit::Microsecond, _)
-            | DataType::Timestamp(TimeUnit::Nanosecond, _)
-            | DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Utf8View
-            | DataType::Binary
-            | DataType::LargeBinary
-    )
+/// Builds the per-group HyperLogLog [`HllGroupsAccumulator`] for the input types
+/// that support the grouped fast path, or `None` for types that fall back to the
+/// per-group [`Accumulator`] path (fixed-domain types like booleans / small ints,
+/// `Null`, and any unsupported time/unit combinations).
+///
+/// This is the single source of truth for grouped HLL dispatch:
+/// [`AggregateUDFImpl::groups_accumulator_supported`] and
+/// [`AggregateUDFImpl::create_groups_accumulator`] both read it, so advertised
+/// support cannot drift from the set of types that can actually be constructed.
+fn create_hll_groups_accumulator(
+    data_type: &DataType,
+) -> Option<Box<dyn GroupsAccumulator>> {
+    let acc: Box<dyn GroupsAccumulator> = match data_type {
+        DataType::UInt32 => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<UInt32Type>>::new())
+        }
+        DataType::UInt64 => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<UInt64Type>>::new())
+        }
+        DataType::Int32 => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<Int32Type>>::new())
+        }
+        DataType::Int64 => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<Int64Type>>::new())
+        }
+        DataType::Date32 => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<Date32Type>>::new())
+        }
+        DataType::Date64 => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<Date64Type>>::new())
+        }
+        DataType::Time32(TimeUnit::Second) => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<Time32SecondType>>::new())
+        }
+        DataType::Time32(TimeUnit::Millisecond) => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<Time32MillisecondType>>::new())
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<Time64MicrosecondType>>::new())
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<Time64NanosecondType>>::new())
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            Box::new(HllGroupsAccumulator::<NumericHasher<TimestampSecondType>>::new())
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            Box::new(HllGroupsAccumulator::<
+                NumericHasher<TimestampMillisecondType>,
+            >::new())
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            Box::new(HllGroupsAccumulator::<
+                NumericHasher<TimestampMicrosecondType>,
+            >::new())
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(HllGroupsAccumulator::<
+            NumericHasher<TimestampNanosecondType>,
+        >::new()),
+        DataType::Utf8 => Box::new(HllGroupsAccumulator::<Utf8Hasher<i32>>::new()),
+        DataType::LargeUtf8 => Box::new(HllGroupsAccumulator::<Utf8Hasher<i64>>::new()),
+        DataType::Utf8View => Box::new(HllGroupsAccumulator::<Utf8ViewHasher>::new()),
+        DataType::Binary => Box::new(HllGroupsAccumulator::<BinaryHasher<i32>>::new()),
+        DataType::LargeBinary => {
+            Box::new(HllGroupsAccumulator::<BinaryHasher<i64>>::new())
+        }
+        _ => return None,
+    };
+    Some(acc)
 }
 
 #[cfg(test)]
@@ -1288,5 +1272,86 @@ mod tests {
             distinct_count(&mut acc_split)
         );
         assert_eq!(distinct_count(&mut acc_single), 3);
+    }
+
+    #[test]
+    fn grouped_support_predicate_matches_constructor() {
+        use arrow::datatypes::Schema;
+
+        let udf = ApproxDistinct::new();
+        let schema = Schema::empty();
+        let return_field: FieldRef = Field::new("c", DataType::UInt64, false).into();
+
+        let probe = |data_type: DataType| -> (bool, bool) {
+            let expr_fields: Vec<FieldRef> =
+                vec![Field::new("v", data_type, true).into()];
+            let args = AccumulatorArgs {
+                return_field: Arc::clone(&return_field),
+                schema: &schema,
+                expr_fields: &expr_fields,
+                ignore_nulls: false,
+                order_bys: &[],
+                is_distinct: false,
+                name: "approx_distinct",
+                is_reversed: false,
+                exprs: &[],
+            };
+            let supported = udf.groups_accumulator_supported(args.clone());
+            let created_ok = udf.create_groups_accumulator(args).is_ok();
+            (supported, created_ok)
+        };
+
+        // (data_type, expected grouped-HLL support)
+        let cases: Vec<(DataType, bool)> = vec![
+            // --- supported ---
+            (DataType::UInt32, true),
+            (DataType::UInt64, true),
+            (DataType::Int32, true),
+            (DataType::Int64, true),
+            (DataType::Date32, true),
+            (DataType::Date64, true),
+            (DataType::Time32(TimeUnit::Second), true),
+            (DataType::Time32(TimeUnit::Millisecond), true),
+            (DataType::Time64(TimeUnit::Microsecond), true),
+            (DataType::Time64(TimeUnit::Nanosecond), true),
+            (DataType::Timestamp(TimeUnit::Second, None), true),
+            (
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                true,
+            ),
+            (DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            (DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            (DataType::Utf8, true),
+            (DataType::LargeUtf8, true),
+            (DataType::Utf8View, true),
+            (DataType::Binary, true),
+            (DataType::LargeBinary, true),
+            // --- unsupported ---
+            (DataType::Time32(TimeUnit::Microsecond), false),
+            (DataType::Time32(TimeUnit::Nanosecond), false),
+            (DataType::Time64(TimeUnit::Second), false),
+            (DataType::Time64(TimeUnit::Millisecond), false),
+            (DataType::Boolean, false),
+            (DataType::Int8, false),
+            (DataType::Int16, false),
+            (DataType::UInt8, false),
+            (DataType::UInt16, false),
+            (DataType::Float32, false),
+            (DataType::Float64, false),
+            (DataType::Null, false),
+        ];
+
+        for (data_type, expected) in cases {
+            let (supported, created_ok) = probe(data_type.clone());
+
+            assert_eq!(
+                supported, expected,
+                "groups_accumulator_supported({data_type:?}) = {supported}, expected {expected}"
+            );
+            assert_eq!(
+                created_ok, expected,
+                "create_groups_accumulator({data_type:?}).is_ok() = {created_ok}, expected {expected}"
+            );
+        }
     }
 }
