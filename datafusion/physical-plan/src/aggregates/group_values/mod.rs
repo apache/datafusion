@@ -34,8 +34,8 @@ mod row;
 pub use row::GroupValuesRows;
 mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
-use multi_group_by::dict::{GroupDictionaryColumn, all_dictionary_schema};
 use multi_group_by::GroupValuesColumn;
+use multi_group_by::dict::{GroupDictionaryColumn, all_dictionary_schema};
 
 pub(crate) use single_group_by::primitive::HashValue;
 
