@@ -37,7 +37,7 @@ backtrace = ["datafusion/backtrace"]
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.8.17"
+aws-config = "1.8.18"
 aws-credential-types = "1.2.13"
 chrono = { workspace = true }
 clap = { version = "4.5.60", features = ["cargo", "derive"] }
@@ -75,7 +75,7 @@ workspace = true
 [dev-dependencies]
 ctor = { workspace = true }
 insta = { workspace = true }
-insta-cmd = "0.6.0"
+insta-cmd = "0.7.0"
 rstest = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["minio"] }
 # Makes sure `test_display_pg_json` behaves in a consistent way regardless of

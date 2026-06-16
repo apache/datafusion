@@ -28,7 +28,7 @@ use crate::{
 };
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
-use datafusion::config::ConfigFileType;
+use datafusion::config::{ConfigFileType, Dialect};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryConsumer;
@@ -223,9 +223,8 @@ pub(super) async fn exec_and_print(
     let dialect = &options.sql_parser.dialect;
     let dialect = dialect_from_str(dialect).ok_or_else(|| {
         plan_datafusion_err!(
-            "Unsupported SQL dialect: {dialect}. Available dialects: \
-                 Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                 MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+            "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+            Dialect::available()
         )
     })?;
 
@@ -613,9 +612,8 @@ mod tests {
         let dialect = &task_ctx.session_config().options().sql_parser.dialect;
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: \
-                 Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                 MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
+                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+                Dialect::available()
             )
         })?;
         for location in locations {

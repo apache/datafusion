@@ -311,12 +311,62 @@ message DmlNode{
     INSERT_OVERWRITE = 4;
     INSERT_REPLACE = 5;
     TRUNCATE = 6;
+    MERGE_INTO = 7;
   }
   Type dml_type = 1;
   LogicalPlanNode input = 2;
   TableReference table_name = 3;
   LogicalPlanNode target = 5;
+  // Populated only when dml_type == MERGE_INTO.
+  MergeIntoOpNode merge_into = 6;
 }
+
+// Carries the ON condition and WHEN clauses of a MERGE INTO operation.
+message MergeIntoOpNode {
+  LogicalExprNode on = 1;
+  repeated MergeIntoClauseNode clauses = 2;
+}
+
+// A single WHEN clause within a MERGE INTO statement.
+message MergeIntoClauseNode {
+  enum Kind {
+    MATCHED = 0;
+    NOT_MATCHED = 1;
+    NOT_MATCHED_BY_TARGET = 2;
+    NOT_MATCHED_BY_SOURCE = 3;
+  }
+  Kind kind = 1;
+  // Optional `AND <expr>` predicate. Absent when the clause has no predicate.
+  LogicalExprNode predicate = 2;
+  MergeIntoActionNode action = 3;
+}
+
+// The action for a single WHEN clause.
+message MergeIntoActionNode {
+  oneof action {
+    MergeUpdateAction update = 1;
+    MergeInsertAction insert = 2;
+    MergeDeleteAction delete = 3;
+  }
+}
+
+message MergeUpdateAction {
+  repeated MergeAssignment assignments = 1;
+}
+
+message MergeAssignment {
+  string column = 1;
+  LogicalExprNode value = 2;
+}
+
+message MergeInsertAction {
+  // May be empty (meaning all columns).
+  repeated string columns = 1;
+  // One expression per inserted column.
+  repeated LogicalExprNode values = 2;
+}
+
+message MergeDeleteAction {}
 
 message UnnestNode {
   LogicalPlanNode input = 1;

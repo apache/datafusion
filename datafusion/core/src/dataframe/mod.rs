@@ -58,13 +58,11 @@ use datafusion_common::{
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
-    dml::InsertOp,
-    expr::{Alias, ScalarFunction},
-    is_null, lit,
-    utils::COUNT_STAR_EXPANSION,
+    ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
+    dml::InsertOp, is_null, lit, utils::COUNT_STAR_EXPANSION,
 };
 use datafusion_functions::core::coalesce;
+use datafusion_functions::math::nanvl;
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
@@ -2472,6 +2470,64 @@ impl DataFrame {
         value: ScalarValue,
         columns: Vec<String>,
     ) -> Result<DataFrame> {
+        self.fill_columns(&value, &columns, &coalesce(), |_| true)
+    }
+
+    // Helper to find columns from names
+    fn find_columns(&self, names: &[impl AsRef<str>]) -> Result<Vec<FieldRef>> {
+        let schema = self.logical_plan().schema();
+        names
+            .iter()
+            .map(|name| {
+                let name = name.as_ref();
+                schema
+                    .field_with_name(None, name)
+                    .cloned()
+                    .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
+            })
+            .collect()
+    }
+
+    /// Fill NaN values in specified floating-point columns with a given value
+    /// If no columns are specified (empty slice), applies to all columns
+    /// Only floating-point columns are affected; other columns are left unchanged
+    /// Only fills if the value can be cast to the column's type
+    ///
+    /// # Arguments
+    /// * `value` - Value to fill NaNs with
+    /// * `columns` - List of column names to fill. If empty, fills all columns.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::ScalarValue;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// // Fill NaN in only columns "a" and "c":
+    /// let df = df.fill_nan(&ScalarValue::from(0.0), &["a", "c"])?;
+    /// // Fill NaN across all columns:
+    /// let df = df.fill_nan(&ScalarValue::from(0.0), &[])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn fill_nan(&self, value: &ScalarValue, columns: &[&str]) -> Result<DataFrame> {
+        self.fill_columns(value, columns, &nanvl(), |field| {
+            field.data_type().is_floating()
+        })
+    }
+
+    fn fill_columns(
+        &self,
+        value: &ScalarValue,
+        columns: &[impl AsRef<str>],
+        func: &Arc<ScalarUDF>,
+        applies: impl Fn(&FieldRef) -> bool,
+    ) -> Result<DataFrame> {
         let cols = if columns.is_empty() {
             self.logical_plan()
                 .schema()
@@ -2480,28 +2536,21 @@ impl DataFrame {
                 .map(Arc::clone)
                 .collect()
         } else {
-            self.find_columns(&columns)?
+            self.find_columns(columns)?
         };
 
-        // Create projections for each column
         let projections = self
             .logical_plan()
             .schema()
             .fields()
             .iter()
             .map(|field| {
-                if cols.contains(field) {
+                if cols.contains(field) && applies(field) {
                     // Try to cast fill value to column type. If the cast fails, fallback to the original column.
                     match value.clone().cast_to(field.data_type()) {
-                        Ok(fill_value) => Expr::Alias(Alias {
-                            expr: Box::new(Expr::ScalarFunction(ScalarFunction {
-                                func: coalesce(),
-                                args: vec![col(field.name()), lit(fill_value)],
-                            })),
-                            relation: None,
-                            name: field.name().to_string(),
-                            metadata: None,
-                        }),
+                        Ok(fill_value) => func
+                            .call(vec![col(field.name()), lit(fill_value)])
+                            .alias(field.name()),
                         Err(_) => col(field.name()),
                     }
                 } else {
@@ -2511,20 +2560,6 @@ impl DataFrame {
             .collect::<Vec<_>>();
 
         self.clone().select(projections)
-    }
-
-    // Helper to find columns from names
-    fn find_columns(&self, names: &[String]) -> Result<Vec<FieldRef>> {
-        let schema = self.logical_plan().schema();
-        names
-            .iter()
-            .map(|name| {
-                schema
-                    .field_with_name(None, name)
-                    .cloned()
-                    .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
-            })
-            .collect()
     }
 
     /// Find qualified columns for this dataframe from names

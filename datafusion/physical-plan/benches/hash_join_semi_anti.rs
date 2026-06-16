@@ -272,6 +272,26 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
         });
     }
 
+    // RightSemi - 100% Density, ~1% hit rate, fanout ~100
+    // Build keys are duplicated: 100K rows over 1K distinct keys. Matching
+    // probe rows produce many duplicate probe indices before RightSemi
+    // deduplication.
+    {
+        let fanout_keys = 1_000;
+        let left_batches = build_batches(build_rows, fanout_keys, 0, &s);
+        let right_batches = build_batches(probe_rows, build_rows, 0, &s);
+        group.bench_function(
+            BenchmarkId::new("right_semi_fanout100_h1", probe_rows),
+            |b| {
+                b.iter(|| {
+                    let left = make_exec(&left_batches, &s);
+                    let right = make_exec(&right_batches, &s);
+                    do_hash_join(left, right, JoinType::RightSemi, &rt)
+                })
+            },
+        );
+    }
+
     // =========================================================================
     // RightAnti Join benchmarks
     // =========================================================================

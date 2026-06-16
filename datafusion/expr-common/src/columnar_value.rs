@@ -18,9 +18,12 @@
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
 use arrow::{
-    array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
+    array::{
+        Array, ArrayRef, Date32Array, Date64Array, NullArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    },
     compute::{CastOptions, kernels, max, min},
-    datatypes::DataType,
+    datatypes::{DataType, TimeUnit},
     util::pretty::pretty_format_columns,
 };
 use datafusion_common::internal_datafusion_err;
@@ -28,7 +31,10 @@ use datafusion_common::{
     Result, ScalarValue,
     format::DEFAULT_CAST_OPTIONS,
     internal_err,
-    scalar::{date_to_timestamp_multiplier, ensure_timestamp_in_bounds},
+    scalar::{
+        date_to_timestamp_multiplier, ensure_timestamp_in_bounds,
+        timestamp_to_timestamp_multiplier,
+    },
 };
 use std::fmt;
 use std::sync::Arc;
@@ -319,7 +325,9 @@ fn cast_array_by_name(
     ) {
         datafusion_common::nested_struct::cast_column(array, cast_type, cast_options)
     } else {
-        ensure_date_array_timestamp_bounds(array, cast_type)?;
+        if !cast_options.safe {
+            ensure_temporal_array_timestamp_bounds(array, cast_type)?;
+        }
         Ok(kernels::cast::cast_with_options(
             array,
             cast_type,
@@ -328,12 +336,14 @@ fn cast_array_by_name(
     }
 }
 
-fn ensure_date_array_timestamp_bounds(
+fn ensure_temporal_array_timestamp_bounds(
     array: &ArrayRef,
     cast_type: &DataType,
 ) -> Result<()> {
     let source_type = array.data_type().clone();
-    let Some(multiplier) = date_to_timestamp_multiplier(&source_type, cast_type) else {
+    let Some(multiplier) = date_to_timestamp_multiplier(&source_type, cast_type)
+        .or_else(|| timestamp_to_timestamp_multiplier(&source_type, cast_type))
+    else {
         return Ok(());
     };
 
@@ -367,7 +377,55 @@ fn ensure_date_array_timestamp_bounds(
                 })?;
             (min(arr), max(arr))
         }
-        _ => return Ok(()), // Not a date type, nothing to do
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected TimestampSecondArray but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected TimestampMillisecondArray but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected TimestampMicrosecondArray but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected TimestampNanosecondArray but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        _ => return Ok(()), // Not a temporal type that needs checking.
     };
 
     // Only validate the min and max values instead of all elements
@@ -693,5 +751,49 @@ mod tests {
                 .contains("converted value exceeds the representable i64 range"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn cast_timestamp_array_to_timestamp_overflow() {
+        let overflow_value = i64::MAX / 1_000_000_000 + 1;
+        let array: ArrayRef =
+            Arc::new(TimestampSecondArray::from(vec![Some(overflow_value)]));
+        let value = ColumnarValue::Array(array);
+        let result =
+            value.cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None), None);
+        let err = result.expect_err("expected overflow to be detected");
+        assert!(
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn safe_cast_timestamp_array_to_timestamp_overflow_returns_null() {
+        let overflow_value = i64::MAX / 1_000_000_000 + 1;
+        let array: ArrayRef =
+            Arc::new(TimestampSecondArray::from(vec![Some(overflow_value)]));
+        let value = ColumnarValue::Array(array);
+        let safe_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let casted = value
+            .cast_to(
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                Some(&safe_options),
+            )
+            .expect("expected safe cast to return null");
+
+        let ColumnarValue::Array(array) = casted else {
+            panic!("expected array after cast");
+        };
+        let array = array
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("expected TimestampNanosecondArray");
+        assert!(array.is_null(0));
     }
 }

@@ -1386,6 +1386,95 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
     Ok(PrimitiveArray::new(rows_number.into(), None))
 }
 
+/// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array.
+/// For non-float arrays returns the input unchanged. NaN payloads are
+/// preserved.
+///
+/// Arrow's comparison kernels (`arrow::compute::kernels::cmp::eq` etc.) and
+/// row-encoding (`arrow::row::RowConverter`) use IEEE 754 totalOrder
+/// semantics, which treats `-0.0` and `+0.0` as distinct. SQL semantics
+/// (PostgreSQL / IEEE 754 equality) require them to compare equal, so
+/// callers normalize before invoking those kernels.
+///
+/// The common case - no `-0.0` present - is allocation-free: a single
+/// read-only scan of the underlying buffer (auto-vectorizable to an
+/// OR-reduction) decides whether to fall through to the rewriting path.
+/// Only arrays that actually contain `-0.0` pay for a new buffer.
+pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
+    use arrow::array::{Float16Array, Float32Array, Float64Array};
+    use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
+    // -0.0 has only the sign bit set; no other finite or NaN value shares
+    // this bit pattern, so a strict-equality scan reliably gates the rewrite.
+    const NEG_ZERO_F16_BITS: u16 = half::f16::NEG_ZERO.to_bits();
+    const NEG_ZERO_F32_BITS: u32 = (-0.0_f32).to_bits();
+    const NEG_ZERO_F64_BITS: u64 = (-0.0_f64).to_bits();
+    match array.data_type() {
+        DataType::Float32 => {
+            let arr: &Float32Array = array.as_primitive::<Float32Type>();
+            if !arr
+                .values()
+                .iter()
+                .any(|v| v.to_bits() == NEG_ZERO_F32_BITS)
+            {
+                return Arc::clone(array);
+            }
+            let normalized: Float32Array =
+                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f32 } else { v });
+            Arc::new(normalized)
+        }
+        DataType::Float64 => {
+            let arr: &Float64Array = array.as_primitive::<Float64Type>();
+            if !arr
+                .values()
+                .iter()
+                .any(|v| v.to_bits() == NEG_ZERO_F64_BITS)
+            {
+                return Arc::clone(array);
+            }
+            let normalized: Float64Array =
+                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f64 } else { v });
+            Arc::new(normalized)
+        }
+        DataType::Float16 => {
+            let arr: &Float16Array = array.as_primitive::<Float16Type>();
+            if !arr
+                .values()
+                .iter()
+                .any(|v| v.to_bits() == NEG_ZERO_F16_BITS)
+            {
+                return Arc::clone(array);
+            }
+            let normalized: Float16Array = arr.unary(|v| {
+                if v.to_bits() << 1 == 0 {
+                    half::f16::from_bits(0)
+                } else {
+                    v
+                }
+            });
+            Arc::new(normalized)
+        }
+        _ => Arc::clone(array),
+    }
+}
+
+/// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
+/// values. Other variants are returned unchanged. See [`normalize_float_zero`]
+/// for context.
+pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
+    match scalar {
+        ScalarValue::Float32(Some(v)) if v.to_bits() << 1 == 0 => {
+            ScalarValue::Float32(Some(0.0))
+        }
+        ScalarValue::Float64(Some(v)) if v.to_bits() << 1 == 0 => {
+            ScalarValue::Float64(Some(0.0))
+        }
+        ScalarValue::Float16(Some(v)) if v.to_bits() << 1 == 0 => {
+            ScalarValue::Float16(Some(half::f16::from_bits(0)))
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

@@ -50,9 +50,9 @@ jobs:
         with:
           rust-version: stable
       - name: Check dependencies
+        working-directory: dev/depcheck
         run: |
-          cd dev/depcheck
-          cargo run
+          cargo run --locked
 
   detect-unused-dependencies:
     name: Detect Unused Dependencies
