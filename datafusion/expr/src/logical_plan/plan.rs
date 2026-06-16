@@ -2073,6 +2073,7 @@ impl LogicalPlan {
                         filter,
                         join_constraint,
                         join_type,
+                        null_aware,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
@@ -2081,6 +2082,8 @@ impl LogicalPlan {
                             .as_ref()
                             .map(|expr| format!(" Filter: {expr}"))
                             .unwrap_or_else(|| "".to_string());
+                        let null_aware_expr =
+                            if *null_aware { " null_aware" } else { "" };
                         let join_type = if filter.is_none()
                             && keys.is_empty()
                             && *join_type == JoinType::Inner
@@ -2100,15 +2103,17 @@ impl LogicalPlan {
                                         filter_expr
                                     )?;
                                 }
+                                write!(f, "{null_aware_expr}")?;
                                 Ok(())
                             }
                             JoinConstraint::Using => {
                                 write!(
                                     f,
-                                    "{} Join: Using {}{}",
+                                    "{} Join: Using {}{}{}",
                                     join_type,
                                     join_expr.join(", "),
                                     filter_expr,
+                                    null_aware_expr,
                                 )
                             }
                         }
