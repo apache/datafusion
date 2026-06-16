@@ -19,8 +19,9 @@ use crate::error::{_plan_err, Result};
 use arrow::{
     array::{
         Array, ArrayRef, DictionaryArray, FixedSizeListArray, GenericListArray,
-        GenericListViewArray, StructArray, downcast_integer, new_null_array,
+        GenericListViewArray, StructArray, downcast_integer, make_array, new_null_array,
     },
+    buffer::NullBuffer,
     compute::{CastOptions, can_cast_types, cast_with_options},
     datatypes::{DataType, DataType::Struct, Field, FieldRef},
 };
@@ -280,11 +281,30 @@ fn cast_fixed_size_list_column(
     let source_list =
         downcast_array!(source_col, FixedSizeListArray, "fixed-size list array")?;
 
-    let cast_values = cast_column(
+    validate_data_type_compatibility(
+        target_inner_field.name(),
+        source_list.values().data_type(),
+        target_inner_field.data_type(),
+    )?;
+
+    let cast_values = match cast_column(
         source_list.values(),
         target_inner_field.data_type(),
         cast_options,
-    )?;
+    ) {
+        Ok(cast_values) => cast_values,
+        Err(error) => match source_list.nulls() {
+            Some(parent_nulls) if parent_nulls.null_count() > 0 => {
+                let values = mask_fixed_size_list_hidden_values(
+                    source_list.values(),
+                    parent_nulls,
+                    target_list_size,
+                )?;
+                cast_column(&values, target_inner_field.data_type(), cast_options)?
+            }
+            _ => return Err(error),
+        },
+    };
 
     Ok(Arc::new(FixedSizeListArray::new(
         Arc::clone(target_inner_field),
@@ -292,6 +312,42 @@ fn cast_fixed_size_list_column(
         cast_values,
         source_list.nulls().cloned(),
     )))
+}
+
+fn mask_fixed_size_list_hidden_values(
+    values: &ArrayRef,
+    parent_nulls: &NullBuffer,
+    list_size: i32,
+) -> Result<ArrayRef> {
+    let hidden_child_nulls = parent_nulls.expand(list_size as usize);
+    mask_array_values(values, &hidden_child_nulls)
+}
+
+fn mask_array_values(
+    values: &ArrayRef,
+    additional_nulls: &NullBuffer,
+) -> Result<ArrayRef> {
+    let nulls = NullBuffer::union(values.nulls(), Some(additional_nulls));
+
+    if let Some(struct_array) = values.as_any().downcast_ref::<StructArray>() {
+        let struct_nulls = nulls
+            .as_ref()
+            .expect("additional nulls always produce nulls");
+        let arrays = struct_array
+            .columns()
+            .iter()
+            .map(|child| mask_array_values(child, struct_nulls))
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(Arc::new(StructArray::new(
+            struct_array.fields().clone(),
+            arrays,
+            nulls,
+        )));
+    }
+
+    Ok(make_array(
+        values.to_data().into_builder().nulls(nulls).build()?,
+    ))
 }
 
 fn cast_dictionary_column(
@@ -1537,6 +1593,70 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert_contains!(runtime_error, "Cannot cast struct field 'a'");
+    }
+
+    #[test]
+    fn test_cast_fixed_size_list_struct_missing_non_nullable_field_runtime_rejected() {
+        let source_field =
+            arc_field("item", struct_type(vec![field("a", DataType::Int32)]));
+        let target_field = arc_field(
+            "item",
+            struct_type(vec![
+                field("a", DataType::Int32),
+                non_null_field("b", DataType::Utf8),
+            ]),
+        );
+        let source_col: ArrayRef =
+            Arc::new(FixedSizeListArray::new_null(source_field, 2, 1));
+        let target_type = DataType::FixedSizeList(target_field, 2);
+
+        let error = cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(
+            error,
+            "target field 'b' is non-nullable but missing from source"
+        );
+    }
+
+    #[test]
+    fn test_cast_fixed_size_list_struct_ignores_hidden_child_values_for_null_parent() {
+        let source_field =
+            arc_field("item", struct_type(vec![field("a", DataType::Utf8)]));
+        let target_field =
+            arc_field("item", struct_type(vec![field("a", DataType::Int32)]));
+        let struct_arr = StructArray::from(vec![(
+            arc_field("a", DataType::Utf8),
+            Arc::new(StringArray::from(vec!["not_int", "also_bad", "1", "2"]))
+                as ArrayRef,
+        )]);
+        let source_col: ArrayRef = Arc::new(FixedSizeListArray::new(
+            source_field,
+            2,
+            Arc::new(struct_arr),
+            Some(NullBuffer::from(vec![false, true])),
+        ));
+        let target_type = DataType::FixedSizeList(target_field, 2);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let result_list = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert!(result_list.is_null(0));
+        assert!(result_list.is_valid(1));
+
+        let struct_values = result_list
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let a_col = get_column_as!(&struct_values, "a", Int32Array);
+        assert!(a_col.is_null(0));
+        assert!(a_col.is_null(1));
+        assert_eq!(a_col.value(2), 1);
+        assert_eq!(a_col.value(3), 2);
     }
 
     #[test]
