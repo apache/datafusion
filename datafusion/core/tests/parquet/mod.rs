@@ -100,6 +100,10 @@ enum Unit {
     RowGroup(usize),
     // pass max row per page in parquet writer
     Page(usize),
+    // pass max row per row_group AND max row per page. Use when a test
+    // needs both multi-RG layout AND multiple pages within each RG so the
+    // page index can prune at sub-RG granularity.
+    RowGroupAndPage(usize, usize),
 }
 
 /// Test fixture that has an execution context that has an external
@@ -319,12 +323,31 @@ impl ContextWithParquet {
             Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
                 config.options_mut().execution.parquet.pushdown_filters = true;
-                make_test_file_rg(scenario, row_per_group, custom_schema, custom_batches)
-                    .await
+                make_test_file_rg(
+                    scenario,
+                    row_per_group,
+                    None,
+                    custom_schema,
+                    custom_batches,
+                )
+                .await
             }
             Unit::Page(row_per_page) => {
                 config = config.with_parquet_page_index_pruning(true);
                 make_test_file_page(scenario, row_per_page).await
+            }
+            Unit::RowGroupAndPage(row_per_group, row_per_page) => {
+                config = config.with_parquet_bloom_filter_pruning(true);
+                config = config.with_parquet_page_index_pruning(true);
+                config.options_mut().execution.parquet.pushdown_filters = true;
+                make_test_file_rg(
+                    scenario,
+                    row_per_group,
+                    Some(row_per_page),
+                    custom_schema,
+                    custom_batches,
+                )
+                .await
             }
         };
         let parquet_path = file.path().to_string_lossy();
@@ -1153,6 +1176,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
 async fn make_test_file_rg(
     scenario: Scenario,
     row_per_group: usize,
+    row_per_page: Option<usize>,
     custom_schema: Option<SchemaRef>,
     custom_batches: Option<Vec<RecordBatch>>,
 ) -> NamedTempFile {
@@ -1162,11 +1186,19 @@ async fn make_test_file_rg(
         .tempfile()
         .expect("tempfile creation");
 
-    let props = WriterProperties::builder()
+    let mut props_builder = WriterProperties::builder()
         .set_max_row_group_row_count(Some(row_per_group))
         .set_bloom_filter_enabled(true)
-        .set_statistics_enabled(EnabledStatistics::Page)
-        .build();
+        .set_statistics_enabled(EnabledStatistics::Page);
+    if let Some(rpp) = row_per_page {
+        // Bound rows per page so the page index can prune at sub-RG
+        // granularity. `write_batch_size` must also be set so the writer
+        // does not buffer the whole RG into one page.
+        props_builder = props_builder
+            .set_data_page_row_count_limit(rpp)
+            .set_write_batch_size(rpp);
+    }
+    let props = props_builder.build();
 
     let (batches, schema) =
         if let (Some(schema), Some(batches)) = (custom_schema, custom_batches) {

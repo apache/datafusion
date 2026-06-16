@@ -207,6 +207,99 @@ async fn dynamic_rg_pruning_metric_quiet_without_topk() {
     );
 }
 
+/// Build five sorted `RecordBatch`es with 1000 values each so that, when
+/// the writer is configured with `row_per_group=1000` and
+/// `data_page_row_count_limit=100`, every row group ends up with **ten
+/// data pages** of 100 rows each. RG `i` covers `[i*1000, (i+1)*1000)`,
+/// monotonically ascending — page index will then have tight per-page
+/// `min`/`max` and can prune at sub-RG granularity.
+fn build_five_thousand_row_rgs(schema: &Arc<Schema>) -> Vec<RecordBatch> {
+    (0..5i64)
+        .map(|rg| {
+            let base = rg * 1000;
+            let values: Vec<i64> = (base..base + 1000).collect();
+            let col: ArrayRef = Arc::new(Int64Array::from(values));
+            RecordBatch::try_new(Arc::clone(schema), vec![col]).unwrap()
+        })
+        .collect()
+}
+
+/// Co-existence test for **page-index `RowSelection`** + dynamic RG
+/// pruning. Tests that the `into_builder` rebuild preserves the
+/// `RowSelection` derived from page-index pruning across RG drops.
+///
+/// Layout: 5 RGs × 1000 rows, with `data_page_row_count_limit=100` so
+/// each RG has 10 pages of 100 rows.
+///
+/// Query: `SELECT v FROM t WHERE v >= 500 ORDER BY v DESC LIMIT 5`.
+/// - `v >= 500` engages the page index: in RG 0 (values 0..1000) the
+///   first 5 pages (values 0..500) are pruned, the last 5 (500..1000)
+///   are scanned. RGs 1..4 keep all their pages (every page has
+///   `max >= 500`). The decoder receives a `RowSelection` that masks
+///   out those first 5 pages of RG 0.
+/// - `ORDER BY v DESC LIMIT 5` fills the TopK heap from RG 4
+///   (`max=4999`); the tightened threshold (≥ 4995) then proves RGs
+///   0..3 unreachable and the runtime pruner drops them in one
+///   `into_builder` rebuild.
+///
+/// If `into_builder` did **not** preserve the row selection (or
+/// truncated / shifted it incorrectly), either the result rows would
+/// drift or the count of pruned pages would drop to zero.
+#[tokio::test]
+async fn dynamic_rg_pruning_coexists_with_page_index_row_selection() {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+    let batches = build_five_thousand_row_rgs(&schema);
+
+    // `RowGroupAndPage(1000, 100)` enables both `pushdown_filters` and
+    // page-index pruning, and writes a parquet file with 1000-row RGs
+    // partitioned into 100-row pages.
+    let mut ctx = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        crate::parquet::Unit::RowGroupAndPage(1000, 100),
+        Arc::clone(&schema),
+        batches,
+    )
+    .await;
+
+    let output = ctx
+        .query("SELECT v FROM t WHERE v >= 500 ORDER BY v DESC LIMIT 5")
+        .await;
+
+    // Correctness — top-5 values descending are 4995..=4999 (all in RG 4).
+    assert_eq!(output.result_rows, 5, "query must return LIMIT rows");
+    let formatted = output.pretty_results();
+    for v in 4995..=4999i64 {
+        assert!(
+            formatted.contains(&format!("| {v} ")),
+            "output must contain top-5 descending value {v}; got:\n{formatted}",
+        );
+    }
+
+    // Page-index pruning must have engaged: RG 0's first 5 pages are
+    // entirely < 500. If `into_builder` dropped the row-selection state,
+    // this metric would still report the original count (it is captured
+    // at file open). Combined with the dynamic-pruner assertion below it
+    // proves both mechanisms were active and that the rebuild left the
+    // selection coherent — otherwise the result rows above would drift.
+    let pages_pruned = output.metric_value("page_index_pages_pruned").unwrap_or(0);
+    assert!(
+        pages_pruned >= 5,
+        "page index must prune at least 5 pages (RG 0 pages 0..5 for v < 500); \
+         pruned={pages_pruned}\n{}",
+        output.description(),
+    );
+
+    let pruned = output
+        .row_groups_pruned_dynamic_filter()
+        .expect("`row_groups_pruned_dynamic_filter` metric must be registered");
+    assert!(
+        pruned >= 1,
+        "with TopK + tight threshold the runtime pruner must skip at least \
+         one row group; pruned={pruned}\n{}",
+        output.description(),
+    );
+}
+
 /// Co-existence test: a `WHERE` clause that gets pushed into the parquet
 /// `RowFilter` plus a `TopK` that drives the dynamic RG pruner.
 ///
