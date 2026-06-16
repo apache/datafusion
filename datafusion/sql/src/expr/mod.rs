@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, TimeUnit};
+use datafusion_expr::planner::RawAnyAllExpr;
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
@@ -36,13 +37,10 @@ use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
-    Operator, TryCast, lit, when,
+    Operator, TryCast, lit,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_functions_nested::expr_fn::{
-    array_has, array_max, array_min, array_position, cardinality,
-};
 
 mod binary_op;
 mod function;
@@ -615,9 +613,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                 ),
                 _ => {
-                    let left_expr = self.sql_to_expr(*left, schema, planner_context)?;
-                    let right_expr = self.sql_to_expr(*right, schema, planner_context)?;
-                    plan_any_op(left_expr, right_expr, &compare_op)
+                    let needle = self.sql_to_expr(*left, schema, planner_context)?;
+                    let haystack = self.sql_to_expr(*right, schema, planner_context)?;
+
+                    let mut raw_expr = RawAnyAllExpr {
+                        op: compare_op,
+                        needle,
+                        haystack,
+                    };
+
+                    for planner in self.context_provider.get_expr_planners() {
+                        match planner.plan_any(raw_expr)? {
+                            PlannerResult::Planned(expr) => {
+                                return Ok(expr);
+                            }
+                            PlannerResult::Original(expr) => raw_expr = expr,
+                        }
+                    }
+                    not_impl_err!("ANY not supported by ExprPlanner: {raw_expr:?}")
                 }
             },
             SQLExpr::AllOp {
@@ -634,9 +647,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                 ),
                 _ => {
-                    let left_expr = self.sql_to_expr(*left, schema, planner_context)?;
-                    let right_expr = self.sql_to_expr(*right, schema, planner_context)?;
-                    plan_all_op(&left_expr, &right_expr, &compare_op)
+                    let needle = self.sql_to_expr(*left, schema, planner_context)?;
+                    let haystack = self.sql_to_expr(*right, schema, planner_context)?;
+
+                    let mut raw_expr = RawAnyAllExpr {
+                        op: compare_op,
+                        needle,
+                        haystack,
+                    };
+
+                    for planner in self.context_provider.get_expr_planners() {
+                        match planner.plan_all(raw_expr)? {
+                            PlannerResult::Planned(expr) => {
+                                return Ok(expr);
+                            }
+                            PlannerResult::Original(expr) => raw_expr = expr,
+                        }
+                    }
+                    not_impl_err!("ALL not supported by ExprPlanner: {raw_expr:?}")
                 }
             },
             #[expect(deprecated)]
@@ -1243,118 +1271,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )
             })
     }
-}
-
-/// Builds a CASE expression that handles NULL semantics for `x <op> ANY(arr)`:
-///
-/// ```text
-/// CASE
-///   WHEN <min_or_max>(arr) IS NOT NULL THEN <comparison>
-///   WHEN arr IS NOT NULL THEN FALSE          -- empty or all-null array
-///   ELSE NULL                                -- NULL array
-/// END
-/// ```
-fn any_op_with_null_handling(bound: Expr, comparison: Expr, arr: Expr) -> Result<Expr> {
-    when(bound.is_not_null(), comparison)
-        .when(arr.is_not_null(), lit(false))
-        .otherwise(lit(ScalarValue::Boolean(None)))
-}
-
-/// Plans a `<left> <op> ANY(<right>)` expression for non-subquery operands.
-fn plan_any_op(
-    left_expr: Expr,
-    right_expr: Expr,
-    compare_op: &BinaryOperator,
-) -> Result<Expr> {
-    match compare_op {
-        BinaryOperator::Eq => Ok(array_has(right_expr, left_expr)),
-        BinaryOperator::NotEq => {
-            let min = array_min(right_expr.clone());
-            let max = array_max(right_expr.clone());
-            // NOT EQ is true when either bound differs from left
-            let comparison = min
-                .not_eq(left_expr.clone())
-                .or(max.clone().not_eq(left_expr));
-            any_op_with_null_handling(max, comparison, right_expr)
-        }
-        BinaryOperator::Gt => {
-            let min = array_min(right_expr.clone());
-            any_op_with_null_handling(min.clone(), min.lt(left_expr), right_expr)
-        }
-        BinaryOperator::Lt => {
-            let max = array_max(right_expr.clone());
-            any_op_with_null_handling(max.clone(), max.gt(left_expr), right_expr)
-        }
-        BinaryOperator::GtEq => {
-            let min = array_min(right_expr.clone());
-            any_op_with_null_handling(min.clone(), min.lt_eq(left_expr), right_expr)
-        }
-        BinaryOperator::LtEq => {
-            let max = array_max(right_expr.clone());
-            any_op_with_null_handling(max.clone(), max.gt_eq(left_expr), right_expr)
-        }
-        _ => plan_err!(
-            "Unsupported AnyOp: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
-        ),
-    }
-}
-
-/// Plans `needle <compare_op> ALL(haystack)` with proper SQL NULL semantics.
-///
-/// CASE/WHEN structure:
-///   WHEN arr IS NULL        → NULL
-///   WHEN empty              → TRUE
-///   WHEN lhs IS NULL        → NULL
-///   WHEN decisive_condition → FALSE
-///   WHEN has_nulls          → NULL
-///   ELSE                    → TRUE
-fn plan_all_op(
-    needle: &Expr,
-    haystack: &Expr,
-    compare_op: &BinaryOperator,
-) -> Result<Expr> {
-    let null_arr_check = haystack.clone().is_null();
-    let empty_check = cardinality(haystack.clone()).eq(lit(0u64));
-    let null_lhs_check = needle.clone().is_null();
-    // DataFusion's array_position uses is_null() checks internally (not equality),
-    // so it can locate NULL elements even though NULL = NULL is NULL in standard SQL.
-    let has_nulls =
-        array_position(haystack.clone(), lit(ScalarValue::Null), lit(1i64)).is_not_null();
-
-    let decisive_condition = match compare_op {
-        BinaryOperator::NotEq => array_has(haystack.clone(), needle.clone()),
-        BinaryOperator::Eq => {
-            let all_equal = array_min(haystack.clone())
-                .eq(needle.clone())
-                .and(array_max(haystack.clone()).eq(needle.clone()));
-            Expr::Not(Box::new(all_equal))
-        }
-        BinaryOperator::Gt => {
-            Expr::Not(Box::new(needle.clone().gt(array_max(haystack.clone()))))
-        }
-        BinaryOperator::Lt => {
-            Expr::Not(Box::new(needle.clone().lt(array_min(haystack.clone()))))
-        }
-        BinaryOperator::GtEq => {
-            Expr::Not(Box::new(needle.clone().gt_eq(array_max(haystack.clone()))))
-        }
-        BinaryOperator::LtEq => {
-            Expr::Not(Box::new(needle.clone().lt_eq(array_min(haystack.clone()))))
-        }
-        _ => {
-            return plan_err!(
-                "Unsupported AllOp: '{compare_op}', only '=', '<>', '>', '<', '>=', '<=' are supported"
-            );
-        }
-    };
-
-    let null_bool = lit(ScalarValue::Boolean(None));
-    when(null_arr_check, null_bool.clone())
-        .when(empty_check, lit(true))
-        .when(null_lhs_check, null_bool.clone())
-        .when(decisive_condition, lit(false))
-        .when(has_nulls, null_bool)
-        .otherwise(lit(true))
 }
 
 #[cfg(test)]
