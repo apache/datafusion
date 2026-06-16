@@ -1170,7 +1170,7 @@ impl RowGroupsPrunedParquetOpen {
                 mem::replace(&mut prepared.async_file_reader, replacement_reader),
                 reader_metadata,
             );
-            let parquet_columns: Vec<(String, usize, Type)> = predicate
+            let parquet_columns: Vec<(String, usize, Type, i32)> = predicate
                 .literal_columns()
                 .into_iter()
                 .filter_map(|column_name| {
@@ -1184,6 +1184,7 @@ impl RowGroupsPrunedParquetOpen {
                         column_name,
                         column_idx,
                         parquet_schema.column(column_idx).physical_type(),
+                        parquet_schema.column(column_idx).type_length(),
                     ))
                 })
                 .collect();
@@ -1191,7 +1192,9 @@ impl RowGroupsPrunedParquetOpen {
             for idx in self.row_groups.row_group_indexes() {
                 let mut row_group_filters =
                     BloomFilterStatistics::with_capacity(parquet_columns.len());
-                for (column_name, column_idx, physical_type) in &parquet_columns {
+                for (column_name, column_idx, physical_type, type_length) in
+                    &parquet_columns
+                {
                     let bf: Sbbf = match builder
                         .get_row_group_column_bloom_filter(idx, *column_idx)
                         .await
@@ -1204,7 +1207,12 @@ impl RowGroupsPrunedParquetOpen {
                             continue;
                         }
                     };
-                    row_group_filters.insert(column_name, bf, *physical_type);
+                    row_group_filters.insert(
+                        column_name,
+                        bf,
+                        *physical_type,
+                        *type_length,
+                    );
                 }
                 row_group_bloom_filters[idx] = row_group_filters;
             }

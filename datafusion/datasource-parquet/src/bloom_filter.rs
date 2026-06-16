@@ -39,7 +39,8 @@ pub(crate) struct BloomFilterStatistics {
     /// Value:
     /// * [`Sbbf`] (Bloom filter),
     /// * Parquet physical [`Type`] needed to evaluate  literals against the filter
-    column_sbbf: HashMap<String, (Sbbf, Type)>,
+    /// * Type length from the Parquet column descriptor
+    column_sbbf: HashMap<String, (Sbbf, Type, i32)>,
 }
 
 impl BloomFilterStatistics {
@@ -56,15 +57,27 @@ impl BloomFilterStatistics {
     }
 
     /// Add a Bloom filter and type for the specified column
-    pub(crate) fn insert(&mut self, column: impl Into<String>, sbbf: Sbbf, ty: Type) {
-        self.column_sbbf.insert(column.into(), (sbbf, ty));
+    pub(crate) fn insert(
+        &mut self,
+        column: impl Into<String>,
+        sbbf: Sbbf,
+        ty: Type,
+        type_length: i32,
+    ) {
+        self.column_sbbf
+            .insert(column.into(), (sbbf, ty, type_length));
     }
 
     /// Helper function for checking if [`Sbbf`] filter contains [`ScalarValue`].
     ///
     /// In case the type of scalar is not supported, returns `true`, assuming that the
     /// value may be present.
-    fn check_scalar(sbbf: &Sbbf, value: &ScalarValue, parquet_type: &Type) -> bool {
+    fn check_scalar(
+        sbbf: &Sbbf,
+        value: &ScalarValue,
+        parquet_type: &Type,
+        type_length: i32,
+    ) -> bool {
         match value {
             ScalarValue::Utf8(Some(v))
             | ScalarValue::Utf8View(Some(v))
@@ -113,8 +126,14 @@ impl BloomFilterStatistics {
                     sbbf.check(&decimal)
                 }
                 Type::FIXED_LEN_BYTE_ARRAY => {
-                    // keep with from_bytes_to_i128
-                    let b = v.to_be_bytes().to_vec();
+                    let Ok(type_length) = usize::try_from(type_length) else {
+                        return true;
+                    };
+                    if type_length == 0 || type_length > 16 {
+                        return true;
+                    }
+                    let b = v.to_be_bytes();
+                    let b = b[(b.len() - type_length)..].to_vec();
                     // Use Decimal constructor after https://github.com/apache/arrow-rs/issues/5325
                     let decimal = Decimal::Bytes {
                         value: b.into(),
@@ -125,9 +144,12 @@ impl BloomFilterStatistics {
                 }
                 _ => true,
             },
-            ScalarValue::Dictionary(_, inner) => {
-                BloomFilterStatistics::check_scalar(sbbf, inner, parquet_type)
-            }
+            ScalarValue::Dictionary(_, inner) => BloomFilterStatistics::check_scalar(
+                sbbf,
+                inner,
+                parquet_type,
+                type_length,
+            ),
             _ => true,
         }
     }
@@ -164,7 +186,8 @@ impl PruningStatistics for BloomFilterStatistics {
         column: &Column,
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
-        let (sbbf, parquet_type) = self.column_sbbf.get(column.name.as_str())?;
+        let (sbbf, parquet_type, type_length) =
+            self.column_sbbf.get(column.name.as_str())?;
 
         // Bloom filters are probabilistic data structures that can return false
         // positives (i.e. it might return true even if the value is not
@@ -173,7 +196,14 @@ impl PruningStatistics for BloomFilterStatistics {
 
         let known_not_present = values
             .iter()
-            .map(|value| BloomFilterStatistics::check_scalar(sbbf, value, parquet_type))
+            .map(|value| {
+                BloomFilterStatistics::check_scalar(
+                    sbbf,
+                    value,
+                    parquet_type,
+                    *type_length,
+                )
+            })
             // The row group doesn't contain any of the values if
             // all the checks are false
             .all(|v| !v);
@@ -201,15 +231,19 @@ mod tests {
     use crate::test_util::ExpectedPruning;
     use crate::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccessPlanFilter};
 
+    use arrow::array::Decimal128Array;
     use arrow::datatypes::{DataType, Field, Schema};
+    use bytes::{BufMut, BytesMut};
     use datafusion_common::Result;
     use datafusion_expr::{Expr, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use datafusion_pruning::PruningPredicate;
     use object_store::ObjectStoreExt;
+    use parquet::arrow::ArrowWriter;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::arrow::async_reader::ParquetObjectReader;
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
     #[tokio::test]
     async fn test_row_group_bloom_filter_pruning_predicate_simple_expr() {
@@ -375,6 +409,40 @@ mod tests {
             .await
     }
 
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_decimal128() {
+        for precision in [19, 20, 21, 28, 38] {
+            let scale = 2;
+            let data = parquet_decimal128_with_bloom_filter(precision, scale);
+            let schema = Schema::new(vec![Field::new(
+                "decimal_col",
+                DataType::Decimal128(precision, scale),
+                true,
+            )]);
+            let expr = col("decimal_col").eq(Expr::Literal(
+                ScalarValue::Decimal128(Some(500), precision, scale),
+                None,
+            ));
+            let expr = logical2physical(&expr, &schema);
+            let pruning_predicate =
+                PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+            let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+                &format!("decimal128-{precision}.parquet"),
+                data,
+                &pruning_predicate,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                pruned_row_groups.access_plan().row_group_indexes(),
+                vec![2],
+                "precision {precision}"
+            );
+        }
+    }
+
     struct BloomFilterTest {
         file_name: String,
         schema: Schema,
@@ -467,6 +535,33 @@ mod tests {
         }
     }
 
+    fn parquet_decimal128_with_bloom_filter(precision: u8, scale: i8) -> bytes::Bytes {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "decimal_col",
+            DataType::Decimal128(precision, scale),
+            true,
+        )]));
+        let array = Arc::new(
+            Decimal128Array::from(vec![100, 200, 300, 400, 500, 600])
+                .with_precision_and_scale(precision, scale)
+                .unwrap(),
+        ) as ArrayRef;
+        let batch =
+            arrow::array::RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(2))
+            .set_bloom_filter_enabled(true)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+        let mut out = BytesMut::new().writer();
+        {
+            let mut writer = ArrowWriter::try_new(&mut out, schema, Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        out.into_inner().freeze()
+    }
+
     /// Evaluates the pruning predicate on the specified row groups and returns the row groups that are left
     async fn test_row_group_bloom_filter_pruning_predicate(
         file_name: &str,
@@ -520,6 +615,7 @@ mod tests {
                     column_name.to_string(),
                     column_idx,
                     builder.parquet_schema().column(column_idx).physical_type(),
+                    builder.parquet_schema().column(column_idx).type_length(),
                 ))
             })
             .collect::<Vec<_>>();
@@ -532,7 +628,8 @@ mod tests {
         for idx in pruned_row_groups.row_group_indexes() {
             let mut bloom_filters =
                 BloomFilterStatistics::with_capacity(parquet_columns.len());
-            for (column_name, column_idx, physical_type) in &parquet_columns {
+            for (column_name, column_idx, physical_type, type_length) in &parquet_columns
+            {
                 let bf = match builder
                     .get_row_group_column_bloom_filter(idx, *column_idx)
                     .await
@@ -545,7 +642,12 @@ mod tests {
                         continue;
                     }
                 };
-                bloom_filters.insert(column_name.clone(), bf, *physical_type);
+                bloom_filters.insert(
+                    column_name.clone(),
+                    bf,
+                    *physical_type,
+                    *type_length,
+                );
             }
             row_group_bloom_filters[idx] = bloom_filters;
         }
