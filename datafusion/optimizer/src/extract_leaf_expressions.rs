@@ -1151,7 +1151,6 @@ fn try_push_into_inputs(
 
     // Unnest may output a column with the same name but different value/type
     // than its input column. Name-based routing cannot distinguish those.
-    // On top of that Unnest can't go through the `node.with_new_exprs(node.expressions(), new_inputs)` rebuild
     if matches!(node, LogicalPlan::Unnest(_)) {
         return Ok(None);
     }
@@ -3046,16 +3045,15 @@ mod tests {
         Ok(())
     }
 
-    /// Regression test for the `Assertion failed: expr.is_empty(): Unnest`
-    /// internal error.
+    /// Regression test: the optimizer must not push extractions through
+    /// `Unnest`.
     ///
-    /// `try_push_into_inputs` rebuilds the parent node via
-    /// `node.with_new_exprs(node.expressions(), new_inputs)`. For `Unnest`,
-    /// `apply_expressions` exposes the `exec_columns` as `Expr::Column`s
-    /// (so `expressions()` is **non-empty**), but `with_new_exprs` for
-    /// `Unnest` immediately calls `assert_no_expressions(expr)?` and errors
-    /// out. The optimizer should treat `Unnest` as a barrier and bail
-    /// instead of attempting to push through it.
+    /// `try_push_into_inputs` routes extracted pairs to inputs by column name.
+    /// `Unnest` can emit an output column with the same name as its input
+    /// column but a different value/type (the unnested element), so name-based
+    /// routing cannot tell the two apart. `try_push_into_inputs` therefore
+    /// treats `Unnest` as a barrier and bails instead of pushing through it
+    /// (see the `matches!(node, LogicalPlan::Unnest(_))` guard there).
     #[test]
     fn test_no_push_through_unnest() -> Result<()> {
         use arrow::datatypes::{DataType, Field, Schema};
