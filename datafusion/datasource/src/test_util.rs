@@ -136,12 +136,12 @@ pub(crate) fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> 
 ///
 /// `usize::MAX` is intentionally included: `ChunkedStore` treats it as
 /// "one chunk containing everything", giving the single-chunk fast path.
-pub const CHUNK_SIZES: &[usize] = &[1, 2, 3, 4, 5, 7, 8, 11, 13, 16, usize::MAX];
+pub(crate) const CHUNK_SIZES: &[usize] = &[1, 2, 3, 4, 5, 7, 8, 11, 13, 16, usize::MAX];
 
 /// Seed a fresh `InMemory` store with `data` and wrap it in a
 /// [`ChunkedStore`] that splits every GET response into `chunk_size`-byte
 /// pieces.
-pub async fn make_chunked_store(
+pub(crate) async fn make_chunked_store(
     data: &[u8],
     chunk_size: usize,
 ) -> (Arc<dyn ObjectStore>, object_store::path::Path) {
