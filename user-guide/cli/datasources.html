@@ -541,6 +541,26 @@ to read all compatible files in that directory.</p>
 <span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">344</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
 </pre></div>
 </div>
+<section id="reading-from-standard-input">
+<h2>Reading from standard input<a class="headerlink" href="#reading-from-standard-input" title="Link to this heading">#</a></h2>
+<p>On Unix-like systems you can pipe data into the CLI and query it by pointing the
+<code class="docutils literal notranslate"><span class="pre">LOCATION</span></code> at the <code class="docutils literal notranslate"><span class="pre">/dev/stdin</span></code> pseudo-file:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="gp">$ </span>cat<span class="w"> </span>hits.csv<span class="w"> </span><span class="p">|</span><span class="w"> </span>datafusion-cli<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;</span>
+<span class="go">CREATE EXTERNAL TABLE hits STORED AS CSV LOCATION &#39;/dev/stdin&#39; OPTIONS (&#39;format.has_header&#39; &#39;true&#39;);</span>
+<span class="go">SELECT count(*) FROM hits;&quot;</span>
+</pre></div>
+</div>
+<p>This works for CSV, JSON, and Parquet. Because standard input is not seekable
+(and Parquet stores its metadata at the end of the file), the CLI buffers the
+entire input into memory before querying it, so the data must fit in memory.
+Standard input is read only once: the buffered contents are reused for any
+further tables backed by <code class="docutils literal notranslate"><span class="pre">/dev/stdin</span></code> in the same session. Those tables must
+declare the same <code class="docutils literal notranslate"><span class="pre">STORED</span> <span class="pre">AS</span></code> format as the first one; a differing format is
+rejected with an error.</p>
+<p>The SQL must be passed with <code class="docutils literal notranslate"><span class="pre">-c</span></code>/<code class="docutils literal notranslate"><span class="pre">--command</span></code> or <code class="docutils literal notranslate"><span class="pre">-f</span></code>/<code class="docutils literal notranslate"><span class="pre">--file</span></code> so that standard
+input is free to carry the data. In the interactive shell (and when SQL is
+piped to the CLI without <code class="docutils literal notranslate"><span class="pre">-c</span></code>/<code class="docutils literal notranslate"><span class="pre">-f</span></code>) standard input carries the SQL itself, and
+<code class="docutils literal notranslate"><span class="pre">LOCATION</span> <span class="pre">'/dev/stdin'</span></code> returns an error.</p>
 <p><strong>Why Wildcards Are Not Supported</strong></p>
 <p>Although wildcards (e.g., <em>.parquet or **/</em>.parquet) may work for local
 filesystems in some cases, they are not supported by DataFusion CLI. This
@@ -585,6 +605,7 @@ following remote object paths:</p>
 <span class="o">+</span><span class="c1">----------+</span>
 </pre></div>
 </div>
+</section>
 </section>
 <section id="formats">
 <h1>Formats<a class="headerlink" href="#formats" title="Link to this heading">#</a></h1>
@@ -952,7 +973,10 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#">Local Files / Directories</a></li>
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#remote-files-directories">Remote Files / Directories</a></li>
-<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#create-external-table"><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code></a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#create-external-table"><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code></a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reading-from-standard-input">Reading from standard input</a></li>
+</ul>
+</li>
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#formats">Formats</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet">Parquet</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-specific-options">Parquet Specific Options</a></li>
