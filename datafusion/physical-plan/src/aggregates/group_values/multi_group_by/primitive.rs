@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aggregates::group_values::HashValue;
 use crate::aggregates::group_values::multi_group_by::{
-    GroupColumn, Nulls, nulls_equal_to, split_vec_min_alloc,
+    GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::ArrowNativeTypeOp;
@@ -28,6 +29,7 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use arrow::util::bit_util::apply_bitwise_binary_op;
 use datafusion_common::Result;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use std::iter;
 use std::sync::Arc;
@@ -50,6 +52,7 @@ pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: boo
 impl<T, const NULLABLE: bool> PrimitiveGroupValueBuilder<T, NULLABLE>
 where
     T: ArrowPrimitiveType,
+    T::Native: HashValue,
 {
     /// Create a new `PrimitiveGroupValueBuilder`
     pub fn new(data_type: DataType) -> Self {
@@ -90,7 +93,9 @@ where
             } else {
                 unsafe { *array_values.get_unchecked(rhs_row) }
             };
-            if left.is_eq(right) {
+            // `left` was already canonicalized on append; canonicalize the
+            // input so ±0 (and any future equivalence class) compares equal.
+            if left.is_eq(right.canonicalize()) {
                 cmp_buf[i / 8] |= 1 << (i % 8);
             }
         }
@@ -132,7 +137,7 @@ where
                 continue;
             }
 
-            if !self.group_values[lhs_row].is_eq(array.value(rhs_row)) {
+            if !self.group_values[lhs_row].is_eq(array.value(rhs_row).canonicalize()) {
                 equal_to_results.set_bit(idx, false);
             }
         }
@@ -141,6 +146,8 @@ where
 
 impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     for PrimitiveGroupValueBuilder<T, NULLABLE>
+where
+    T::Native: HashValue,
 {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         // Perf: skip null check (by short circuit) if input is not nullable
@@ -153,7 +160,8 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             // Otherwise, we need to check their values
         }
 
-        self.group_values[lhs_row].is_eq(array.as_primitive::<T>().value(rhs_row))
+        self.group_values[lhs_row]
+            .is_eq(array.as_primitive::<T>().value(rhs_row).canonicalize())
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
@@ -164,10 +172,12 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 self.group_values.push(T::default_value());
             } else {
                 self.nulls.append(false);
-                self.group_values.push(array.as_primitive::<T>().value(row));
+                self.group_values
+                    .push(array.as_primitive::<T>().value(row).canonicalize());
             }
         } else {
-            self.group_values.push(array.as_primitive::<T>().value(row));
+            self.group_values
+                .push(array.as_primitive::<T>().value(row).canonicalize());
         }
 
         Ok(())
@@ -213,7 +223,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                         self.group_values.push(T::default_value());
                     } else {
                         self.nulls.append(false);
-                        self.group_values.push(arr.value(row));
+                        self.group_values.push(arr.value(row).canonicalize());
                     }
                 }
             }
@@ -221,7 +231,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             (true, Nulls::None) => {
                 self.nulls.append_n(rows.len(), false);
                 for &row in rows {
-                    self.group_values.push(arr.value(row));
+                    self.group_values.push(arr.value(row).canonicalize());
                 }
             }
 
@@ -233,7 +243,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
             (false, _) => {
                 for &row in rows {
-                    self.group_values.push(arr.value(row));
+                    self.group_values.push(arr.value(row).canonicalize());
                 }
             }
         }

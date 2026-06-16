@@ -227,11 +227,11 @@ atan2(expression_y, expression_x)
 
 ```sql
 > SELECT atan2(1, 1);
-+------------+
-| atan2(1,1) |
-+------------+
-| 0.7853982  |
-+------------+
++--------------------+
+| atan2(1,1)         |
++--------------------+
+| 0.7853981633974483 |
++--------------------+
 ```
 
 ### `atanh`
@@ -3244,6 +3244,7 @@ _Alias of [current_date](#current_date)._
 ## Array Functions
 
 - [any_match](#any_match)
+- [array_add](#array_add)
 - [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
@@ -3258,6 +3259,7 @@ _Alias of [current_date](#current_date)._
 - [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
+- [array_filter](#array_filter)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -3274,6 +3276,7 @@ _Alias of [current_date](#current_date)._
 - [array_position](#array_position)
 - [array_positions](#array_positions)
 - [array_prepend](#array_prepend)
+- [array_product](#array_product)
 - [array_push_back](#array_push_back)
 - [array_push_front](#array_push_front)
 - [array_remove](#array_remove)
@@ -3285,8 +3288,11 @@ _Alias of [current_date](#current_date)._
 - [array_replace_n](#array_replace_n)
 - [array_resize](#array_resize)
 - [array_reverse](#array_reverse)
+- [array_scale](#array_scale)
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
+- [array_subtract](#array_subtract)
+- [array_sum](#array_sum)
 - [array_to_string](#array_to_string)
 - [array_transform](#array_transform)
 - [array_union](#array_union)
@@ -3299,6 +3305,7 @@ _Alias of [current_date](#current_date)._
 - [flatten](#flatten)
 - [generate_series](#generate_series)
 - [inner_product](#inner_product)
+- [list_add](#list_add)
 - [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
@@ -3313,6 +3320,7 @@ _Alias of [current_date](#current_date)._
 - [list_empty](#list_empty)
 - [list_except](#list_except)
 - [list_extract](#list_extract)
+- [list_filter](#list_filter)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
@@ -3328,6 +3336,7 @@ _Alias of [current_date](#current_date)._
 - [list_position](#list_position)
 - [list_positions](#list_positions)
 - [list_prepend](#list_prepend)
+- [list_product](#list_product)
 - [list_push_back](#list_push_back)
 - [list_push_front](#list_push_front)
 - [list_remove](#list_remove)
@@ -3339,8 +3348,11 @@ _Alias of [current_date](#current_date)._
 - [list_replace_n](#list_replace_n)
 - [list_resize](#list_resize)
 - [list_reverse](#list_reverse)
+- [list_scale](#list_scale)
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
+- [list_subtract](#list_subtract)
+- [list_sum](#list_sum)
 - [list_to_string](#list_to_string)
 - [list_transform](#list_transform)
 - [list_union](#list_union)
@@ -3354,6 +3366,34 @@ _Alias of [current_date](#current_date)._
 ### `any_match`
 
 _Alias of [array_any_match](#array_any_match)._
+
+### `array_add`
+
+Returns the element-wise sum of two numeric arrays of equal length, computed as `array1[i] + array2[i]` per position. NULL is propagated per element: if either input element at position `i` is NULL, the corresponding output element is NULL (positions are preserved). Returns NULL if either entire input array is NULL. Errors if the per-row lengths differ. Returns an empty array if both inputs are empty.
+
+```sql
+array_add(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_add([1.0, 2.0, 3.0], [10.0, 20.0, 30.0]);
++---------------------------------------------------------+
+| array_add(List([1.0,2.0,3.0]),List([10.0,20.0,30.0]))   |
++---------------------------------------------------------+
+| [11.0, 22.0, 33.0]                                      |
++---------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_add
 
 ### `array_any_match`
 
@@ -3659,6 +3699,34 @@ array_except(array1, array2)
 ### `array_extract`
 
 _Alias of [array_element](#array_element)._
+
+### `array_filter`
+
+filters the values of an array using a boolean lambda
+
+```sql
+array_filter(array, x -> x > 2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda that returns a boolean. Elements for which the lambda returns true are kept.
+
+#### Example
+
+```sql
+> select array_filter([1, 2, 3, 4, 5], x -> x > 2);
++--------------------------------------------+
+| array_filter([1, 2, 3, 4, 5], x -> x > 2) |
++--------------------------------------------+
+| [3, 4, 5]                                  |
++--------------------------------------------+
+```
+
+#### Aliases
+
+- list_filter
 
 ### `array_has`
 
@@ -4072,6 +4140,33 @@ array_prepend(element, array)
 - array_push_front
 - list_push_front
 
+### `array_product`
+
+Returns the product of the elements in the input numeric array. NULL elements inside the array are skipped (matching SQL aggregate convention). Returns NULL if the input is NULL, every element is NULL, or the array is empty. The result is always returned as `Float64`.
+
+```sql
+array_product(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_product([1.0, 2.0, 3.0]);
++------------------------------------+
+| array_product(List([1.0,2.0,3.0])) |
++------------------------------------+
+| 6.0                                |
++------------------------------------+
+```
+
+#### Aliases
+
+- list_product
+
 ### `array_push_back`
 
 _Alias of [array_append](#array_append)._
@@ -4364,6 +4459,34 @@ array_reverse(array)
 
 - list_reverse
 
+### `array_scale`
+
+Returns a new array with each element of the input array multiplied by a scalar value, computed as `array[i] * scalar`. Returns NULL if the input row is NULL or the scalar is NULL. If a NULL element appears in the input array at position `i`, the result element at position `i` is NULL. Returns an empty array for an empty input array.
+
+```sql
+array_scale(array, scalar)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **scalar**: Numeric scalar to multiply each element by. Can be a constant or column expression.
+
+#### Example
+
+```sql
+> select array_scale([1.0, 2.0, 3.0], 2.0);
++----------------------------------+
+| array_scale(List([1.0,2.0,3.0]),Float64(2.0)) |
++----------------------------------+
+| [2.0, 4.0, 6.0]                  |
++----------------------------------+
+```
+
+#### Aliases
+
+- list_scale
+
 ### `array_slice`
 
 Returns a slice of the array based on 1-indexed start and end positions.
@@ -4422,6 +4545,61 @@ array_sort(array, desc, nulls_first)
 #### Aliases
 
 - list_sort
+
+### `array_subtract`
+
+Returns the element-wise difference of two numeric arrays of equal length, computed as `array1[i] - array2[i]` per position. NULL is propagated per element: if either input element at position `i` is NULL, the corresponding output element is NULL (positions are preserved). Returns NULL if either entire input array is NULL. Errors if the per-row lengths differ. Returns an empty array if both inputs are empty.
+
+```sql
+array_subtract(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_subtract([10.0, 20.0, 30.0], [1.0, 2.0, 3.0]);
++--------------------------------------------------------------+
+| array_subtract(List([10.0,20.0,30.0]),List([1.0,2.0,3.0]))   |
++--------------------------------------------------------------+
+| [9.0, 18.0, 27.0]                                            |
++--------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_subtract
+
+### `array_sum`
+
+Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL, every element is NULL, or the array is empty.
+
+```sql
+array_sum(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_sum([1.0, 2.0, 3.0]);
++----------------------------+
+| array_sum(List([1.0,2.0,3.0])) |
++----------------------------+
+| 6.0                        |
++----------------------------+
+```
+
+#### Aliases
+
+- list_sum
 
 ### `array_to_string`
 
@@ -4715,6 +4893,10 @@ inner_product(array1, array2)
 
 - dot_product
 
+### `list_add`
+
+_Alias of [array_add](#array_add)._
+
 ### `list_any_match`
 
 _Alias of [array_any_match](#array_any_match)._
@@ -4770,6 +4952,10 @@ _Alias of [array_except](#array_except)._
 ### `list_extract`
 
 _Alias of [array_element](#array_element)._
+
+### `list_filter`
+
+_Alias of [array_filter](#array_filter)._
 
 ### `list_has`
 
@@ -4831,6 +5017,10 @@ _Alias of [array_positions](#array_positions)._
 
 _Alias of [array_prepend](#array_prepend)._
 
+### `list_product`
+
+_Alias of [array_product](#array_product)._
+
 ### `list_push_back`
 
 _Alias of [array_append](#array_append)._
@@ -4875,6 +5065,10 @@ _Alias of [array_resize](#array_resize)._
 
 _Alias of [array_reverse](#array_reverse)._
 
+### `list_scale`
+
+_Alias of [array_scale](#array_scale)._
+
 ### `list_slice`
 
 _Alias of [array_slice](#array_slice)._
@@ -4882,6 +5076,14 @@ _Alias of [array_slice](#array_slice)._
 ### `list_sort`
 
 _Alias of [array_sort](#array_sort)._
+
+### `list_subtract`
+
+_Alias of [array_subtract](#array_subtract)._
+
+### `list_sum`
+
+_Alias of [array_sum](#array_sum)._
 
 ### `list_to_string`
 

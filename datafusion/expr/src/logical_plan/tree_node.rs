@@ -37,6 +37,7 @@
 //! * [`LogicalPlan::with_new_exprs`]: Create a new plan with different expressions
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
+use crate::logical_plan::plan::RangePartitioning;
 use crate::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
     DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
@@ -203,6 +204,7 @@ impl TreeNode for LogicalPlan {
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded,
+                show_statistics,
             }) => plan.map_elements(f)?.update_data(|plan| {
                 LogicalPlan::Explain(Explain {
                     verbose,
@@ -211,17 +213,24 @@ impl TreeNode for LogicalPlan {
                     stringified_plans,
                     schema,
                     logical_optimization_succeeded,
+                    show_statistics,
                 })
             }),
             LogicalPlan::Analyze(Analyze {
                 verbose,
+                format,
                 input,
                 schema,
+                analyze_level,
+                analyze_categories,
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Analyze(Analyze {
                     verbose,
+                    format,
                     input,
                     schema,
+                    analyze_level,
+                    analyze_categories,
                 })
             }),
             LogicalPlan::Dml(DmlStatement {
@@ -329,13 +338,18 @@ impl TreeNode for LogicalPlan {
                 static_term,
                 recursive_term,
                 is_distinct,
+                schema,
             }) => (static_term, recursive_term).map_elements(f)?.update_data(
                 |(static_term, recursive_term)| {
+                    // Ordinary child rewrites preserve derived schemas. Call
+                    // `LogicalPlan::recompute_schema` when child schemas should
+                    // be reconciled again.
                     LogicalPlan::RecursiveQuery(RecursiveQuery {
                         name,
                         static_term,
                         recursive_term,
                         is_distinct,
+                        schema,
                     })
                 },
             ),
@@ -414,6 +428,7 @@ impl LogicalPlan {
                 Partitioning::Hash(expr, _) | Partitioning::DistributeBy(expr) => {
                     expr.apply_elements(f)
                 }
+                Partitioning::Range(range) => range.ordering().to_vec().apply_elements(f),
                 Partitioning::RoundRobinBatch(_) => Ok(TreeNodeRecursion::Continue),
             },
             LogicalPlan::Window(Window { window_expr, .. }) => {
@@ -519,6 +534,19 @@ impl LogicalPlan {
                 Partitioning::DistributeBy(expr) => expr
                     .map_elements(f)?
                     .update_data(Partitioning::DistributeBy),
+                Partitioning::Range(range) => {
+                    let split_points = range.split_points().to_vec();
+                    range
+                        .ordering()
+                        .to_vec()
+                        .map_elements(f)?
+                        .map_data(|ordering| {
+                            Ok(Partitioning::Range(RangePartitioning::try_new(
+                                ordering,
+                                split_points,
+                            )?))
+                        })?
+                }
                 Partitioning::RoundRobinBatch(_) => Transformed::no(partitioning_scheme),
             }
             .update_data(|partitioning_scheme| {
@@ -615,6 +643,7 @@ impl LogicalPlan {
                 projected_schema,
                 filters,
                 fetch,
+                statistics_requests,
             }) => filters.map_elements(f)?.update_data(|filters| {
                 LogicalPlan::TableScan(TableScan {
                     table_name,
@@ -623,6 +652,7 @@ impl LogicalPlan {
                     projected_schema,
                     filters,
                     fetch,
+                    statistics_requests,
                 })
             }),
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
@@ -841,6 +871,32 @@ impl LogicalPlan {
         })
     }
 
+    /// Returns true if any expression in this node contains a subquery
+    /// (Exists, InSubquery, SetComparison, or ScalarSubquery).
+    fn has_subquery_expressions(&self) -> bool {
+        let mut found = false;
+        let _ = self.apply_expressions(|expr| {
+            if found {
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            expr.apply(|e| {
+                if matches!(
+                    e,
+                    Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                        | Expr::ScalarSubquery(_)
+                ) {
+                    found = true;
+                    Ok(TreeNodeRecursion::Stop)
+                } else {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+            })
+        });
+        found
+    }
+
     /// Similarly to [`Self::map_children`], rewrites all subqueries that may
     /// appear in expressions such as `IN (SELECT ...)` using `f`.
     ///
@@ -849,6 +905,14 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        // Fast path: skip the expensive ownership-based expression traversal
+        // when this node has no subquery expressions. This avoids
+        // map_expressions → transform_down walking every expression node
+        // via consume+recreate just to find no subqueries.
+        if !self.has_subquery_expressions() {
+            return Ok(Transformed::no(self));
+        }
+
         self.map_expressions(|expr| {
             expr.transform_down(|expr| match expr {
                 Expr::Exists(Exists { subquery, negated }) => {

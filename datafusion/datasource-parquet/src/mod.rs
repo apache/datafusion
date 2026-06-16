@@ -26,6 +26,7 @@
 
 pub mod access_plan;
 mod bloom_filter;
+mod decoder_projection;
 pub mod file_format;
 pub mod metadata;
 mod metrics;
@@ -42,6 +43,7 @@ pub mod source;
 mod supported_predicates;
 #[cfg(test)]
 mod test_util;
+mod virtual_column;
 mod writer;
 
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
@@ -54,9 +56,10 @@ pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use row_group_filter::RowGroupAccessPlanFilter;
 #[expect(deprecated)]
 pub use schema_coercion::{
-    apply_file_schema_type_coercions, coerce_file_schema_to_string_type,
+    Int96Coercer, apply_file_schema_type_coercions, coerce_file_schema_to_string_type,
     coerce_file_schema_to_view_type, coerce_int96_to_resolution,
     transform_binary_to_string, transform_schema_to_view,
 };
 pub use sink::ParquetSink;
+pub use virtual_column::ParquetVirtualColumn;
 pub use writer::plan_to_parquet;

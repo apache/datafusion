@@ -459,6 +459,7 @@ fn object_meta_to_partitioned_file(
 ) -> Result<Option<PartitionedFile>> {
     Ok(Some(PartitionedFile {
         object_meta,
+        arrow_schema: None,
         partition_values: vec![],
         range: None,
         statistics: None,

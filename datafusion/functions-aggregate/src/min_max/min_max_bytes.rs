@@ -27,6 +27,8 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use std::mem::size_of;
 use std::sync::Arc;
 
+use datafusion_common::utils::split_vec_min_alloc;
+
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
 /// [`BinaryArray`], [`StringViewArray`], etc)
 ///
@@ -307,11 +309,10 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // min/max are their own states (no transition needed)
-        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+        self.update_batch(values, group_indices, None, total_num_groups)
     }
 
     fn convert_to_state(
@@ -493,7 +494,7 @@ impl MinMaxBytesState {
                 )
             }
             EmitTo::First(n) => {
-                let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
+                let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
                 let first_data_capacity: usize = first_min_maxes
                     .iter()
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))

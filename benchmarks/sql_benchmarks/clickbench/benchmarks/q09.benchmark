@@ -1,0 +1,16 @@
+name Q09
+group clickbench
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run
+SELECT "RegionID", SUM("AdvEngineID"), COUNT(*) AS c, AVG("ResolutionWidth"), COUNT(DISTINCT "UserID") FROM hits GROUP BY "RegionID" ORDER BY c DESC LIMIT 10;
+
+result sql_benchmarks/clickbench/results/${CLICKBENCH_TYPE:-single}/q09.csv
