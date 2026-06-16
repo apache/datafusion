@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Streaming boundary-aligned wrapper for newline-delimited JSON range reads.
+//! Streaming boundary-aligned wrapper for newline-delimited range reads.
 //!
 //! [`AlignedBoundaryStream`] wraps a raw byte stream and lazily aligns to
 //! record (newline) boundaries, avoiding the need for separate `get_opts`

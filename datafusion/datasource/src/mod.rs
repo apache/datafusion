@@ -28,6 +28,7 @@
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
+pub mod boundary_stream;
 pub mod decoder;
 pub mod display;
 pub mod file;
@@ -429,62 +430,6 @@ pub enum RangeCalculation {
     TerminateEarly,
 }
 
-/// Calculates an appropriate byte range for reading from an object based on the
-/// provided metadata.
-///
-/// This asynchronous function examines the [`PartitionedFile`] of an object in an object store
-/// and determines the range of bytes to be read. The range calculation may adjust
-/// the start and end points to align with meaningful data boundaries (like newlines).
-///
-/// Returns a `Result` wrapping a [`RangeCalculation`], which is either a calculated byte range or an indication to terminate early.
-///
-/// Returns an `Error` if any part of the range calculation fails, such as issues in reading from the object store or invalid range boundaries.
-pub async fn calculate_range(
-    file: &PartitionedFile,
-    store: &Arc<dyn ObjectStore>,
-    terminator: Option<u8>,
-) -> Result<RangeCalculation> {
-    let location = &file.object_meta.location;
-    let file_size = file.object_meta.size;
-    let newline = terminator.unwrap_or(b'\n');
-
-    match file.range {
-        None => Ok(RangeCalculation::Range(None)),
-        Some(FileRange { start, end }) => {
-            let start: u64 = start.try_into().map_err(|_| {
-                exec_datafusion_err!("Expect start range to fit in u64, got {start}")
-            })?;
-            let end: u64 = end.try_into().map_err(|_| {
-                exec_datafusion_err!("Expect end range to fit in u64, got {end}")
-            })?;
-
-            let start_delta = if start != 0 {
-                find_first_newline(store, location, start - 1, file_size, newline).await?
-            } else {
-                0
-            };
-
-            if start + start_delta > end {
-                return Ok(RangeCalculation::TerminateEarly);
-            }
-
-            let end_delta = if end != file_size {
-                find_first_newline(store, location, end - 1, file_size, newline).await?
-            } else {
-                0
-            };
-
-            let range = start + start_delta..end + end_delta;
-
-            if range.start >= range.end {
-                return Ok(RangeCalculation::TerminateEarly);
-            }
-
-            Ok(RangeCalculation::Range(Some(range)))
-        }
-    }
-}
-
 /// Asynchronously finds the position of the first newline character in a specified byte range
 /// within an object, such as a file, in an object store.
 ///
@@ -843,32 +788,5 @@ mod tests {
 
         // testing an empty path with `ignore_subdirectory` set to false
         assert!(url.contains(&Path::parse("/var/data/mytable/").unwrap(), false));
-    }
-
-    /// Regression test for <https://github.com/apache/datafusion/issues/19605>
-    #[tokio::test]
-    async fn test_calculate_range_single_line_file() {
-        use super::{PartitionedFile, RangeCalculation, calculate_range};
-        use object_store::ObjectStore;
-        use object_store::memory::InMemory;
-
-        let content = r#"{"id":1,"data":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
-        let file_size = content.len() as u64;
-
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let path = Path::from("test.json");
-        store.put(&path, content.into()).await.unwrap();
-
-        let mid = file_size / 2;
-        let partitioned_file = PartitionedFile::new_with_range(
-            path.to_string(),
-            file_size,
-            mid as i64,
-            file_size as i64,
-        );
-
-        let result = calculate_range(&partitioned_file, &store, None).await;
-
-        assert!(matches!(result, Ok(RangeCalculation::TerminateEarly)));
     }
 }
