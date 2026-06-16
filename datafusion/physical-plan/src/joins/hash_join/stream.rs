@@ -20,6 +20,7 @@
 //! This module implements [`HashJoinStream`], the streaming engine for
 //! [`super::HashJoinExec`]. See comments in [`HashJoinStream`] for more details.
 
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::task::Poll;
@@ -33,21 +34,25 @@ use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{
-    OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
+    OnceFut, equal_rows_arr, equal_rows_mask, get_anti_indices,
+    get_final_indices_from_shared_bitmap, is_contiguous_range,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
     hash_utils::create_hashes,
     joins::utils::{
-        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
+        BuildProbeJoinMetrics, ColumnIndex, ExistenceProbe, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_empty_build_side, build_batch_from_indices,
         need_produce_result_in_final,
     },
 };
 
-use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, UInt32Array, UInt64Array, downcast_array,
+};
+use arrow::compute::FilterBuilder;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
@@ -92,15 +97,6 @@ impl BuildSide {
     /// Tries to extract BuildSideReadyState from BuildSide enum.
     /// Returns an error if state is not Ready.
     fn try_as_ready(&self) -> Result<&BuildSideReadyState> {
-        match self {
-            BuildSide::Ready(state) => Ok(state),
-            _ => internal_err!("Expected build side in ready state"),
-        }
-    }
-
-    /// Tries to extract BuildSideReadyState from BuildSide enum.
-    /// Returns an error if state is not Ready.
-    fn try_as_ready_mut(&mut self) -> Result<&mut BuildSideReadyState> {
         match self {
             BuildSide::Ready(state) => Ok(state),
             _ => internal_err!("Expected build side in ready state"),
@@ -316,10 +312,8 @@ pub(super) struct HashJoinStream {
     batch_size: usize,
     /// Scratch space for computing hashes
     hashes_buffer: Vec<u64>,
-    /// Scratch space for probe indices during hash lookup
-    probe_indices_buffer: Vec<u32>,
-    /// Scratch space for build indices during hash lookup
-    build_indices_buffer: Vec<u64>,
+    /// Reusable scratch space for probe-side lookups
+    probe_scratch: ProbeScratch,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
     /// Owns this partition's build-data report lifecycle.
@@ -387,6 +381,37 @@ impl RecordBatchStream for HashJoinStream {
 /// Build indices: 4, 5, 6, 6
 /// Probe indices: 3, 3, 4, 5
 /// ```
+/// Reusable scratch buffers for probe-side lookups, allocated once per stream
+/// and recycled across probe chunks.
+///
+/// `probe_indices` and `build_indices` are shared by the pair-producing and
+/// existence-probe paths; the candidate-window buffers belong to the
+/// existence probe's chain walk and stay empty on the pair-producing path.
+struct ProbeScratch {
+    /// Probe-side row indices produced by map lookups
+    probe_indices: Vec<u32>,
+    /// Build-side row indices produced by map lookups
+    build_indices: Vec<u64>,
+    /// Original candidate position of each entry in the current window
+    candidate_positions: Vec<u32>,
+    /// Original candidate position of each entry in the next window
+    next_candidate_positions: Vec<u32>,
+    /// Per-candidate match verdicts, indexed by original candidate position
+    matched_candidates: Vec<bool>,
+}
+
+impl ProbeScratch {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            probe_indices: Vec::with_capacity(capacity),
+            build_indices: Vec::with_capacity(capacity),
+            candidate_positions: Vec::new(),
+            next_candidate_positions: Vec::new(),
+            matched_candidates: Vec::new(),
+        }
+    }
+}
+
 #[expect(clippy::too_many_arguments)]
 pub(super) fn lookup_join_hashmap(
     build_hashmap: &dyn JoinHashMapType,
@@ -429,6 +454,182 @@ pub(super) fn lookup_join_hashmap(
     Ok((build_indices, probe_indices, next_offset))
 }
 
+/// Returns the sorted, deduplicated indices of the probe rows in
+/// `probe_range` that have at least one key-equal row on the build side.
+///
+/// This is the chained-hash-map implementation of the existence probe used by
+/// `HashJoinStream::try_existence_probe_batch`; the dense-key `ArrayMap`
+/// strategy provides an equivalent inherent method of the same name.
+///
+/// # Algorithm
+///
+/// Walking each probe row's hash chain to completion would do work
+/// proportional to fanout, and comparing keys row-by-row during the walk
+/// would lose vectorization. Instead, all chains are walked in lockstep, one
+/// link per round, comparing keys for a whole round with one vectorized
+/// [`equal_rows_mask`] call:
+///
+/// 1. Gather the initial candidate window: each probe row's first chain
+///    entry.
+/// 2. Compare build/probe join keys for the entire window at once.
+/// 3. Window entries whose keys matched are finished; the rest advance to
+///    their next chain entry, dropping out when their chain is exhausted.
+///    Repeat from step 2 until the window is empty.
+///
+/// A hash chain groups build rows with identical hash values: absent collisions
+/// a chain holds duplicates of a single key, and a probe row either matches its
+/// first candidate or will match none of them. In practice, nearly every row
+/// will resolve in the first round; later rounds handle hash collisions.
+///
+/// `scratch` is reused across calls: its index vectors back the per-round
+/// index arrays and are returned (emptied) on exit, and its candidate-window
+/// buffers retain their allocations across rounds and chunks.
+fn get_probe_indices_with_any_match(
+    existence_probe: &dyn ExistenceProbe,
+    build_side_values: &[ArrayRef],
+    probe_side_values: &[ArrayRef],
+    null_equality: NullEquality,
+    hashes_buffer: &[u64],
+    probe_range: Range<usize>,
+    scratch: &mut ProbeScratch,
+) -> Result<UInt32Array> {
+    // Gather the initial candidates: a (build index, probe index) pair for
+    // each probe row in `probe_range` whose hash is present in the map.
+    existence_probe.get_probe_first_candidates(
+        hashes_buffer,
+        probe_range,
+        &mut scratch.probe_indices,
+        &mut scratch.build_indices,
+    );
+
+    let mut current_build_indices: UInt64Array =
+        std::mem::take(&mut scratch.build_indices).into();
+    let initial_probe_indices: UInt32Array =
+        std::mem::take(&mut scratch.probe_indices).into();
+
+    let equal_mask = equal_rows_mask(
+        &current_build_indices,
+        &initial_probe_indices,
+        build_side_values,
+        probe_side_values,
+        null_equality,
+    )?;
+
+    // The equality check passed for every candidate, so the matched set is all
+    // of `initial_probe_indices`: return it as-is instead of filtering by an
+    // all-true mask.
+    if equal_mask.null_count() == 0 && equal_mask.true_count() == equal_mask.len() {
+        scratch.build_indices = current_build_indices.into_parts().1.into();
+        let capacity = initial_probe_indices.len();
+        scratch.probe_indices = Vec::with_capacity(capacity);
+        return Ok(initial_probe_indices);
+    }
+
+    // Unique hashes mean every chain has length 1, so the chain walk below
+    // is unnecessary.
+    if existence_probe.has_unique_hashes() {
+        let filter_builder = FilterBuilder::new(&equal_mask).optimize().build();
+        let matched_probe_indices = filter_builder.filter(&initial_probe_indices)?;
+
+        scratch.build_indices = current_build_indices.into_parts().1.into();
+        scratch.probe_indices = initial_probe_indices.into_parts().1.into();
+
+        return Ok(downcast_array(matched_probe_indices.as_ref()));
+    }
+
+    /// Marks the candidates of the current window whose join keys compared equal.
+    fn mark_matched(equal_mask: &BooleanArray, positions: &[u32], matched: &mut [bool]) {
+        if equal_mask.null_count() == 0 && equal_mask.true_count() == equal_mask.len() {
+            for &position in positions {
+                matched[position as usize] = true;
+            }
+        } else {
+            for (i, &position) in positions.iter().enumerate() {
+                if !equal_mask.is_null(i) && equal_mask.value(i) {
+                    matched[position as usize] = true;
+                }
+            }
+        }
+    }
+
+    // General case: walk the chains round by round. `matched_candidates[i]`
+    // records the verdict for the i-th initial candidate (one per probe
+    // row); because the window shrinks as rows resolve, each window entry
+    // carries its original candidate position in `candidate_positions`
+    // (initially the identity mapping) so later rounds can record verdicts
+    // in the right slot.
+    let candidate_count = initial_probe_indices.len();
+    scratch.candidate_positions.clear();
+    scratch
+        .candidate_positions
+        .extend(0..candidate_count as u32);
+    scratch.matched_candidates.clear();
+    scratch.matched_candidates.resize(candidate_count, false);
+    // Cheap Arc clone; reassigned (releasing the alias) on the first chain advance.
+    let mut current_probe_indices = initial_probe_indices.clone();
+    let mut equal_mask = equal_mask;
+
+    loop {
+        mark_matched(
+            &equal_mask,
+            &scratch.candidate_positions,
+            &mut scratch.matched_candidates,
+        );
+
+        // Advance each unmatched window entry one link down its hash chain;
+        // matched and chain-exhausted entries drop out of the window.
+        existence_probe.get_next_probe_candidates(
+            current_build_indices.values().as_ref(),
+            current_probe_indices.values().as_ref(),
+            &scratch.candidate_positions,
+            &scratch.matched_candidates,
+            &mut scratch.next_candidate_positions,
+            &mut scratch.build_indices,
+            &mut scratch.probe_indices,
+        );
+
+        if scratch.build_indices.is_empty() {
+            break;
+        }
+
+        std::mem::swap(
+            &mut scratch.candidate_positions,
+            &mut scratch.next_candidate_positions,
+        );
+        current_build_indices = std::mem::take(&mut scratch.build_indices).into();
+        current_probe_indices = std::mem::take(&mut scratch.probe_indices).into();
+
+        equal_mask = equal_rows_mask(
+            &current_build_indices,
+            &current_probe_indices,
+            build_side_values,
+            probe_side_values,
+            null_equality,
+        )?;
+    }
+
+    // Release the potential alias of `initial_probe_indices` so the buffer
+    // recycling below stays zero-copy.
+    drop(current_probe_indices);
+
+    // Collect the probe index of every candidate position that matched in
+    // some round; ascending position order keeps the result sorted.
+    scratch.probe_indices.clear();
+    for (position, &is_matched) in scratch.matched_candidates.iter().enumerate() {
+        if is_matched {
+            scratch
+                .probe_indices
+                .push(initial_probe_indices.value(position));
+        }
+    }
+
+    scratch.build_indices = current_build_indices.into_parts().1.into();
+    let matched_probe_indices = std::mem::take(&mut scratch.probe_indices).into();
+    scratch.probe_indices = initial_probe_indices.into_parts().1.into();
+
+    Ok(matched_probe_indices)
+}
+
 /// Counts the number of distinct elements in the input array.
 ///
 /// The input array must be sorted (e.g., `[0, 1, 1, 2, 2, ...]`) and contain no null values.
@@ -456,6 +657,38 @@ fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
         }
     }
     count
+}
+
+/// Builds an output batch by slicing `probe_batch` instead of `take`-ing it,
+/// when `probe_indices` form a contiguous ascending run and every output
+/// column is sourced from the probe side.
+///
+/// Returns `Ok(None)` when the fast path does not apply and the caller should
+/// fall back to [`build_batch_from_indices`].
+fn try_build_contiguous_probe_output(
+    schema: &Arc<Schema>,
+    column_indices: &[ColumnIndex],
+    probe_batch: &RecordBatch,
+    probe_indices: &UInt32Array,
+) -> Result<Option<RecordBatch>> {
+    if schema.fields().is_empty() {
+        return Ok(None);
+    }
+
+    let Some(range) = is_contiguous_range(probe_indices) else {
+        return Ok(None);
+    };
+
+    let probe_slice = probe_batch.slice(range.start, range.len());
+    let mut columns = Vec::with_capacity(column_indices.len());
+    for column_index in column_indices {
+        if column_index.side != JoinSide::Right {
+            return Ok(None);
+        }
+        columns.push(Arc::clone(probe_slice.column(column_index.index)));
+    }
+
+    Ok(Some(RecordBatch::try_new(Arc::clone(schema), columns)?))
 }
 
 impl HashJoinStream {
@@ -500,14 +733,140 @@ impl HashJoinStream {
             build_side,
             batch_size,
             hashes_buffer,
-            probe_indices_buffer: Vec::with_capacity(batch_size),
-            build_indices_buffer: Vec::with_capacity(batch_size),
+            probe_scratch: ProbeScratch::with_capacity(batch_size),
             right_side_ordered,
             build_report: BuildReportHandle::new(partition, mode, build_accumulator),
             mode,
             output_buffer,
             null_aware,
         }
+    }
+
+    /// Try the existence-probe fast path for a probe-batch chunk.
+    ///
+    /// RightSemi and RightAnti joins only need to know whether each probe row
+    /// has at least one equal build row. For those joins, when there is no
+    /// join filter, the build side is non-empty, and the build-side map
+    /// supports [`ExistenceProbe`], this path scans a range of probe rows and
+    /// emits each probe row at most once, stopping each row's hash-chain
+    /// search at its first key-equal match.
+    ///
+    /// Returns false when the path is ineligible and the caller should fall
+    /// back to the general pair-producing path.
+    fn try_existence_probe_batch(&mut self) -> Result<bool> {
+        let state = self.state.try_as_process_probe_batch_mut()?;
+        let build_side = self.build_side.try_as_ready()?;
+        let probe_batch_num_rows = state.batch.num_rows();
+
+        // An empty build side falls through to the general path, which emits
+        // whole probe batches at once via `build_batch_empty_build_side`
+        // instead of probing the empty map row by row.
+        if !matches!(self.join_type, JoinType::RightSemi | JoinType::RightAnti)
+            || self.filter.is_some()
+            || build_side.left_data.map().is_empty()
+        {
+            return Ok(false);
+        }
+
+        let timer = self.join_metrics.join_time.timer();
+
+        let probe_range_start = state.offset.0;
+        let probe_range_end =
+            (probe_range_start + self.batch_size).min(probe_batch_num_rows);
+        let probe_range = probe_range_start..probe_range_end;
+
+        let matched_probe_indices = match build_side.left_data.map() {
+            Map::HashMap(map) => {
+                let Some(existence_probe) = map.existence_probe() else {
+                    timer.done();
+                    return Ok(false);
+                };
+                get_probe_indices_with_any_match(
+                    existence_probe,
+                    build_side.left_data.values(),
+                    &state.values,
+                    self.null_equality,
+                    &self.hashes_buffer,
+                    probe_range.clone(),
+                    &mut self.probe_scratch,
+                )?
+            }
+            Map::ArrayMap(array_map) => {
+                array_map.get_probe_indices_with_any_match(
+                    &state.values,
+                    probe_range.clone(),
+                    &mut self.probe_scratch.probe_indices,
+                )?;
+                UInt32Array::from(std::mem::take(&mut self.probe_scratch.probe_indices))
+            }
+        };
+        let matched_probe_count = matched_probe_indices.len();
+
+        // The existence path stops after the first equal build row for each
+        // probe row, so exact fanout cannot be determined.  Leave avg_fanout as
+        // N/A for this path.
+        self.join_metrics
+            .probe_hit_rate
+            .add_total(probe_range.len());
+        self.join_metrics
+            .probe_hit_rate
+            .add_part(matched_probe_count);
+
+        let right_indices = match self.join_type {
+            JoinType::RightSemi => matched_probe_indices.clone(),
+            JoinType::RightAnti => {
+                get_anti_indices(probe_range.clone(), &matched_probe_indices)
+            }
+            _ => {
+                unreachable!("existence probe only runs for right semi/anti")
+            }
+        };
+
+        let push_status = if right_indices.is_empty() {
+            self.probe_scratch.probe_indices =
+                matched_probe_indices.into_parts().1.into();
+            PushBatchStatus::Continue
+        } else {
+            let batch = if let Some(batch) = try_build_contiguous_probe_output(
+                &self.schema,
+                &self.column_indices,
+                &state.batch,
+                &right_indices,
+            )? {
+                batch
+            } else {
+                let left_indices = UInt64Array::from(Vec::<u64>::new());
+                build_batch_from_indices(
+                    &self.schema,
+                    build_side.left_data.batch(),
+                    &state.batch,
+                    &left_indices,
+                    &right_indices,
+                    &self.column_indices,
+                    JoinSide::Left,
+                    self.join_type,
+                )?
+            };
+
+            let push_status = self.output_buffer.push_batch(batch)?;
+            self.probe_scratch.probe_indices = right_indices.into_parts().1.into();
+            push_status
+        };
+
+        timer.done();
+
+        if probe_range_end == probe_batch_num_rows {
+            self.state = HashJoinStreamState::FetchProbeBatch;
+        } else {
+            state.advance((probe_range_end, None), None);
+        }
+
+        if push_status == PushBatchStatus::LimitReached {
+            self.output_buffer.finish()?;
+            self.state = HashJoinStreamState::Completed;
+        }
+
+        Ok(true)
     }
 
     /// Returns the next state after the build side has been fully collected
@@ -712,8 +1071,13 @@ impl HashJoinStream {
     fn process_probe_batch(
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        if self.try_existence_probe_batch()? {
+            return Ok(StatefulStreamResult::Continue);
+        }
+
         let state = self.state.try_as_process_probe_batch_mut()?;
-        let build_side = self.build_side.try_as_ready_mut()?;
+        let build_side = self.build_side.try_as_ready()?;
+        let is_empty = build_side.left_data.map().is_empty();
 
         self.join_metrics
             .probe_hit_rate
@@ -759,10 +1123,6 @@ impl HashJoinStream {
             }
         }
 
-        // If the build side is empty, this stream only reaches ProcessProbeBatch for
-        // join types whose output still depends on probe rows.
-        let is_empty = build_side.left_data.map().is_empty();
-
         if is_empty {
             // Invariant: state_after_build_ready should have already completed
             // join types whose result is fixed to empty when the build side is empty.
@@ -781,7 +1141,9 @@ impl HashJoinStream {
             return Ok(StatefulStreamResult::Continue);
         }
 
-        // get the matched by join keys indices
+        // Find build/probe row pairs with equal join keys, bounded by
+        // `batch_size`. `next_offset` identifies where to resume if the
+        // candidate scan needs another output batch.
         let (left_indices, right_indices, next_offset) = match build_side.left_data.map()
         {
             Map::HashMap(map) => lookup_join_hashmap(
@@ -792,20 +1154,20 @@ impl HashJoinStream {
                 &self.hashes_buffer,
                 self.batch_size,
                 state.offset,
-                &mut self.probe_indices_buffer,
-                &mut self.build_indices_buffer,
+                &mut self.probe_scratch.probe_indices,
+                &mut self.probe_scratch.build_indices,
             )?,
             Map::ArrayMap(array_map) => {
                 let next_offset = array_map.get_matched_indices_with_limit_offset(
                     &state.values,
                     self.batch_size,
                     state.offset,
-                    &mut self.probe_indices_buffer,
-                    &mut self.build_indices_buffer,
+                    &mut self.probe_scratch.probe_indices,
+                    &mut self.probe_scratch.build_indices,
                 )?;
                 (
-                    UInt64Array::from(self.build_indices_buffer.clone()),
-                    UInt32Array::from(self.probe_indices_buffer.clone()),
+                    UInt64Array::from(self.probe_scratch.build_indices.clone()),
+                    UInt32Array::from(self.probe_scratch.probe_indices.clone()),
                     next_offset,
                 )
             }
@@ -823,7 +1185,7 @@ impl HashJoinStream {
             .avg_fanout
             .add_total(distinct_right_indices_count);
 
-        // apply join filter if exists
+        // apply join filter, if any
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
             apply_join_filter_to_indices(
                 build_side.left_data.batch(),

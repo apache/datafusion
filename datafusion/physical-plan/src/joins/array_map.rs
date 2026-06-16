@@ -18,6 +18,7 @@
 use arrow_schema::DataType;
 use num_traits::AsPrimitive;
 use std::mem::size_of;
+use std::ops::Range;
 
 use crate::joins::MapOffset;
 use crate::joins::chain::traverse_chain;
@@ -142,7 +143,6 @@ impl ArrayMap {
     }
 
     /// Estimates the maximum memory usage for an `ArrayMap` with the given parameters.
-    ///
     pub fn estimate_memory_size(min_val: u64, max_val: u64, num_rows: usize) -> usize {
         let range = Self::calculate_range(min_val, max_val);
         if range >= usize::MAX as u64 {
@@ -155,6 +155,16 @@ impl ArrayMap {
 
     pub fn calculate_range(min_val: u64, max_val: u64) -> u64 {
         max_val.wrapping_sub(min_val)
+    }
+
+    #[inline]
+    fn key_to_index(key: u64, offset: u64, data_len: usize) -> Option<usize> {
+        let idx = key.wrapping_sub(offset);
+        if idx < data_len as u64 {
+            Some(idx as usize)
+        } else {
+            None
+        }
     }
 
     /// Creates a new [`ArrayMap`] from the given array of join keys.
@@ -207,10 +217,9 @@ impl ArrayMap {
         for (i, val) in arr.iter().enumerate().rev() {
             if let Some(val) = val {
                 let key: u64 = val.as_();
-                let idx = key.wrapping_sub(offset_val) as usize;
-                if idx >= data.len() {
+                let Some(idx) = Self::key_to_index(key, offset_val, data.len()) else {
                     return internal_err!("failed build Array idx >= data.len()");
-                }
+                };
 
                 if data[idx] != 0 {
                     if next.is_empty() {
@@ -264,6 +273,76 @@ impl ArrayMap {
         )
     }
 
+    /// Returns whether `key` (a raw probe value cast to `u64`) is present in the
+    /// build side, i.e. maps to a non-empty bucket.
+    #[inline]
+    fn key_present(&self, key: u64) -> bool {
+        let Some(idx) = Self::key_to_index(key, self.offset, self.data.len()) else {
+            return false;
+        };
+        self.data[idx] != 0
+    }
+
+    pub fn get_probe_indices_with_any_match(
+        &self,
+        prob_side_keys: &[ArrayRef],
+        range: Range<usize>,
+        probe_indices: &mut Vec<u32>,
+    ) -> Result<()> {
+        if prob_side_keys.len() != 1 {
+            return internal_err!(
+                "ArrayMap expects 1 join key, but got {}",
+                prob_side_keys.len()
+            );
+        }
+        let array = &prob_side_keys[0];
+
+        downcast_supported_integer!(
+            array.data_type() => (
+                lookup_and_get_probe_indices,
+                self,
+                array,
+                range,
+                probe_indices
+            )
+        )
+    }
+
+    fn lookup_and_get_probe_indices<T: ArrowNumericType>(
+        &self,
+        array: &ArrayRef,
+        range: Range<usize>,
+        probe_indices: &mut Vec<u32>,
+    ) -> Result<()>
+    where
+        T::Native: Copy + AsPrimitive<u64>,
+    {
+        probe_indices.clear();
+
+        let arr = array.as_primitive::<T>();
+        let end = range.end.min(arr.len());
+        if range.start >= end {
+            return Ok(());
+        }
+
+        let have_null = arr.null_count() > 0;
+        for probe_idx in range.start..end {
+            if have_null && arr.is_null(probe_idx) {
+                // Skip NULLs: under NullEqualsNothing, they will never match a
+                // build row, and ArrayMap is not used with NullEqualsNull.
+                continue;
+            }
+
+            // SAFETY: probe_idx is guaranteed to be within bounds by the loop range.
+            let prob_val: u64 = unsafe { arr.value_unchecked(probe_idx) }.as_();
+            if self.key_present(prob_val) {
+                probe_indices.push(probe_idx as u32);
+            }
+        }
+
+        Ok(())
+    }
+
     fn lookup_and_get_indices<T: ArrowNumericType>(
         &self,
         array: &ArrayRef,
@@ -294,11 +373,13 @@ impl ArrayMap {
                 }
                 // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
                 let prob_val: u64 = unsafe { arr.value_unchecked(prob_idx) }.as_();
-                let idx_in_build_side = prob_val.wrapping_sub(self.offset) as usize;
+                let Some(idx_in_build_side) =
+                    Self::key_to_index(prob_val, self.offset, self.data.len())
+                else {
+                    continue;
+                };
 
-                if idx_in_build_side >= self.data.len()
-                    || self.data[idx_in_build_side] == 0
-                {
+                if self.data[idx_in_build_side] == 0 {
                     continue;
                 }
                 build_indices.push((self.data[idx_in_build_side] - 1) as u64);
@@ -345,10 +426,12 @@ impl ArrayMap {
 
                 // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
                 let prob_val: u64 = unsafe { arr.value_unchecked(prob_side_idx) }.as_();
-                let idx_in_build_side = prob_val.wrapping_sub(self.offset) as usize;
-                if idx_in_build_side >= self.data.len()
-                    || self.data[idx_in_build_side] == 0
-                {
+                let Some(idx_in_build_side) =
+                    Self::key_to_index(prob_val, self.offset, self.data.len())
+                else {
+                    continue;
+                };
+                if self.data[idx_in_build_side] == 0 {
                     continue;
                 }
 
@@ -402,8 +485,7 @@ impl ArrayMap {
             }
             // SAFETY: i is within bounds [0, arr.len())
             let key: u64 = unsafe { arr.value_unchecked(i) }.as_();
-            let idx = key.wrapping_sub(self.offset) as usize;
-            idx < self.data.len() && self.data[idx] != 0
+            self.key_present(key)
         });
         Ok(BooleanArray::new(buffer, None))
     }
@@ -414,6 +496,7 @@ mod tests {
     use super::*;
     use arrow::array::Int32Array;
     use arrow::array::Int64Array;
+    use arrow::array::UInt64Array;
     use std::sync::Arc;
 
     #[test]
@@ -503,6 +586,80 @@ mod tests {
         assert_eq!(prob_indices, vec![1, 1, 3]);
         assert_eq!(build_indices, vec![0, 1, 0]);
         assert_eq!(result_offset, Some((3, Some(2))));
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_map_probe_indices_with_any_match() -> Result<()> {
+        let build: ArrayRef = Arc::new(Int32Array::from(vec![1, 1, 3, 5, 5]));
+        let map = ArrayMap::try_new(&build, 1, 5)?;
+        let probe = [Arc::new(Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(4),
+            Some(5),
+        ])) as ArrayRef];
+
+        let mut probe_indices = vec![99];
+        map.get_probe_indices_with_any_match(&probe, 2..8, &mut probe_indices)?;
+
+        assert_eq!(probe_indices, vec![2, 4, 7]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_map_rejects_large_out_of_range_probe_key() -> Result<()> {
+        let build: ArrayRef =
+            Arc::new(UInt64Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+        let map = ArrayMap::try_new(&build, 0, 10)?;
+
+        assert_eq!(ArrayMap::key_to_index(3, 0, 11), Some(3));
+
+        // Pick a key for which the computed bucket offset is larger than
+        // u32::MAX but has low 32 bits equal to 3. It must be bounds-checked
+        // before casting to usize, otherwise 32-bit targets can truncate it
+        // into range.
+        let out_of_range_key = (1_u64 << 32) + 3;
+        assert_eq!(ArrayMap::key_to_index(out_of_range_key, 0, 11), None);
+
+        let probe = [Arc::new(UInt64Array::from(vec![
+            Some(3),
+            Some(out_of_range_key),
+            Some(11),
+            None,
+        ])) as ArrayRef];
+
+        let mut probe_indices = vec![];
+        map.get_probe_indices_with_any_match(
+            &probe,
+            0..probe[0].len(),
+            &mut probe_indices,
+        )?;
+        assert_eq!(probe_indices, vec![0]);
+
+        let mut matched_probe_indices = vec![];
+        let mut matched_build_indices = vec![];
+        let next = map.get_matched_indices_with_limit_offset(
+            &probe,
+            10,
+            (0, None),
+            &mut matched_probe_indices,
+            &mut matched_build_indices,
+        )?;
+        assert_eq!(matched_probe_indices, vec![0]);
+        assert_eq!(matched_build_indices, vec![3]);
+        assert!(next.is_none());
+
+        let contains = map.contain_keys(&probe)?;
+        assert!(contains.value(0));
+        assert!(!contains.value(1));
+        assert!(!contains.value(2));
+        assert!(!contains.value(3));
+
         Ok(())
     }
 
