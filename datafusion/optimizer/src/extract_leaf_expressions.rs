@@ -830,6 +830,9 @@ fn split_and_push_projection(
     let mut needs_recovery = false;
     let mut has_new_extractions = false;
     let mut proj_exprs_captured: usize = 0;
+    // Track standalone column expressions (Case B) to detect column refs
+    // from extracted aliases (Case A) that aren't also standalone expressions.
+    let mut standalone_columns: IndexSet<Column> = IndexSet::new();
 
     for (expr, (qualifier, field)) in proj.expr.iter().zip(original_schema.iter()) {
         if let Expr::Alias(alias) = expr
@@ -851,6 +854,7 @@ fn split_and_push_projection(
         } else if let Expr::Column(col) = expr {
             // Plain column pass-through — track it in the extractor
             extractors[0].columns_needed.insert(col.clone());
+            standalone_columns.insert(col.clone());
             recovery_exprs.push(expr.clone());
             proj_exprs_captured += 1;
         } else {
@@ -871,11 +875,6 @@ fn split_and_push_projection(
                 original_name != &expr_name
             };
             let recovery_expr = if needs_alias {
-                // A transformed expression that no longer carries its original
-                // output name must be aliased back, and that rename means the
-                // pushed `base_plan` no longer exposes the original column name
-                // → restore it with a recovery projection. (The field-count
-                // check below cannot see an equal-arity rename.)
                 needs_recovery = true;
                 transformed_expr
                     .clone()
@@ -883,6 +882,14 @@ fn split_and_push_projection(
             } else {
                 transformed_expr.clone()
             };
+
+            // If the expression was transformed (i.e., has extracted sub-parts),
+            // it differs from what the pushed projection outputs → needs recovery.
+            // Also, any non-column, non-__datafusion_extracted expression needs recovery
+            // because the pushed extraction projection won't output it directly.
+            if transformed.transformed || !matches!(expr, Expr::Column(_)) {
+                needs_recovery = true;
+            }
 
             recovery_exprs.push(recovery_expr);
         }
@@ -904,6 +911,17 @@ fn split_and_push_projection(
     // If no extractions found, nothing to do
     if extraction_pairs.is_empty() {
         return Ok(None);
+    }
+
+    // If columns_needed has entries that aren't standalone projection columns
+    // (i.e., they came from column refs inside extracted aliases), a merge
+    // into an inner projection will widen the schema with those extra columns,
+    // requiring a recovery projection to restore the original schema.
+    if columns_needed
+        .iter()
+        .any(|c| !standalone_columns.contains(c))
+    {
+        needs_recovery = true;
     }
 
     // ── Phase 2: Push down ──────────────────────────────────────────────
@@ -941,20 +959,13 @@ fn split_and_push_projection(
         }
     };
 
-    // Second way `base_plan` can diverge from the original output: pushing the
-    // projection down can *widen* it with extra columns (e.g. an inner extraction
-    // projection's *other* `__datafusion_extracted` aliases bubbling up through a
-    // Filter). A schema-caching parent like SubqueryAlias then keeps a stale
-    // schema (see `map_children` in `logical_plan/tree_node.rs`), so the later
-    // `optimize_projections` pass computes the wrong required columns and fails.
-    //
-    // The field-count check catches that arity change; together with the
-    // rename check above it covers both ways the output can drift. We compare
-    // counts rather than full schemas deliberately: this pass only ever *adds*
-    // pass-through columns (it never swaps one out), and a stricter ordered- or
-    // qualified-schema comparison spuriously fires on benign column reorders and
-    // unqualified/qualified alias differences, stacking redundant recovery
-    // projections.
+    // Pushing the projection down can leak extra columns into `base_plan` (e.g.
+    // an inner extraction projection's *other* `__datafusion_extracted` aliases
+    // bubbling up through a Filter). A schema-caching parent like SubqueryAlias
+    // then keeps a stale schema (see `map_children` in
+    // `logical_plan/tree_node.rs`), so the later `optimize_projections` pass
+    // computes the wrong required columns and fails. If the field count changed,
+    // restore the original output schema with the recovery projection.
     needs_recovery |= base_plan.schema().fields().len() != original_schema.fields().len();
 
     // Wrap with recovery projection if the output schema changed
