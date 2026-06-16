@@ -64,10 +64,7 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
 }
 
 fn expand_if_scalar(arg: &ColumnarValue, rows: usize) -> Result<ColumnarValue> {
-    match arg {
-        ColumnarValue::Scalar(s) => Ok(ColumnarValue::Array(s.to_array_of_size(rows)?)),
-        ColumnarValue::Array(a) => Ok(ColumnarValue::Array(Arc::clone(a))),
-    }
+    Ok(ColumnarValue::Array(arg.to_array(rows)?))
 }
 
 fn make_map_batch(args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
