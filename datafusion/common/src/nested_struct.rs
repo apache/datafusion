@@ -467,10 +467,6 @@ pub fn validate_data_type_compatibility(
         | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
             validate_field_compatibility(s, t)?;
         }
-        (
-            DataType::FixedSizeList(_, source_list_size),
-            DataType::FixedSizeList(_, target_list_size),
-        ) if source_list_size != target_list_size => {}
         (DataType::Dictionary(s_key, s_val), DataType::Dictionary(t_key, t_val)) => {
             if !can_cast_types(s_key, t_key) {
                 return _plan_err!(
@@ -1461,6 +1457,21 @@ mod tests {
             error,
             "target field 'b' is non-nullable but missing from source"
         );
+    }
+
+    #[test]
+    fn test_validate_fixed_size_list_struct_size_mismatch_rejected() {
+        let (source_field, target_field) = create_fsl_test_fields(
+            vec![("a", DataType::Int32)],
+            vec![("a", DataType::Int64), ("b", DataType::Utf8)],
+        );
+        let source = DataType::FixedSizeList(source_field, 2);
+        let target = DataType::FixedSizeList(target_field, 3);
+
+        let error = validate_data_type_compatibility("col", &source, &target)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(error, "Cannot cast struct field 'col'");
     }
 
     #[test]
