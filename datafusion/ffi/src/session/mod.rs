@@ -476,13 +476,12 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
     let current_format = options.remove("datafusion_ffi.table_current_format");
 
     let mut table_options = TableOptions::default();
-    let formats = vec![ConfigFileType::CSV, ConfigFileType::JSON];
-    #[cfg(feature = "parquet")]
-    let formats = {
-        let mut formats = formats;
-        formats.push(ConfigFileType::PARQUET);
-        formats
-    };
+    let formats = [
+        ConfigFileType::CSV,
+        ConfigFileType::JSON,
+        #[cfg(feature = "parquet")]
+        ConfigFileType::PARQUET,
+    ];
     for format in formats {
         // It is imperative that if new enum variants are added below that they be
         // included in the formats list above and in the extension check below.
