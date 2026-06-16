@@ -20,6 +20,7 @@
 mod boolean;
 mod bytes;
 pub mod bytes_view;
+pub mod dict;
 pub mod primitive;
 
 use std::mem::{self, size_of};
