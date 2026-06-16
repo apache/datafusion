@@ -39,8 +39,6 @@ workspace = true
 
 [lib]
 name = "datafusion_macros"
-# lib.rs to be re-added in the future
-path = "src/user_doc.rs"
 proc-macro = true
 
 [dependencies]

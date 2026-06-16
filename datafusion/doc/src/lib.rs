@@ -22,10 +22,15 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+mod metrics;
 mod udaf;
 mod udf;
 mod udwf;
 
+pub use metrics::{
+    MetricFieldDocumentation, MetricPosition, MetricsDocumentation,
+    MetricsDocumentationBuilder,
+};
 pub use udaf::aggregate_doc_sections;
 pub use udf::scalar_doc_sections;
 pub use udwf::window_doc_sections;

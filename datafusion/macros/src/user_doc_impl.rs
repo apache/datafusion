@@ -15,13 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![doc(
-    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
-    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
-)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
-
-extern crate proc_macro;
 use datafusion_doc::scalar_doc_sections::doc_sections_const;
 use proc_macro::TokenStream;
 use quote::quote;
@@ -102,8 +95,7 @@ use syn::{DeriveInput, LitStr, parse_macro_input};
 ///     }
 /// }
 /// ```
-#[proc_macro_attribute]
-pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut doc_section_lbl: Option<LitStr> = None;
 
     let mut description: Option<LitStr> = None;

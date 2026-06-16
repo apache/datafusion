@@ -58,6 +58,7 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_macros::metrics_doc;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -1034,6 +1035,21 @@ impl BatchPartitioner {
 /// For more background, please also see the [Optimizing Repartitions in DataFusion] blog.
 ///
 /// [Optimizing Repartitions in DataFusion]: https://datafusion.apache.org/blog/2025/12/15/avoid-consecutive-repartitions
+#[metrics_doc(
+    position = "operator",
+    metric(
+        name = "fetch_time",
+        description = "Time spent executing the child operator and fetching batches.",
+    ),
+    metric(
+        name = "repartition_time",
+        description = "Time spent performing repartitioning.",
+    ),
+    metric(
+        name = "send_time",
+        description = "Time spent sending output batches to output channels. One metric per output partition (labelled with `outputPartition`).",
+    )
+)]
 #[derive(Debug, Clone)]
 pub struct RepartitionExec {
     /// Input execution plan
@@ -1359,6 +1375,12 @@ impl ExecutionPlan for RepartitionExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn metrics_documentation(
+        &self,
+    ) -> Option<&'static datafusion_expr::MetricsDocumentation> {
+        Some(Self::metrics_doc())
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {

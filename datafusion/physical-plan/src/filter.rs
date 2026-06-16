@@ -21,6 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
+use datafusion_macros::metrics_doc;
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use itertools::Itertools;
 
@@ -79,6 +80,13 @@ const FILTER_EXEC_DEFAULT_BATCH_SIZE: usize = 8192;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
+#[metrics_doc(
+    position = "operator",
+    metric(
+        name = "selectivity",
+        description = "Selectivity of the filter, calculated as output_rows / input_rows",
+    )
+)]
 #[derive(Debug, Clone)]
 pub struct FilterExec {
     /// The expression to filter on. This expression must evaluate to a boolean value.
@@ -588,6 +596,12 @@ impl ExecutionPlan for FilterExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn metrics_documentation(
+        &self,
+    ) -> Option<&'static datafusion_expr::MetricsDocumentation> {
+        Some(Self::metrics_doc())
+    }
+
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
@@ -1065,8 +1079,6 @@ struct FilterExecMetrics {
     baseline_metrics: BaselineMetrics,
     /// Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
-    // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
-    // or modifying metrics comments
 }
 
 impl FilterExecMetrics {
