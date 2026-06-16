@@ -63,24 +63,19 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn expand_if_scalar(arg: &ColumnarValue, rows: usize) -> Result<ColumnarValue> {
-    Ok(ColumnarValue::Array(arg.to_array(rows)?))
+fn expand_if_scalar(arg: ColumnarValue, rows: usize) -> Result<ColumnarValue> {
+    Ok(ColumnarValue::Array(arg.into_array(rows)?))
 }
 
-fn make_map_batch(args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-    let [keys_arg, values_arg] = take_function_args("make_map", args)?;
-
-    let can_evaluate_to_const = can_evaluate_to_const(args);
+fn make_map_batch(args: Vec<ColumnarValue>, number_rows: usize) -> Result<ColumnarValue> {
+    let can_evaluate_to_const = can_evaluate_to_const(&args);
+    let [mut keys_arg, mut values_arg] = take_function_args("make_map", args)?;
 
     // if we can't evaluate to const (inputs are not both scalar) then ensure they
     // are expanded to arrays which following logic expects
-    let (keys_arg, values_arg) = if !can_evaluate_to_const {
-        (
-            expand_if_scalar(keys_arg, number_rows)?,
-            expand_if_scalar(values_arg, number_rows)?,
-        )
-    } else {
-        (keys_arg.clone(), values_arg.clone())
+    if !can_evaluate_to_const {
+        keys_arg = expand_if_scalar(keys_arg, number_rows)?;
+        values_arg = expand_if_scalar(values_arg, number_rows)?;
     };
 
     let keys = get_first_array_ref(&keys_arg)?;
@@ -414,7 +409,7 @@ impl ScalarUDFImpl for MapFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_map_batch(&args.args, args.number_rows)
+        make_map_batch(args.args, args.number_rows)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -732,7 +727,7 @@ mod tests {
 
         // Call make_map_batch - should succeed
         let result = make_map_batch(
-            &[
+            vec![
                 ColumnarValue::Array(keys_array),
                 ColumnarValue::Array(values_array),
             ],
@@ -783,7 +778,7 @@ mod tests {
 
         // Call make_map_batch - should fail
         let result = make_map_batch(
-            &[
+            vec![
                 ColumnarValue::Array(keys_array),
                 ColumnarValue::Array(values_array),
             ],
@@ -834,7 +829,7 @@ mod tests {
 
         // Call make_map_batch - should succeed
         let result = make_map_batch(
-            &[
+            vec![
                 ColumnarValue::Array(keys_array),
                 ColumnarValue::Array(values_array),
             ],
@@ -907,7 +902,7 @@ mod tests {
 
         // Call make_map_batch - should succeed
         let result = make_map_batch(
-            &[
+            vec![
                 ColumnarValue::Array(keys_array),
                 ColumnarValue::Array(values_array),
             ],
