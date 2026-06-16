@@ -216,7 +216,9 @@ pub fn rewrite_input_file_name_in_projection(
             as Arc<dyn PhysicalExpr>;
 
     projection.try_map_exprs(|expr| {
-        rewrite_scalar_udf::<InputFileNameFunc, _>(expr, |_| Ok(Arc::clone(&file_name_lit)))
+        rewrite_scalar_udf::<InputFileNameFunc, _>(expr, |_| {
+            Ok(Arc::clone(&file_name_lit))
+        })
     })
 }
 
