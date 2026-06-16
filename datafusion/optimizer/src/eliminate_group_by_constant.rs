@@ -24,7 +24,9 @@ use std::collections::HashSet;
 
 use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
-use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
+use datafusion_expr::{
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility, col, lit,
+};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
 /// and places additional projection on top of aggregation, to preserve
@@ -46,7 +48,7 @@ impl OptimizerRule for EliminateGroupByConstant {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Aggregate(aggregate) => {
@@ -64,23 +66,52 @@ impl OptimizerRule for EliminateGroupByConstant {
                     .group_expr
                     .iter()
                     .partition(|expr| is_redundant_group_expr(expr, &group_by_columns));
-                // Only eliminate when at least one required group expression remains. A grouping
-                // aggregate emits 0 rows on empty input; a global aggregate emits 1 NULL row.
-
-                if redundant.is_empty() || required.is_empty() {
+                if redundant.is_empty()
+                    || (required.is_empty() && aggregate.aggr_expr.is_empty())
+                {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
-                let simplified_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
-                    aggregate.input,
-                    required.into_iter().cloned().collect(),
-                    aggregate.aggr_expr.clone(),
-                )?);
+                let simplified_plan = if required.is_empty() {
+                    let Some(registry) = config.function_registry() else {
+                        return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
+                    };
+                    let sentinel_name =
+                        config.alias_generator().next("__row_count_sentinel");
+                    let count_udaf = registry.udaf("count")?;
+                    let sentinel = count_udaf
+                        .call(vec![lit(1_i64)])
+                        .alias(sentinel_name.as_str());
+                    let mut aggr_with_sentinel = aggregate.aggr_expr.clone();
+                    aggr_with_sentinel.push(sentinel);
+                    let global_agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                        aggregate.input,
+                        vec![],
+                        aggr_with_sentinel,
+                    )?);
+                    LogicalPlanBuilder::from(global_agg)
+                        .filter(col(sentinel_name.as_str()).gt(lit(0_i64)))?
+                        .build()?
+                } else {
+                    LogicalPlan::Aggregate(Aggregate::try_new(
+                        aggregate.input,
+                        required.into_iter().cloned().collect(),
+                        aggregate.aggr_expr.clone(),
+                    )?)
+                };
 
-                let projection_expr =
-                    aggregate.group_expr.into_iter().chain(aggregate.aggr_expr);
+                let projection_expr: Vec<Expr> = aggregate
+                    .group_expr
+                    .into_iter()
+                    .chain(
+                        aggregate
+                            .aggr_expr
+                            .iter()
+                            .map(|e| col(e.schema_name().to_string())),
+                    )
+                    .collect();
 
-                let projection = LogicalPlanBuilder::from(simplified_aggregate)
+                let projection = LogicalPlanBuilder::from(simplified_plan)
                     .project(projection_expr)?
                     .build()?;
 
