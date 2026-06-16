@@ -24,7 +24,10 @@ use arrow::array::{
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Field, FieldRef, Int64Type, TimeUnit,
+    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Field, FieldRef, Int32Type,
+    Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt32Type, UInt64Type,
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::hash_utils::create_hashes;
@@ -723,6 +726,7 @@ impl AggregateUDFImpl for ApproxDistinct {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = acc_args.expr_fields[0].data_type();
 
+        // For primitive types, use specialized accumulators for better performance.
         let accumulator: Box<dyn Accumulator> = match data_type {
             DataType::Boolean
             | DataType::UInt8
@@ -731,8 +735,41 @@ impl AggregateUDFImpl for ApproxDistinct {
             | DataType::Int16 => {
                 return get_fixed_domain_approx_accumulator(data_type);
             }
+            DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
+            DataType::UInt64 => Box::new(NumericHLLAccumulator::<UInt64Type>::new()),
+            DataType::Int32 => Box::new(NumericHLLAccumulator::<Int32Type>::new()),
             DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::new()),
-            data_type if is_hll_type(data_type) => Box::new(HLLAccumulator::new()),
+            DataType::Date32 => Box::new(NumericHLLAccumulator::<Date32Type>::new()),
+            DataType::Date64 => Box::new(NumericHLLAccumulator::<Date64Type>::new()),
+            DataType::Time32(TimeUnit::Second) => {
+                Box::new(NumericHLLAccumulator::<Time32SecondType>::new())
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                Box::new(NumericHLLAccumulator::<Time32MillisecondType>::new())
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                Box::new(NumericHLLAccumulator::<Time64MicrosecondType>::new())
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                Box::new(NumericHLLAccumulator::<Time64NanosecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampSecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampMillisecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampMicrosecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampNanosecondType>::new())
+            }
+            DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Utf8View
+            | DataType::Binary
+            | DataType::LargeBinary => Box::new(HLLAccumulator::new()),
             DataType::Null => {
                 Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
             }
@@ -746,7 +783,7 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        is_hll_type(args.expr_fields[0].data_type())
+        is_hll_groups_type(args.expr_fields[0].data_type())
     }
 
     fn create_groups_accumulator(
@@ -754,7 +791,7 @@ impl AggregateUDFImpl for ApproxDistinct {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         let data_type = args.expr_fields[0].data_type();
-        if is_hll_type(data_type) {
+        if is_hll_groups_type(data_type) {
             Ok(Box::new(HllGroupsAccumulator::new()))
         } else {
             not_impl_err!(
@@ -768,9 +805,10 @@ impl AggregateUDFImpl for ApproxDistinct {
     }
 }
 
-/// Returns true for the data types backed by HyperLogLog. The fixed-domain
-/// types (booleans / small ints) and `Null` use separate accumulator paths.
-fn is_hll_type(data_type: &DataType) -> bool {
+/// Returns true for the data types backed by the HyperLogLog
+/// [`HllGroupsAccumulator`]. The fixed-domain types (booleans / small ints) and
+/// `Null` fall back to the per-group [`Accumulator`] path.
+fn is_hll_groups_type(data_type: &DataType) -> bool {
     matches!(
         data_type,
         DataType::UInt32
