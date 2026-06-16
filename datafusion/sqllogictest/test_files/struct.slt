@@ -1714,3 +1714,21 @@ RESET datafusion.sql_parser.dialect;
 
 statement ok
 drop table t_agg_window;
+
+# extract_leaf_expressions regression
+statement ok
+create table leaf_base as select named_struct('status', 'active') as s, 1 as id;
+
+statement ok
+create view leaf_view as select s, id, id + 1 as synth from leaf_base;
+
+query T?I
+select s['status'], s, id from leaf_view where s['status'] is not null;
+----
+active {status: active} 1
+
+statement ok
+drop view leaf_view;
+
+statement ok
+drop table leaf_base;

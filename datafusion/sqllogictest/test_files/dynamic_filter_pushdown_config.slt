@@ -380,14 +380,14 @@ FROM left_parquet l
 WHERE l.id NOT IN (SELECT r.id FROM right_parquet r);
 ----
 logical_plan
-01)LeftAnti Join: l.id = __correlated_sq_1.id
+01)LeftAnti Join: l.id = __correlated_sq_1.id null_aware
 02)--SubqueryAlias: l
 03)----TableScan: left_parquet projection=[id, data]
 04)--SubqueryAlias: __correlated_sq_1
 05)----SubqueryAlias: r
 06)------TableScan: right_parquet projection=[id]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
 03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ]
 
@@ -482,7 +482,7 @@ ORDER BY l.id LIMIT 2;
 ----
 logical_plan
 01)Sort: l.id ASC NULLS LAST, fetch=2
-02)--LeftAnti Join: l.id = __correlated_sq_1.id
+02)--LeftAnti Join: l.id = __correlated_sq_1.id null_aware
 03)----SubqueryAlias: l
 04)------TableScan: left_parquet projection=[id, data]
 05)----SubqueryAlias: __correlated_sq_1
@@ -490,7 +490,7 @@ logical_plan
 07)--------TableScan: right_parquet projection=[id]
 physical_plan
 01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ]
 04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ]
 

@@ -1023,6 +1023,48 @@ statement ok
 drop table int_probe;
 
 
+########
+# Dynamic filters must not be created for null-equal joins (IS NOT DISTINCT
+# FROM, INTERSECT): min/max bounds and membership filters derived from the
+# build side evaluate to NULL for probe-side NULL keys and would prune rows
+# that can null-match a build-side NULL.
+########
+
+statement ok
+COPY (SELECT * FROM (VALUES (11), (22), (NULL)) v(id)) TO 'test_files/scratch/push_down_filter_parquet/nej_probe.parquet' STORED AS PARQUET;
+
+statement ok
+COPY (SELECT * FROM (VALUES (11), (NULL)) v(id)) TO 'test_files/scratch/push_down_filter_parquet/nej_build.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE nej_probe STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_parquet/nej_probe.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE nej_build STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_parquet/nej_build.parquet';
+
+# The probe-side NULL key must survive to match the build-side NULL
+query II rowsort
+SELECT nej_build.id, nej_probe.id FROM nej_build JOIN nej_probe ON nej_build.id IS NOT DISTINCT FROM nej_probe.id
+----
+11 11
+NULL NULL
+
+# No DynamicFilter predicate may appear on the probe side of a null-equal join
+query TT
+EXPLAIN SELECT nej_build.id, nej_probe.id FROM nej_build JOIN nej_probe ON nej_build.id IS NOT DISTINCT FROM nej_probe.id
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], NullsEqual: true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nej_build.parquet]]}, projection=[id], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nej_probe.parquet]]}, projection=[id], file_type=parquet
+
+statement ok
+drop table nej_build;
+
+statement ok
+drop table nej_probe;
+
+
 # Config reset
 statement ok
 RESET datafusion.explain.physical_plan_only;

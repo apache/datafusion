@@ -134,6 +134,8 @@ mod tests {
     use datafusion_physical_expr::expressions::col;
     use futures::StreamExt;
 
+    // Migrated to PartialHashAggregateStream coverage in hash_aggregate.rs;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_skip_aggregation_probe_not_locked_until_skip() -> Result<()> {
         // Test that the probe is not locked until we actually decide to skip.

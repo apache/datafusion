@@ -2459,6 +2459,28 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
             assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
             assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
 
+            // For Full joins, get_required_batch_indices extends 0..batches.len(), so
+            // poll_spilled_batches can restore all spilled batches at once via infallible
+            // grow(). Verify accounting tracked the transient spike and cleaned up.
+            let peak_mem = join
+                .metrics()
+                .and_then(|m| m.sum_by_name("peak_mem_used"))
+                .map(|m| m.as_usize())
+                .unwrap_or(0);
+            assert!(
+                peak_mem > 0,
+                "peak_mem_used should be > 0 for {join_type:?} batch_size={batch_size}"
+            );
+            assert_eq!(
+                runtime.memory_pool.reserved(),
+                0,
+                concat!(
+                    "memory should be fully released after {join_type:?} completes ",
+                    "(batch_size={batch_size}): infallible grow during restore must be balanced"
+                ),
+                join_type = join_type,
+                batch_size = batch_size,
+            );
             // Run the test with no spill configuration as
             let task_ctx_no_spill =
                 TaskContext::default().with_session_config(session_config.clone());
