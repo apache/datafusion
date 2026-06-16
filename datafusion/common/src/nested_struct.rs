@@ -26,6 +26,19 @@ use arrow::{
 };
 use std::{collections::HashSet, sync::Arc};
 
+/// Helper macro to downcast an array and convert to Result with appropriate error.
+macro_rules! downcast_array {
+    ($col:expr, $ty:ty, $type_name:expr) => {
+        $col.as_any().downcast_ref::<$ty>().ok_or_else(|| {
+            crate::error::DataFusionError::Plan(format!(
+                "Expected {} but got {}",
+                $type_name,
+                $col.data_type()
+            ))
+        })
+    };
+}
+
 /// Cast a struct column to match target struct fields, handling nested structs recursively.
 ///
 /// This function implements struct-to-struct casting with the assumption that **structs should
@@ -217,15 +230,7 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
     target_inner_field: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    let source_list = source_col
-        .as_any()
-        .downcast_ref::<GenericListArray<O>>()
-        .ok_or_else(|| {
-            crate::error::DataFusionError::Plan(format!(
-                "Expected list array but got {}",
-                source_col.data_type()
-            ))
-        })?;
+    let source_list = downcast_array!(source_col, GenericListArray<O>, "list array")?;
 
     let cast_values = cast_column(
         source_list.values(),
@@ -247,15 +252,8 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
     target_inner_field: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    let source_list = source_col
-        .as_any()
-        .downcast_ref::<GenericListViewArray<O>>()
-        .ok_or_else(|| {
-            crate::error::DataFusionError::Plan(format!(
-                "Expected list view array but got {}",
-                source_col.data_type()
-            ))
-        })?;
+    let source_list =
+        downcast_array!(source_col, GenericListViewArray<O>, "list view array")?;
 
     let cast_values = cast_column(
         source_list.values(),
@@ -279,15 +277,8 @@ fn cast_fixed_size_list_column(
     target_list_size: i32,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    let source_list = source_col
-        .as_any()
-        .downcast_ref::<FixedSizeListArray>()
-        .ok_or_else(|| {
-            crate::error::DataFusionError::Plan(format!(
-                "Expected fixed-size list array but got {}",
-                source_col.data_type()
-            ))
-        })?;
+    let source_list =
+        downcast_array!(source_col, FixedSizeListArray, "fixed-size list array")?;
 
     let cast_values = cast_column(
         source_list.values(),
@@ -1367,6 +1358,31 @@ mod tests {
         assert!(b_col.iter().all(|v| v.is_none()));
     }
 
+    fn create_fsl_test_fields(
+        source_struct_fields: Vec<(&str, DataType)>,
+        target_struct_fields: Vec<(&str, DataType)>,
+    ) -> (FieldRef, FieldRef) {
+        let source_field = arc_field(
+            "item",
+            struct_type(
+                source_struct_fields
+                    .into_iter()
+                    .map(|(name, dt)| field(name, dt))
+                    .collect(),
+            ),
+        );
+        let target_field = arc_field(
+            "item",
+            struct_type(
+                target_struct_fields
+                    .into_iter()
+                    .map(|(name, dt)| field(name, dt))
+                    .collect(),
+            ),
+        );
+        (source_field, target_field)
+    }
+
     #[test]
     fn test_cast_fixed_size_list_struct() {
         let struct_arr = StructArray::from(vec![(
@@ -1374,14 +1390,9 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
         )]);
 
-        let source_field =
-            arc_field("item", struct_type(vec![field("a", DataType::Int32)]));
-        let target_field = arc_field(
-            "item",
-            struct_type(vec![
-                field("a", DataType::Int64),
-                field("b", DataType::Utf8),
-            ]),
+        let (source_field, target_field) = create_fsl_test_fields(
+            vec![("a", DataType::Int32)],
+            vec![("a", DataType::Int64), ("b", DataType::Utf8)],
         );
         let source_col: ArrayRef = Arc::new(FixedSizeListArray::new(
             source_field,
@@ -1414,20 +1425,12 @@ mod tests {
 
     #[test]
     fn test_validate_fixed_size_list_struct_compatibility() {
-        let source = DataType::FixedSizeList(
-            arc_field("item", struct_type(vec![field("a", DataType::Int32)])),
-            2,
+        let (source_field, target_field) = create_fsl_test_fields(
+            vec![("a", DataType::Int32)],
+            vec![("a", DataType::Int64), ("b", DataType::Utf8)],
         );
-        let target = DataType::FixedSizeList(
-            arc_field(
-                "item",
-                struct_type(vec![
-                    field("a", DataType::Int64),
-                    field("b", DataType::Utf8),
-                ]),
-            ),
-            2,
-        );
+        let source = DataType::FixedSizeList(source_field, 2);
+        let target = DataType::FixedSizeList(target_field, 2);
 
         assert!(requires_nested_struct_cast(&source, &target));
         assert!(validate_data_type_compatibility("col", &source, &target).is_ok());
@@ -1435,10 +1438,11 @@ mod tests {
 
     #[test]
     fn test_validate_fixed_size_list_struct_missing_non_nullable_field_rejected() {
-        let source = DataType::FixedSizeList(
-            arc_field("item", struct_type(vec![field("a", DataType::Int32)])),
-            2,
+        let (source_field, _) = create_fsl_test_fields(
+            vec![("a", DataType::Int32)],
+            vec![("a", DataType::Int64), ("b", DataType::Utf8)],
         );
+        let source = DataType::FixedSizeList(source_field, 2);
         let target = DataType::FixedSizeList(
             arc_field(
                 "item",
@@ -1461,14 +1465,9 @@ mod tests {
 
     #[test]
     fn test_cast_fixed_size_list_struct_all_null() {
-        let source_field =
-            arc_field("item", struct_type(vec![field("a", DataType::Int32)]));
-        let target_field = arc_field(
-            "item",
-            struct_type(vec![
-                field("a", DataType::Int64),
-                field("b", DataType::Utf8),
-            ]),
+        let (source_field, target_field) = create_fsl_test_fields(
+            vec![("a", DataType::Int32)],
+            vec![("a", DataType::Int64), ("b", DataType::Utf8)],
         );
         let source_col: ArrayRef =
             Arc::new(FixedSizeListArray::new_null(source_field, 2, 2));
