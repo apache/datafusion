@@ -206,3 +206,64 @@ async fn dynamic_rg_pruning_metric_quiet_without_topk() {
         output.description(),
     );
 }
+
+/// Co-existence test: a `WHERE` clause that gets pushed into the parquet
+/// `RowFilter` plus a `TopK` that drives the dynamic RG pruner.
+///
+/// `v % 2 = 0` cannot be statically pruned and is not page-index-amenable
+/// either, so it must run per-row inside the parquet decoder as a
+/// `RowFilter`. `ORDER BY v DESC LIMIT 3` then fills the TopK heap and
+/// tightens the threshold, triggering runtime RG pruning. The decoder
+/// rebuild that happens via
+/// `into_builder().with_row_groups(remaining).build()` must preserve the
+/// installed `RowFilter` (and any `RowSelection` derived from page-index
+/// pruning) across the rebuild — if it didn't, either:
+///
+/// - The post-prune RGs would silently drop their per-row filtering and
+///   the result would contain odd values, OR
+/// - The rebuilt decoder would re-emit rows the original was about to
+///   yield, double-counting against the limit.
+///
+/// This test catches both regressions: it pins both the exact result rows
+/// (top three even values descending: 498, 496, 494) and asserts the
+/// dynamic pruner fired at least once.
+#[tokio::test]
+async fn dynamic_rg_pruning_coexists_with_row_filter() {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+    let batches = build_five_disjoint_batches(&schema);
+
+    let mut ctx = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroup(100),
+        Arc::clone(&schema),
+        batches,
+    )
+    .await;
+
+    // `v % 2 = 0` survives stats pruning (every RG straddles even / odd),
+    // so the predicate is pushed into the decoder as a `RowFilter` and
+    // evaluated per row. The TopK on top still tightens the threshold and
+    // engages the runtime RG pruner.
+    let output = ctx
+        .query("SELECT v FROM t WHERE v % 2 = 0 ORDER BY v DESC LIMIT 3")
+        .await;
+
+    assert_eq!(output.result_rows, 3, "query must return LIMIT rows");
+    let formatted = output.pretty_results();
+    for v in [498i64, 496, 494] {
+        assert!(
+            formatted.contains(&format!("| {v} ")),
+            "output must contain top-3 even descending value {v}; got:\n{formatted}",
+        );
+    }
+
+    let pruned = output
+        .row_groups_pruned_dynamic_filter()
+        .expect("`row_groups_pruned_dynamic_filter` metric must be registered");
+    assert!(
+        pruned >= 1,
+        "with WHERE v % 2 = 0 + TopK the runtime pruner must still skip at \
+         least one row group; pruned={pruned}\n{}",
+        output.description(),
+    );
+}

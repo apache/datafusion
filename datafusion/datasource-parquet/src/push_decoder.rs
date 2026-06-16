@@ -243,15 +243,6 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) decoder: Option<ParquetPushDecoder>,
     pub(crate) active_reader: Option<ParquetRecordBatchReader>,
     pub(crate) rg_plan: VecDeque<RgPlanEntry>,
-    /// Stream-level remaining row limit, enforced across decoder rebuilds.
-    ///
-    /// The decoder-local limit installed by [`DecoderBuilderConfig::build`]
-    /// is only safe within a single decoder instance. When a row-group
-    /// boundary triggers a rebuild via [`ParquetPushDecoder::into_builder`],
-    /// the limit budget that has already been consumed must carry over so
-    /// the rebuilt decoder doesn't restart its count from zero — that
-    /// bookkeeping lives here.
-    pub(crate) remaining_limit: Option<usize>,
     pub(crate) reader: Box<dyn AsyncFileReader>,
     /// Per-file projection: the mask installed on every decoder and the
     /// per-batch transform applied by [`Self::project_batch`].
@@ -302,10 +293,6 @@ impl PushDecoderStreamState {
     /// with `unfold`'s ownership across yield points.
     async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
         loop {
-            if self.remaining_limit == Some(0) {
-                return None;
-            }
-
             // Step 1: drain a batch from the active reader if any.
             if let Some(reader) = self.active_reader.as_mut() {
                 match reader.next() {
@@ -328,27 +315,28 @@ impl PushDecoderStreamState {
                 }
             }
 
-            // Step 2: at RG boundary, drop pruned RGs from the head of the
-            // plan. Rebuild the decoder via `into_builder` so it skips the
-            // pruned RGs entirely. Buffered bytes for already-fetched RGs
-            // carry across the rebuild.
+            // Step 2: at RG boundary, scan the entire `rg_plan` and drop
+            // every RG the pruner proves cannot contribute — head, interior,
+            // and tail alike. Evaluating per-RG stats against the cached
+            // `PruningPredicate` is cheap; the expensive part is the
+            // `into_builder` rebuild, so we do at most one rebuild per
+            // boundary regardless of how many RGs were dropped. Buffered
+            // bytes for already-fetched RGs carry across the rebuild.
             if !self.rg_plan.is_empty() {
-                let mut pruned_head = 0usize;
-                while let Some(next) = self.rg_plan.front() {
-                    let pruned = self
-                        .row_group_pruner
-                        .as_mut()
-                        .map(|p| p.should_prune(&[next.rg_index]))
-                        .unwrap_or(false);
-                    if pruned {
-                        pruned_head += 1;
-                        self.rg_plan.pop_front();
-                        self.row_groups_pruned_dynamic.add(1);
-                    } else {
-                        break;
+                let mut pruned_count = 0usize;
+                if let Some(pruner) = self.row_group_pruner.as_mut() {
+                    let mut kept = VecDeque::with_capacity(self.rg_plan.len());
+                    while let Some(entry) = self.rg_plan.pop_front() {
+                        if pruner.should_prune(&[entry.rg_index]) {
+                            pruned_count += 1;
+                            self.row_groups_pruned_dynamic.add(1);
+                        } else {
+                            kept.push_back(entry);
+                        }
                     }
+                    self.rg_plan = kept;
                 }
-                if pruned_head > 0 {
+                if pruned_count > 0 {
                     if self.rg_plan.is_empty() {
                         return None;
                     }

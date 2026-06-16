@@ -22,10 +22,11 @@
 #   RG 0: 0..3,  RG 1: 3..6,  RG 2: 6..9,  RG 3: 9..12,  RG 4: 12..15
 # `ORDER BY v DESC LIMIT 3` fills the TopK heap from the row group with
 # the largest values; the tightened threshold then proves every other
-# row group unreachable. The opener splits decoder runs per row group
-# (because the predicate carries a `DynamicFilterPhysicalExpr`) and the
-# runtime `RowGroupPruner` increments
-# `row_groups_pruned_dynamic_filter`.
+# row group unreachable. At each row-group boundary the runtime
+# `RowGroupPruner` evaluates the current threshold against the next RGs'
+# statistics, drops the ones it proves unwinnable, and rebuilds the
+# decoder via `into_builder().with_row_groups(...)` to skip them. Each
+# drop bumps `row_groups_pruned_dynamic_filter`.
 
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;

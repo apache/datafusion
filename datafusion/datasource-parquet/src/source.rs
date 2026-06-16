@@ -748,6 +748,18 @@ impl FileSource for ParquetSource {
                 // the decoder via `into_builder().with_row_groups(...)` to
                 // skip them. The actual pruning count appears as
                 // `row_groups_pruned_dynamic_filter` in EXPLAIN ANALYZE.
+                // We use `contains_dynamic_filter()` (matches both `Watching`
+                // and `AllComplete`) rather than the stricter `Watching(_)`
+                // check the opener uses to construct the pruner. Reason: the
+                // opener gate is evaluated at file-open time, when a TopK
+                // threshold has not yet been pushed — at that moment a still-
+                // useful pruner needs `Watching`. `fmt_extra`, on the other
+                // hand, is called *also* by `EXPLAIN ANALYZE` after execution
+                // completes, at which point TopK has marked its dynamic
+                // filter complete and `classify` returns `AllComplete`. The
+                // marker is plan-time metadata ("this scan was eligible for
+                // runtime RG pruning"), so it should still show in that
+                // post-run rendering.
                 if let Some(predicate) = self.filter()
                     && DynamicFilterTracking::classify(&predicate)
                         .contains_dynamic_filter()

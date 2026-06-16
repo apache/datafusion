@@ -1452,8 +1452,10 @@ impl RowGroupsPrunedParquetOpen {
         // RG check.
         let row_group_pruner = match (&prepared.predicate, rg_plan.len() > 1) {
             (Some(predicate), true)
-                if DynamicFilterTracking::classify(predicate)
-                    .contains_dynamic_filter() =>
+                if matches!(
+                    DynamicFilterTracking::classify(predicate),
+                    DynamicFilterTracking::Watching(_)
+                ) =>
             {
                 Some(RowGroupPruner::new(
                     Arc::clone(predicate),
@@ -1474,7 +1476,6 @@ impl RowGroupsPrunedParquetOpen {
             decoder: Some(decoder),
             active_reader: None,
             rg_plan,
-            remaining_limit: None,
             reader: prepared.async_file_reader,
             decoder_projection,
             arrow_reader_metrics,
