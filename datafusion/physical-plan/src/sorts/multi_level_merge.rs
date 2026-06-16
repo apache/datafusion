@@ -490,6 +490,13 @@ impl MultiLevelMergeBuilder {
     /// next attempt can seat both streams. One stream's worth of memory is reserved
     /// for the duration and freed afterwards. Makes the merge resilient to skew.
     async fn split_spill_file_in_half(&mut self, index: usize) -> Result<()> {
+        log::debug!(
+            "2 spilled streams could not be loaded into memory for merge \
+        (requires 2x of the largest batch from both), re-spilling the larger of the two with half \
+        the batch size to reduce memory needs for the next merge attempt, \
+        setting batch_size to half to proceed with merge"
+        );
+
         // Extract the target in O(1) instead of `remove(index)`, which would shift
         // every following spill file. Swap it to the back and pop it; the matching
         // swap after re-spilling restores the original order, so the vec ends up
@@ -726,7 +733,7 @@ mod tests {
         )
     }
 
-    /// Proves the fix: two sorted runs whose largest batches are too big to both
+    /// Two sorted runs whose largest batches are too big to both
     /// be seated in the merge budget at once are re-spilled (halved) until they
     /// fit, and the merge then completes with fully sorted, complete output.
     /// Before the fix this returned `ResourcesExhausted` instead of merging.
