@@ -25,6 +25,7 @@ use std::sync::Arc;
 pub mod abs;
 pub mod bounds;
 pub mod ceil;
+mod common;
 pub mod cot;
 mod decimal;
 pub mod factorial;
