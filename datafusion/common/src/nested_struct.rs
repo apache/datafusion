@@ -1354,7 +1354,7 @@ mod tests {
         assert!(b_col.iter().all(|v| v.is_none()));
     }
 
-    fn create_fsl_test_fields(
+    fn create_fixed_size_list_test_fields(
         source_struct_fields: Vec<(&str, DataType)>,
         target_struct_fields: Vec<(&str, DataType)>,
     ) -> (FieldRef, FieldRef) {
@@ -1386,7 +1386,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
         )]);
 
-        let (source_field, target_field) = create_fsl_test_fields(
+        let (source_field, target_field) = create_fixed_size_list_test_fields(
             vec![("a", DataType::Int32)],
             vec![("a", DataType::Int64), ("b", DataType::Utf8)],
         );
@@ -1421,7 +1421,7 @@ mod tests {
 
     #[test]
     fn test_validate_fixed_size_list_struct_compatibility() {
-        let (source_field, target_field) = create_fsl_test_fields(
+        let (source_field, target_field) = create_fixed_size_list_test_fields(
             vec![("a", DataType::Int32)],
             vec![("a", DataType::Int64), ("b", DataType::Utf8)],
         );
@@ -1434,7 +1434,7 @@ mod tests {
 
     #[test]
     fn test_validate_fixed_size_list_struct_missing_non_nullable_field_rejected() {
-        let (source_field, _) = create_fsl_test_fields(
+        let (source_field, _) = create_fixed_size_list_test_fields(
             vec![("a", DataType::Int32)],
             vec![("a", DataType::Int64), ("b", DataType::Utf8)],
         );
@@ -1461,7 +1461,7 @@ mod tests {
 
     #[test]
     fn test_validate_fixed_size_list_struct_size_mismatch_rejected() {
-        let (source_field, target_field) = create_fsl_test_fields(
+        let (source_field, target_field) = create_fixed_size_list_test_fields(
             vec![("a", DataType::Int32)],
             vec![("a", DataType::Int64), ("b", DataType::Utf8)],
         );
@@ -1476,7 +1476,7 @@ mod tests {
 
     #[test]
     fn test_cast_fixed_size_list_struct_all_null() {
-        let (source_field, target_field) = create_fsl_test_fields(
+        let (source_field, target_field) = create_fixed_size_list_test_fields(
             vec![("a", DataType::Int32)],
             vec![("a", DataType::Int64), ("b", DataType::Utf8)],
         );
