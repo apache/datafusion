@@ -360,6 +360,7 @@ impl FileOpener for CsvOpener {
 
         let store = Arc::clone(&self.object_store);
         let terminator = self.config.terminator();
+
         let baseline_metrics =
             BaselineMetrics::new(&self.config.metrics, self.partition_index);
 
