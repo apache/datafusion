@@ -48,6 +48,31 @@ WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/se
 WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/second.csv 50
 WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/second.csv 60
 
+query I
+SELECT column1
+FROM csv_table
+WHERE input_file_name() LIKE '%/first.csv'
+ORDER BY column1;
+----
+10
+20
+30
+
+query TT
+EXPLAIN SELECT column1
+FROM csv_table
+WHERE input_file_name() LIKE '%/first.csv';
+----
+logical_plan
+01)Projection: csv_table.column1
+02)--Filter: __datafusion_extracted_1 LIKE Utf8("%/first.csv")
+03)----Projection: input_file_name() AS __datafusion_extracted_1, csv_table.column1
+04)------TableScan: csv_table projection=[column1]
+physical_plan
+01)FilterExec: __datafusion_extracted_1@0 LIKE %/first.csv, projection=[column1@1]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/first.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/second.csv]]}, projection=[input_file_name() as __datafusion_extracted_1, column1], file_type=csv, has_header=true
+
 
 query error Execution error: input_file_name\(\) is source dependent and cannot be evaluated directly
 SELECT input_file_name() FROM (VALUES (1)) v(x);
