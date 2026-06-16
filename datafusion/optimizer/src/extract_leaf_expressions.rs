@@ -830,9 +830,6 @@ fn split_and_push_projection(
     let mut needs_recovery = false;
     let mut has_new_extractions = false;
     let mut proj_exprs_captured: usize = 0;
-    // Track standalone column expressions (Case B) to detect column refs
-    // from extracted aliases (Case A) that aren't also standalone expressions.
-    let mut standalone_columns: IndexSet<Column> = IndexSet::new();
 
     for (expr, (qualifier, field)) in proj.expr.iter().zip(original_schema.iter()) {
         if let Expr::Alias(alias) = expr
@@ -854,7 +851,6 @@ fn split_and_push_projection(
         } else if let Expr::Column(col) = expr {
             // Plain column pass-through — track it in the extractor
             extractors[0].columns_needed.insert(col.clone());
-            standalone_columns.insert(col.clone());
             recovery_exprs.push(expr.clone());
             proj_exprs_captured += 1;
         } else {
@@ -911,17 +907,6 @@ fn split_and_push_projection(
     // If no extractions found, nothing to do
     if extraction_pairs.is_empty() {
         return Ok(None);
-    }
-
-    // If columns_needed has entries that aren't standalone projection columns
-    // (i.e., they came from column refs inside extracted aliases), a merge
-    // into an inner projection will widen the schema with those extra columns,
-    // requiring a recovery projection to restore the original schema.
-    if columns_needed
-        .iter()
-        .any(|c| !standalone_columns.contains(c))
-    {
-        needs_recovery = true;
     }
 
     // ── Phase 2: Push down ──────────────────────────────────────────────
