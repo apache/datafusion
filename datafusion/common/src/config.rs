@@ -677,8 +677,7 @@ config_namespace! {
         pub coalesce_batches: bool, default = true
 
         /// Should DataFusion collect statistics when first creating a table.
-        /// Has no effect after the table is created. Applies to the default
-        /// `ListingTableProvider` in DataFusion. Defaults to true.
+        /// Has no effect after the table is created. Defaults to true.
         pub collect_statistics: bool, default = true
 
         /// Number of partitions for query execution. Increasing partitions can increase
@@ -722,7 +721,7 @@ config_namespace! {
         /// will be removed after the migration is finished.
         ///
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
-        pub enable_migration_aggregate: bool, default = false
+        pub enable_migration_aggregate: bool, default = true
 
         /// Sets the compression codec used when spilling data to disk.
         ///

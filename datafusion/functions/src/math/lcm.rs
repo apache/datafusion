@@ -15,24 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use arrow::array::ArrayRef;
+use arrow::datatypes::{
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Int64Type,
+};
 
-use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
-use arrow::compute::try_binary;
-use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Int64;
-use arrow::datatypes::Int64Type;
-
-use arrow::error::ArrowError;
-use datafusion_common::{Result, exec_err};
+use crate::math::common::{lcm_signed, lcm_signed_int};
+use crate::utils::{calculate_binary_decimal_math_cast, calculate_binary_math};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+use datafusion_expr_common::type_coercion::binary::decimal_coercion;
 use datafusion_macros::user_doc;
-
-use super::gcd::unsigned_gcd;
-use crate::utils::make_scalar_function;
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -62,9 +59,8 @@ impl Default for LcmFunc {
 
 impl LcmFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(2, vec![Int64], Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -78,49 +74,100 @@ impl ScalarUDFImpl for LcmFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Int64)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].clone())
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [arg1, arg2] = take_function_args(self.name(), arg_types)?;
+
+        let coerced_type = match (arg1, arg2) {
+            (DataType::Null, _) | (_, DataType::Null) => Ok(DataType::Int64),
+            (lhs, rhs) if lhs.is_integer() && rhs.is_integer() => Ok(DataType::Int64),
+            (lhs, rhs) if lhs.is_decimal() || rhs.is_decimal() => {
+                decimal_coercion(lhs, rhs).map(Ok).unwrap_or_else(|| {
+                    plan_err!(
+                        "Unsupported argument types {lhs:?} and {rhs:?} for function {}",
+                        self.name()
+                    )
+                })
+            }
+            (lhs, rhs) => {
+                plan_err!(
+                    "Unsupported argument types {lhs:?} and {rhs:?} for function {}",
+                    self.name()
+                )
+            }
+        }?;
+        Ok(vec![coerced_type.clone(), coerced_type])
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(lcm, vec![])(&args.args)
+        let left = &args.args[0].to_array(args.number_rows)?;
+        let right = &args.args[1];
+
+        let arr: ArrayRef = match (left.data_type(), right.data_type()) {
+            (DataType::Int64, _) => calculate_binary_math::<
+                Int64Type,
+                Int64Type,
+                Int64Type,
+                _,
+            >(&left, right, lcm_signed_int)?,
+            (
+                lhs @ DataType::Decimal32(precision, scale),
+                rhs @ DataType::Decimal32(_, _),
+            ) if *lhs == rhs => {
+                calculate_binary_decimal_math_cast::<
+                    Decimal32Type,
+                    Decimal32Type,
+                    Decimal32Type,
+                    _,
+                >(&left, right, lcm_signed, *precision, *scale, lhs)?
+            }
+            (
+                lhs @ DataType::Decimal64(precision, scale),
+                rhs @ DataType::Decimal64(_, _),
+            ) if *lhs == rhs => {
+                calculate_binary_decimal_math_cast::<
+                    Decimal64Type,
+                    Decimal64Type,
+                    Decimal64Type,
+                    _,
+                >(&left, right, lcm_signed, *precision, *scale, lhs)?
+            }
+            (
+                lhs @ DataType::Decimal128(precision, scale),
+                rhs @ DataType::Decimal128(_, _),
+            ) if *lhs == rhs => {
+                calculate_binary_decimal_math_cast::<
+                    Decimal128Type,
+                    Decimal128Type,
+                    Decimal128Type,
+                    _,
+                >(&left, right, lcm_signed, *precision, *scale, lhs)?
+            }
+            (
+                lhs @ DataType::Decimal256(precision, scale),
+                rhs @ DataType::Decimal256(_, _),
+            ) if *lhs == rhs => {
+                calculate_binary_decimal_math_cast::<
+                    Decimal256Type,
+                    Decimal256Type,
+                    Decimal256Type,
+                    _,
+                >(&left, right, lcm_signed, *precision, *scale, lhs)?
+            }
+            (lhs, rhs) => {
+                return exec_err!(
+                    "Unsupported data types {lhs:?} and {rhs:?} for function {}",
+                    self.name()
+                );
+            }
+        };
+        Ok(ColumnarValue::Array(arr))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-/// Lcm SQL function
-fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let compute_lcm = |x: i64, y: i64| -> Result<i64, ArrowError> {
-        if x == 0 || y == 0 {
-            return Ok(0);
-        }
-
-        // lcm(x, y) = |x| * |y| / gcd(|x|, |y|)
-        let a = x.unsigned_abs();
-        let b = y.unsigned_abs();
-        let gcd = unsigned_gcd(a, b);
-        // gcd is not zero since both a and b are not zero, so the division is safe.
-        (a / gcd)
-            .checked_mul(b)
-            .and_then(|v| i64::try_from(v).ok())
-            .ok_or_else(|| {
-                ArrowError::ComputeError(format!(
-                    "Signed integer overflow in LCM({x}, {y})"
-                ))
-            })
-    };
-
-    match args[0].data_type() {
-        Int64 => {
-            let arg1 = args[0].as_primitive::<Int64Type>();
-            let arg2 = args[1].as_primitive::<Int64Type>();
-
-            let result: PrimitiveArray<Int64Type> = try_binary(arg1, arg2, compute_lcm)?;
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => exec_err!("Unsupported data type {other:?} for function lcm"),
     }
 }
