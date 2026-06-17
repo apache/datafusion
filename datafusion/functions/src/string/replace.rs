@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait, StringArrayType};
+use arrow::array::{ArrayRef, OffsetSizeTrait, StringArrayType};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 
@@ -265,6 +265,7 @@ fn replace_into_writer<W: StringWriter>(w: &mut W, string: &str, from: &str, to:
 mod tests {
     use super::*;
     use crate::utils::test::test_function;
+    use arrow::array::Array;
     use arrow::array::LargeStringArray;
     use arrow::array::StringArray;
     use arrow::datatypes::DataType::{LargeUtf8, Utf8};
