@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait, StringArrayType};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 
@@ -162,40 +162,12 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_string_view_array(&args[1])?;
     let to_array = as_string_view_array(&args[2])?;
 
-    let len = string_array.len();
-    let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(len, 0);
-    let nulls = NullBuffer::union_many([
-        string_array.nulls(),
-        from_array.nulls(),
-        to_array.nulls(),
-    ]);
-
-    // Hoist the nulls.is_some() check out of the loop. LLVM does not always
-    // unswitch this loop on its own (the Utf8View body is large enough to
-    // exceed its cost-benefit threshold).
-    if let Some(nulls_ref) = nulls.as_ref() {
-        for i in 0..len {
-            if nulls_ref.is_null(i) {
-                builder.try_append_placeholder()?;
-                continue;
-            }
-            // SAFETY: union of input nulls is non-null at i, so each input is too.
-            let string = unsafe { string_array.value_unchecked(i) };
-            let from = unsafe { from_array.value_unchecked(i) };
-            let to = unsafe { to_array.value_unchecked(i) };
-            apply_replace(&mut builder, string, from, to)?;
-        }
-    } else {
-        for i in 0..len {
-            // SAFETY: i < len, and no input has a null buffer.
-            let string = unsafe { string_array.value_unchecked(i) };
-            let from = unsafe { from_array.value_unchecked(i) };
-            let to = unsafe { to_array.value_unchecked(i) };
-            apply_replace(&mut builder, string, from, to)?;
-        }
-    }
-
-    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
+    replace_arrays(
+        string_array,
+        from_array,
+        to_array,
+        GenericStringArrayBuilder::<i32>::with_capacity(string_array.len(), 0),
+    )
 }
 
 /// Replaces all occurrences in string of substring from with substring to.
@@ -205,17 +177,33 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_generic_string_array::<T>(&args[1])?;
     let to_array = as_generic_string_array::<T>(&args[2])?;
 
+    replace_arrays(
+        string_array,
+        from_array,
+        to_array,
+        GenericStringArrayBuilder::<T>::with_capacity(string_array.len(), 0),
+    )
+}
+
+fn replace_arrays<'a, S, O>(
+    string_array: S,
+    from_array: S,
+    to_array: S,
+    mut builder: GenericStringArrayBuilder<O>,
+) -> Result<ArrayRef>
+where
+    S: StringArrayType<'a> + Copy,
+    O: OffsetSizeTrait,
+{
     let len = string_array.len();
-    let mut builder = GenericStringArrayBuilder::<T>::with_capacity(len, 0);
     let nulls = NullBuffer::union_many([
         string_array.nulls(),
         from_array.nulls(),
         to_array.nulls(),
     ]);
 
-    // Hoist the nulls.is_some() check out of the loop. LLVM unswitches this
-    // automatically today, but kept explicit so the no-nulls fast path is not
-    // contingent on the optimizer's cost heuristic.
+    // Hoist the nulls.is_some() check out of the loop so the no-nulls fast
+    // path does not depend on LLVM loop-unswitching heuristics.
     if let Some(nulls_ref) = nulls.as_ref() {
         for i in 0..len {
             if nulls_ref.is_null(i) {
@@ -257,18 +245,16 @@ fn apply_replace<O: OffsetSizeTrait>(
         && to_byte.is_ascii()
     {
         // SAFETY: see the contract above.
-        unsafe {
+        return unsafe {
             builder.try_append_byte_map(string.as_bytes(), |b| {
                 if b == from_byte { to_byte } else { b }
-            })?;
-        }
-        return Ok(());
+            })
+        };
     }
 
     if from.is_empty() {
         // PostgreSQL returns the input unchanged when `from` is empty (#22253).
-        builder.try_append_value(string)?;
-        return Ok(());
+        return builder.try_append_value(string);
     }
 
     builder.try_append_with(|w| replace_into_writer(w, string, from, to))
@@ -288,7 +274,6 @@ fn replace_into_writer<W: StringWriter>(w: &mut W, string: &str, from: &str, to:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::strings::GenericStringArrayBuilder;
     use crate::utils::test::test_function;
     use arrow::array::LargeStringArray;
     use arrow::array::StringArray;
@@ -352,15 +337,6 @@ mod tests {
             LargeStringArray
         );
 
-        Ok(())
-    }
-
-    #[test]
-    fn apply_replace_returns_result() -> Result<()> {
-        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(1, 0);
-        apply_replace(&mut builder, "aabb", "bb", "ccc")?;
-        let array = builder.finish(None)?;
-        assert_eq!(array.value(0), "aaccc");
         Ok(())
     }
 }

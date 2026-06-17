@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use datafusion_common::{Result, exec_datafusion_err, internal_err};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err, internal_err};
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, ByteView,
@@ -453,12 +453,16 @@ pub(crate) struct GenericStringArrayBuilder<O: OffsetSizeTrait> {
     _phantom: PhantomData<O>,
 }
 
+fn offset_overflow_error<O: OffsetSizeTrait>() -> DataFusionError {
+    exec_datafusion_err!(
+        "byte array offset overflow: output size exceeds {} bytes",
+        O::MAX_OFFSET
+    )
+}
+
 fn try_offset<O: OffsetSizeTrait>(len: usize) -> Result<O> {
     if len > O::MAX_OFFSET {
-        return Err(exec_datafusion_err!(
-            "byte array offset overflow: output size exceeds {} bytes",
-            O::MAX_OFFSET
-        ));
+        return Err(offset_overflow_error::<O>());
     }
     Ok(O::usize_as(len))
 }
@@ -496,12 +500,7 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
             .value_buffer
             .len()
             .checked_add(additional_len)
-            .ok_or_else(|| {
-                exec_datafusion_err!(
-                    "byte array offset overflow: output size exceeds {} bytes",
-                    O::MAX_OFFSET
-                )
-            })?;
+            .ok_or_else(offset_overflow_error::<O>)?;
         let next_offset = try_offset::<O>(next_len)?;
         append(&mut self.value_buffer);
         debug_assert_eq!(self.value_buffer.len(), next_len);
