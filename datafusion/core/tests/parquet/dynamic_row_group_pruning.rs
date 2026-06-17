@@ -207,6 +207,79 @@ async fn dynamic_rg_pruning_metric_quiet_without_topk() {
     );
 }
 
+/// Regression for "into_builder called mid-row-group" — surfaced by
+/// ClickBench Q24 / Q26 (`SELECT … WHERE x <> '' ORDER BY ts LIMIT 10`).
+///
+/// The push-decoder state machine re-enters Step 2 on every iteration of
+/// the `transition` loop, including iterations where Step 3 returned
+/// `NeedsData` and pushed byte ranges but has not yet produced a reader
+/// for the upcoming row group. At those moments the decoder is in
+/// `ReadingRowGroup` state but `is_at_row_group_boundary()` is `false`,
+/// and the runtime row-group pruner's `into_builder()` rebuild path
+/// errored out with:
+///
+/// ```text
+/// Parquet error: into_builder called mid-row-group;
+/// check is_at_row_group_boundary() first
+/// ```
+///
+/// The fix in `push_decoder.rs::Step 2` gates the prune-and-rebuild on
+/// `is_at_row_group_boundary()`. This test reproduces the trigger: a
+/// many-RG file (so the pruner has work to do) plus an `ORDER BY` query
+/// whose TopK threshold tightens enough to make the pruner want to
+/// rebuild more than once during the scan. Before the fix the query
+/// returned an `Execution` / `Parquet` error; after the fix it returns
+/// the expected ten rows and the pruner fires.
+#[tokio::test]
+async fn dynamic_rg_pruner_does_not_call_into_builder_mid_row_group() {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+    // 20 disjoint row groups of 50 values each. With 20 RGs the pruner
+    // gets multiple boundaries to attempt rebuilds, so any path that
+    // calls `into_builder` outside a boundary is hit reliably.
+    let batches: Vec<RecordBatch> = (0..20i64)
+        .map(|rg| {
+            let base = rg * 50;
+            let values: Vec<i64> = (base..base + 50).collect();
+            let col: ArrayRef = Arc::new(Int64Array::from(values));
+            RecordBatch::try_new(Arc::clone(&schema), vec![col]).unwrap()
+        })
+        .collect();
+
+    let mut ctx = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroup(50),
+        Arc::clone(&schema),
+        batches,
+    )
+    .await;
+
+    let output = ctx.query("SELECT v FROM t ORDER BY v ASC LIMIT 10").await;
+
+    // Correctness: smallest ten values are 0..=9.
+    assert_eq!(output.result_rows, 10, "query must return LIMIT rows");
+    let formatted = output.pretty_results();
+    for v in 0..=9i64 {
+        assert!(
+            formatted.contains(&format!("| {v} ")),
+            "output must contain smallest value {v}; got:\n{formatted}",
+        );
+    }
+
+    // Behavior: with 20 disjoint RGs and a tight TopK, the dynamic
+    // pruner must skip a meaningful share of them. We don't pin the
+    // exact count — what matters is that the scan *completed* without
+    // the mid-row-group rebuild error.
+    let pruned = output
+        .row_groups_pruned_dynamic_filter()
+        .expect("`row_groups_pruned_dynamic_filter` metric must be registered");
+    assert!(
+        pruned >= 1,
+        "dynamic RG pruner must skip at least one row group; \
+         pruned={pruned}\n{}",
+        output.description(),
+    );
+}
+
 /// Build five sorted `RecordBatch`es with 1000 values each so that, when
 /// the writer is configured with `row_per_group=1000` and
 /// `data_page_row_count_limit=100`, every row group ends up with **ten

@@ -315,14 +315,27 @@ impl PushDecoderStreamState {
                 }
             }
 
-            // Step 2: at RG boundary, scan the entire `rg_plan` and drop
-            // every RG the pruner proves cannot contribute — head, interior,
-            // and tail alike. Evaluating per-RG stats against the cached
-            // `PruningPredicate` is cheap; the expensive part is the
-            // `into_builder` rebuild, so we do at most one rebuild per
-            // boundary regardless of how many RGs were dropped. Buffered
-            // bytes for already-fetched RGs carry across the rebuild.
-            if !self.rg_plan.is_empty() {
+            // Step 2: when the decoder is sitting on a row-group boundary,
+            // scan the entire `rg_plan` and drop every RG the pruner proves
+            // cannot contribute — head, interior, and tail alike. Evaluating
+            // per-RG stats against the cached `PruningPredicate` is cheap;
+            // the expensive part is the `into_builder` rebuild, so we do at
+            // most one rebuild per boundary regardless of how many RGs were
+            // dropped. Buffered bytes for already-fetched RGs carry across
+            // the rebuild.
+            //
+            // `into_builder` errors out mid-row-group, so we gate the prune
+            // pass on `is_at_row_group_boundary()`. When the decoder is
+            // mid-RG (e.g. byte ranges have been pushed but no reader has
+            // been handed back yet), step 3 drives it forward and we get
+            // another chance at the next boundary — the pruner is stateful
+            // and idempotent, so deferring loses nothing.
+            let at_boundary = self
+                .decoder
+                .as_ref()
+                .expect("decoder present")
+                .is_at_row_group_boundary();
+            if at_boundary && !self.rg_plan.is_empty() {
                 let mut pruned_count = 0usize;
                 if let Some(pruner) = self.row_group_pruner.as_mut() {
                     let mut kept = VecDeque::with_capacity(self.rg_plan.len());
