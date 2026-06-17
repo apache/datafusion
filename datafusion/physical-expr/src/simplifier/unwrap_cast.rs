@@ -231,6 +231,29 @@ mod tests {
         ])
     }
 
+    fn timestamp_schema(unit: TimeUnit) -> Schema {
+        Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(unit, None),
+            false,
+        )])
+    }
+
+    fn timestamp_cast_comparison(
+        schema: &Schema,
+        target_unit: TimeUnit,
+        op: Operator,
+        literal: ScalarValue,
+    ) -> Arc<dyn PhysicalExpr> {
+        let column_expr = col("ts", schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(
+            column_expr,
+            DataType::Timestamp(target_unit, None),
+            None,
+        ));
+        Arc::new(BinaryExpr::new(cast_expr, op, lit(literal)))
+    }
+
     #[test]
     fn test_unwrap_cast_in_binary_comparison() {
         let schema = test_schema();
@@ -613,21 +636,13 @@ mod tests {
 
     #[test]
     fn test_timestamp_precision_narrowing_range_preimage_gt() {
-        let schema = Schema::new(vec![Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
-        )]);
-
-        let column_expr = col("ts", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(
-            column_expr,
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            None,
-        ));
-        let literal_expr = lit(ScalarValue::TimestampMillisecond(Some(1000), None));
-        let binary_expr =
-            Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
+        let schema = timestamp_schema(TimeUnit::Nanosecond);
+        let binary_expr = timestamp_cast_comparison(
+            &schema,
+            TimeUnit::Millisecond,
+            Operator::Gt,
+            ScalarValue::TimestampMillisecond(Some(1000), None),
+        );
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
@@ -644,21 +659,13 @@ mod tests {
 
     #[test]
     fn test_timestamp_precision_narrowing_range_preimage_eq() {
-        let schema = Schema::new(vec![Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
-        )]);
-
-        let column_expr = col("ts", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(
-            column_expr,
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            None,
-        ));
-        let literal_expr = lit(ScalarValue::TimestampMillisecond(Some(-1), None));
-        let binary_expr =
-            Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal_expr));
+        let schema = timestamp_schema(TimeUnit::Nanosecond);
+        let binary_expr = timestamp_cast_comparison(
+            &schema,
+            TimeUnit::Millisecond,
+            Operator::Eq,
+            ScalarValue::TimestampMillisecond(Some(-1), None),
+        );
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
@@ -685,21 +692,13 @@ mod tests {
 
     #[test]
     fn test_timestamp_widening_exactness() {
-        let schema = Schema::new(vec![Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            false,
-        )]);
-
-        let column_expr = col("ts", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(
-            column_expr,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            None,
-        ));
-        let literal_expr = lit(ScalarValue::TimestampNanosecond(Some(123_000_000), None));
-        let binary_expr =
-            Arc::new(BinaryExpr::new(cast_expr, Operator::GtEq, literal_expr));
+        let schema = timestamp_schema(TimeUnit::Millisecond);
+        let binary_expr = timestamp_cast_comparison(
+            &schema,
+            TimeUnit::Nanosecond,
+            Operator::GtEq,
+            ScalarValue::TimestampNanosecond(Some(123_000_000), None),
+        );
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
@@ -713,15 +712,12 @@ mod tests {
             &ScalarValue::TimestampMillisecond(Some(123), None)
         );
 
-        let column_expr = col("ts", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(
-            column_expr,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            None,
-        ));
-        let literal_expr = lit(ScalarValue::TimestampNanosecond(Some(123_456_789), None));
-        let binary_expr =
-            Arc::new(BinaryExpr::new(cast_expr, Operator::GtEq, literal_expr));
+        let binary_expr = timestamp_cast_comparison(
+            &schema,
+            TimeUnit::Nanosecond,
+            Operator::GtEq,
+            ScalarValue::TimestampNanosecond(Some(123_456_789), None),
+        );
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
         assert!(!result.transformed);
@@ -729,24 +725,13 @@ mod tests {
 
     #[test]
     fn test_timestamp_precision_narrowing_range_preimage_is_distinct_from() {
-        let schema = Schema::new(vec![Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
-        )]);
-
-        let column_expr = col("ts", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(
-            column_expr,
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            None,
-        ));
-        let literal_expr = lit(ScalarValue::TimestampMillisecond(Some(1000), None));
-        let binary_expr = Arc::new(BinaryExpr::new(
-            cast_expr,
+        let schema = timestamp_schema(TimeUnit::Nanosecond);
+        let binary_expr = timestamp_cast_comparison(
+            &schema,
+            TimeUnit::Millisecond,
             Operator::IsDistinctFrom,
-            literal_expr,
-        ));
+            ScalarValue::TimestampMillisecond(Some(1000), None),
+        );
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 
@@ -789,24 +774,13 @@ mod tests {
 
     #[test]
     fn test_timestamp_precision_narrowing_range_preimage_is_not_distinct_from() {
-        let schema = Schema::new(vec![Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
-        )]);
-
-        let column_expr = col("ts", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(
-            column_expr,
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            None,
-        ));
-        let literal_expr = lit(ScalarValue::TimestampMillisecond(Some(1000), None));
-        let binary_expr = Arc::new(BinaryExpr::new(
-            cast_expr,
+        let schema = timestamp_schema(TimeUnit::Nanosecond);
+        let binary_expr = timestamp_cast_comparison(
+            &schema,
+            TimeUnit::Millisecond,
             Operator::IsNotDistinctFrom,
-            literal_expr,
-        ));
+            ScalarValue::TimestampMillisecond(Some(1000), None),
+        );
 
         let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
 

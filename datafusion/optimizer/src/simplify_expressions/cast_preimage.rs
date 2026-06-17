@@ -270,67 +270,79 @@ mod tests {
     fn test_cast_preimage_timestamp_precision_narrowing_inequality() {
         let schema = expr_test_schema();
 
-        let expr =
-            cast(col("ts_nano"), timestamp_millis_type()).gt(lit_timestamp_millis(1000));
-        let expected = col("ts_nano").gt_eq(lit_timestamp_nano(1_001_000_000));
-        assert_eq!(optimize_test(expr, &schema), expected);
-
-        let expr =
-            cast(col("ts_nano"), timestamp_millis_type()).lt_eq(lit_timestamp_millis(-1));
-        let expected = col("ts_nano").lt(lit_timestamp_nano(-999_999));
-        assert_eq!(optimize_test(expr, &schema), expected);
-
-        let expr =
-            cast(col("ts_nano"), timestamp_millis_type()).lt(lit_timestamp_millis(0));
-        let expected = col("ts_nano").lt(lit_timestamp_nano(-999_999));
-        assert_eq!(optimize_test(expr, &schema), expected);
-
-        let expr =
-            cast(col("ts_nano"), timestamp_millis_type()).lt_eq(lit_timestamp_millis(0));
-        let expected = col("ts_nano").lt(lit_timestamp_nano(1_000_000));
-        assert_eq!(optimize_test(expr, &schema), expected);
-
-        let expr =
-            cast(col("ts_nano"), timestamp_millis_type()).gt(lit_timestamp_millis(0));
-        let expected = col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000));
-        assert_eq!(optimize_test(expr, &schema), expected);
-
-        let expr =
-            cast(col("ts_nano"), timestamp_millis_type()).gt_eq(lit_timestamp_millis(0));
-        let expected = col("ts_nano").gt_eq(lit_timestamp_nano(-999_999));
-        assert_eq!(optimize_test(expr, &schema), expected);
-
-        let expr =
-            cast(col("ts_nano"), timestamp_millis_type()).not_eq(lit_timestamp_millis(0));
-        let expected = col("ts_nano")
-            .lt(lit_timestamp_nano(-999_999))
-            .or(col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000)));
-        assert_eq!(optimize_test(expr, &schema), expected);
+        for (op, lit_ms, expected) in vec![
+            (
+                Operator::Gt,
+                1000,
+                col("ts_nano").gt_eq(lit_timestamp_nano(1_001_000_000)),
+            ),
+            (
+                Operator::LtEq,
+                -1,
+                col("ts_nano").lt(lit_timestamp_nano(-999_999)),
+            ),
+            (
+                Operator::Lt,
+                0,
+                col("ts_nano").lt(lit_timestamp_nano(-999_999)),
+            ),
+            (
+                Operator::LtEq,
+                0,
+                col("ts_nano").lt(lit_timestamp_nano(1_000_000)),
+            ),
+            (
+                Operator::Gt,
+                0,
+                col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000)),
+            ),
+            (
+                Operator::GtEq,
+                0,
+                col("ts_nano").gt_eq(lit_timestamp_nano(-999_999)),
+            ),
+            (
+                Operator::NotEq,
+                0,
+                col("ts_nano")
+                    .lt(lit_timestamp_nano(-999_999))
+                    .or(col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000))),
+            ),
+        ] {
+            let expr = binary_expr(
+                cast(col("ts_nano"), timestamp_millis_type()),
+                op,
+                lit_timestamp_millis(lit_ms),
+            );
+            assert_eq!(optimize_test(expr, &schema), expected);
+        }
     }
 
     #[test]
     fn test_cast_preimage_timestamp_precision_narrowing_distinctness() {
         let schema = expr_test_schema();
 
-        let expr = binary_expr(
-            cast(col("ts_nano"), timestamp_millis_type()),
-            Operator::IsNotDistinctFrom,
-            lit_timestamp_millis(0),
-        );
-        let expected = col("ts_nano")
-            .gt_eq(lit_timestamp_nano(-999_999))
-            .and(col("ts_nano").lt(lit_timestamp_nano(1_000_000)));
-        assert_eq!(optimize_test(expr, &schema), expected);
-
-        let expr = binary_expr(
-            cast(col("ts_nano"), timestamp_millis_type()),
-            Operator::IsDistinctFrom,
-            lit_timestamp_millis(0),
-        );
-        let expected = col("ts_nano")
-            .lt(lit_timestamp_nano(-999_999))
-            .or(col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000)));
-        assert_eq!(optimize_test(expr, &schema), expected);
+        for (op, expected) in vec![
+            (
+                Operator::IsNotDistinctFrom,
+                col("ts_nano")
+                    .gt_eq(lit_timestamp_nano(-999_999))
+                    .and(col("ts_nano").lt(lit_timestamp_nano(1_000_000))),
+            ),
+            (
+                Operator::IsDistinctFrom,
+                col("ts_nano")
+                    .lt(lit_timestamp_nano(-999_999))
+                    .or(col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000))),
+            ),
+        ] {
+            let expr = binary_expr(
+                cast(col("ts_nano"), timestamp_millis_type()),
+                op,
+                lit_timestamp_millis(0),
+            );
+            assert_eq!(optimize_test(expr, &schema), expected);
+        }
     }
 
     #[test]
@@ -360,35 +372,33 @@ mod tests {
     fn test_cast_preimage_timestamp_literal_left_range() {
         let schema = expr_test_schema();
 
-        // lit_timestamp_millis(1000) < cast(col("ts_nano"), timestamp_millis_type())
-        // should swap and rewrite to ts_nano >= 1_001_000_000ns
-        let expr =
-            lit_timestamp_millis(1000).lt(cast(col("ts_nano"), timestamp_millis_type()));
-        let expected = col("ts_nano").gt_eq(lit_timestamp_nano(1_001_000_000));
-        assert_eq!(optimize_test(expr, &schema), expected);
-
-        // lit_timestamp_millis(1000) <= cast(col("ts_nano"), timestamp_millis_type())
-        // should swap and rewrite to ts_nano >= 1_000_000_000ns
-        let expr = lit_timestamp_millis(1000)
-            .lt_eq(cast(col("ts_nano"), timestamp_millis_type()));
-        let expected = col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000_000));
-        assert_eq!(optimize_test(expr, &schema), expected);
-
-        // lit_timestamp_millis(1000) > cast(col("ts_nano"), timestamp_millis_type())
-        // should swap and rewrite to ts_nano < 1_000_000_000ns
-        let expr =
-            lit_timestamp_millis(1000).gt(cast(col("ts_nano"), timestamp_millis_type()));
-        let expected = col("ts_nano").lt(lit_timestamp_nano(1_000_000_000));
-        assert_eq!(optimize_test(expr, &schema), expected);
-
-        // lit_timestamp_millis(1000) = cast(col("ts_nano"), timestamp_millis_type())
-        // should swap and rewrite to range preimage
-        let expr =
-            lit_timestamp_millis(1000).eq(cast(col("ts_nano"), timestamp_millis_type()));
-        let expected = col("ts_nano")
-            .gt_eq(lit_timestamp_nano(1_000_000_000))
-            .and(col("ts_nano").lt(lit_timestamp_nano(1_001_000_000)));
-        assert_eq!(optimize_test(expr, &schema), expected);
+        for (op, expected) in vec![
+            (
+                Operator::Lt,
+                col("ts_nano").gt_eq(lit_timestamp_nano(1_001_000_000)),
+            ),
+            (
+                Operator::LtEq,
+                col("ts_nano").gt_eq(lit_timestamp_nano(1_000_000_000)),
+            ),
+            (
+                Operator::Gt,
+                col("ts_nano").lt(lit_timestamp_nano(1_000_000_000)),
+            ),
+            (
+                Operator::Eq,
+                col("ts_nano")
+                    .gt_eq(lit_timestamp_nano(1_000_000_000))
+                    .and(col("ts_nano").lt(lit_timestamp_nano(1_001_000_000))),
+            ),
+        ] {
+            let expr = binary_expr(
+                lit_timestamp_millis(1000),
+                op,
+                cast(col("ts_nano"), timestamp_millis_type()),
+            );
+            assert_eq!(optimize_test(expr, &schema), expected);
+        }
     }
 
     #[test]
