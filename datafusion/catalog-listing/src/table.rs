@@ -34,8 +34,7 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
-use datafusion_execution::cache::cache_manager::FileStatisticsCache;
-use datafusion_execution::cache::cache_manager::TableScopedPath;
+use datafusion_execution::cache::cache_manager::{FileStatisticsCache, TableScopedPath};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
