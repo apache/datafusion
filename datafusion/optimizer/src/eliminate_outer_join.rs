@@ -272,9 +272,9 @@ impl NullRejectingSides {
     }
 }
 
-/// Compute which join sides cannot be NULL-padded and still pass `expr` in a
-/// WHERE clause. A marked side means rows with that side padded to NULL are
-/// guaranteed to evaluate to NULL or false and be filtered out.
+  /// Compute which join sides are null-rejected by `expr` in a WHERE clause.
+  /// For each marked side, rows padded with NULLs on that side are guaranteed to
+  /// evaluate to NULL or false and be filtered out.
 ///
 /// `left_schema` and `right_schema` map column references to join sides.
 /// `top_level` is true only while walking the root WHERE context; nested
