@@ -1387,95 +1387,39 @@ mod tests {
 
     #[test]
     fn test_cast_predicate_preimage_exact() {
-        assert_eq!(
-            cast_predicate_preimage(
-                &DataType::Int32,
-                &DataType::Int64,
-                Operator::Gt,
-                &ScalarValue::Int64(Some(10)),
-            )
-            .unwrap(),
-            Some(CastPredicatePreimage::Exact(ScalarValue::Int32(Some(10))))
+        assert_preimage_exact(
+            &DataType::Int32,
+            &DataType::Int64,
+            Operator::Gt,
+            &ScalarValue::Int64(Some(10)),
+            ScalarValue::Int32(Some(10)),
         );
 
-        assert_eq!(
-            cast_predicate_preimage(
-                &DataType::Int32,
-                &DataType::Utf8,
-                Operator::Eq,
-                &ScalarValue::Utf8(Some("123".to_string())),
-            )
-            .unwrap(),
-            Some(CastPredicatePreimage::Exact(ScalarValue::Int32(Some(123))))
+        assert_preimage_exact(
+            &DataType::Int32,
+            &DataType::Utf8,
+            Operator::Eq,
+            &ScalarValue::Utf8(Some("123".to_string())),
+            ScalarValue::Int32(Some(123)),
         );
 
-        assert_eq!(
-            cast_predicate_preimage(
-                &DataType::Int32,
-                &DataType::Utf8,
-                Operator::Eq,
-                &ScalarValue::Utf8(Some("0123".to_string())),
-            )
-            .unwrap(),
-            None
+        assert_preimage_none(
+            &DataType::Int32,
+            &DataType::Utf8,
+            Operator::Eq,
+            &ScalarValue::Utf8(Some("0123".to_string())),
         );
     }
 
     #[test]
     fn test_cast_predicate_preimage_timestamp_narrowing_range() {
-        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
-        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
-
-        assert_eq!(
-            cast_predicate_preimage(
-                &ts_ns,
-                &ts_ms,
-                Operator::Eq,
-                &ScalarValue::TimestampMillisecond(Some(1000), None),
-            )
-            .unwrap(),
-            Some(CastPredicatePreimage::Range(
-                Interval::try_new(
-                    ScalarValue::TimestampNanosecond(Some(1_000_000_000), None),
-                    ScalarValue::TimestampNanosecond(Some(1_001_000_000), None),
-                )
-                .unwrap()
-            ))
-        );
-
-        assert_eq!(
-            cast_predicate_preimage(
-                &ts_ns,
-                &ts_ms,
-                Operator::Eq,
-                &ScalarValue::TimestampMillisecond(Some(0), None),
-            )
-            .unwrap(),
-            Some(CastPredicatePreimage::Range(
-                Interval::try_new(
-                    ScalarValue::TimestampNanosecond(Some(-999_999), None),
-                    ScalarValue::TimestampNanosecond(Some(1_000_000), None),
-                )
-                .unwrap()
-            ))
-        );
-
-        assert_eq!(
-            cast_predicate_preimage(
-                &ts_ns,
-                &ts_ms,
-                Operator::Eq,
-                &ScalarValue::TimestampMillisecond(Some(-1), None),
-            )
-            .unwrap(),
-            Some(CastPredicatePreimage::Range(
-                Interval::try_new(
-                    ScalarValue::TimestampNanosecond(Some(-1_999_999), None),
-                    ScalarValue::TimestampNanosecond(Some(-999_999), None),
-                )
-                .unwrap()
-            ))
-        );
+        for (lit_ms, lower_ns, upper_ns) in [
+            (1000, 1_000_000_000, 1_001_000_000),
+            (0, -999_999, 1_000_000),
+            (-1, -1_999_999, -999_999),
+        ] {
+            assert_timestamp_narrowing_range(lit_ms, lower_ns, upper_ns);
+        }
     }
 
     #[test]
@@ -1483,28 +1427,19 @@ mod tests {
         let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
         let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
 
-        assert_eq!(
-            cast_predicate_preimage(
-                &ts_ms,
-                &ts_ns,
-                Operator::Eq,
-                &ScalarValue::TimestampNanosecond(Some(123_000_000), None),
-            )
-            .unwrap(),
-            Some(CastPredicatePreimage::Exact(
-                ScalarValue::TimestampMillisecond(Some(123), None)
-            ))
+        assert_preimage_exact(
+            &ts_ms,
+            &ts_ns,
+            Operator::Eq,
+            &ScalarValue::TimestampNanosecond(Some(123_000_000), None),
+            ScalarValue::TimestampMillisecond(Some(123), None),
         );
 
-        assert_eq!(
-            cast_predicate_preimage(
-                &ts_ms,
-                &ts_ns,
-                Operator::Eq,
-                &ScalarValue::TimestampNanosecond(Some(123_456_789), None),
-            )
-            .unwrap(),
-            None
+        assert_preimage_none(
+            &ts_ms,
+            &ts_ns,
+            Operator::Eq,
+            &ScalarValue::TimestampNanosecond(Some(123_456_789), None),
         );
     }
 
@@ -1967,30 +1902,16 @@ mod tests {
         let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
         let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
 
-        // i64::MAX in milliseconds expands beyond i64 range in nanoseconds,
+        // These millisecond values expand beyond i64 range in nanoseconds,
         // so the preimage should return None rather than panicking.
-        assert_eq!(
-            cast_predicate_preimage(
+        for value in [i64::MAX, i64::MIN] {
+            assert_preimage_none(
                 &ts_ns,
                 &ts_ms,
                 Operator::Eq,
-                &ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
-            )
-            .unwrap(),
-            None
-        );
-
-        // i64::MIN in milliseconds expands beyond i64 range in nanoseconds.
-        assert_eq!(
-            cast_predicate_preimage(
-                &ts_ns,
-                &ts_ms,
-                Operator::Eq,
-                &ScalarValue::TimestampMillisecond(Some(i64::MIN), None),
-            )
-            .unwrap(),
-            None
-        );
+                &ScalarValue::TimestampMillisecond(Some(value), None),
+            );
+        }
     }
 
     #[test]
@@ -2235,6 +2156,27 @@ mod tests {
         assert_eq!(
             result, None,
             "expected None preimage for {source_type:?} → {target_type:?} {op:?} {lit_value:?}"
+        );
+    }
+
+    fn assert_timestamp_narrowing_range(lit_ms: i64, lower_ns: i64, upper_ns: i64) {
+        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
+        assert_eq!(
+            cast_predicate_preimage(
+                &ts_ns,
+                &ts_ms,
+                Operator::Eq,
+                &ScalarValue::TimestampMillisecond(Some(lit_ms), None),
+            )
+            .unwrap(),
+            Some(CastPredicatePreimage::Range(
+                Interval::try_new(
+                    ScalarValue::TimestampNanosecond(Some(lower_ns), None),
+                    ScalarValue::TimestampNanosecond(Some(upper_ns), None),
+                )
+                .unwrap()
+            ))
         );
     }
 }
