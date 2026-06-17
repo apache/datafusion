@@ -1188,7 +1188,7 @@ fn join_with_ambiguous_column() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.id
+    Projection: a.id AS id
       Inner Join: Using a.id = b.id
         SubqueryAlias: a
           TableScan: person
@@ -1205,7 +1205,7 @@ fn natural_left_join() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.l_item_id
+    Projection: a.l_item_id AS l_item_id
       Left Join: Using a.l_orderkey = b.l_orderkey, a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.l_extendedprice = b.l_extendedprice, a.price = b.price
         SubqueryAlias: a
           TableScan: lineitem
@@ -1222,7 +1222,7 @@ fn natural_right_join() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.l_item_id
+    Projection: b.l_item_id AS l_item_id
       Right Join: Using a.l_orderkey = b.l_orderkey, a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.l_extendedprice = b.l_extendedprice, a.price = b.price
         SubqueryAlias: a
           TableScan: lineitem
@@ -3011,7 +3011,7 @@ fn join_with_using() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: person.first_name, person.id
+    Projection: person.first_name, person.id AS id
       Inner Join: Using person.id = person2.id
         TableScan: person
         SubqueryAlias: person2
@@ -4099,6 +4099,17 @@ fn plan_at_time_zone_without_planner() {
         err.strip_backtrace()
             .contains("AT TIME ZONE needs an ExprPlanner"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn natural_join_group_by_order_by_non_grouped_merged_key() {
+    let sql = "WITH t1 AS (SELECT 1 AS v1, 2 AS v2) \
+        SELECT v1 FROM t1 AS tt1 NATURAL JOIN t1 AS tt2 \
+        GROUP BY v1 ORDER BY v2";
+    assert_contains!(
+        error_message(sql),
+        "Column in ORDER BY must be in GROUP BY or an aggregate function"
     );
 }
 
@@ -5802,7 +5813,8 @@ fn test_using_join_wildcard_schema() {
         [
             "t1.a".to_string(),
             "t1.b".to_string(),
-            "t2.c".to_string(),
+            // RIGHT join: the merged key `c` is the never-NULL-padded right side
+            "t3.c".to_string(),
             "t3.d".to_string()
         ]
     );

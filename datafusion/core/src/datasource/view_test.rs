@@ -289,10 +289,10 @@ mod tests {
 
         insta::assert_snapshot!(batches_to_string(&results),@r"
         +---------+---------+---------+
-        | column2 | column1 | column3 |
+        | column1 | column2 | column3 |
         +---------+---------+---------+
-        | 2       | 1       | 3       |
-        | 5       | 4       | 6       |
+        | 1       | 2       | 3       |
+        | 4       | 5       | 6       |
         +---------+---------+---------+
         ");
 
