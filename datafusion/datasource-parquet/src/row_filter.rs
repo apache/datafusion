@@ -796,17 +796,7 @@ fn build_filter_schema(
     struct_field_accesses: &[StructFieldAccess],
 ) -> SchemaRef {
     let regular_set: BTreeSet<usize> = regular_indices.iter().copied().collect();
-    let mut paths_by_root: BTreeMap<usize, Vec<&[String]>> = BTreeMap::new();
-    for StructFieldAccess {
-        root_index,
-        field_path,
-    } in struct_field_accesses
-    {
-        paths_by_root
-            .entry(*root_index)
-            .or_default()
-            .push(field_path.as_slice());
-    }
+    let paths_by_root = group_access_paths_by_root(struct_field_accesses);
 
     let all_indices = regular_indices
         .iter()
@@ -847,18 +837,56 @@ fn build_filter_schema(
     ))
 }
 
+/// Groups struct field access paths once for the root schema level.
+///
+/// Each map entry contains the complete field paths accessed below a root
+/// column. Recursive pruning groups these paths by their next component at each
+/// nested struct level.
+fn group_access_paths_by_root(
+    struct_field_accesses: &[StructFieldAccess],
+) -> BTreeMap<usize, Vec<&[String]>> {
+    let mut paths_by_root: BTreeMap<usize, Vec<&[String]>> = BTreeMap::new();
+    for StructFieldAccess {
+        root_index,
+        field_path,
+    } in struct_field_accesses
+    {
+        paths_by_root
+            .entry(*root_index)
+            .or_default()
+            .push(field_path.as_slice());
+    }
+
+    paths_by_root
+}
+
+/// Groups access paths once for the current struct level.
+///
+/// The map key is the field name at this level. The map value is the list of
+/// remaining path suffixes below that field. An empty suffix means the access
+/// path terminates at that field, so the full field must be preserved.
+fn group_paths_by_next_field<'a>(
+    paths: &'a [&'a [String]],
+) -> BTreeMap<&'a str, Vec<&'a [String]>> {
+    let mut paths_by_field: BTreeMap<&str, Vec<&[String]>> = BTreeMap::new();
+    for path in paths {
+        if let Some((field, sub_path)) = path.split_first() {
+            paths_by_field
+                .entry(field.as_str())
+                .or_default()
+                .push(sub_path);
+        }
+    }
+
+    paths_by_field
+}
+
 fn prune_struct_type(dt: &DataType, paths: &[&[String]]) -> DataType {
     let DataType::Struct(fields) = dt else {
         return dt.clone();
     };
 
-    let paths_by_field = paths.iter().filter_map(|path| path.split_first()).fold(
-        BTreeMap::<&str, Vec<&[String]>>::new(),
-        |mut acc, (field, sub_path)| {
-            acc.entry(field.as_str()).or_default().push(sub_path);
-            acc
-        },
-    );
+    let paths_by_field = group_paths_by_next_field(paths);
 
     let pruned_fields = fields
         .iter()
