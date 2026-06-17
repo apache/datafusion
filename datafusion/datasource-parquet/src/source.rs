@@ -26,6 +26,9 @@ use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::opener::build_virtual_columns_state;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
+use arrow_schema::Fields;
+use arrow_schema::extension::ExtensionType;
+use arrow_schema::{DataType, Field};
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
@@ -40,9 +43,14 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_functions::core::file_row_index::FileRowIndexFunc;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
-use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
+use datafusion_physical_expr_adapter::expr_references_scalar_udf;
+use datafusion_physical_expr_adapter::{
+    DefaultPhysicalExprAdapterFactory, rewrite_file_row_index_projection,
+};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_plan::DisplayFormatType;
@@ -60,6 +68,7 @@ use datafusion_execution::parquet_encryption::EncryptionFactory;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
 use object_store::ObjectStore;
+use parquet::arrow::RowNumber;
 #[cfg(feature = "parquet_encryption")]
 use parquet::encryption::decrypt::FileDecryptionProperties;
 
@@ -675,7 +684,28 @@ impl FileSource for ParquetSource {
         projection: &ProjectionExprs,
     ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
         let mut source = self.clone();
-        source.projection = self.projection.try_merge(projection)?;
+
+        // If there's no reference to `FileRowIndexFunc` in the projection, we can just merge
+        // both projections as-is, there's no need to modify the projection first.
+        if !projection.iter().any(|projection_expr| {
+            expr_references_scalar_udf::<FileRowIndexFunc>(&projection_expr.expr)
+        }) {
+            source.projection = self.projection.try_merge(projection)?;
+            return Ok(Some(Arc::new(source)));
+        }
+
+        // If we can find a reference to `FileRowIndexFunc`, we add it as a virtual column
+        // or re-use an existing one in the table's schema.
+        let (table_schema, row_index_col) =
+            table_schema_with_row_index_col(self.table_schema());
+
+        source.table_schema = table_schema;
+        source.projection = rewrite_file_row_index_projection(
+            &self.projection,
+            projection,
+            &row_index_col,
+        )?;
+
         Ok(Some(Arc::new(source)))
     }
 
@@ -958,15 +988,12 @@ impl FileSource for ParquetSource {
             reversed_eq_properties.ordering_satisfy(order.iter().cloned())?;
         let sort_order = LexOrdering::new(order.iter().cloned());
         let column_in_file_schema = sort_order.as_ref().is_some_and(|s| {
-            s.first()
-                .expr
-                .downcast_ref::<datafusion_physical_expr::expressions::Column>()
-                .is_some_and(|col| {
-                    self.table_schema
-                        .file_schema()
-                        .field_with_name(col.name())
-                        .is_ok()
-                })
+            s.first().expr.downcast_ref::<Column>().is_some_and(|col| {
+                self.table_schema
+                    .file_schema()
+                    .field_with_name(col.name())
+                    .is_ok()
+            })
         });
 
         if !column_in_file_schema && !reversed_satisfies {
@@ -993,6 +1020,69 @@ impl FileSource for ParquetSource {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
     }
+}
+
+/// Returns the a [`TableSchema`] containing a [`RowNumber`] virtual column and a [`Column`] expression referencing its row index column.
+/// The expression is then merged into a projection.
+///
+/// - If the schema already has a virtual column with the [`RowNumber`] type, it returns the schema unchanged.
+/// - If the schema doesn't have the appropriate virtual column, it returns a modified schema with the virtual column appended to it.
+fn table_schema_with_row_index_col(table_schema: &TableSchema) -> (TableSchema, Column) {
+    // If we can find a virtual column with the `RowNumber` type, we just return the schema
+    // and create the appropriate `column` we're going to use
+    if let Some((idx, field)) =
+        table_schema
+            .virtual_columns()
+            .iter()
+            .enumerate()
+            .find(|(_, field)| {
+                field
+                    .extension_type_name()
+                    .is_some_and(|name| name == RowNumber::NAME)
+            })
+    {
+        let virtual_offset = table_schema.file_schema().fields().len()
+            + table_schema.table_partition_cols().len();
+
+        return (
+            table_schema.clone(),
+            Column::new(field.name(), virtual_offset + idx),
+        );
+    }
+
+    // The hidden field is shared across all files in this scan, but it must
+    // have a unique table-schema name because later rewrites resolve it by
+    // column name and index.
+    let base_row_index_name = "__datafusion_file_row_index";
+    let mut row_index_name = base_row_index_name.to_string();
+    let mut suffix = 0;
+    while table_schema
+        .table_schema()
+        .field_with_name(&row_index_name)
+        .is_ok()
+    {
+        suffix += 1;
+        row_index_name = format!("{base_row_index_name}_{suffix}");
+    }
+
+    let row_index_table_idx = table_schema.table_schema().fields().len();
+    let row_index_field = Arc::new(
+        Field::new(&row_index_name, DataType::Int64, true).with_extension_type(RowNumber),
+    );
+    (
+        TableSchema::builder(Arc::clone(table_schema.file_schema()))
+            .with_table_partition_cols(table_schema.table_partition_cols().clone())
+            .with_virtual_columns(
+                table_schema
+                    .virtual_columns()
+                    .iter()
+                    .cloned()
+                    .chain([row_index_field])
+                    .collect::<Fields>(),
+            )
+            .build(),
+        Column::new(&row_index_name, row_index_table_idx),
+    )
 }
 
 #[cfg(test)]
@@ -1628,7 +1718,9 @@ mod tests {
         use datafusion_common::config::ConfigOptions;
         use datafusion_datasource::TableSchema;
         use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_functions::core::expr_fn::file_row_index;
         use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_expr_adapter::rewrite_file_row_index_expr;
         use datafusion_physical_plan::filter_pushdown::PushedDown;
         use parquet::arrow::RowNumber;
 
@@ -1658,13 +1750,20 @@ mod tests {
                 .or(col("value").eq(logical_lit(4i64))),
             full_schema,
         );
+        let (_, row_index_col) = table_schema_with_row_index_col(source.table_schema());
+        let row_index = rewrite_file_row_index_expr(
+            logical2physical(&file_row_index().gt(logical_lit(2i64)), full_schema),
+            row_index_col.name(),
+            row_index_col.index(),
+        )
+        .expect("file_row_index should rewrite to the row_number virtual column");
 
         let config = ConfigOptions::default();
         let prop = source
-            .try_pushdown_filters(vec![pushable, virtual_only, mixed], &config)
+            .try_pushdown_filters(vec![pushable, virtual_only, mixed, row_index], &config)
             .expect("try_pushdown_filters must not error");
 
-        assert_eq!(prop.filters.len(), 3);
+        assert_eq!(prop.filters.len(), 4);
         assert!(
             matches!(prop.filters[0], PushedDown::Yes),
             "file-column filter should be pushable"
@@ -1677,6 +1776,11 @@ mod tests {
             matches!(prop.filters[2], PushedDown::No),
             "filter mixing a virtual column with a file column must not be \
              pushed down (row filter would silently drop it)"
+        );
+        assert!(
+            matches!(prop.filters[3], PushedDown::No),
+            "file_row_index() rewrites to a virtual column and must not be \
+             pushed down"
         );
     }
 }
