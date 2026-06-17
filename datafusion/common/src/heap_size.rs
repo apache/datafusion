@@ -326,47 +326,6 @@ impl DFHeapSize for Fields {
     }
 }
 
-impl DFHeapSize for StructArray {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        self.get_array_memory_size()
-    }
-}
-
-impl DFHeapSize for LargeListArray {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        self.get_array_memory_size()
-    }
-}
-
-impl DFHeapSize for LargeListViewArray {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        self.get_array_memory_size()
-    }
-}
-
-impl DFHeapSize for ListArray {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        self.get_array_memory_size()
-    }
-}
-
-impl DFHeapSize for ListViewArray {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        self.get_array_memory_size()
-    }
-}
-
-impl DFHeapSize for FixedSizeListArray {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        self.get_array_memory_size()
-    }
-}
-impl DFHeapSize for MapArray {
-    fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
-        self.get_array_memory_size()
-    }
-}
-
 impl<T: DFHeapSize> DFHeapSize for Box<T> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         size_of::<T>() + self.as_ref().heap_size(ctx)
@@ -467,6 +426,29 @@ impl_zero_heap_size!(
     TimeUnit,
     IntervalUnit,
     DateTime<Utc>,
+);
+
+/// Implement [`DFHeapSize`] for Arrow arrays types.
+macro_rules! impl_array_heap_size {
+    ($($t:ty),+ $(,)?) => {
+        $(
+            impl DFHeapSize for $t {
+                fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
+                    self.get_array_memory_size()
+                }
+            }
+        )+
+    };
+}
+
+impl_array_heap_size!(
+    StructArray,
+    LargeListArray,
+    LargeListViewArray,
+    ListArray,
+    ListViewArray,
+    FixedSizeListArray,
+    MapArray,
 );
 
 #[cfg(test)]
@@ -695,5 +677,62 @@ mod tests {
     fn test_field() {
         let field = Field::new("temperature", DataType::Float64, true);
         assert!(size(&field) > 0);
+    }
+
+    #[test]
+    fn test_list_array() {
+        use arrow::array::types::Int32Type;
+
+        let array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4)]),
+        ]);
+        assert_eq!(size(&array), array.get_array_memory_size());
+        assert!(size(&array) > 0);
+
+        let large =
+            LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                Some(1),
+                Some(2),
+            ])]);
+        assert_eq!(size(&large), large.get_array_memory_size());
+        assert!(size(&large) > 0);
+    }
+
+    #[test]
+    fn test_struct_array() {
+        use arrow::array::Int32Array;
+
+        let array = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+        )]);
+        assert_eq!(size(&array), array.get_array_memory_size());
+        assert!(size(&array) > 0);
+    }
+
+    #[test]
+    fn test_fixed_size_list_array() {
+        use arrow::array::Int32Array;
+
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let array = FixedSizeListArray::new(field, 2, values, None);
+        assert_eq!(size(&array), array.get_array_memory_size());
+        assert!(size(&array) > 0);
+    }
+
+    #[test]
+    fn test_map_array() {
+        use arrow::array::{Int32Builder, MapBuilder, StringBuilder};
+
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        builder.keys().append_value("key");
+        builder.values().append_value(1);
+        builder.append(true).unwrap();
+        let array = builder.finish();
+        assert_eq!(size(&array), array.get_array_memory_size());
+        assert!(size(&array) > 0);
     }
 }

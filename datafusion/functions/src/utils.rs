@@ -140,40 +140,20 @@ where
     F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
     R::Native: TryFrom<ScalarValue>,
 {
-    let left = left.as_primitive::<L>();
-    let right = right.cast_to(&R::DATA_TYPE, None)?;
-    let result = match right {
-        ColumnarValue::Scalar(scalar) => {
-            if scalar.is_null() {
-                // Null scalar is castable to any numeric, creating a non-null expression.
-                // Provide null array explicitly to make result null
-                PrimitiveArray::<O>::new_null(left.len())
-            } else {
-                let right = R::Native::try_from(scalar.clone()).map_err(|_| {
-                    DataFusionError::NotImplemented(format!(
-                        "Cannot convert scalar value {} to {}",
-                        &scalar,
-                        R::DATA_TYPE
-                    ))
-                })?;
-                left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
-            }
-        }
-        ColumnarValue::Array(right) => {
-            let right = right.as_primitive::<R>();
-            try_binary::<_, _, _, O>(left, right, &fun)?
-        }
-    };
-    Ok(Arc::new(result) as _)
+    calculate_binary_math_cast::<L, R, O, F>(left, right, fun, &R::DATA_TYPE)
 }
 
 /// Computes a binary math function for input arrays using a specified function
-/// and apply rescaling to given precision and scale.
+/// and applies rescaling to given precision and scale.
 /// Generic types:
 /// - `L`: Left array decimal type
 /// - `R`: Right array primitive type
 /// - `O`: Output array decimal type
 /// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
+#[deprecated(
+    since = "55.0.0",
+    note = "Use `calculate_binary_decimal_math_cast` instead"
+)]
 pub fn calculate_binary_decimal_math<L, R, O, F>(
     left: &dyn Array,
     right: &ColumnarValue,
@@ -188,7 +168,105 @@ where
     F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
     R::Native: TryFrom<ScalarValue>,
 {
-    let result_array = calculate_binary_math::<L, R, O, F>(left, right, fun)?;
+    calculate_binary_decimal_math_cast::<L, R, O, F>(
+        left,
+        right,
+        fun,
+        precision,
+        scale,
+        &R::DATA_TYPE,
+    )
+}
+
+/// Computes a binary math function for input arrays using a specified function.
+///
+/// It casts the right operand to `cast_target` instead of the default `R::DATA_TYPE` to preserve
+/// the right operand scale.
+///
+/// # Type Parameters
+/// - `L`: Left array primitive type
+/// - `R`: Right array primitive type
+/// - `O`: Output array primitive type
+/// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
+/// # Arguments
+/// - `left`: Left input array
+/// - `right`: Right input array or scalar value
+/// - `fun`: Function of type `F`
+/// - `cast_target`: Data type to cast right operand to before applying function
+fn calculate_binary_math_cast<L, R, O, F>(
+    left: &dyn Array,
+    right: &ColumnarValue,
+    fun: F,
+    cast_target: &DataType,
+) -> Result<Arc<PrimitiveArray<O>>>
+where
+    L: ArrowPrimitiveType,
+    R: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
+    R::Native: TryFrom<ScalarValue>,
+{
+    let left = left.as_primitive::<L>();
+    let right = right.cast_to(cast_target, None)?;
+    let result = match right {
+        ColumnarValue::Scalar(scalar) => {
+            if scalar.is_null() {
+                // Null scalar is castable to any numeric, creating a non-null expression.
+                // Provide null array explicitly to make result null
+                PrimitiveArray::<O>::new_null(left.len())
+            } else {
+                let right = R::Native::try_from(scalar.clone()).map_err(|_| {
+                    DataFusionError::NotImplemented(format!(
+                        "Cannot convert scalar value {} to {}",
+                        &scalar, cast_target
+                    ))
+                })?;
+                left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
+            }
+        }
+        ColumnarValue::Array(right) => {
+            let right = right.as_primitive::<R>();
+            try_binary::<_, _, _, O>(left, right, &fun)?
+        }
+    };
+    Ok(Arc::new(result) as _)
+}
+
+/// Computes a binary math function for input arrays using a specified function
+/// and applies rescaling to given precision and scale.
+///
+/// It casts the right operand to `cast_target` instead of the default `R::DATA_TYPE` to preserve
+/// the right operand scale.
+///
+/// # Type Parameters
+/// - `L`: Left array decimal type
+/// - `R`: Right array primitive type
+/// - `O`: Output array decimal type
+/// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
+/// # Arguments
+/// - `left`: Left input array
+/// - `right`: Right input array or scalar value
+/// - `fun`: Function of type `F`
+/// - `precision`: Precision to apply to output decimal array
+/// - `scale`: Scale to apply to output decimal array
+/// - `cast_target`: Data type to cast right operand to before applying function
+pub fn calculate_binary_decimal_math_cast<L, R, O, F>(
+    left: &dyn Array,
+    right: &ColumnarValue,
+    fun: F,
+    precision: u8,
+    scale: i8,
+    cast_target: &DataType,
+) -> Result<Arc<PrimitiveArray<O>>>
+where
+    L: DecimalType,
+    R: ArrowPrimitiveType,
+    O: DecimalType,
+    F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
+    R::Native: TryFrom<ScalarValue>,
+{
+    let result_array =
+        calculate_binary_math_cast::<L, R, O, F>(left, right, fun, cast_target)?;
     Ok(Arc::new(
         result_array
             .as_ref()
