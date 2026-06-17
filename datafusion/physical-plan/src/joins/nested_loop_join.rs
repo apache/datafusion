@@ -735,11 +735,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
         }
 
         // TODO: split by `col`/`JoinSide` instead so mark joins can also push down to children.
-        let is_mark_join =
-            matches!(self.join_type(), JoinType::LeftMark | JoinType::RightMark);
-
         let schema = self.schema();
-        if !is_mark_join
+        if !matches!(self.join_type(), JoinType::LeftMark | JoinType::RightMark)
             && let Some(JoinData {
                 projected_left_child,
                 projected_right_child,
