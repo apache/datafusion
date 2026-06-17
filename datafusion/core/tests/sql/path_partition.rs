@@ -47,7 +47,7 @@ use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use insta::assert_snapshot;
 use object_store::{
-    Attributes, CopyOptions, GetRange, MultipartUpload, PutMultipartOptions, PutPayload,
+    CopyOptions, GetRange, MultipartUpload, PutMultipartOptions, PutPayload,
 };
 use object_store::{
     GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
@@ -717,7 +717,8 @@ impl ObjectStore for MirroringObjectStore {
             range: 0..meta.size,
             payload,
             meta,
-            attributes: Attributes::default(),
+            attributes: Default::default(),
+            extensions: Default::default(),
         })
     }
 
@@ -789,6 +790,7 @@ impl ObjectStore for MirroringObjectStore {
         Ok(ListResult {
             common_prefixes: common_prefixes.into_iter().collect(),
             objects,
+            extensions: Default::default(),
         })
     }
 
