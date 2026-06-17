@@ -21,9 +21,7 @@ use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 
-use crate::strings::{
-    BulkNullStringArrayBuilder, GenericStringArrayBuilder, StringWriter,
-};
+use crate::strings::{GenericStringArrayBuilder, StringWriter};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
@@ -178,14 +176,14 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
     if let Some(nulls_ref) = nulls.as_ref() {
         for i in 0..len {
             if nulls_ref.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
                 continue;
             }
             // SAFETY: union of input nulls is non-null at i, so each input is too.
             let string = unsafe { string_array.value_unchecked(i) };
             let from = unsafe { from_array.value_unchecked(i) };
             let to = unsafe { to_array.value_unchecked(i) };
-            apply_replace(&mut builder, string, from, to);
+            apply_replace(&mut builder, string, from, to)?;
         }
     } else {
         for i in 0..len {
@@ -193,7 +191,7 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string = unsafe { string_array.value_unchecked(i) };
             let from = unsafe { from_array.value_unchecked(i) };
             let to = unsafe { to_array.value_unchecked(i) };
-            apply_replace(&mut builder, string, from, to);
+            apply_replace(&mut builder, string, from, to)?;
         }
     }
 
@@ -221,14 +219,14 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if let Some(nulls_ref) = nulls.as_ref() {
         for i in 0..len {
             if nulls_ref.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
                 continue;
             }
             // SAFETY: union of input nulls is non-null at i, so each input is too.
             let string = unsafe { string_array.value_unchecked(i) };
             let from = unsafe { from_array.value_unchecked(i) };
             let to = unsafe { to_array.value_unchecked(i) };
-            apply_replace(&mut builder, string, from, to);
+            apply_replace(&mut builder, string, from, to)?;
         }
     } else {
         for i in 0..len {
@@ -236,7 +234,7 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string = unsafe { string_array.value_unchecked(i) };
             let from = unsafe { from_array.value_unchecked(i) };
             let to = unsafe { to_array.value_unchecked(i) };
-            apply_replace(&mut builder, string, from, to);
+            apply_replace(&mut builder, string, from, to)?;
         }
     }
 
@@ -244,12 +242,12 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 #[inline]
-fn apply_replace<B: BulkNullStringArrayBuilder>(
-    builder: &mut B,
+fn apply_replace<O: OffsetSizeTrait>(
+    builder: &mut GenericStringArrayBuilder<O>,
     string: &str,
     from: &str,
     to: &str,
-) {
+) -> Result<()> {
     // Hot path: single ASCII byte → single ASCII byte. An ASCII byte (< 0x80)
     // cannot appear inside a multi-byte UTF-8 sequence, so any multi-byte
     // sequences in `string` pass through unchanged and output stays valid
@@ -260,20 +258,20 @@ fn apply_replace<B: BulkNullStringArrayBuilder>(
     {
         // SAFETY: see the contract above.
         unsafe {
-            builder.append_byte_map(string.as_bytes(), |b| {
+            builder.try_append_byte_map(string.as_bytes(), |b| {
                 if b == from_byte { to_byte } else { b }
-            });
+            })?;
         }
-        return;
+        return Ok(());
     }
 
     if from.is_empty() {
         // PostgreSQL returns the input unchanged when `from` is empty (#22253).
-        builder.append_value(string);
-        return;
+        builder.try_append_value(string)?;
+        return Ok(());
     }
 
-    builder.append_with(|w| replace_into_writer(w, string, from, to));
+    builder.try_append_with(|w| replace_into_writer(w, string, from, to))
 }
 
 #[inline]
@@ -290,6 +288,7 @@ fn replace_into_writer<W: StringWriter>(w: &mut W, string: &str, from: &str, to:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strings::GenericStringArrayBuilder;
     use crate::utils::test::test_function;
     use arrow::array::LargeStringArray;
     use arrow::array::StringArray;
@@ -353,6 +352,15 @@ mod tests {
             LargeStringArray
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn apply_replace_returns_result() -> Result<()> {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(1, 0);
+        apply_replace(&mut builder, "aabb", "bb", "ccc")?;
+        let array = builder.finish(None)?;
+        assert_eq!(array.value(0), "aaccc");
         Ok(())
     }
 }
