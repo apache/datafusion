@@ -22,7 +22,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
-use crate::expr_rewriter::strip_outer_reference;
+use crate::expr_rewriter::{merged_using_key_or_column, strip_outer_reference};
 use crate::{
     BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator, and,
 };
@@ -461,7 +461,22 @@ pub fn expand_wildcard(
     };
     // Add each excluded `Column` to columns_to_skip
     columns_to_skip.extend(excluded_columns);
-    Ok(get_exprs_except_skipped(schema, &columns_to_skip))
+    let exprs = get_exprs_except_skipped(schema, &columns_to_skip);
+
+    // For RIGHT / FULL USING / NATURAL joins the surviving key column is the
+    // merged key; expose it as COALESCE(left, right) so a wildcard shows the
+    // value from whichever side is present rather than the NULL-padded side.
+    let outer_using_keys = plan.outer_using_key_pairs()?;
+    if outer_using_keys.is_empty() {
+        return Ok(exprs);
+    }
+    exprs
+        .into_iter()
+        .map(|expr| match expr {
+            Expr::Column(col) => merged_using_key_or_column(col, true, &outer_using_keys),
+            other => Ok(other),
+        })
+        .collect()
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.

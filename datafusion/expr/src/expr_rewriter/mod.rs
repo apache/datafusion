@@ -99,7 +99,7 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
 /// (the same form `coalesce` is simplified to, and buildable here without
 /// depending on the functions crate), aliased to the key name so the output
 /// column keeps its name.
-fn merged_using_key_or_column(
+pub(crate) fn merged_using_key_or_column(
     col: Column,
     was_unqualified: bool,
     outer_using_keys: &[(Column, Column)],
