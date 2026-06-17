@@ -715,6 +715,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }) => {
                 let new_expr =
                     coerce_arguments_for_signature(args, self.schema, func.as_ref())?;
+
+                let filter = filter
+                    .map(|filter| filter.cast_to(&DataType::Boolean, self.schema))
+                    .transpose()?
+                    .map(Box::new);
+
                 Ok(Transformed::yes(Expr::AggregateFunction(
                     expr::AggregateFunction::new_udf(
                         func,
@@ -751,6 +757,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         coerce_arguments_for_signature(args, self.schema, udf.as_ref())?
                     }
                 };
+
+                let filter = filter
+                    .map(|filter| filter.cast_to(&DataType::Boolean, self.schema))
+                    .transpose()?
+                    .map(Box::new);
 
                 let new_expr = Expr::from(WindowFunction {
                     fun,
@@ -1772,6 +1783,31 @@ mod test {
         }
     }
 
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct TestArrayElementUDF;
+
+    impl ScalarUDFImpl for TestArrayElementUDF {
+        fn name(&self) -> &str {
+            "TestArrayElementUDF"
+        }
+
+        fn signature(&self) -> &Signature {
+            static SIGNATURE: std::sync::LazyLock<Signature> =
+                std::sync::LazyLock::new(|| {
+                    Signature::array_and_index(Volatility::Immutable)
+                });
+            &SIGNATURE
+        }
+
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(Utf8)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+        }
+    }
+
     #[test]
     fn scalar_udf() -> Result<()> {
         let empty = empty();
@@ -2664,6 +2700,33 @@ mod test {
             plan,
             @r#"
         Projection: a = CAST(CAST(a AS Map("key_value": non-null Struct("key": non-null Utf8, "value": Float64), unsorted)) AS Map("entries": non-null Struct("key": non-null Utf8, "value": Float64), unsorted))
+          EmptyRelation: rows=0
+        "#
+        )
+    }
+
+    #[test]
+    fn array_element_preserves_parquet_list_field_name() -> Result<()> {
+        let list_type = DataType::List(Arc::new(Field::new(
+            "element",
+            DataType::Struct(
+                vec![
+                    Field::new("id", Utf8, true),
+                    Field::new("prim", DataType::Boolean, true),
+                ]
+                .into(),
+            ),
+            true,
+        )));
+
+        let expr = ScalarUDF::from(TestArrayElementUDF).call(vec![col("a"), lit(1_i64)]);
+        let empty = empty_with_type(list_type);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: TestArrayElementUDF(a, Int64(1))
           EmptyRelation: rows=0
         "#
         )

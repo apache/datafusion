@@ -1046,17 +1046,17 @@ SELECT log(10, arrow_cast(1 , 'Decimal32(5, 1)'))
 query RT
 SELECT power(2::decimal(38, 0), 4), arrow_typeof(power(2::decimal(38, 0), 4));
 ----
-16 Decimal128(38, 0)
+16 Float64
 
 query RT
 SELECT power(10000000000::decimal(38, 0), 2), arrow_typeof(power(10000000000::decimal(38, 0), 2));
 ----
-100000000000000000000 Decimal128(38, 0)
+100000000000000000000 Float64
 
 query R
 SELECT power(2.5, 4)
 ----
-39
+39.0625
 
 query R
 SELECT power(2.5, 1)
@@ -1093,75 +1093,106 @@ SELECT power(2, 100000000000)
 ----
 Infinity
 
-# Negative exponent now works (fallback to f64)
+# Negative exponent returns Float64 so fractional results are representable
 query RT
 SELECT power(2::decimal(38, 0), -5), arrow_typeof(power(2::decimal(38, 0), -5));
 ----
-0 Decimal128(38, 0)
+0.03125 Float64
 
-# Negative exponent with scale preserves decimal places
+query RT
+SELECT power(CAST(2 AS DECIMAL(10, 0)), -3), arrow_typeof(power(CAST(2 AS DECIMAL(10, 0)), -3));
+----
+0.125 Float64
+
 query RT
 SELECT power(4::decimal(38, 5), -1), arrow_typeof(power(4::decimal(38, 5), -1));
 ----
-0.25 Decimal128(38, 5)
+0.25 Float64
 
-# Expected to have `16 Decimal128(38, 0)`
-# Due to type coericion, it becomes Float -> Float -> Float
+query IRT
+SELECT exponent, power(2::decimal(10, 0), exponent), arrow_typeof(power(2::decimal(10, 0), exponent))
+FROM (VALUES (-3), (3)) AS t(exponent)
+ORDER BY exponent;
+----
+-3 0.125 Float64
+3 8 Float64
+
 query RT
 SELECT power(2::decimal(38, 0), 4), arrow_typeof(power(2::decimal(38, 0), 4));
 ----
-16 Decimal128(38, 0)
+16 Float64
 
-# Arbitrary scale
 query RT
 SELECT power(2.5::decimal(38, 3), 4), arrow_typeof(power(2.5::decimal(38, 3), 4));
 ----
-39.062 Decimal128(38, 3)
+39.0625 Float64
+
+# https://github.com/apache/datafusion/issues/22480
+query RT
+SELECT power(2.5::decimal(20, 4), 10), arrow_typeof(power(2.5::decimal(20, 4), 10));
+----
+9536.7431640625 Float64
 
 query RT
 SELECT power(2.5, 4.0), arrow_typeof(power(2.5, 4.0));
 ----
-39 Decimal128(2, 1)
+39.0625 Float64
 
-# Non-integer exponent now works (fallback to f64)
 query RT
 SELECT power(2.5, 4.2), arrow_typeof(power(2.5, 4.2));
 ----
-46.9 Decimal128(2, 1)
+46.9189232024 Float64
 
-query error Compute error: Cannot use non-finite exp: NaN
-SELECT power(2::decimal(38, 0), arrow_cast('NaN','Float64'))
+query RT
+SELECT power(2::decimal(38, 0), arrow_cast('NaN','Float64')),
+       arrow_typeof(power(2::decimal(38, 0), arrow_cast('NaN','Float64')));
+----
+NaN Float64
 
-query error Compute error: Cannot use non-finite exp: inf
-SELECT power(2::decimal(38, 0), arrow_cast('INF','Float64'))
+query RT
+SELECT power(2::decimal(38, 0), arrow_cast('INF','Float64')),
+       arrow_typeof(power(2::decimal(38, 0), arrow_cast('INF','Float64')));
+----
+Infinity Float64
 
-# Floating above u32::max now works (fallback to f64, returns infinity which is an error)
-query error Arrow error: Arithmetic overflow: Result of 2\^5000000000.1 is not finite
-SELECT power(2::decimal(38, 0), 5000000000.1)
+# Result overflows finite Float64 range
+query RT
+SELECT power(2::decimal(38, 0), 5000000000.1),
+       arrow_typeof(power(2::decimal(38, 0), 5000000000.1));
+----
+Infinity Float64
 
-# Integer Above u32::max - still goes through integer path which fails
-query error Arrow error: Arithmetic overflow: Unsupported exp value
-SELECT power(2::decimal(38, 0), 5000000000)
+# Integer above u32::max uses the Float64 decimal/int path
+query RT
+SELECT power(2::decimal(38, 0), 5000000000),
+       arrow_typeof(power(2::decimal(38, 0), 5000000000));
+----
+Infinity Float64
 
-query ?T
+query RT
 SELECT power(arrow_cast(2, 'Decimal32(5, 0)'), 4), arrow_typeof(power(arrow_cast(2, 'Decimal32(5, 0)'), 4));
 ----
-16 Decimal32(5, 0)
+16 Float64
 
-query ?T
+query RT
 SELECT power(arrow_cast(2, 'Decimal64(5, 0)'), 4), arrow_typeof(power(arrow_cast(2, 'Decimal64(5, 0)'), 4));
 ----
-16 Decimal64(5, 0)
+16 Float64
 
 query RT
 SELECT power(2::decimal(76, 0), 4), arrow_typeof(power(2::decimal(76, 0), 4));
 ----
-16 Decimal256(76, 0)
+16 Float64
 
 query R
 SELECT power(2.0, null)
 ----
 NULL
+
+query RT
+SELECT power(2::decimal(38, 0), null), arrow_typeof(power(2::decimal(38, 0), null));
+----
+NULL Float64
 
 # Array variants of power function
 query RR rowsort
@@ -1206,7 +1237,7 @@ select log(100000000000000000000000000000000000::decimal(38,0))
 ----
 35
 
-# Result is decimal since argument is decimal regardless decimals-as-floats parsing
+# Decimal x Int64 returns Float64 regardless of decimals-as-floats parsing
 query R
 SELECT power(10000000000::decimal(38, 0), 2);
 ----
@@ -1216,7 +1247,7 @@ query RT
 SELECT power(10000000000::decimal(38, 0), 2),
        arrow_typeof(power(10000000000::decimal(38, 0), 2));
 ----
-100000000000000000000 Decimal128(38, 0)
+100000000000000000000 Float64
 
 query R
 SELECT power(2.5, 4.0)
@@ -1235,3 +1266,28 @@ NULL
 
 query error Arrow error: Invalid argument error: 1.10 is too large to store in a Decimal128 of precision 2. Max is 0.99
 select cast(1.1 as decimal(2, 2)) + 1;
+
+# Regression test for division of two `Decimal128` values with different
+# precision/scale. The combined CASE/WHERE shape triggers interval propagation
+# through the optimizer; previously this hit an internal assertion in
+# `Interval::div` because `numeric / count(*)` gives `Decimal128(38, 10)` /
+# `Decimal128(20, 0)`.
+statement ok
+CREATE TABLE decimal_div_mismatch(c1 BIGINT) AS VALUES (1::bigint), (2::bigint), (10::bigint);
+
+query IR
+SELECT
+  c1,
+  CASE WHEN c1 = 0 THEN 100.0
+       ELSE ROUND((1.0 - (c1::numeric / c1)) * 100, 2)
+  END AS rate
+FROM decimal_div_mismatch
+WHERE (1.0 - (c1::numeric / c1)) * 100 < 95.0
+ORDER BY c1;
+----
+1 0
+2 0
+10 0
+
+statement ok
+DROP TABLE decimal_div_mismatch;

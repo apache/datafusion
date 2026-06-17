@@ -24,9 +24,9 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-#[cfg(not(feature = "sql"))]
-use crate::expr::Ident;
 use crate::expr::Sort;
+#[cfg(not(feature = "sql"))]
+use crate::sql::Ident;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
@@ -38,8 +38,10 @@ use sqlparser::ast::Ident;
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum DdlStatement {
-    /// Creates an external table.
-    CreateExternalTable(CreateExternalTable),
+    /// Creates an external table. Boxed to keep `LogicalPlan` enum size down
+    /// — `CreateExternalTable` is ~312 bytes, dwarfing every other variant
+    /// in the plan tree and forcing the whole enum to that width.
+    CreateExternalTable(Box<CreateExternalTable>),
     /// Creates an in memory table.
     CreateMemoryTable(CreateMemoryTable),
     /// Creates a new view.
@@ -56,8 +58,9 @@ pub enum DdlStatement {
     DropView(DropView),
     /// Drops a catalog schema
     DropCatalogSchema(DropCatalogSchema),
-    /// Create function statement
-    CreateFunction(CreateFunction),
+    /// Create function statement. Boxed for the same reason as
+    /// [`Self::CreateExternalTable`] (~288 bytes).
+    CreateFunction(Box<CreateFunction>),
     /// Drop function statement
     DropFunction(DropFunction),
 }
@@ -66,9 +69,7 @@ impl DdlStatement {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
-            DdlStatement::CreateExternalTable(CreateExternalTable { schema, .. }) => {
-                schema
-            }
+            DdlStatement::CreateExternalTable(ce) => &ce.schema,
             DdlStatement::CreateMemoryTable(CreateMemoryTable { input, .. })
             | DdlStatement::CreateView(CreateView { input, .. }) => input.schema(),
             DdlStatement::CreateCatalogSchema(CreateCatalogSchema { schema, .. }) => {
@@ -79,7 +80,7 @@ impl DdlStatement {
             DdlStatement::DropTable(DropTable { schema, .. }) => schema,
             DdlStatement::DropView(DropView { schema, .. }) => schema,
             DdlStatement::DropCatalogSchema(DropCatalogSchema { schema, .. }) => schema,
-            DdlStatement::CreateFunction(CreateFunction { schema, .. }) => schema,
+            DdlStatement::CreateFunction(cf) => &cf.schema,
             DdlStatement::DropFunction(DropFunction { schema, .. }) => schema,
         }
     }
@@ -131,11 +132,9 @@ impl DdlStatement {
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
-                    DdlStatement::CreateExternalTable(CreateExternalTable {
-                        name,
-                        constraints,
-                        ..
-                    }) => {
+                    DdlStatement::CreateExternalTable(ce) => {
+                        let name = &ce.name;
+                        let constraints = &ce.constraints;
                         if constraints.is_empty() {
                             write!(f, "CreateExternalTable: {name:?}")
                         } else {
@@ -191,7 +190,8 @@ impl DdlStatement {
                             "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}"
                         )
                     }
-                    DdlStatement::CreateFunction(CreateFunction { name, .. }) => {
+                    DdlStatement::CreateFunction(cf) => {
+                        let name = &cf.name;
                         write!(f, "CreateFunction: name {name:?}")
                     }
                     DdlStatement::DropFunction(DropFunction { name, .. }) => {

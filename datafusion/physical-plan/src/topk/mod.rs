@@ -221,7 +221,7 @@ impl TopK {
             expr,
             row_converter,
             scratch_rows,
-            heap: TopKHeap::new(k, batch_size),
+            heap: TopKHeap::new(k),
             common_sort_prefix_converter: prefix_row_converter,
             common_sort_prefix: Arc::from(common_sort_prefix),
             finished: false,
@@ -255,7 +255,9 @@ impl TopK {
         let array = filtered.into_array(num_rows)?;
         let mut filter = array.as_boolean().clone();
         if !filter.has_true() {
-            // nothing to filter, so no need to update
+            // The heap is unchanged, but a fully rejected batch can still prove
+            // that the shared sort prefix has passed the heap boundary.
+            self.attempt_early_completion(&batch)?;
             return Ok(());
         }
         // only update the keys / rows if the filter does not match all rows
@@ -663,8 +665,6 @@ impl TopKMetrics {
 struct TopKHeap {
     /// The maximum number of elements to store in this heap.
     k: usize,
-    /// The target number of rows for output batches
-    batch_size: usize,
     /// Storage for up at most `k` items using a BinaryHeap. Reversed
     /// so that the smallest k so far is on the top
     inner: BinaryHeap<TopKRow>,
@@ -675,11 +675,10 @@ struct TopKHeap {
 }
 
 impl TopKHeap {
-    fn new(k: usize, batch_size: usize) -> Self {
+    fn new(k: usize) -> Self {
         assert!(k > 0);
         Self {
             k,
-            batch_size,
             inner: BinaryHeap::new(),
             store: RecordBatchStore::new(),
             owned_bytes: 0,
@@ -792,24 +791,26 @@ impl TopKHeap {
     /// Compact this heap, rewriting all stored batches into a single
     /// input batch
     pub fn maybe_compact(&mut self) -> Result<()> {
-        // we compact if the number of "unused" rows in the store is
-        // past some pre-defined threshold. Target holding up to
-        // around 20 batches, but handle cases of large k where some
-        // batches might be partially full
-        let max_unused_rows = (20 * self.batch_size) + self.k;
-        let unused_rows = self.store.unused_rows();
-
-        // don't compact if the store has one extra batch or
-        // unused rows is under the threshold
-        if self.store.len() <= 2 || unused_rows < max_unused_rows {
+        // Don't compact if there's only one batch (compacting into itself is pointless)
+        if self.store.len() <= 1 {
             return Ok(());
         }
+
+        let total_rows = self.store.total_rows;
+        let num_rows = self.inner.len();
+
+        // Compact when current store memory exceeds 2x what the compacted
+        // result would need. The multiplier avoids compacting when the
+        // savings would be marginal.
+        if total_rows <= num_rows * 2 {
+            return Ok(());
+        }
+
         // at first, compact the entire thing always into a new batch
         // (maybe we can get fancier in the future about ignoring
         // batches that have a high usage ratio already
 
         // Note: new batch is in the same order as inner
-        let num_rows = self.inner.len();
         let (new_batch, mut topk_rows) = self.emit_with_state()?;
         let Some(new_batch) = new_batch else {
             return Ok(());
@@ -969,6 +970,8 @@ struct RecordBatchStore {
     batches: HashMap<u32, RecordBatchEntry>,
     /// total size of all record batches tracked by this store
     batches_size: usize,
+    /// row count of all the batches
+    total_rows: usize,
 }
 
 impl RecordBatchStore {
@@ -977,6 +980,7 @@ impl RecordBatchStore {
             next_id: 0,
             batches: HashMap::new(),
             batches_size: 0,
+            total_rows: 0,
         }
     }
 
@@ -994,6 +998,7 @@ impl RecordBatchStore {
         // uses of 0 means that none of the rows in the batch were stored in the topk
         if entry.uses > 0 {
             self.batches_size += get_record_batch_memory_size(&entry.batch);
+            self.total_rows += entry.batch.num_rows();
             self.batches.insert(entry.id, entry);
         }
     }
@@ -1002,6 +1007,7 @@ impl RecordBatchStore {
     fn clear(&mut self) {
         self.batches.clear();
         self.batches_size = 0;
+        self.total_rows = 0;
     }
 
     fn get(&self, id: u32) -> Option<&RecordBatchEntry> {
@@ -1011,15 +1017,6 @@ impl RecordBatchStore {
     /// returns the total number of batches stored in this store
     fn len(&self) -> usize {
         self.batches.len()
-    }
-
-    /// Returns the total number of rows in batches minus the number
-    /// which are in use
-    fn unused_rows(&self) -> usize {
-        self.batches
-            .values()
-            .map(|batch_entry| batch_entry.batch.num_rows() - batch_entry.uses)
-            .sum()
     }
 
     /// returns true if the store has nothing stored
@@ -1045,6 +1042,11 @@ impl RecordBatchStore {
                 .batches_size
                 .checked_sub(get_record_batch_memory_size(&old_entry.batch))
                 .unwrap();
+
+            self.total_rows = self
+                .total_rows
+                .checked_sub(old_entry.batch.num_rows())
+                .unwrap();
         }
     }
 
@@ -1060,7 +1062,7 @@ impl RecordBatchStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float64Array, Int32Array};
+    use arrow::array::{BooleanArray, Float64Array, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::assert_batches_eq;
@@ -1099,20 +1101,15 @@ mod tests {
         assert_eq!(record_batch_store.batches_size, 0);
     }
 
-    /// This test validates that the `try_finish` method marks the TopK operator as finished
-    /// when the prefix (on column "a") of the last row in the current batch is strictly greater
-    /// than the max top‑k row.
-    /// The full sort expression is defined on both columns ("a", "b"), but the input ordering is only on "a".
-    #[tokio::test]
-    async fn test_try_finish_marks_finished_with_prefix() -> Result<()> {
-        // Create a schema with two columns.
+    /// Builds an `(a Int32, b Float64)` schema and a `TopK` with full sort
+    /// `(a ASC, b ASC)`, input prefix `[a]`, `k = 3`, `batch_size = 2`. Used by
+    /// the prefix-completion tests below to keep their per-scenario logic in focus.
+    fn build_ab_prefix_topk() -> Result<(Arc<Schema>, TopK)> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Float64, false),
         ]));
 
-        // Create sort expressions.
-        // Full sort: first by "a", then by "b".
         let sort_expr_a = PhysicalSortExpr {
             expr: col("a", schema.as_ref())?,
             options: SortOptions::default(),
@@ -1122,28 +1119,33 @@ mod tests {
             options: SortOptions::default(),
         };
 
-        // Input ordering uses only column "a" (a prefix of the full sort).
+        // Input ordering uses only column "a" (a prefix of the full sort on (a, b)).
         let prefix = vec![sort_expr_a.clone()];
         let full_expr = LexOrdering::from([sort_expr_a, sort_expr_b]);
 
-        // Create a dummy runtime environment and metrics.
-        let runtime = Arc::new(RuntimeEnv::default());
-        let metrics = ExecutionPlanMetricsSet::new();
-
-        // Create a TopK instance with k = 3 and batch_size = 2.
-        let mut topk = TopK::try_new(
+        let topk = TopK::try_new(
             0,
             Arc::clone(&schema),
             prefix,
             full_expr,
             3,
             2,
-            runtime,
-            &metrics,
+            Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
             Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
                 DynamicFilterPhysicalExpr::new(vec![], lit(true)),
             )))),
         )?;
+        Ok((schema, topk))
+    }
+
+    /// This test validates that the `try_finish` method marks the TopK operator as finished
+    /// when the prefix (on column "a") of the last row in the current batch is strictly greater
+    /// than the max top‑k row.
+    /// The full sort expression is defined on both columns ("a", "b"), but the input ordering is only on "a".
+    #[tokio::test]
+    async fn test_try_finish_marks_finished_with_prefix() -> Result<()> {
+        let (schema, mut topk) = build_ab_prefix_topk()?;
 
         // Create the first batch with two columns:
         // Column "a": [1, 1, 2], Column "b": [20.0, 15.0, 30.0].
@@ -1196,6 +1198,67 @@ mod tests {
         Ok(())
     }
 
+    /// Regression test for #22849: a batch whose rows are entirely rejected by the
+    /// heap's dynamic filter must still trigger `attempt_early_completion` when its
+    /// last row's prefix is worse than the heap's worst.
+    ///
+    /// Before the fix, the `!filter.has_true()` short-circuit returned without calling
+    /// `attempt_early_completion`. Because the heap's filter is itself derived from the
+    /// heap's worst row, a batch from a strictly-worse prefix is exactly the case the
+    /// filter rejects entirely — i.e. the very signal the early-exit was designed to
+    /// detect was being silently dropped.
+    #[tokio::test]
+    async fn test_try_finish_fires_when_filter_rejects_entire_batch() -> Result<()> {
+        let (schema, mut topk) = build_ab_prefix_topk()?;
+
+        // Batch 1 fills the heap with (1, 20.0), (1, 15.0), (2, 30.0).
+        // heap.max becomes (a=2, b=30.0); update_filter tightens the heap filter to
+        //   a < 2 OR (a = 2 AND b < 30.0).
+        let array_a1: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(2)]));
+        let array_b1: ArrayRef = Arc::new(Float64Array::from(vec![20.0, 15.0, 30.0]));
+        let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![array_a1, array_b1])?;
+        topk.insert_batch(batch1)?;
+        assert!(
+            !topk.finished,
+            "Expected 'finished' to be false after batch 1 \
+             (last row prefix a=2 equals heap.max prefix a=2, not strictly greater)."
+        );
+
+        // Batch 2: every row has a=3, so the heap's filter (a < 2 OR (a = 2 AND b < 30))
+        // rejects every row. Before the fix, `insert_batch` would short-circuit on
+        //   `!filter.has_true()` and return without checking the prefix; `finished`
+        // would stay false even though no future batch could improve the heap.
+        let array_a2: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(3)]));
+        let array_b2: ArrayRef = Arc::new(Float64Array::from(vec![10.0, 20.0]));
+        let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![array_a2, array_b2])?;
+        topk.insert_batch(batch2)?;
+        assert!(
+            topk.finished,
+            "Expected 'finished' to be true after batch 2 \
+             (filter rejected every row, but the batch's last row prefix a=3 \
+              is strictly greater than heap.max prefix a=2)."
+        );
+
+        // The emitted top-k is unchanged from after batch 1 since none of batch 2's
+        // rows could improve the heap.
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+---+------+",
+                "| a | b    |",
+                "+---+------+",
+                "| 1 | 15.0 |",
+                "| 1 | 20.0 |",
+                "| 2 | 30.0 |",
+                "+---+------+",
+            ],
+            &results
+        );
+
+        Ok(())
+    }
+
     /// This test verifies that the dynamic filter is marked as complete after TopK processing finishes.
     #[tokio::test]
     async fn test_topk_marks_filter_complete() -> Result<()> {
@@ -1240,6 +1303,186 @@ mod tests {
         // After emit is called, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
         dynamic_filter_clone.wait_complete().await;
+
+        Ok(())
+    }
+
+    /// Tests that memory-based compaction triggers when a large batch
+    /// has very few rows referenced by the top-k heap.
+    #[tokio::test]
+    async fn test_topk_memory_compaction() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let sort_expr = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+
+        let full_expr = LexOrdering::from([sort_expr.clone()]);
+        let prefix = vec![sort_expr];
+
+        let runtime = Arc::new(RuntimeEnv::default());
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let k = 5;
+        let mut topk = TopK::try_new(
+            0,
+            Arc::clone(&schema),
+            prefix,
+            full_expr,
+            k,
+            8192,
+            runtime,
+            &metrics,
+            Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+                DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+            )))),
+        )?;
+
+        // Insert a large batch (100,000 rows) with values 1..=100_000.
+        // Only the smallest 5 values (1..=5) will end up in the heap.
+        let large_values: Vec<i32> = (1..=100_000).collect();
+        let array1: ArrayRef = Arc::new(Int32Array::from(large_values));
+        let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![array1])?;
+        topk.insert_batch(batch1)?;
+
+        // After the first batch, store has 1 batch — compaction should
+        // not trigger (guard: store.len() <= 1).
+        assert_eq!(
+            topk.heap.store.len(),
+            1,
+            "should have 1 batch before second insert"
+        );
+
+        // Insert a second batch whose values displace entries in the heap.
+        // -1 and 0 are smaller than the current top-5 (1..=5), so they
+        // produce 2 replacements. With replacements > 0, `insert_batch`
+        // calls `insert_batch_entry` (briefly making store.len() == 2)
+        // and then `maybe_compact`, which should collapse it back to 1.
+        let array2: ArrayRef = Arc::new(Int32Array::from(vec![-1, 0]));
+        let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![array2])?;
+        let replacements_before = topk.metrics.row_replacements.value();
+        topk.insert_batch(batch2)?;
+
+        // Sanity check: batch2 was actually integrated. Without
+        // replacements, `maybe_compact` is never called and the
+        // store-length assertion below would pass vacuously.
+        assert!(
+            topk.metrics.row_replacements.value() > replacements_before,
+            "batch2 must produce replacements so compaction is exercised"
+        );
+
+        // The compacted-estimate guard is `total_rows <= num_rows * 2`,
+        // i.e. 100_002 <= 10, which is false, so compaction fires and
+        // collapses the two stored batches back into one.
+        assert_eq!(
+            topk.heap.store.len(),
+            1,
+            "store should be compacted to 1 batch"
+        );
+
+        // Verify the emitted results are correct (top 5 ascending).
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+", "| a  |", "+----+", "| -1 |", "| 0  |", "| 1  |", "| 2  |",
+                "| 3  |", "+----+",
+            ],
+            &results
+        );
+
+        Ok(())
+    }
+
+    /// Negative path: when stored rows are close to the heap size,
+    /// compaction must NOT fire even with multiple batches present,
+    /// because the savings would be marginal
+    /// (guard: `total_rows <= num_rows * 2`).
+    ///
+    /// Uses a bit-packed `BooleanArray` so that future changes to the
+    /// compaction heuristic that reintroduce a per-byte estimate
+    /// (where integer truncation could misbehave on sub-byte types)
+    /// are caught here.
+    #[tokio::test]
+    async fn test_topk_memory_compaction_skipped_when_marginal() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
+
+        let sort_expr = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+        let full_expr = LexOrdering::from([sort_expr.clone()]);
+        let prefix = vec![sort_expr];
+
+        let runtime = Arc::new(RuntimeEnv::default());
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let k = 10;
+        let mut topk = TopK::try_new(
+            0,
+            Arc::clone(&schema),
+            prefix,
+            full_expr,
+            k,
+            8192,
+            runtime,
+            &metrics,
+            Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+                DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+            )))),
+        )?;
+
+        // Two small batches; every row from both batches ends up referenced
+        // by the heap, so total_rows == num_rows == 10.
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(BooleanArray::from(vec![false, false, true, true, true]))
+                    as ArrayRef,
+            ],
+        )?;
+        topk.insert_batch(batch1)?;
+
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(BooleanArray::from(vec![false, false, false, true, true]))
+                    as ArrayRef,
+            ],
+        )?;
+        topk.insert_batch(batch2)?;
+
+        // Guard `total_rows <= num_rows * 2` should hold (10 <= 20),
+        // so compaction is skipped and BOTH batches remain in the store.
+        assert_eq!(
+            topk.heap.store.len(),
+            2,
+            "store must keep 2 batches when savings would be marginal"
+        );
+        assert_eq!(topk.heap.inner.len(), 10, "heap should hold all 10 rows");
+
+        // Output is still correct (5 falses then 5 trues ascending).
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+-------+",
+                "| a     |",
+                "+-------+",
+                "| false |",
+                "| false |",
+                "| false |",
+                "| false |",
+                "| false |",
+                "| true  |",
+                "| true  |",
+                "| true  |",
+                "| true  |",
+                "| true  |",
+                "+-------+",
+            ],
+            &results
+        );
 
         Ok(())
     }

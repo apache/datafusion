@@ -72,6 +72,7 @@ use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
+use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_functions::core::getfield::GetFieldFunc;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
@@ -260,6 +261,9 @@ struct PushdownChecker<'schema> {
     non_primitive_columns: bool,
     /// Does the expression reference any columns not present in the file schema?
     projected_columns: bool,
+    /// Does the expression references a ScalarUDF that requires some rewrite
+    /// and therefore can't be pushed down into the row-filter.
+    has_unpushable_udfs: bool,
     /// Indices into the file schema of columns required to evaluate the expression.
     /// Does not include struct columns accessed via `get_field`.
     required_columns: Vec<usize>,
@@ -276,6 +280,7 @@ impl<'schema> PushdownChecker<'schema> {
         Self {
             non_primitive_columns: false,
             projected_columns: false,
+            has_unpushable_udfs: false,
             required_columns: Vec::new(),
             struct_field_accesses: Vec::new(),
             allow_list_columns,
@@ -372,7 +377,7 @@ impl<'schema> PushdownChecker<'schema> {
 
     #[inline]
     fn prevents_pushdown(&self) -> bool {
-        self.non_primitive_columns || self.projected_columns
+        self.non_primitive_columns || self.projected_columns || self.has_unpushable_udfs
     }
 
     /// Consumes the checker and returns sorted, deduplicated column indices
@@ -482,6 +487,13 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
             && let Some(recursion) = self.check_single_column(column.name())
         {
             return Ok(recursion);
+        }
+
+        if ScalarFunctionExpr::try_downcast_func::<FileRowIndexFunc>(node.as_ref())
+            .is_some()
+        {
+            self.has_unpushable_udfs = true;
+            return Ok(TreeNodeRecursion::Jump);
         }
 
         Ok(TreeNodeRecursion::Continue)
@@ -1080,6 +1092,70 @@ pub fn build_row_filter(
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|filters| Some(RowFilter::new(filters)))
+}
+
+/// Builds row filters for decoder runs.
+///
+/// A [`RowFilter`] must be owned by a decoder, so scans split across multiple
+/// decoder runs need a fresh filter for each run that evaluates row predicates.
+/// The first filter is built eagerly during construction so callers can cheaply
+/// query [`has_row_filter`](Self::has_row_filter) before splitting the scan.
+pub(crate) struct RowFilterGenerator<'a> {
+    predicate: Option<&'a Arc<dyn PhysicalExpr>>,
+    physical_file_schema: &'a SchemaRef,
+    file_metadata: &'a ParquetMetaData,
+    reorder_predicates: bool,
+    file_metrics: &'a ParquetFileMetrics,
+    first_row_filter: Option<RowFilter>,
+}
+
+impl<'a> RowFilterGenerator<'a> {
+    pub(crate) fn new(
+        predicate: Option<&'a Arc<dyn PhysicalExpr>>,
+        physical_file_schema: &'a SchemaRef,
+        file_metadata: &'a ParquetMetaData,
+        reorder_predicates: bool,
+        file_metrics: &'a ParquetFileMetrics,
+    ) -> Self {
+        let mut generator = Self {
+            predicate,
+            physical_file_schema,
+            file_metadata,
+            reorder_predicates,
+            file_metrics,
+            first_row_filter: None,
+        };
+        generator.first_row_filter = generator.build();
+        generator
+    }
+
+    pub(crate) fn has_row_filter(&self) -> bool {
+        self.first_row_filter.is_some()
+    }
+
+    pub(crate) fn next_filter(&mut self) -> Option<RowFilter> {
+        self.first_row_filter.take().or_else(|| self.build())
+    }
+
+    fn build(&self) -> Option<RowFilter> {
+        let predicate = self.predicate?;
+        match build_row_filter(
+            predicate,
+            self.physical_file_schema,
+            self.file_metadata,
+            self.reorder_predicates,
+            self.file_metrics,
+        ) {
+            Ok(Some(filter)) => Some(filter),
+            Ok(None) => None,
+            Err(e) => {
+                log::debug!(
+                    "Ignoring error building row filter for '{predicate:?}': {e}"
+                );
+                None
+            }
+        }
+    }
 }
 
 #[cfg(test)]

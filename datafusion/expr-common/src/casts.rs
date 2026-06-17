@@ -31,7 +31,31 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::ScalarValue;
 
-/// Convert a literal value from one data type to another
+/// Convert a literal [`ScalarValue`] to `target_type`, preserving the exact value.
+///
+/// Returns `None` if the value cannot be represented in `target_type`
+/// *exactly*.
+///
+/// This is a restricted, value-preserving cast used to rewrite comparison
+/// predicates of the form `CAST(col AS target_type) <op> literal` into
+/// `col <op> try_cast_literal_to_type(literal, col_type)`. That rewrite is
+/// only valid when the cast cannot change the comparison result.
+///
+/// # Supported Casts
+/// * numeric → numeric, including integers, decimals, `Date32`/`Date64` and
+///   `Timestamp`s, rejecting values outside the target's range or that would
+///   lose decimal digits
+/// * string → string between `Utf8`, `LargeUtf8` and `Utf8View`
+/// * wrapping a value into, or unwrapping it out of, a `Dictionary` whose value
+///   type matches the literal's type
+/// * `Binary` → `FixedSizeBinary` of the matching length
+/// * `Timestamp` → `Timestamp` cast between different time units is allowed even
+///   though it can truncate (for example nanoseconds → seconds), and a unit
+///   conversion that overflows yields a `NULL` literal rather than `None`.
+///
+/// # See Also
+/// - [`ScalarValue::cast_to`]: a general-purpose cast that can lose information
+///   or change a value's meaning.
 pub fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,

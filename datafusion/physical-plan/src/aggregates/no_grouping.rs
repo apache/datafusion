@@ -23,6 +23,7 @@ use crate::aggregates::{
     finalize_aggregation,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -370,6 +371,9 @@ impl AggregateStream {
                     Some(Err(e)) => Err(e),
                     None => {
                         this.finished = true;
+                        // Release the input pipeline's resources before finalization.
+                        let input_schema = this.input.schema();
+                        this.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                         let timer = this.baseline_metrics.elapsed_compute().timer();
                         let result =
                             finalize_aggregation(&mut this.accumulators, &this.mode)

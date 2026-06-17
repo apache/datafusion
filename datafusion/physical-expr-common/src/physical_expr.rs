@@ -37,6 +37,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr_common::statistics::Distribution;
 
 use itertools::izip;
@@ -72,7 +73,9 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 /// [`Column`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/expressions/struct.Column.html
 pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
-    /// Get the data type of this expression, given the schema of the input
+    /// Get the data type of this expression, given the schema of the input.
+    /// Returns an error if the data type cannot be determined, ex. if the
+    /// schema is missing a required field.
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         Ok(self.return_field(input_schema)?.data_type().to_owned())
     }
@@ -250,6 +253,11 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// statistics accordingly. The default implementation simply creates an
     /// unknown output distribution by combining input ranges. This logic loses
     /// distribution information, but is a safe default.
+    #[deprecated(
+        since = "54.0.0",
+        note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+    )]
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         let children_ranges = children
             .iter()
@@ -298,6 +306,11 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// default implementation simply creates an unknown distribution if it can
     /// narrow the range by propagating ranges. This logic loses distribution
     /// information, but is a safe default.
+    #[deprecated(
+        since = "54.0.0",
+        note = "Part of the unused Statistics V2 framework; see https://github.com/apache/datafusion/pull/22071"
+    )]
+    #[expect(deprecated)]
     fn propagate_statistics(
         &self,
         parent: &Distribution,
@@ -463,6 +476,304 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// serialization boundary.
     fn expression_id(&self) -> Option<u64> {
         None
+    }
+
+    /// Serialize this expression to a [`PhysicalExprNode`] proto message.
+    ///
+    /// Returning `Ok(None)` means "this expression does not know how to
+    /// serialize itself"; the caller (typically `datafusion-proto`) will fall
+    /// back to its existing codec / extension paths. This matches today's
+    /// behavior for expressions that aren't built into `datafusion-proto`.
+    ///
+    /// Returning `Ok(Some(node))` means the expression has serialized itself
+    /// fully; the caller should not try any further fallback path.
+    ///
+    /// Returning `Err(_)` means a real serialization failure (e.g. the
+    /// expression knows it should serialize but a child failed).
+    ///
+    /// The motivating use case is letting expressions with private state
+    /// (e.g. `DynamicFilterPhysicalExpr`'s `RwLock`-protected inner fields)
+    /// reach into their own internals for `try_to_proto`/`try_from_proto`
+    /// without having to expose `pub` accessors to `datafusion-proto`. See
+    /// <https://github.com/apache/datafusion/issues/21835>.
+    ///
+    /// The `try_` prefix matches the fallible `try_from_proto` decode
+    /// constructors (and the `TryFromProto` trait in `datafusion-proto`);
+    /// both sides of the round-trip are fallible and named consistently.
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        Ok(None)
+    }
+}
+
+/// Encode-side context for [`PhysicalExpr::try_to_proto`].
+///
+/// Expression authors only ever see [`proto_encode::PhysicalExprEncodeCtx`]:
+/// a concrete struct with stable methods. Internally it dispatches to a
+/// [`proto_encode::PhysicalExprEncode`] implementor that lives in
+/// `datafusion-proto`, which is what lets `physical-expr-common` stay free
+/// of `datafusion-proto` as a dep.
+///
+/// More specialized helpers (e.g. encoding UDFs/UDAFs/UDWFs through the
+/// extension codec) can be added to the context as expressions migrate;
+/// today they're not required because the encoder forwards to the existing
+/// codec via the proto converter.
+#[cfg(feature = "proto")]
+pub mod proto_encode {
+    use std::sync::Arc;
+
+    use datafusion_common::Result;
+    use datafusion_proto_models::protobuf::PhysicalExprNode;
+
+    use super::PhysicalExpr;
+
+    /// Encoder context handed to [`super::PhysicalExpr::try_to_proto`].
+    ///
+    /// Wraps an internal [`PhysicalExprEncode`] trait object so callers see a
+    /// stable concrete type while implementations can evolve in
+    /// `datafusion-proto`.
+    pub struct PhysicalExprEncodeCtx<'a> {
+        encoder: &'a dyn PhysicalExprEncode,
+    }
+
+    impl<'a> PhysicalExprEncodeCtx<'a> {
+        /// Construct a new encode context. Typically called by
+        /// `datafusion-proto`; expression authors receive `&PhysicalExprEncodeCtx`.
+        pub fn new(encoder: &'a dyn PhysicalExprEncode) -> Self {
+            Self { encoder }
+        }
+
+        /// Encode a child expression. Routes through the configured encoder
+        /// so dedup-aware encoding is preserved.
+        pub fn encode_child(
+            &self,
+            expr: &Arc<dyn PhysicalExpr>,
+        ) -> Result<PhysicalExprNode> {
+            self.encoder.encode(expr)
+        }
+
+        /// Encode a sequence of child expressions, preserving order.
+        ///
+        /// Convenience wrapper over [`Self::encode_child`] for expressions
+        /// holding a `repeated` proto field (e.g. the `list` of an `InList`).
+        /// The first encode error short-circuits.
+        pub fn encode_children_expressions<'b, I>(
+            &self,
+            exprs: I,
+        ) -> Result<Vec<PhysicalExprNode>>
+        where
+            I: IntoIterator<Item = &'b Arc<dyn PhysicalExpr>>,
+        {
+            exprs
+                .into_iter()
+                .map(|expr| self.encode_child(expr))
+                .collect()
+        }
+    }
+
+    /// Internal dispatch trait. Implementors live in `datafusion-proto` and
+    /// wrap the existing `PhysicalExtensionCodec` +
+    /// `PhysicalProtoConverterExtension` plumbing. Expression authors should
+    /// use [`PhysicalExprEncodeCtx`] instead of calling this directly.
+    pub trait PhysicalExprEncode {
+        /// Encode an expression to a protobuf node.
+        fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode>;
+    }
+}
+
+/// Decode-side counterpart to [`proto_encode`].
+///
+/// Expression authors implement an associated `try_from_proto` on their
+/// concrete type, with the signature
+///
+/// ```ignore
+/// fn try_from_proto(
+///     node: &PhysicalExprNode,
+///     ctx: &PhysicalExprDecodeCtx<'_>,
+/// ) -> Result<Arc<dyn PhysicalExpr>>
+/// ```
+///
+/// It takes the whole [`PhysicalExprNode`] — the exact inverse of what
+/// [`PhysicalExpr::try_to_proto`] returns — so the constructor can also see
+/// outer-node fields such as `expr_id`. The central match in
+/// `datafusion-proto` dispatches `ExprType` variants to these constructors.
+///
+/// As with the encode side, the public surface is a struct (not a `&dyn`
+/// trait) so future fields/helpers (registries for third-party expressions,
+/// schema-resolution caches, etc.) can be added without changing the
+/// signature every expression depends on.
+///
+/// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+#[cfg(feature = "proto")]
+pub mod proto_decode {
+    use std::sync::Arc;
+
+    use arrow::datatypes::Schema;
+    use datafusion_common::Result;
+    use datafusion_proto_models::protobuf::PhysicalExprNode;
+
+    use super::PhysicalExpr;
+
+    /// Open the outer [`PhysicalExprNode`] and assert it carries the expected
+    /// `ExprType` variant, returning the inner payload (auto-derefs through
+    /// `Box`) or bailing with an `Internal` error.
+    ///
+    /// Every `try_from_proto` starts with the same six-line `match`:
+    ///
+    /// ```ignore
+    /// let try_cast = match &node.expr_type {
+    ///     Some(protobuf::physical_expr_node::ExprType::TryCast(x)) => x.as_ref(),
+    ///     _ => return internal_err!("PhysicalExprNode is not a TryCastExpr"),
+    /// };
+    /// ```
+    ///
+    /// With this macro that collapses to:
+    ///
+    /// ```ignore
+    /// let try_cast = expect_expr_variant!(
+    ///     node,
+    ///     protobuf::physical_expr_node::ExprType::TryCast,
+    ///     "TryCastExpr",
+    /// );
+    /// ```
+    ///
+    /// Pass the variant as a `::` path so the macro stays agnostic to how
+    /// the caller imports the proto types.
+    #[macro_export]
+    macro_rules! expect_expr_variant {
+        ($node:expr, $variant:path, $expr_name:literal $(,)?) => {{
+            match &$node.expr_type {
+                ::core::option::Option::Some($variant(inner)) => inner,
+                _ => {
+                    return ::datafusion_common::internal_err!(concat!(
+                        "PhysicalExprNode is not a ",
+                        $expr_name
+                    ));
+                }
+            }
+        }};
+    }
+    #[doc(inline)]
+    pub use expect_expr_variant;
+
+    /// Decoder context handed to per-expression `try_from_proto` constructors.
+    ///
+    /// Wraps an internal [`PhysicalExprDecode`] trait object plus a borrowed
+    /// schema. The trait stays an implementation detail of `datafusion-proto`;
+    /// expression authors only see this struct.
+    pub struct PhysicalExprDecodeCtx<'a> {
+        schema: &'a Schema,
+        decoder: &'a dyn PhysicalExprDecode,
+    }
+
+    impl<'a> PhysicalExprDecodeCtx<'a> {
+        /// Construct a new decode context. Typically called by
+        /// `datafusion-proto`; expression authors receive
+        /// `&PhysicalExprDecodeCtx`.
+        pub fn new(schema: &'a Schema, decoder: &'a dyn PhysicalExprDecode) -> Self {
+            Self { schema, decoder }
+        }
+
+        /// The schema bound to this decode context. Use it for column lookups,
+        /// data-type resolution, etc.
+        pub fn schema(&self) -> &Schema {
+            self.schema
+        }
+
+        /// Decode an expression node, recursing into child sub-expressions.
+        ///
+        /// Routes built-in `ExprType` variants through `datafusion-proto`'s
+        /// central match and forwards extension nodes to the registered codec
+        /// (today via [`PhysicalExtensionCodec::try_decode_expr`]; later via
+        /// a per-type registry — see #21835).
+        ///
+        /// [`PhysicalExtensionCodec::try_decode_expr`]: https://docs.rs/datafusion-proto/latest/datafusion_proto/physical_plan/trait.PhysicalExtensionCodec.html#method.try_decode_expr
+        pub fn decode(&self, node: &PhysicalExprNode) -> Result<Arc<dyn PhysicalExpr>> {
+            self.decoder.decode(node, self.schema)
+        }
+
+        /// Decode a required child node, erroring if it is absent.
+        ///
+        /// Proto child expressions are encoded as `Option<Box<PhysicalExprNode>>`;
+        /// pass the field directly (e.g. `node.expr.as_deref()`). `expr_name`
+        /// is the expression being decoded (e.g. `"InListExpr"`) and `field`
+        /// the proto field (e.g. `"expr"`); both are woven into the error so
+        /// it names *where* the missing field is, without each author
+        /// hand-rolling the string.
+        pub fn decode_required_expression(
+            &self,
+            node: Option<&PhysicalExprNode>,
+            expr_name: &str,
+            field: &str,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            let node = node.ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "{expr_name} is missing required field '{field}'"
+                )
+            })?;
+            self.decode(node)
+        }
+
+        /// Decode a sequence of child nodes, preserving order.
+        ///
+        /// Convenience wrapper over [`Self::decode`] for expressions holding a
+        /// `repeated` proto field (e.g. the `list` of an `InList`). The first
+        /// decode error short-circuits.
+        pub fn decode_children_expressions<'b, I>(
+            &self,
+            nodes: I,
+        ) -> Result<Vec<Arc<dyn PhysicalExpr>>>
+        where
+            I: IntoIterator<Item = &'b PhysicalExprNode>,
+        {
+            nodes.into_iter().map(|node| self.decode(node)).collect()
+        }
+    }
+
+    /// Unwrap a required non-expression proto field.
+    ///
+    /// Mirrors [`PhysicalExprDecodeCtx::decode_required_expression`] for proto
+    /// fields that aren't [`PhysicalExprNode`]s — e.g. the `arrow_type` of a
+    /// `PhysicalCastNode` or the `scalar` of a `PhysicalLiteralNode`. Keeps
+    /// the "missing required field" message format identical across
+    /// expressions:
+    ///
+    /// ```ignore
+    /// let arrow_type = require_proto_field(
+    ///     cast_expr.arrow_type.as_ref(),
+    ///     "CastExpr",
+    ///     "arrow_type",
+    /// )?;
+    /// ```
+    pub fn require_proto_field<T>(
+        opt: Option<T>,
+        expr_name: &str,
+        field: &str,
+    ) -> Result<T> {
+        opt.ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "{expr_name} is missing required field '{field}'"
+            )
+        })
+    }
+
+    /// Internal dispatch trait. Implementors live in `datafusion-proto`.
+    /// Expression authors should use [`PhysicalExprDecodeCtx`] instead of
+    /// calling this directly.
+    pub trait PhysicalExprDecode {
+        /// Decode a proto node into a concrete `PhysicalExpr`. The schema is
+        /// passed alongside so implementations can support recursive children
+        /// and rebind the context per call (e.g. for nested plans).
+        fn decode(
+            &self,
+            node: &PhysicalExprNode,
+            schema: &Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>>;
     }
 }
 
@@ -683,6 +994,12 @@ pub fn snapshot_generation(expr: &Arc<dyn PhysicalExpr>) -> u64 {
 /// Check if the given `PhysicalExpr` is dynamic.
 /// Internally this calls [`snapshot_generation`] to check if the generation is non-zero,
 /// any dynamic `PhysicalExpr` should have a non-zero generation.
+#[deprecated(
+    since = "55.0.0",
+    note = "Downcast to `DynamicFilterPhysicalExpr`, or use \
+    `DynamicFilterTracking::classify(expr).contains_dynamic_filter()` from \
+    `datafusion_physical_expr`"
+)]
 pub fn is_dynamic_physical_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     // If the generation is non-zero, then this `PhysicalExpr` is dynamic.
     snapshot_generation(expr) != 0
@@ -893,5 +1210,85 @@ mod test {
             &unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![true; 5]),
         );
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod proto_helper_tests {
+    use datafusion_common::DataFusionError;
+    use datafusion_proto_models::protobuf::{
+        self, PhysicalColumn, PhysicalExprNode, physical_expr_node,
+    };
+
+    use crate::expect_expr_variant;
+    use crate::physical_expr::proto_decode::require_proto_field;
+
+    fn column_node() -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::Column(PhysicalColumn {
+                name: "a".to_string(),
+                index: 0,
+            })),
+        }
+    }
+
+    #[test]
+    fn require_proto_field_returns_inner() {
+        let v = require_proto_field(Some(7_u32), "FooExpr", "answer").unwrap();
+        assert_eq!(v, 7);
+    }
+
+    #[test]
+    fn require_proto_field_reports_missing() {
+        let err = require_proto_field::<u32>(None, "FooExpr", "answer").unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("FooExpr is missing required field 'answer'")
+        ));
+    }
+
+    fn expect_column(
+        node: &PhysicalExprNode,
+    ) -> Result<&PhysicalColumn, DataFusionError> {
+        let inner =
+            expect_expr_variant!(node, physical_expr_node::ExprType::Column, "Column",);
+        Ok(inner)
+    }
+
+    #[test]
+    fn expect_expr_variant_returns_inner_payload() {
+        let node = column_node();
+        let col = expect_column(&node).unwrap();
+        assert_eq!(col.name, "a");
+    }
+
+    #[test]
+    fn expect_expr_variant_rejects_wrong_variant() {
+        let node = PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::Negative(Box::new(
+                protobuf::PhysicalNegativeNode { expr: None },
+            ))),
+        };
+        let err = expect_column(&node).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a Column")
+        ));
+    }
+
+    #[test]
+    fn expect_expr_variant_rejects_missing_expr_type() {
+        let node = PhysicalExprNode {
+            expr_id: None,
+            expr_type: None,
+        };
+        let err = expect_column(&node).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a Column")
+        ));
     }
 }
