@@ -726,11 +726,11 @@ fn make_bytearray_batch(
     let name: StringArray = std::iter::repeat_n(Some(name), num_rows).collect();
     let service_string: StringArray = string_values.iter().map(Some).collect();
     let service_binary: BinaryArray = binary_values.iter().map(Some).collect();
-    let service_fixedsize: FixedSizeBinaryArray = fixedsize_values
-        .iter()
-        .map(|value| Some(value.as_slice()))
-        .collect::<Vec<_>>()
-        .into();
+    let service_fixedsize = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+        fixedsize_values.iter().map(|value| Some(value.as_slice())),
+        3,
+    )
+    .unwrap();
     let service_large_binary: LargeBinaryArray =
         large_binary_values.iter().map(Some).collect();
 

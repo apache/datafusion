@@ -132,11 +132,10 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // update / merge are the same
-        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+        self.update_batch(values, group_indices, None, total_num_groups)
     }
 
     fn size(&self) -> usize {

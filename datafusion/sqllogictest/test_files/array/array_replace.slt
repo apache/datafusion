@@ -118,6 +118,37 @@ select array_replace(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 
 ----
 [1, 2, 3, 4, 5]
 
+# A NULL-typed array argument returns NULL, for both literal and multi-row
+# column inputs.
+query ?
+select array_replace(NULL, 1, 2);
+----
+NULL
+
+query ?
+select array_replace_n(NULL, 1, 2, 3);
+----
+NULL
+
+query ?
+select array_replace_all(NULL, 1, 2);
+----
+NULL
+
+query ?
+select array_replace(column1, 1, 2) from (values (NULL), (NULL), (NULL));
+----
+NULL
+NULL
+NULL
+
+query ?
+select array_replace(column1, column2, column3) from (values (NULL, 1, 2), (NULL, 3, 4), (NULL, 5, 6)) as t(column1, column2, column3);
+----
+NULL
+NULL
+NULL
+
 # array_replace scalar function with columns #1
 query ?
 select array_replace(column1, column2, column3) from arrays_with_repeating_elements;
