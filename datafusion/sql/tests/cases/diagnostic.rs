@@ -17,13 +17,17 @@
 
 use datafusion_functions::string;
 use insta::assert_snapshot;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
 
 use datafusion_common::diagnostic::DiagnosticKind;
 use datafusion_common::{Diagnostic, Location, Result, Span};
 use datafusion_sql::{
-    parser::{DFParser, DFParserBuilder},
+    parser::{DFParser, DFParserBuilder, Statement as DFStatement},
     planner::{ParserOptions, SqlToRel},
+    sqlparser::{
+        ast::{Expr as SQLExpr, visit_expressions_mut},
+        tokenizer::Span as SQLParserSpan,
+    },
 };
 use regex::Regex;
 
@@ -58,6 +62,10 @@ fn do_query_warnings(sql: &'static str) -> Vec<Diagnostic> {
         .expect("unable to create parser")
         .parse_statement()
         .expect("unable to parse query");
+    do_statement_warnings(statement)
+}
+
+fn do_statement_warnings(statement: DFStatement) -> Vec<Diagnostic> {
     let options = ParserOptions {
         collect_spans: true,
         ..ParserOptions::default()
@@ -69,6 +77,18 @@ fn do_query_warnings(sql: &'static str) -> Vec<Diagnostic> {
         .statement_to_plan(statement)
         .expect("expected planning to succeed");
     sql_to_rel.take_warnings()
+}
+
+fn clear_value_spans(statement: &mut DFStatement) {
+    let DFStatement::Statement(statement) = statement else {
+        panic!("expected sqlparser statement");
+    };
+    let _ = visit_expressions_mut(statement.as_mut(), |expr| {
+        if let SQLExpr::Value(value) = expr {
+            value.span = SQLParserSpan::empty();
+        }
+        ControlFlow::<()>::Continue(())
+    });
 }
 
 /// Given a query that contains tag delimited spans, returns a mapping from the
@@ -509,6 +529,39 @@ fn test_eq_null_warning_nested_in_case_predicate() -> Result<()> {
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
     assert_eq!(warnings[0].span, Some(spans["cmp"]));
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_warning_under_is_null_predicate() -> Result<()> {
+    let query = "SELECT * FROM person WHERE (/*cmp*/first_name = /*null*/NULL/*null+cmp*/) IS NULL";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_eq!(warnings[0].span, Some(spans["cmp"]));
+    assert_eq!(warnings[0].helps[0].span, Some(spans["null"]));
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_warning_without_null_span() -> Result<()> {
+    let query = "SELECT * FROM person WHERE first_name = NULL";
+    let mut statement = DFParserBuilder::new(query)
+        .build()
+        .expect("unable to create parser")
+        .parse_statement()
+        .expect("unable to parse query");
+    clear_value_spans(&mut statement);
+
+    let warnings = do_statement_warnings(statement);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_snapshot!(
+        warnings[0].message,
+        @"comparison with NULL using `=` always evaluates to NULL"
+    );
+    assert_eq!(warnings[0].helps[0].span, None);
     Ok(())
 }
 

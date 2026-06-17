@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::ControlFlow;
+
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
@@ -23,7 +25,7 @@ use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
     DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
     ExprWithAlias as SQLExprWithAlias, JsonPath, MapEntry, Spanned, StructField,
-    Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
+    Subscript, TrimWhereField, TypedString, Value, ValueWithSpan, visit_expressions,
 };
 
 use datafusion_common::{
@@ -56,13 +58,15 @@ mod value;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn warn_on_null_equality_predicate(&self, predicate: &SQLExpr) {
-        fn null_value_span(expr: &SQLExpr) -> Option<Span> {
-            match expr {
-                SQLExpr::Value(ValueWithSpan {
-                    value: Value::Null,
-                    span,
-                }) => Span::try_from_sqlparser_span(*span),
-                _ => None,
+        fn null_value_span(expr: &SQLExpr) -> Option<Option<Span>> {
+            if let SQLExpr::Value(ValueWithSpan {
+                value: Value::Null,
+                span,
+            }) = expr
+            {
+                Some(Span::try_from_sqlparser_span(*span))
+            } else {
+                None
             }
         }
 
@@ -70,6 +74,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let SQLExpr::BinaryOp { left, op, right } = expr else {
                 return None;
             };
+
+            let null_span = null_value_span(left).or_else(|| null_value_span(right))?;
 
             let (message, help) = match op {
                 BinaryOperator::Eq => (
@@ -83,69 +89,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 _ => return None,
             };
 
-            let null_span = null_value_span(left).or_else(|| null_value_span(right));
-            null_span.map(|null_span| {
+            Some(
                 Diagnostic::new_warning(
                     message,
                     Span::try_from_sqlparser_span(expr.span()),
                 )
-                .with_help(help, Some(null_span))
-            })
+                .with_help(help, null_span),
+            )
         }
 
-        fn collect_null_equality_warnings(
-            expr: &SQLExpr,
-            warnings: &mut Vec<Diagnostic>,
-        ) {
+        let _ = visit_expressions(predicate, |expr| {
             if let Some(warning) = null_equality_warning(expr) {
-                warnings.push(warning);
+                self.add_warning(warning);
             }
-
-            match expr {
-                SQLExpr::BinaryOp { left, right, .. }
-                | SQLExpr::IsDistinctFrom(left, right)
-                | SQLExpr::IsNotDistinctFrom(left, right) => {
-                    collect_null_equality_warnings(left, warnings);
-                    collect_null_equality_warnings(right, warnings);
-                }
-                SQLExpr::Nested(expr)
-                | SQLExpr::UnaryOp { expr, .. }
-                | SQLExpr::IsFalse(expr)
-                | SQLExpr::IsNotFalse(expr)
-                | SQLExpr::IsTrue(expr)
-                | SQLExpr::IsNotTrue(expr)
-                | SQLExpr::IsUnknown(expr)
-                | SQLExpr::IsNotUnknown(expr)
-                | SQLExpr::OuterJoin(expr)
-                | SQLExpr::Prior(expr) => {
-                    collect_null_equality_warnings(expr, warnings);
-                }
-                SQLExpr::Case {
-                    operand,
-                    conditions,
-                    else_result,
-                    ..
-                } => {
-                    if let Some(operand) = operand {
-                        collect_null_equality_warnings(operand, warnings);
-                    }
-                    for condition in conditions {
-                        collect_null_equality_warnings(&condition.condition, warnings);
-                        collect_null_equality_warnings(&condition.result, warnings);
-                    }
-                    if let Some(else_result) = else_result {
-                        collect_null_equality_warnings(else_result, warnings);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let mut warnings = vec![];
-        collect_null_equality_warnings(predicate, &mut warnings);
-        for warning in warnings {
-            self.add_warning(warning);
-        }
+            ControlFlow::<()>::Continue(())
+        });
     }
 
     pub(crate) fn sql_expr_to_logical_expr_with_alias(
