@@ -448,7 +448,7 @@ main() {
                     run_hj
                     run_tpcds
                     run_smj
-                    run_dict 
+                    run_dict
                     ;;
                 tpch)
                     run_tpch "1" "parquet"

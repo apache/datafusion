@@ -74,7 +74,7 @@ The SQL benchmarking tool uses the following environment variables:
 | DATA_DIR              | Root directory for benchmark data loaded by SQL benchmark files. When unset, uses `data` (relative to the benchmarks/ directory).                                                                 |
 | SIMULATE_LATENCY      | Simulate object store latency to mimic remote storage (e.g. S3). Adds random latency in the range 20-200ms to each object store operation.                                                        |
 | MEM_POOL_TYPE         | The memory pool type to use, should be one of "fair" or "greedy".                                                                                                                                 |
-| MEMORY_LIMIT          | Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query if there's any, otherwise run with no memory limit.                                       | 
+| MEMORY_LIMIT          | Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query if there's any, otherwise run with no memory limit.                                       |
 
 Example – Run the H2O window benchmarks on the 'small' sized CSV data files:
 
