@@ -1186,12 +1186,20 @@ impl LogicalPlan {
                 options,
                 ..
             }) => {
-                self.assert_no_expressions(expr)?;
+                let exec_columns = if expr.is_empty() {
+                    columns.clone()
+                } else {
+                    expr.into_iter()
+                        .map(|e| match e {
+                            Expr::Column(c) => Ok(c),
+                            other => internal_err!(
+                                "Expected Expr::Column for Unnest exec_columns, got {other:?}"
+                            ),
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                };
                 let input = self.only_input(inputs)?;
-                // Update schema with unnested column type.
-                let new_plan =
-                    unnest_with_options(input, columns.clone(), options.clone())?;
-                Ok(new_plan)
+                Ok(unnest_with_options(input, exec_columns, options.clone())?)
             }
         }
     }
@@ -6599,6 +6607,55 @@ mod tests {
             "USING join should have all fields"
         );
         assert_eq!(using_join.join_constraint, JoinConstraint::Using);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unnest_with_new_exprs_accepts_expressions() -> Result<()> {
+        use crate::LogicalPlanBuilder;
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let schema = Schema::new(vec![
+            Field::new("list_col", DataType::new_list(DataType::Int32, true), true),
+            Field::new("other_col", DataType::Int32, true),
+        ]);
+        let plan = table_scan(Some("t"), &schema, None)?.build()?;
+        let unnest_plan = LogicalPlanBuilder::from(plan)
+            .unnest_column("list_col")?
+            .build()?;
+
+        let exprs = unnest_plan.expressions();
+        assert!(!exprs.is_empty(), "Unnest should expose exec_columns");
+        assert_eq!(exprs.len(), 1);
+        assert!(matches!(&exprs[0], Expr::Column(c) if c.name == "list_col"));
+
+        let inputs: Vec<LogicalPlan> =
+            unnest_plan.inputs().into_iter().cloned().collect();
+        let rebuilt = unnest_plan.with_new_exprs(exprs, inputs)?;
+        assert_eq!(rebuilt.schema(), unnest_plan.schema());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unnest_with_new_exprs_empty_preserves_columns() -> Result<()> {
+        use crate::LogicalPlanBuilder;
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let schema = Schema::new(vec![
+            Field::new("list_col", DataType::new_list(DataType::Int32, true), true),
+            Field::new("other_col", DataType::Int32, true),
+        ]);
+        let plan = table_scan(Some("t"), &schema, None)?.build()?;
+        let unnest_plan = LogicalPlanBuilder::from(plan)
+            .unnest_column("list_col")?
+            .build()?;
+
+        let inputs: Vec<LogicalPlan> =
+            unnest_plan.inputs().into_iter().cloned().collect();
+        let rebuilt = unnest_plan.with_new_exprs(vec![], inputs)?;
+        assert_eq!(rebuilt.schema(), unnest_plan.schema());
 
         Ok(())
     }
