@@ -50,7 +50,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use parking_lot::RwLock;
 
-/// Global TopK
+/// TopK
 ///
 /// # Background
 ///
@@ -85,10 +85,13 @@ use parking_lot::RwLock;
 /// # Partial Sort Optimization
 ///
 /// This implementation additionally optimizes queries where the input is already
-/// partially sorted by a common prefix of the requested ordering. Once the top K
-/// heap is full, if subsequent rows are guaranteed to be strictly greater (in sort
-/// order) on this prefix than the largest row currently stored, the operator
-/// safely terminates early.
+/// partially sorted by a common prefix of the requested ordering. If subsequent
+/// rows are guaranteed to be strictly greater (in sort order) than a known TopK
+/// boundary on this prefix, the operator safely terminates early.
+///
+/// For a local TopK, that boundary comes from the local heap once it has K rows.
+/// For a partitioned `SortExec`, a shared dynamic-filter threshold can provide
+/// the same prefix boundary before a lagging partition has filled its local heap.
 ///
 /// ## Example
 ///
@@ -138,10 +141,12 @@ pub struct TopK {
 /// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
 #[derive(Debug)]
 pub struct TopKDynamicFilters {
-    /// The current *global* threshold for the dynamic filter.
-    /// This is shared across all partitions and is updated by any of them.
-    /// Stored as row bytes for efficient comparison.
-    threshold_row: Option<Vec<u8>>,
+    /// The current threshold shared by all TopK emitters that use this dynamic
+    /// filter. Any emitter may tighten it.
+    ///
+    /// The full sort-key row and common-prefix row are stored together so they
+    /// always describe the same heap row.
+    shared_threshold: Option<TopKThreshold>,
     /// The expression used to evaluate the dynamic filter
     /// Only updated when lock held for the duration of the update
     expr: Arc<DynamicFilterPhysicalExpr>,
@@ -155,6 +160,39 @@ pub struct TopKDynamicFilters {
     /// concurrent emitters use this atomic counter instead of taking an
     /// exclusive lock just to mark their partition done.
     remaining_topk_emitters: AtomicUsize,
+}
+
+#[derive(Debug, Clone)]
+struct TopKThreshold {
+    /// The full sort-key row bytes for efficient comparison.
+    full_sort_key_row: Vec<u8>,
+    /// The same heap row encoded with the common-prefix converter, when the
+    /// input ordering shares a prefix with the TopK ordering.
+    ///
+    /// This lets each partition stop from a shared TopK threshold even if its
+    /// local heap has not filled yet.
+    common_prefix_row: Option<Vec<u8>>,
+}
+
+impl TopKThreshold {
+    fn new(full_sort_key_row: Vec<u8>, common_prefix_row: Option<Vec<u8>>) -> Self {
+        Self {
+            full_sort_key_row,
+            common_prefix_row,
+        }
+    }
+
+    fn full_sort_key_row(&self) -> &[u8] {
+        self.full_sort_key_row.as_slice()
+    }
+
+    fn common_prefix_row(&self) -> Option<&[u8]> {
+        self.common_prefix_row.as_deref()
+    }
+
+    fn is_more_selective_than(&self, current: &Self) -> bool {
+        self.full_sort_key_row() < current.full_sort_key_row()
+    }
 }
 
 impl TopKDynamicFilters {
@@ -171,7 +209,7 @@ impl TopKDynamicFilters {
     ) -> Self {
         debug_assert!(topk_emitter_count > 0);
         Self {
-            threshold_row: None,
+            shared_threshold: None,
             expr,
             remaining_topk_emitters: AtomicUsize::new(topk_emitter_count),
         }
@@ -247,7 +285,7 @@ impl TopK {
         let scratch_rows =
             row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
 
-        let prefix_row_converter = if common_sort_prefix.is_empty() {
+        let common_prefix_row_converter = if common_sort_prefix.is_empty() {
             None
         } else {
             let input_sort_fields = build_sort_fields(&common_sort_prefix, &schema)?;
@@ -263,7 +301,7 @@ impl TopK {
             row_converter,
             scratch_rows,
             heap: TopKHeap::new(k),
-            common_sort_prefix_converter: prefix_row_converter,
+            common_sort_prefix_converter: common_prefix_row_converter,
             common_sort_prefix: Arc::from(common_sort_prefix),
             finished: false,
             filter,
@@ -402,18 +440,18 @@ impl TopK {
             return Ok(());
         };
 
-        let new_threshold_row = &max_row.row;
+        let new_threshold_row = max_row.row();
 
         // Fast path: check if the current value in topk is better than what is
         // currently set in the filter with a read only lock
         let needs_update = self
             .filter
             .read()
-            .threshold_row
+            .shared_threshold
             .as_ref()
-            .map(|current_row| {
+            .map(|current_threshold| {
                 // new < current means new threshold is more selective
-                new_threshold_row < current_row
+                new_threshold_row < current_threshold.full_sort_key_row()
             })
             .unwrap_or(true); // No current threshold, so we need to set one
 
@@ -430,33 +468,25 @@ impl TopK {
 
         // Build the filter expression OUTSIDE any synchronization
         let predicate = Self::build_filter_expression(&self.expr, &thresholds)?;
-        let new_threshold = new_threshold_row.to_vec();
+        let new_threshold = TopKThreshold::new(
+            new_threshold_row.to_vec(),
+            self.encode_topk_common_prefix_row(max_row)?,
+        );
 
         // update the threshold. Since there was a lock gap, we must check if it is still the best
         // may have changed while we were building the expression without the lock
         let mut filter = self.filter.write();
-        let old_threshold = filter.threshold_row.take();
-
-        // Update filter if we successfully updated the threshold
-        // (or if there was no previous threshold and we're the first)
-        match old_threshold {
-            Some(old_threshold) => {
-                // new threshold is still better than the old one
-                if new_threshold.as_slice() < old_threshold.as_slice() {
-                    filter.threshold_row = Some(new_threshold);
-                } else {
-                    // some other thread updated the threshold to a better
-                    // one while we were building so there is no need to
-                    // update the filter
-                    filter.threshold_row = Some(old_threshold);
-                    return Ok(());
-                }
-            }
-            None => {
-                // No previous threshold, so we can set the new one
-                filter.threshold_row = Some(new_threshold);
-            }
-        };
+        let still_needs_update = filter
+            .shared_threshold
+            .as_ref()
+            .map(|current| new_threshold.is_more_selective_than(current))
+            .unwrap_or(true);
+        if !still_needs_update {
+            // some other thread updated the threshold to a better one while we
+            // were building so there is no need to update the filter
+            return Ok(());
+        }
+        filter.shared_threshold = Some(new_threshold);
 
         // Update the filter expression
         if let Some(pred) = predicate
@@ -554,24 +584,21 @@ impl TopK {
         Ok(dynamic_predicate)
     }
 
-    /// If input ordering shares a common sort prefix with the TopK, and if the TopK's heap is full,
+    /// If input ordering shares a common sort prefix with the TopK,
     /// check if the computation can be finished early.
-    /// This is the case if the last row of the current batch is strictly greater than the max row in the heap,
-    /// comparing only on the shared prefix columns.
+    ///
+    /// This is the case if the last row of the current batch is strictly
+    /// greater than either the shared dynamic-filter threshold prefix or the max
+    /// row in the local heap, comparing only on the shared prefix columns.
     fn attempt_early_completion(&mut self, batch: &RecordBatch) -> Result<()> {
         // Early exit if the batch is empty as there is no last row to extract from it.
         if batch.num_rows() == 0 {
             return Ok(());
         }
 
-        // prefix_row_converter is only `Some` if the input ordering has a common prefix with the TopK,
+        // common_prefix_row_converter is only `Some` if the input ordering has a common prefix with the TopK,
         // so early exit if it is `None`.
         let Some(prefix_converter) = &self.common_sort_prefix_converter else {
-            return Ok(());
-        };
-
-        // Early exit if the heap is not full (`heap.max()` only returns `Some` if the heap is full).
-        let Some(max_topk_row) = self.heap.max() else {
             return Ok(());
         };
 
@@ -580,52 +607,86 @@ impl TopK {
         let mut batch_prefix_scratch =
             prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW); // 1 row with capacity ESTIMATED_BYTES_PER_ROW
 
-        self.compute_common_sort_prefix(batch, last_row_idx, &mut batch_prefix_scratch)?;
-
-        // Retrieve the max row from the heap.
-        let store_entry = self
-            .heap
-            .store
-            .get(max_topk_row.batch_id)
-            .ok_or(internal_datafusion_err!("Invalid batch id in topK heap"))?;
-        let max_batch = &store_entry.batch;
-        let mut heap_prefix_scratch =
-            prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW); // 1 row with capacity ESTIMATED_BYTES_PER_ROW
-        self.compute_common_sort_prefix(
-            max_batch,
-            max_topk_row.index,
-            &mut heap_prefix_scratch,
+        self.append_common_prefix_row(
+            prefix_converter,
+            batch,
+            last_row_idx,
+            &mut batch_prefix_scratch,
         )?;
+        let batch_common_prefix_row = batch_prefix_scratch.row(0);
+        let batch_common_prefix = batch_common_prefix_row.as_ref();
+
+        let finished_by_shared_threshold = self
+            .filter
+            .read()
+            .shared_threshold
+            .as_ref()
+            .and_then(TopKThreshold::common_prefix_row)
+            .map(|common_prefix_row| batch_common_prefix > common_prefix_row)
+            .unwrap_or(false);
+        if finished_by_shared_threshold {
+            self.finished = true;
+            return Ok(());
+        }
+
+        // Early exit if the heap is not full (`heap.max()` only returns `Some` if the heap is full).
+        let Some(max_topk_row) = self.heap.max() else {
+            return Ok(());
+        };
+
+        // Encode the local heap max row's common-prefix projection.
+        let Some(heap_common_prefix_row) =
+            self.encode_topk_common_prefix_row(max_topk_row)?
+        else {
+            return Ok(());
+        };
 
         // If the last row's prefix is strictly greater than the max prefix, mark as finished.
-        if batch_prefix_scratch.row(0).as_ref() > heap_prefix_scratch.row(0).as_ref() {
+        if batch_common_prefix > heap_common_prefix_row.as_slice() {
             self.finished = true;
         }
 
         Ok(())
     }
 
-    // Helper function to compute the prefix for a given batch and row index, storing the result in scratch.
-    fn compute_common_sort_prefix(
+    fn encode_topk_common_prefix_row(
         &self,
+        topk_row: &TopKRow,
+    ) -> Result<Option<Vec<u8>>> {
+        let Some(prefix_converter) = &self.common_sort_prefix_converter else {
+            return Ok(None);
+        };
+
+        let store_entry = self
+            .heap
+            .store
+            .get(topk_row.batch_id)
+            .ok_or(internal_datafusion_err!("Invalid batch id in topK heap"))?;
+        let mut scratch = prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW);
+        self.append_common_prefix_row(
+            prefix_converter,
+            &store_entry.batch,
+            topk_row.index,
+            &mut scratch,
+        )?;
+        Ok(Some(scratch.row(0).as_ref().to_vec()))
+    }
+
+    fn append_common_prefix_row(
+        &self,
+        prefix_converter: &RowConverter,
         batch: &RecordBatch,
-        last_row_idx: usize,
+        row_idx: usize,
         scratch: &mut Rows,
     ) -> Result<()> {
-        let last_row: Vec<ArrayRef> = self
+        let row = batch.slice(row_idx, 1);
+        let prefix_columns: Vec<ArrayRef> = self
             .common_sort_prefix
             .iter()
-            .map(|expr| {
-                expr.expr
-                    .evaluate(&batch.slice(last_row_idx, 1))?
-                    .into_array(1)
-            })
+            .map(|expr| expr.expr.evaluate(&row)?.into_array(1))
             .collect::<Result<_>>()?;
 
-        self.common_sort_prefix_converter
-            .as_ref()
-            .unwrap()
-            .append(scratch, &last_row)?;
+        prefix_converter.append(scratch, &prefix_columns)?;
         Ok(())
     }
 
@@ -1148,8 +1209,12 @@ mod tests {
     }
 
     fn make_ab_schema() -> SchemaRef {
+        make_ab_schema_with_nullable_a(false)
+    }
+
+    fn make_ab_schema_with_nullable_a(a_nullable: bool) -> SchemaRef {
         Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
+            Field::new("a", DataType::Int32, a_nullable),
             Field::new("b", DataType::Float64, false),
         ]))
     }
@@ -1160,15 +1225,35 @@ mod tests {
         ))))
     }
 
+    fn make_shared_topk_filter(
+        topk_emitter_count: usize,
+    ) -> Arc<RwLock<TopKDynamicFilters>> {
+        Arc::new(RwLock::new(
+            TopKDynamicFilters::new_with_topk_emitter_count(
+                Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true))),
+                topk_emitter_count,
+            ),
+        ))
+    }
+
     /// Builds the `(a, b)` fixture used by prefix-completion tests:
     /// full sort `(a, b)`, input prefix `[a]`, `k = 3`, and batch size 2.
     fn make_ab_topk(
         schema: SchemaRef,
         filter: Arc<RwLock<TopKDynamicFilters>>,
     ) -> Result<TopK> {
+        make_ab_topk_with_options(0, schema, filter, SortOptions::default())
+    }
+
+    fn make_ab_topk_with_options(
+        partition_id: usize,
+        schema: SchemaRef,
+        filter: Arc<RwLock<TopKDynamicFilters>>,
+        a_options: SortOptions,
+    ) -> Result<TopK> {
         let sort_expr_a = PhysicalSortExpr {
             expr: col("a", schema.as_ref())?,
-            options: SortOptions::default(),
+            options: a_options,
         };
         let sort_expr_b = PhysicalSortExpr {
             expr: col("b", schema.as_ref())?,
@@ -1176,7 +1261,7 @@ mod tests {
         };
 
         TopK::try_new(
-            0,
+            partition_id,
             schema,
             vec![sort_expr_a.clone()],
             LexOrdering::from([sort_expr_a, sort_expr_b]),
@@ -1200,6 +1285,13 @@ mod tests {
                 Arc::new(Float64Array::from(b.to_vec())) as ArrayRef,
             ],
         )?)
+    }
+
+    type AbRow = (Option<i32>, f64);
+
+    fn make_ab_rows_batch(schema: SchemaRef, rows: &[AbRow]) -> Result<RecordBatch> {
+        let (a, b): (Vec<_>, Vec<_>) = rows.iter().copied().unzip();
+        make_ab_batch(schema, &a, &b)
     }
 
     #[tokio::test]
@@ -1320,6 +1412,126 @@ mod tests {
             &results
         );
 
+        Ok(())
+    }
+
+    struct SharedPrefixCase {
+        name: &'static str,
+        a_nullable: bool,
+        a_options: SortOptions,
+        threshold_source_rows: &'static [AbRow],
+        lagging_partition_rows: &'static [AbRow],
+        expected_finished: bool,
+    }
+
+    fn assert_shared_prefix_case(case: SharedPrefixCase) -> Result<()> {
+        let schema = make_ab_schema_with_nullable_a(case.a_nullable);
+        let filter = make_shared_topk_filter(2);
+
+        let mut threshold_source = make_ab_topk_with_options(
+            0,
+            Arc::clone(&schema),
+            Arc::clone(&filter),
+            case.a_options,
+        )?;
+        threshold_source.insert_batch(make_ab_rows_batch(
+            Arc::clone(&schema),
+            case.threshold_source_rows,
+        )?)?;
+        assert!(
+            filter
+                .read()
+                .shared_threshold
+                .as_ref()
+                .and_then(TopKThreshold::common_prefix_row)
+                .is_some(),
+            "{}: threshold-source partition should establish the shared prefix threshold",
+            case.name
+        );
+
+        let mut lagging_partition = make_ab_topk_with_options(
+            1,
+            Arc::clone(&schema),
+            Arc::clone(&filter),
+            case.a_options,
+        )?;
+        lagging_partition
+            .insert_batch(make_ab_rows_batch(schema, case.lagging_partition_rows)?)?;
+
+        assert!(
+            lagging_partition.heap.inner.is_empty(),
+            "{}: lagging partition's local heap should remain empty",
+            case.name
+        );
+        assert_eq!(
+            lagging_partition.finished, case.expected_finished,
+            "{}",
+            case.name
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_shared_filter_can_finish_partition_before_local_heap_is_full() -> Result<()> {
+        assert_shared_prefix_case(SharedPrefixCase {
+            name: "shared threshold should finish lagging partition",
+            a_nullable: false,
+            a_options: SortOptions::default(),
+            threshold_source_rows: &[(Some(1), 20.0), (Some(1), 15.0), (Some(2), 30.0)],
+            lagging_partition_rows: &[(Some(3), 10.0), (Some(3), 20.0)],
+            expected_finished: true,
+        })
+    }
+
+    #[test]
+    fn test_shared_prefix_threshold_boundary_cases() -> Result<()> {
+        for case in [
+            SharedPrefixCase {
+                name: "equal prefix cannot prove completion",
+                a_nullable: false,
+                a_options: SortOptions::default(),
+                threshold_source_rows: &[
+                    (Some(1), 20.0),
+                    (Some(1), 15.0),
+                    (Some(2), 30.0),
+                ],
+                lagging_partition_rows: &[(Some(2), 40.0), (Some(2), 50.0)],
+                expected_finished: false,
+            },
+            SharedPrefixCase {
+                name: "descending prefix uses sort-order row encoding",
+                a_nullable: false,
+                a_options: SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                },
+                threshold_source_rows: &[
+                    (Some(10), 1.0),
+                    (Some(10), 2.0),
+                    (Some(9), 3.0),
+                ],
+                lagging_partition_rows: &[(Some(8), 1.0), (Some(8), 2.0)],
+                expected_finished: true,
+            },
+            SharedPrefixCase {
+                name: "NULLS LAST prefix uses sort-order row encoding",
+                a_nullable: true,
+                a_options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+                threshold_source_rows: &[
+                    (Some(1), 20.0),
+                    (Some(1), 15.0),
+                    (Some(2), 30.0),
+                ],
+                lagging_partition_rows: &[(None, 10.0), (None, 20.0)],
+                expected_finished: true,
+            },
+        ] {
+            assert_shared_prefix_case(case)?;
+        }
         Ok(())
     }
 
