@@ -444,7 +444,7 @@ fn checked_scale_to_nanos(value: i64, scale: i64) -> Result<i64> {
     }
 }
 
-fn checked_scale_and_bin_to_nanos(
+fn checked_scale_and_bin_to_nanos_or_null(
     value: i64,
     scale: i64,
     stride: i64,
@@ -583,7 +583,7 @@ fn date_bin_impl(
         let scale = timestamp_scale::<T>();
         value
             .and_then(|value| {
-                checked_scale_and_bin_to_nanos(value, scale, stride, stride_fn, origin)
+                checked_scale_and_bin_to_nanos_or_null(value, scale, stride, stride_fn, origin)
             })
             .map(|binned| binned / scale)
     }
@@ -627,7 +627,7 @@ fn date_bin_impl(
             }
             let result = v
                 .and_then(|value| {
-                    checked_scale_and_bin_to_nanos(
+                    checked_scale_and_bin_to_nanos_or_null(
                         value as i64,
                         NANOS_PER_MILLI,
                         stride,
@@ -644,7 +644,7 @@ fn date_bin_impl(
             }
             let result = v
                 .and_then(|value| {
-                    checked_scale_and_bin_to_nanos(
+                    checked_scale_and_bin_to_nanos_or_null(
                         value as i64,
                         NANOS_PER_SEC,
                         stride,
@@ -672,7 +672,7 @@ fn date_bin_impl(
             }
             let result = v
                 .and_then(|value| {
-                    checked_scale_and_bin_to_nanos(
+                    checked_scale_and_bin_to_nanos_or_null(
                         value,
                         NANOS_PER_MICRO,
                         stride,
@@ -699,7 +699,7 @@ fn date_bin_impl(
 
                 // Per-row errors become NULL, matching scalar behavior.
                 let result: PrimitiveArray<T> = array.unary_opt(|value| {
-                    checked_scale_and_bin_to_nanos(value, scale, stride, stride_fn, origin)
+                    checked_scale_and_bin_to_nanos_or_null(value, scale, stride, stride_fn, origin)
                         .map(|binned| binned / scale)
                 });
 
@@ -737,7 +737,7 @@ fn date_bin_impl(
                     let array = array.as_primitive::<Time32MillisecondType>();
                     let result: PrimitiveArray<Time32MillisecondType> =
                         array.unary_opt(|value| {
-                            checked_scale_and_bin_to_nanos(
+                            checked_scale_and_bin_to_nanos_or_null(
                                 value as i64,
                                 NANOS_PER_MILLI,
                                 stride,
@@ -759,7 +759,7 @@ fn date_bin_impl(
                     let array = array.as_primitive::<Time32SecondType>();
                     let result: PrimitiveArray<Time32SecondType> =
                         array.unary_opt(|value| {
-                            checked_scale_and_bin_to_nanos(
+                            checked_scale_and_bin_to_nanos_or_null(
                                 value as i64,
                                 NANOS_PER_SEC,
                                 stride,
@@ -781,7 +781,7 @@ fn date_bin_impl(
                     let array = array.as_primitive::<Time64MicrosecondType>();
                     let result: PrimitiveArray<Time64MicrosecondType> =
                         array.unary_opt(|value| {
-                            checked_scale_and_bin_to_nanos(
+                            checked_scale_and_bin_to_nanos_or_null(
                                 value,
                                 NANOS_PER_MICRO,
                                 stride,
