@@ -378,7 +378,7 @@ async fn optimized_duckdb_unparse_qualifies_nested_passthrough_column() -> Resul
     // `o` (which is only the base-table alias one level deeper). The bug emitted
     // `"o"."order_id"` inside that derived table; the fix emits a bare column.
     let expected = concat!(
-        r#"SELECT "o"."order_id", "o"."discount_pct_2" "#,
+        r#"SELECT "oi"."order_id", "o"."discount_pct_2" "#,
         r#"FROM "warehouse"."main"."order_items" AS "oi" "#,
         r#"INNER JOIN (SELECT "order_id", "#,
         r#"CASE WHEN "__common_expr_1" IS NOT NULL "#,
