@@ -24,6 +24,7 @@ use arrow::{
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use std::mem::size_of;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use super::metrics::{
@@ -135,7 +136,7 @@ pub struct TopK {
 /// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
 ///
 /// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TopKDynamicFilters {
     /// The current *global* threshold for the dynamic filter.
     /// This is shared across all partitions and is updated by any of them.
@@ -144,19 +145,59 @@ pub struct TopKDynamicFilters {
     /// The expression used to evaluate the dynamic filter
     /// Only updated when lock held for the duration of the update
     expr: Arc<DynamicFilterPhysicalExpr>,
+    /// Number of local TopK emitters that have not called `emit` yet.
+    ///
+    /// A partition-preserving `SortExec` creates one local TopK per output
+    /// partition. The shared dynamic filter is complete only after every local
+    /// TopK has emitted.
+    ///
+    /// `emit` only needs a read guard on the shared filter wrapper, so
+    /// concurrent emitters use this atomic counter instead of taking an
+    /// exclusive lock just to mark their partition done.
+    remaining_topk_emitters: AtomicUsize,
 }
 
 impl TopKDynamicFilters {
     /// Create a new `TopKDynamicFilters` with the given expression
     pub fn new(expr: Arc<DynamicFilterPhysicalExpr>) -> Self {
+        Self::new_with_topk_emitter_count(expr, 1)
+    }
+
+    /// Create a new `TopKDynamicFilters` with the expected number of local
+    /// TopK emitters that share it.
+    pub fn new_with_topk_emitter_count(
+        expr: Arc<DynamicFilterPhysicalExpr>,
+        topk_emitter_count: usize,
+    ) -> Self {
+        debug_assert!(topk_emitter_count > 0);
         Self {
             threshold_row: None,
             expr,
+            remaining_topk_emitters: AtomicUsize::new(topk_emitter_count),
         }
     }
 
     pub fn expr(&self) -> Arc<DynamicFilterPhysicalExpr> {
         Arc::clone(&self.expr)
+    }
+
+    fn mark_topk_emitted(&self) {
+        let previous = self
+            .remaining_topk_emitters
+            .fetch_update(
+                AtomicOrdering::AcqRel,
+                AtomicOrdering::Acquire,
+                |remaining| remaining.checked_sub(1),
+            )
+            .unwrap_or(0);
+        debug_assert!(
+            previous > 0,
+            "TopK dynamic filter emitter completed more times than expected"
+        );
+
+        if previous == 1 {
+            self.expr.mark_complete();
+        }
     }
 }
 
@@ -606,8 +647,9 @@ impl TopK {
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
-        // Mark the dynamic filter as complete now that TopK processing is finished.
-        filter.read().expr().mark_complete();
+        // Mark this local TopK as emitted. For shared filters, the final
+        // local emitter marks the dynamic filter complete.
+        filter.read().mark_topk_emitted();
 
         // break into record batches as needed
         let mut batches = vec![];
@@ -1070,7 +1112,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::assert_batches_eq;
-    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::{DynamicFilterTracking, expressions::col};
     use futures::TryStreamExt;
 
     /// This test ensures the size calculation is correct for RecordBatches with multiple columns.
@@ -1281,50 +1323,101 @@ mod tests {
         Ok(())
     }
 
-    /// This test verifies that the dynamic filter is marked as complete after TopK processing finishes.
-    #[tokio::test]
-    async fn test_topk_marks_filter_complete() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    fn make_single_column_topk(
+        dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<(SchemaRef, TopK)> {
+        make_single_column_topk_with_filter(
+            0,
+            Arc::new(RwLock::new(TopKDynamicFilters::new(dynamic_filter))),
+        )
+    }
 
+    fn make_single_column_topk_with_filter(
+        partition_id: usize,
+        filter: Arc<RwLock<TopKDynamicFilters>>,
+    ) -> Result<(SchemaRef, TopK)> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let sort_expr = PhysicalSortExpr {
             expr: col("a", schema.as_ref())?,
             options: SortOptions::default(),
         };
 
-        let full_expr = LexOrdering::from([sort_expr.clone()]);
-        let prefix = vec![sort_expr];
-
-        // Create a dummy runtime environment and metrics
-        let runtime = Arc::new(RuntimeEnv::default());
-        let metrics = ExecutionPlanMetricsSet::new();
-
-        // Create a dynamic filter that we'll check for completion
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
-        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
-
-        // Create a TopK instance
-        let mut topk = TopK::try_new(
-            0,
+        let topk = TopK::try_new(
+            partition_id,
             Arc::clone(&schema),
-            prefix,
-            full_expr,
+            vec![sort_expr.clone()],
+            LexOrdering::from([sort_expr]),
             2,
             10,
-            runtime,
-            &metrics,
-            Arc::new(RwLock::new(TopKDynamicFilters::new(dynamic_filter))),
+            Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+            filter,
         )?;
+
+        Ok((schema, topk))
+    }
+
+    #[tokio::test]
+    async fn test_topk_marks_filter_complete() -> Result<()> {
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
+        let (schema, mut topk) = make_single_column_topk(dynamic_filter)?;
 
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(1), Some(2)]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array])?;
         topk.insert_batch(batch)?;
 
-        // Call emit to finish TopK processing
         let _results: Vec<_> = topk.emit()?.try_collect().await?;
 
-        // After emit is called, the dynamic filter should be marked as complete
-        // wait_complete() should return immediately
-        dynamic_filter_clone.wait_complete().await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            dynamic_filter_clone.wait_complete(),
+        )
+        .await
+        .expect("single-emitter TopK should mark the dynamic filter complete");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_shared_topk_filter_completes_after_last_emitter() -> Result<()> {
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
+        let shared_filter = Arc::new(RwLock::new(
+            TopKDynamicFilters::new_with_topk_emitter_count(dynamic_filter, 2),
+        ));
+
+        let (schema, mut topk_0) =
+            make_single_column_topk_with_filter(0, Arc::clone(&shared_filter))?;
+        let (_, mut topk_1) =
+            make_single_column_topk_with_filter(1, Arc::clone(&shared_filter))?;
+
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(1), Some(2)]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array])?;
+        topk_0.insert_batch(batch)?;
+        let _results: Vec<_> = topk_0.emit()?.try_collect().await?;
+
+        let dynamic_filter_expr: Arc<dyn PhysicalExpr> =
+            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter_clone);
+        assert!(
+            matches!(
+                DynamicFilterTracking::classify(&dynamic_filter_expr),
+                DynamicFilterTracking::Watching(_)
+            ),
+            "the shared filter should remain watchable until every TopK emits"
+        );
+
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(6), Some(4), Some(5)]));
+        let batch = RecordBatch::try_new(schema, vec![array])?;
+        topk_1.insert_batch(batch)?;
+        let _results: Vec<_> = topk_1.emit()?.try_collect().await?;
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            dynamic_filter_clone.wait_complete(),
+        )
+        .await
+        .expect("the final shared TopK emitter should mark the dynamic filter complete");
 
         Ok(())
     }
