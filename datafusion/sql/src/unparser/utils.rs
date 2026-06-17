@@ -22,7 +22,7 @@ use super::{
     rewrite::TableAliasRewriter,
 };
 use datafusion_common::{
-    Column, DataFusionError, Result, ScalarValue, TableReference,
+    Column, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
     assert_eq_or_internal_err, internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
@@ -389,11 +389,16 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
             }
             LogicalPlan::TableScan(table_scan) => {
                 let table_schema = table_scan.source.schema();
+                let filter_schema = DFSchema::try_from_qualified_schema(
+                    table_scan.table_name.clone(),
+                    table_schema.as_ref(),
+                )?;
                 // optional rewriter if table has an alias
                 let mut filter_alias_rewriter =
                     table_alias.as_ref().map(|alias_name| TableAliasRewriter {
-                        table_schema: &table_schema,
+                        table_schema: &filter_schema,
                         alias_name: alias_name.clone(),
+                        rewrite_unqualified: true,
                     });
 
                 // rewrite filters to use table alias if present
