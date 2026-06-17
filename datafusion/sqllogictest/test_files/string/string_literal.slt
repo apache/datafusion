@@ -391,6 +391,10 @@ SELECT repeat(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 3)
 ----
 foofoofoo
 
+query error DataFusion error: Execution error: string size overflow on repeat, max size is 2147483647, but got \d+
+SELECT repeat(x, 9223372036854775807)
+FROM (VALUES ('abc')) AS t(x);
+
 query T
 SELECT arrow_typeof(repeat('foo', 3))
 ----
@@ -426,6 +430,26 @@ SELECT replace(arrow_cast('foobar', 'LargeUtf8'), arrow_cast('bar', 'LargeUtf8')
 ----
 foohello
 
+# PostgreSQL compatibility: empty search string is a no-op (issue #22253)
+query T
+SELECT replace('abc', '', 'x')
+----
+abc
+
+query T
+SELECT replace(arrow_cast('abc', 'Dictionary(Int32, Utf8)'), '', 'x')
+----
+abc
+
+query T
+SELECT replace(arrow_cast('abc', 'Utf8View'), arrow_cast('', 'Utf8View'), arrow_cast('x', 'Utf8View'))
+----
+abc
+
+query T
+SELECT replace(arrow_cast('abc', 'LargeUtf8'), arrow_cast('', 'LargeUtf8'), arrow_cast('x', 'LargeUtf8'))
+----
+abc
 
 query T
 SELECT reverse('abcde')

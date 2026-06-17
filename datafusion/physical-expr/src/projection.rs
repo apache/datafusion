@@ -661,7 +661,7 @@ impl ProjectionExprs {
         for proj_expr in self.exprs.iter() {
             let expr = &proj_expr.expr;
             let col_stats = if let Some(col) = expr.downcast_ref::<Column>() {
-                std::mem::take(&mut stats.column_statistics[col.index()])
+                column_statistics_at(&stats.column_statistics, col.index())
             } else if let Some(literal) = expr.downcast_ref::<Literal>() {
                 // Handle literal expressions (constants) by calculating proper statistics
                 let data_type = expr.data_type(output_schema)?;
@@ -725,6 +725,60 @@ impl ProjectionExprs {
         stats.column_statistics = column_statistics;
         Ok(stats)
     }
+
+    /// Returns the output position of `column` if this projection contains it.
+    ///
+    /// This only matches projection expressions that are exactly [`Column`] expressions.
+    /// Computed expressions, even if they reference `column`, do not match. The
+    /// comparison uses [`Column`] equality, so both the name and index must match.
+    /// If the same column appears more than once, this returns the first matching
+    /// position.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use datafusion_common::ScalarValue;
+    /// use datafusion_physical_expr::expressions::{Column, Literal};
+    /// use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+    /// use std::sync::Arc;
+    ///
+    /// let projection = ProjectionExprs::new([
+    ///     ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+    ///     ProjectionExpr::new(
+    ///         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
+    ///         "answer",
+    ///     ),
+    ///     ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+    /// ]);
+    ///
+    /// assert_eq!(
+    ///     projection.projected_column_position(&Column::new("b", 1)),
+    ///     Some(0)
+    /// );
+    /// assert_eq!(
+    ///     projection.projected_column_position(&Column::new("a", 0)),
+    ///     Some(2)
+    /// );
+    ///
+    /// // The literal projection is not a Column expression.
+    /// assert_eq!(
+    ///     projection.projected_column_position(&Column::new("answer", 1)),
+    ///     None
+    /// );
+    ///
+    /// // Columns not present in the projection also return None.
+    /// assert_eq!(
+    ///     projection.projected_column_position(&Column::new("c", 2)),
+    ///     None
+    /// );
+    /// ```
+    pub fn projected_column_position(&self, column: &Column) -> Option<usize> {
+        self.iter().position(|expr| {
+            expr.expr
+                .downcast_ref::<Column>()
+                .is_some_and(|projected| projected == column)
+        })
+    }
 }
 
 /// Propagate column statistics through CAST projections. Other expressions
@@ -736,7 +790,7 @@ fn project_column_statistics_through_expr(
     column_stats: &[ColumnStatistics],
 ) -> ColumnStatistics {
     if let Some(col) = expr.downcast_ref::<Column>() {
-        return column_stats[col.index()].clone();
+        return column_statistics_at(column_stats, col.index());
     }
     let Some(cast_expr) = expr.downcast_ref::<CastExpr>() else {
         return ColumnStatistics::new_unknown();
@@ -758,6 +812,16 @@ fn project_column_statistics_through_expr(
         sum_value: Precision::Absent,
         byte_size: Precision::Absent,
     }
+}
+
+fn column_statistics_at(
+    column_stats: &[ColumnStatistics],
+    index: usize,
+) -> ColumnStatistics {
+    column_stats
+        .get(index)
+        .cloned()
+        .unwrap_or_else(ColumnStatistics::new_unknown)
 }
 
 impl<'a> IntoIterator for &'a ProjectionExprs {
@@ -2203,6 +2267,43 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_projected_column_position_returns_output_position() {
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(Arc::new(Column::new("col2", 2)), "col2"),
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "col0"),
+        ]);
+
+        assert_eq!(
+            projection.projected_column_position(&Column::new("col2", 2)),
+            Some(0)
+        );
+        assert_eq!(
+            projection.projected_column_position(&Column::new("col0", 0)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn test_projected_column_position_returns_none_for_non_column_or_missing() {
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(
+                Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+                "col1",
+            ),
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "col0"),
+        ]);
+
+        assert_eq!(
+            projection.projected_column_position(&Column::new("col1", 1)),
+            None
+        );
+        assert_eq!(
+            projection.projected_column_position(&Column::new("col2", 2)),
+            None
+        );
+    }
+
+    #[test]
     fn test_stats_projection_columns_only() {
         let source = get_stats();
         let schema = get_schema();
@@ -2861,6 +2962,107 @@ pub(crate) mod tests {
         assert_eq!(
             output_stats.column_statistics[0].max_value,
             Precision::Exact(ScalarValue::Int32(Some(21)))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_duplicate_column() -> Result<()> {
+        let input_stats = get_stats();
+        let col0 = input_stats.column_statistics[0].clone();
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "b"),
+        ]);
+
+        let output_schema = projection.project_schema(&get_schema())?;
+        let output_stats = projection.project_statistics(input_stats, &output_schema)?;
+
+        assert_eq!(output_stats.column_statistics, vec![col0.clone(), col0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_column_and_cast() -> Result<()> {
+        let input_stats = get_stats();
+        let col0 = input_stats.column_statistics[0].clone();
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "num"),
+            ProjectionExpr::new(
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("col0", 0)),
+                    DataType::Int32,
+                    None,
+                )),
+                "casted",
+            ),
+        ]);
+
+        let output_schema = projection.project_schema(&get_schema())?;
+        let output_stats = projection.project_statistics(input_stats, &output_schema)?;
+
+        assert_eq!(output_stats.column_statistics[0], col0);
+        assert_eq!(
+            output_stats.column_statistics[1],
+            ColumnStatistics {
+                min_value: Precision::Exact(ScalarValue::Int32(Some(-4))),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(21))),
+                distinct_count: Precision::Exact(5),
+                null_count: Precision::Exact(0),
+                sum_value: Precision::Absent,
+                byte_size: Precision::Absent,
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_missing_column_stats_are_unknown() -> Result<()> {
+        let mut input_stats = get_stats();
+        let input_schema = get_schema();
+        input_stats.column_statistics.truncate(2);
+
+        // The schema has col2, but the statistics do not. This can happen for
+        // source-provided virtual columns that are available at execution time
+        // but not represented in file-level statistics.
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col2", 2)),
+                alias: "virtual_col".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(CastExpr::new(
+                    Arc::new(Column::new("col2", 2)),
+                    DataType::Float64,
+                    None,
+                )),
+                alias: "casted_virtual_col".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col0", 0)),
+                alias: "physical_col".to_string(),
+            },
+        ]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        assert_eq!(output_stats.column_statistics.len(), 3);
+        assert_eq!(
+            output_stats.column_statistics[0],
+            ColumnStatistics::new_unknown()
+        );
+        assert_eq!(
+            output_stats.column_statistics[1],
+            ColumnStatistics::new_unknown()
+        );
+        assert_eq!(
+            output_stats.column_statistics[2].max_value,
+            Precision::Exact(ScalarValue::Int64(Some(21)))
         );
 
         Ok(())

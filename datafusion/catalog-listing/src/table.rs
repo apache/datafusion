@@ -32,7 +32,7 @@ use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
-    ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
+    ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
 use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
@@ -321,14 +321,15 @@ impl ListingTable {
 
     /// Creates a file source for this table
     fn create_file_source(&self) -> Arc<dyn FileSource> {
-        let table_schema = TableSchema::new(
-            Arc::clone(&self.file_schema),
-            self.options
-                .table_partition_cols
-                .iter()
-                .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
-                .collect(),
-        );
+        let table_schema = TableSchemaBuilder::from(&self.file_schema)
+            .with_table_partition_cols(
+                self.options
+                    .table_partition_cols
+                    .iter()
+                    .map(|(col, field)| Arc::new(Field::new(col, field.clone(), false)))
+                    .collect::<Vec<_>>(),
+            )
+            .build();
 
         self.options.format.file_source(table_schema)
     }
@@ -532,7 +533,7 @@ impl TableProvider for ListingTable {
                         &self.table_schema,
                         &partitioned_file_lists,
                         output_ordering,
-                        self.options.target_partitions,
+                        state.config().target_partitions(),
                     )
                 })
             })
@@ -540,7 +541,7 @@ impl TableProvider for ListingTable {
         {
             Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
             Some(Ok(new_groups)) => {
-                if new_groups.len() <= self.options.target_partitions {
+                if new_groups.len() <= state.config().target_partitions() {
                     partitioned_file_lists = new_groups;
                 } else {
                     log::debug!(
@@ -723,7 +724,7 @@ impl ListingTable {
         let files = file_list
             .map(|part_file| async {
                 let part_file = part_file?;
-                let (statistics, ordering) = if self.options.collect_stat {
+                let (statistics, ordering) = if ctx.config().collect_statistics() {
                     self.do_collect_statistics_and_ordering(ctx, &store, &part_file)
                         .await?
                 } else {
@@ -737,7 +738,7 @@ impl ListingTable {
             .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
         let (file_group, inexact_stats) =
-            get_files_with_limit(files, limit, self.options.collect_stat).await?;
+            get_files_with_limit(files, limit, ctx.config().collect_statistics()).await?;
 
         // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
         //
@@ -746,32 +747,32 @@ impl ListingTable {
         // hash repartitioning for aggregates and joins on partition columns.
         let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
-        let (file_groups, grouped_by_partition) = if threshold > 0
-            && !self.options.table_partition_cols.is_empty()
-        {
-            let grouped =
-                file_group.group_by_partition_values(self.options.target_partitions);
-            if grouped.len() >= threshold {
-                (grouped, true)
+        let (file_groups, grouped_by_partition) =
+            if threshold > 0 && !self.options.table_partition_cols.is_empty() {
+                let grouped = file_group
+                    .group_by_partition_values(ctx.config().target_partitions());
+                if grouped.len() >= threshold {
+                    (grouped, true)
+                } else {
+                    let all_files: Vec<_> =
+                        grouped.into_iter().flat_map(|g| g.into_inner()).collect();
+                    (
+                        FileGroup::new(all_files)
+                            .split_files(ctx.config().target_partitions()),
+                        false,
+                    )
+                }
             } else {
-                let all_files: Vec<_> =
-                    grouped.into_iter().flat_map(|g| g.into_inner()).collect();
                 (
-                    FileGroup::new(all_files).split_files(self.options.target_partitions),
+                    file_group.split_files(ctx.config().target_partitions()),
                     false,
                 )
-            }
-        } else {
-            (
-                file_group.split_files(self.options.target_partitions),
-                false,
-            )
-        };
+            };
 
         let (file_groups, stats) = compute_all_files_statistics(
             file_groups,
             self.schema(),
-            self.options.collect_stat,
+            ctx.config().collect_statistics(),
             inexact_stats,
         )?;
 

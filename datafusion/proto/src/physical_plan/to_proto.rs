@@ -35,14 +35,12 @@ use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion_physical_plan::expressions::{
-    CaseExpr, CastExpr, DynamicFilterPhysicalExpr, InListExpr, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
-};
-use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
+use datafusion_physical_plan::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
-use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
+use datafusion_physical_plan::{
+    Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, WindowExpr,
+};
 
 use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
@@ -302,172 +300,7 @@ pub fn serialize_physical_expr_with_converter(
         return Ok(node);
     }
 
-    // HashTableLookupExpr is used for dynamic filter pushdown in hash joins.
-    // It contains an Arc<dyn JoinHashMapType> (the build-side hash table) which
-    // cannot be serialized - the hash table is a runtime structure built during
-    // execution on the build side.
-    //
-    // We replace it with lit(true) which is safe because:
-    // 1. The filter is a performance optimization, not a correctness requirement
-    // 2. lit(true) passes all rows, so no valid rows are incorrectly filtered out
-    // 3. The join itself will still produce correct results, just without the
-    //    benefit of early filtering on the probe side
-    //
-    // In distributed execution, the remote worker won't have access to the hash
-    // table anyway, so the best we can do is skip this optimization.
-    if expr.downcast_ref::<HashTableLookupExpr>().is_some() {
-        let value = datafusion_proto_common::ScalarValue {
-            value: Some(datafusion_proto_common::scalar_value::Value::BoolValue(
-                true,
-            )),
-        };
-        return Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(value)),
-        });
-    }
-
-    if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
-                protobuf::UnknownColumn {
-                    name: expr.name().to_string(),
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<CaseExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(
-                protobuf::physical_expr_node::ExprType::Case(
-                    Box::new(
-                        protobuf::PhysicalCaseNode {
-                            expr: expr
-                                .expr()
-                                .map(|exp| {
-                                    proto_converter
-                                        .physical_expr_to_proto(exp, codec)
-                                        .map(Box::new)
-                                })
-                                .transpose()?,
-                            when_then_expr: expr
-                                .when_then_expr()
-                                .iter()
-                                .map(|(when_expr, then_expr)| {
-                                    serialize_when_then_expr(
-                                        when_expr,
-                                        then_expr,
-                                        codec,
-                                        proto_converter,
-                                    )
-                                })
-                                .collect::<Result<
-                                    Vec<protobuf::PhysicalWhenThen>,
-                                    DataFusionError,
-                                >>()?,
-                            else_expr: expr
-                                .else_expr()
-                                .map(|a| {
-                                    proto_converter
-                                        .physical_expr_to_proto(a, codec)
-                                        .map(Box::new)
-                                })
-                                .transpose()?,
-                        },
-                    ),
-                ),
-            ),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<NotExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(Box::new(
-                protobuf::PhysicalNot {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.arg(), codec)?,
-                    )),
-                },
-            ))),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<IsNullExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
-                Box::new(protobuf::PhysicalIsNull {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.arg(), codec)?,
-                    )),
-                }),
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<IsNotNullExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::IsNotNullExpr(
-                Box::new(protobuf::PhysicalIsNotNull {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.arg(), codec)?,
-                    )),
-                }),
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<InListExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
-                protobuf::PhysicalInListNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.expr(), codec)?,
-                    )),
-                    list: serialize_physical_exprs(expr.list(), codec, proto_converter)?,
-                    negated: expr.negated(),
-                },
-            ))),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
-                protobuf::PhysicalNegativeNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.arg(), codec)?,
-                    )),
-                },
-            ))),
-        })
-    } else if let Some(lit) = expr.downcast_ref::<Literal>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
-                lit.value().try_into()?,
-            )),
-        })
-    } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
-                protobuf::PhysicalCastNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(cast.expr(), codec)?,
-                    )),
-                    arrow_type: Some(cast.cast_type().try_into()?),
-                },
-            ))),
-        })
-    } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(Box::new(
-                protobuf::PhysicalTryCastNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(cast.expr(), codec)?,
-                    )),
-                    arrow_type: Some(cast.cast_type().try_into()?),
-                },
-            ))),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
+    if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
         let mut buf = Vec::new();
         codec.try_encode_udf(expr.fun(), &mut buf)?;
         Ok(protobuf::PhysicalExprNode {
@@ -483,37 +316,6 @@ pub fn serialize_physical_expr_with_converter(
                         .return_field(&Schema::empty())?
                         .name()
                         .to_string(),
-                },
-            )),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(Box::new(
-                protobuf::PhysicalLikeExprNode {
-                    negated: expr.negated(),
-                    case_insensitive: expr.case_insensitive(),
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.expr(), codec)?,
-                    )),
-                    pattern: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(expr.pattern(), codec)?,
-                    )),
-                },
-            ))),
-        })
-    } else if let Some(expr) = expr.downcast_ref::<HashExpr>() {
-        Ok(protobuf::PhysicalExprNode {
-            expr_id,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
-                protobuf::PhysicalHashExprNode {
-                    on_columns: serialize_physical_exprs(
-                        expr.on_columns(),
-                        codec,
-                        proto_converter,
-                    )?,
-                    seed0: expr.seed(),
-                    description: expr.description().to_string(),
                 },
             )),
         })
@@ -607,6 +409,11 @@ pub fn serialize_partitioning(
                 )),
             }
         }
+        Partitioning::Range(range) => protobuf::Partitioning {
+            partition_method: Some(protobuf::partitioning::PartitionMethod::Range(
+                serialize_range_partitioning(range, codec, proto_converter)?,
+            )),
+        },
         Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
             partition_method: Some(protobuf::partitioning::PartitionMethod::Unknown(
                 *partition_count as u64,
@@ -616,15 +423,37 @@ pub fn serialize_partitioning(
     Ok(serialized_partitioning)
 }
 
-fn serialize_when_then_expr(
-    when_expr: &Arc<dyn PhysicalExpr>,
-    then_expr: &Arc<dyn PhysicalExpr>,
+fn serialize_range_partitioning(
+    range: &RangePartitioning,
     codec: &dyn PhysicalExtensionCodec,
     proto_converter: &dyn PhysicalProtoConverterExtension,
-) -> Result<protobuf::PhysicalWhenThen> {
-    Ok(protobuf::PhysicalWhenThen {
-        when_expr: Some(proto_converter.physical_expr_to_proto(when_expr, codec)?),
-        then_expr: Some(proto_converter.physical_expr_to_proto(then_expr, codec)?),
+) -> Result<protobuf::PhysicalRangePartitioning> {
+    Ok(protobuf::PhysicalRangePartitioning {
+        sort_expr: serialize_physical_sort_exprs(
+            range.ordering().iter().cloned(),
+            codec,
+            proto_converter,
+        )?,
+        split_point: range
+            .split_points()
+            .iter()
+            .map(serialize_range_split_point)
+            .collect::<Result<_>>()?,
+    })
+}
+
+fn serialize_range_split_point(
+    split_point: &SplitPoint,
+) -> Result<protobuf::PhysicalRangeSplitPoint> {
+    Ok(protobuf::PhysicalRangeSplitPoint {
+        value: split_point
+            .values()
+            .iter()
+            .map(|value| {
+                TryInto::<datafusion_proto_common::ScalarValue>::try_into(value)
+                    .map_err(Into::into)
+            })
+            .collect::<Result<_>>()?,
     })
 }
 
@@ -639,6 +468,11 @@ impl TryFromProto<&PartitionedFile> for protobuf::PartitionedFile {
             ))
         })? as u64;
         Ok(protobuf::PartitionedFile {
+            arrow_schema: pf
+                .arrow_schema
+                .as_ref()
+                .map(|s| s.as_ref().try_into())
+                .transpose()?,
             path: pf.object_meta.location.as_ref().to_owned(),
             size: pf.object_meta.size,
             last_modified_ns,

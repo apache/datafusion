@@ -437,14 +437,14 @@ pub enum Expr {
 #[derive(Clone, Eq, PartialOrd, Debug)]
 pub struct HigherOrderFunction {
     /// The function
-    pub func: Arc<dyn HigherOrderUDF>,
+    pub func: Arc<HigherOrderUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
 }
 
 impl HigherOrderFunction {
     /// Create a new `HigherOrderFunction` from a [`HigherOrderUDF`]
-    pub fn new(func: Arc<dyn HigherOrderUDF>, args: Vec<Expr>) -> Self {
+    pub fn new(func: Arc<HigherOrderUDF>, args: Vec<Expr>) -> Self {
         Self { func, args }
     }
 
@@ -452,7 +452,7 @@ impl HigherOrderFunction {
         self.func.name()
     }
 
-    /// Invokes the inner function [`HigherOrderUDF::lambda_parameters`]
+    /// Invokes the inner function [`crate::HigherOrderUDFImpl::lambda_parameters`]
     /// using the arguments of this invocation. This expression lambda
     /// variables must be already resolved either by coming from the
     /// default sql planner or by calling [Expr::resolve_lambda_variables]
@@ -662,7 +662,7 @@ pub fn intersect_metadata_for_union<'a>(
             }
             Some(current) => {
                 // Only keep keys that exist in both with the same value
-                current.retain(|k, v| metadata.get(k) == Some(v));
+                current.retain(|k, v| metadata.get(k) == Some(&*v));
             }
         }
     }
@@ -4052,6 +4052,24 @@ mod test {
         // representation. CAST does not change the name of expressions.
         assert_eq!("Float32(1.23)", expr.schema_name().to_string());
         Ok(())
+    }
+
+    #[test]
+    fn format_decimal_literal() {
+        let expr = lit(ScalarValue::Decimal128(Some(1), 1, 1));
+        assert_eq!("Decimal128(0.1,1,1)", format!("{expr}"));
+        assert_eq!("Decimal128(0.1,1,1)", expr.schema_name().to_string());
+        assert_eq!("0.1", expr.human_display().to_string());
+
+        let expr = lit(ScalarValue::Decimal128(Some(120), 3, 2));
+        assert_eq!("Decimal128(1.20,3,2)", format!("{expr}"));
+        assert_eq!("Decimal128(1.20,3,2)", expr.schema_name().to_string());
+        assert_eq!("1.20", expr.human_display().to_string());
+
+        let null_expr = lit(ScalarValue::Decimal128(None, 10, 2));
+        assert_eq!("Decimal128(NULL,10,2)", format!("{null_expr}"));
+        assert_eq!("Decimal128(NULL,10,2)", null_expr.schema_name().to_string());
+        assert_eq!("NULL", null_expr.human_display().to_string());
     }
 
     #[test]

@@ -1,0 +1,22 @@
+subgroup groupby
+
+name Q08
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} groupby ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_groupby_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run
+SELECT id6, largest2_v3 FROM 
+   (
+        SELECT id6, v3 AS largest2_v3, ROW_NUMBER() OVER (PARTITION BY id6 ORDER BY v3 DESC) AS order_v3 
+        FROM x WHERE v3 IS NOT NULL
+   ) sub_query WHERE order_v3 <= 2;
+
+result sql_benchmarks/h2o/results/groupby/${H2O_BENCH_SIZE:-small}/q08.csv

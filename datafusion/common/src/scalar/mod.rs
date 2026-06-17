@@ -23,7 +23,7 @@ mod struct_builder;
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::Write;
@@ -144,6 +144,30 @@ pub fn date_to_timestamp_multiplier(
             TimeUnit::Nanosecond => Some(NANOS_PER_MILLISECOND),
         },
 
+        _ => None,
+    }
+}
+
+/// Returns the multiplier that converts the input timestamp representation into
+/// the desired timestamp unit, if the conversion requires a multiplication that
+/// can overflow an `i64`.
+pub fn timestamp_to_timestamp_multiplier(
+    source_type: &DataType,
+    target_type: &DataType,
+) -> Option<i64> {
+    let (DataType::Timestamp(source_unit, _), DataType::Timestamp(target_unit, _)) =
+        (source_type, target_type)
+    else {
+        return None;
+    };
+
+    match (source_unit, target_unit) {
+        (TimeUnit::Second, TimeUnit::Millisecond) => Some(1_000),
+        (TimeUnit::Second, TimeUnit::Microsecond) => Some(1_000_000),
+        (TimeUnit::Second, TimeUnit::Nanosecond) => Some(1_000_000_000),
+        (TimeUnit::Millisecond, TimeUnit::Microsecond) => Some(1_000),
+        (TimeUnit::Millisecond, TimeUnit::Nanosecond) => Some(1_000_000),
+        (TimeUnit::Microsecond, TimeUnit::Nanosecond) => Some(1_000),
         _ => None,
     }
 }
@@ -4212,22 +4236,70 @@ impl ScalarValue {
         Some(v.as_ref().map(|v| v.as_str()))
     }
 
-    /// Try to cast this value to a ScalarValue of type `data_type`
+    /// Cast this value to a `ScalarValue` of type `target_type` using the
+    /// default [`CastOptions`].
+    ///
+    /// This is a general-purpose cast with the same semantics as the Arrow
+    /// [`cast_with_options`] kernel and can therefore **lose information** --
+    /// for example casting the floating point value `123.45` to the integer
+    /// `123`.
+    ///
+    /// Returns an error for casts the Arrow kernel cannot perform.
+    ///
+    /// # See Also
+    /// - [`try_cast_literal_to_type`]: for a *value-preserving* cast
+    ///
+    /// [`try_cast_literal_to_type`]: https://docs.rs/datafusion/latest/datafusion/logical_expr_common/casts/fn.try_cast_literal_to_type.html
     pub fn cast_to(&self, target_type: &DataType) -> Result<Self> {
         self.cast_to_with_options(target_type, &DEFAULT_CAST_OPTIONS)
     }
 
-    /// Try to cast this value to a ScalarValue of type `data_type` with [`CastOptions`]
+    /// Cast this value to type `target_type` with the given [`CastOptions`].
+    ///
+    /// # See Also
+    /// - [`ScalarValue::cast_to`] for more details.
+    /// - [`try_cast_literal_to_type`]: for a *value-preserving* cast
+    ///
+    /// [`try_cast_literal_to_type`]: https://docs.rs/datafusion/latest/datafusion/logical_expr_common/casts/fn.try_cast_literal_to_type.html
     pub fn cast_to_with_options(
         &self,
         target_type: &DataType,
         cast_options: &CastOptions<'static>,
     ) -> Result<Self> {
         let source_type = self.data_type();
+
+        // Fast path: an identical target type needs no conversion at all.
+        if &source_type == target_type {
+            return Ok(self.clone());
+        }
+
+        // Fast path: conversions among the string types (`Utf8`, `LargeUtf8`,
+        // `Utf8View`) are value-preserving, so we can rewrap the string
+        // directly instead of building a single-row array and invoking the
+        // arrow cast kernel.
+        if source_type.is_string() && target_type.is_string() {
+            // `self` is one of the string types, so `try_as_str` returns `Some`
+            let value = self.try_as_str().flatten().map(|s| s.to_string());
+            return Ok(match target_type {
+                DataType::Utf8 => ScalarValue::Utf8(value),
+                DataType::LargeUtf8 => ScalarValue::LargeUtf8(value),
+                DataType::Utf8View => ScalarValue::Utf8View(value),
+                _ => unreachable!("matched a string target type above"),
+            });
+        }
+
         if let Some(multiplier) = date_to_timestamp_multiplier(&source_type, target_type)
-            && let Some(value) = self.date_scalar_value_as_i64()
+            .or_else(|| timestamp_to_timestamp_multiplier(&source_type, target_type))
+            && let Some(value) = self.temporal_scalar_value_as_i64()
         {
-            ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)?;
+            match ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)
+            {
+                Ok(()) => {}
+                Err(_) if cast_options.safe => {
+                    return ScalarValue::try_new_null(target_type);
+                }
+                Err(e) => return Err(e),
+            }
         }
 
         let scalar_array = self.to_array()?;
@@ -4247,10 +4319,14 @@ impl ScalarValue {
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
-    fn date_scalar_value_as_i64(&self) -> Option<i64> {
+    fn temporal_scalar_value_as_i64(&self) -> Option<i64> {
         match self {
             ScalarValue::Date32(Some(value)) => Some(i64::from(*value)),
             ScalarValue::Date64(Some(value)) => Some(*value),
+            ScalarValue::TimestampSecond(Some(value), _)
+            | ScalarValue::TimestampMillisecond(Some(value), _)
+            | ScalarValue::TimestampMicrosecond(Some(value), _)
+            | ScalarValue::TimestampNanosecond(Some(value), _) => Some(*value),
             _ => None,
         }
     }
@@ -4711,6 +4787,18 @@ impl ScalarValue {
                 .iter()
                 .map(|sv| sv.size() - size_of_val(sv))
                 .sum::<usize>()
+    }
+
+    /// Estimates [size](Self::size) of [`HashMap`] keyed by [`ScalarValue`] in bytes.
+    ///
+    /// Includes the size of the [`HashMap`] container itself. Heap payload of
+    /// `V` is not accounted for; callers storing heap-backed values should
+    /// supplement this estimate.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
+    pub fn size_of_hashmap<V, S>(map: &HashMap<Self, V, S>) -> usize {
+        size_of_val(map)
+            + ((size_of::<ScalarValue>() + size_of::<V>()) * map.capacity())
+            + map.keys().map(|k| k.size() - size_of_val(k)).sum::<usize>()
     }
 
     /// Compacts the allocation referenced by `self` to the minimum, copying the data if
@@ -5343,6 +5431,35 @@ macro_rules! format_option {
     }};
 }
 
+macro_rules! format_decimal {
+    ($F:expr, $TYPE:ty, $VALUE:expr, $PRECISION:expr, $SCALE:expr) => {{
+        match $VALUE {
+            Some(value) => write!(
+                $F,
+                "{}",
+                <$TYPE>::format_decimal(*value, *$PRECISION, *$SCALE)
+            ),
+            None => write!($F, "NULL"),
+        }
+    }};
+}
+
+macro_rules! format_decimal_debug {
+    ($F:expr, $TYPE_NAME:literal, $TYPE:ty, $VALUE:expr, $PRECISION:expr, $SCALE:expr) => {{
+        match $VALUE {
+            Some(value) => write!(
+                $F,
+                "{}({},{},{})",
+                $TYPE_NAME,
+                <$TYPE>::format_decimal(*value, *$PRECISION, *$SCALE),
+                $PRECISION,
+                $SCALE
+            ),
+            None => write!($F, "{}(NULL,{},{})", $TYPE_NAME, $PRECISION, $SCALE),
+        }
+    }};
+}
+
 // Implement Display trait for ScalarValue
 //
 // # Panics
@@ -5352,16 +5469,16 @@ impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal32(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal32Type, v, p, s)?
             }
             ScalarValue::Decimal64(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal64Type, v, p, s)?
             }
             ScalarValue::Decimal128(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal128Type, v, p, s)?
             }
             ScalarValue::Decimal256(v, p, s) => {
-                write!(f, "{v:?},{p:?},{s:?}")?;
+                format_decimal!(f, Decimal256Type, v, p, s)?
             }
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float16(e) => format_option!(f, e)?,
@@ -5535,8 +5652,9 @@ fn fmt_list(arr: &dyn Array, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{value_formatter}")
 }
 
-/// writes a byte array to formatter. `[1, 2, 3]` ==> `"1,2,3"`
-fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
+/// Writes a byte array for ScalarValue Debug formatting.
+/// `[1, 2, 3]` -> `"1,2,3"`
+fn fmt_binary_debug(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
     let mut iter = data.iter();
     if let Some(b) = iter.next() {
         write!(f, "{b}")?;
@@ -5550,10 +5668,46 @@ fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
 impl fmt::Debug for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ScalarValue::Decimal32(_, _, _) => write!(f, "Decimal32({self})"),
-            ScalarValue::Decimal64(_, _, _) => write!(f, "Decimal64({self})"),
-            ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({self})"),
-            ScalarValue::Decimal256(_, _, _) => write!(f, "Decimal256({self})"),
+            ScalarValue::Decimal32(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal32",
+                    Decimal32Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
+            ScalarValue::Decimal64(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal64",
+                    Decimal64Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
+            ScalarValue::Decimal128(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal128",
+                    Decimal128Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
+            ScalarValue::Decimal256(value, precision, scale) => {
+                format_decimal_debug!(
+                    f,
+                    "Decimal256",
+                    Decimal256Type,
+                    value,
+                    precision,
+                    scale
+                )
+            }
             ScalarValue::Boolean(_) => write!(f, "Boolean({self})"),
             ScalarValue::Float16(_) => write!(f, "Float16({self})"),
             ScalarValue::Float32(_) => write!(f, "Float32({self})"),
@@ -5587,13 +5741,13 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::Binary(None) => write!(f, "Binary({self})"),
             ScalarValue::Binary(Some(b)) => {
                 write!(f, "Binary(\"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::BinaryView(None) => write!(f, "BinaryView({self})"),
             ScalarValue::BinaryView(Some(b)) => {
                 write!(f, "BinaryView(\"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::FixedSizeBinary(size, None) => {
@@ -5601,13 +5755,13 @@ impl fmt::Debug for ScalarValue {
             }
             ScalarValue::FixedSizeBinary(size, Some(b)) => {
                 write!(f, "FixedSizeBinary({size}, \"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({self})"),
             ScalarValue::LargeBinary(Some(b)) => {
                 write!(f, "LargeBinary(\"")?;
-                fmt_binary(b.as_slice(), f)?;
+                fmt_binary_debug(b.as_slice(), f)?;
                 write!(f, "\")")
             }
             ScalarValue::FixedSizeList(_) => write!(f, "FixedSizeList({self})"),
@@ -8736,6 +8890,80 @@ mod tests {
             ScalarValue::from("larger than 12 bytes string"),
             DataType::Utf8View,
         );
+
+        // Cases also covered by `try_cast_literal_to_type` in datafusion-expr-common
+
+        // identity casts (exercise the no-conversion fast path in `cast_to`)
+        check_scalar_cast(ScalarValue::Int32(Some(5)), DataType::Int32);
+        check_scalar_cast(ScalarValue::from("foo"), DataType::Utf8);
+        check_scalar_cast(ScalarValue::Utf8(None), DataType::Utf8);
+        check_scalar_cast(
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("foo")),
+            ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        );
+
+        // integer widening / narrowing (in range)
+        check_scalar_cast(ScalarValue::Int32(Some(123)), DataType::Int64);
+        check_scalar_cast(ScalarValue::Int64(Some(123)), DataType::Int32);
+        check_scalar_cast(ScalarValue::UInt32(Some(123)), DataType::Int64);
+        check_scalar_cast(ScalarValue::Int32(Some(123)), DataType::UInt64);
+
+        // integer <-> decimal
+        check_scalar_cast(ScalarValue::Int32(Some(123)), DataType::Decimal128(10, 0));
+        check_scalar_cast(ScalarValue::Decimal128(Some(123), 3, 0), DataType::Int64);
+        // decimal rescale
+        check_scalar_cast(
+            ScalarValue::Decimal128(Some(12300), 5, 2),
+            DataType::Decimal128(8, 5),
+        );
+
+        // timestamp unit conversion
+        check_scalar_cast(
+            ScalarValue::TimestampNanosecond(Some(123456), None),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        );
+        // timestamp timezone conversion
+        check_scalar_cast(
+            ScalarValue::TimestampSecond(Some(12345), None),
+            DataType::Timestamp(TimeUnit::Second, Some("+00:00".into())),
+        );
+        // int64 <-> timestamp
+        check_scalar_cast(
+            ScalarValue::Int64(Some(12345)),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        );
+        check_scalar_cast(
+            ScalarValue::TimestampSecond(Some(12345), Some("+00:00".into())),
+            DataType::Int64,
+        );
+
+        // additional string conversions
+        check_scalar_cast(ScalarValue::from("foo"), DataType::LargeUtf8);
+        check_scalar_cast(ScalarValue::LargeUtf8(Some("foo".into())), DataType::Utf8);
+        check_scalar_cast(
+            ScalarValue::LargeUtf8(Some("foo".into())),
+            DataType::Utf8View,
+        );
+        check_scalar_cast(ScalarValue::Utf8View(Some("foo".into())), DataType::Utf8);
+
+        // dictionary unwrap
+        check_scalar_cast(
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("foo")),
+            ),
+            DataType::Utf8,
+        );
+
+        // binary -> fixed size binary
+        check_scalar_cast(
+            ScalarValue::Binary(Some(vec![1, 2, 3])),
+            DataType::FixedSizeBinary(3),
+        );
+
         check_scalar_cast(
             {
                 let element_field =
@@ -8825,6 +9053,16 @@ mod tests {
         // turn it back to a scalar
         let cast_scalar = ScalarValue::try_from_array(&cast_array, 0).unwrap();
         assert_eq!(cast_scalar.data_type(), desired_type);
+
+        // `ScalarValue::cast_to` (which has array-free fast paths) must produce
+        // exactly the same result as casting through the arrow kernel above.
+        let cast_to_scalar = scalar
+            .cast_to(&desired_type)
+            .expect("Failed to cast_to scalar");
+        assert_eq!(
+            cast_to_scalar, cast_scalar,
+            "cast_to({scalar:?} -> {desired_type:?}) disagreed with the arrow cast kernel"
+        );
 
         // Some time later the "cast" scalar is turned back into an array:
         let array = cast_scalar
@@ -9601,6 +9839,36 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_display_and_debug() {
+        let decimal32 = ScalarValue::Decimal32(Some(123), 3, 2);
+        assert_eq!(decimal32.to_string(), "1.23");
+        assert_eq!(format!("{decimal32:?}"), "Decimal32(1.23,3,2)");
+
+        let decimal64 = ScalarValue::Decimal64(Some(-12345), 5, 3);
+        assert_eq!(decimal64.to_string(), "-12.345");
+        assert_eq!(format!("{decimal64:?}"), "Decimal64(-12.345,5,3)");
+
+        let decimal128 = ScalarValue::Decimal128(Some(1), 1, 1);
+        assert_eq!(decimal128.to_string(), "0.1");
+        assert_eq!(format!("{decimal128:?}"), "Decimal128(0.1,1,1)");
+
+        let decimal128_trailing_zero = ScalarValue::Decimal128(Some(120), 3, 2);
+        assert_eq!(decimal128_trailing_zero.to_string(), "1.20");
+        assert_eq!(
+            format!("{decimal128_trailing_zero:?}"),
+            "Decimal128(1.20,3,2)"
+        );
+
+        let decimal256 = ScalarValue::Decimal256(Some(i256::from(100123)), 28, 3);
+        assert_eq!(decimal256.to_string(), "100.123");
+        assert_eq!(format!("{decimal256:?}"), "Decimal256(100.123,28,3)");
+
+        let null_decimal = ScalarValue::Decimal128(None, 10, 2);
+        assert_eq!(null_decimal.to_string(), "NULL");
+        assert_eq!(format!("{null_decimal:?}"), "Decimal128(NULL,10,2)");
+    }
+
+    #[test]
     fn test_struct_display_null() {
         let fields = vec![Field::new("a", DataType::Int32, false)];
         let s = ScalarStructBuilder::new_null(fields);
@@ -9927,6 +10195,55 @@ mod tests {
                 .contains("converted value exceeds the representable i64 range"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn safe_cast_date_to_timestamp_overflow_returns_null() {
+        let scalar = ScalarValue::Date32(Some(i32::MAX));
+        let safe_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let casted = scalar
+            .cast_to_with_options(
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                &safe_options,
+            )
+            .expect("expected safe cast to return null");
+
+        assert_eq!(casted, ScalarValue::TimestampNanosecond(None, None));
+    }
+
+    #[test]
+    fn cast_timestamp_to_timestamp_overflow_returns_error() {
+        let scalar = ScalarValue::TimestampSecond(Some(i64::MAX), None);
+        let err = scalar
+            .cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None))
+            .expect_err("expected cast to fail");
+        assert!(
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn safe_cast_timestamp_to_timestamp_overflow_returns_null() {
+        let scalar = ScalarValue::TimestampSecond(Some(i64::MAX), None);
+        let safe_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let casted = scalar
+            .cast_to_with_options(
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                &safe_options,
+            )
+            .expect("expected safe cast to return null");
+
+        assert_eq!(casted, ScalarValue::TimestampNanosecond(None, None));
     }
 
     #[test]

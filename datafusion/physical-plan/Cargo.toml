@@ -42,6 +42,15 @@ force_hash_collisions = []
 test_utils = ["arrow/test_utils"]
 tokio_coop = []
 tokio_coop_fallback = []
+# Enables `PhysicalExpr::try_to_proto` / `try_from_proto` hooks on the
+# physical expressions defined in this crate (e.g. `HashExpr`). Off by
+# default so consumers that never serialize plans pay nothing.
+proto = [
+    "dep:datafusion-proto-models",
+    "dep:datafusion-proto-common",
+    "datafusion-physical-expr/proto",
+    "datafusion-physical-expr-common/proto",
+]
 
 [lib]
 name = "datafusion_physical_plan"
@@ -65,6 +74,8 @@ datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
 datafusion-physical-expr-common = { workspace = true }
+datafusion-proto-common = { workspace = true, optional = true }
+datafusion-proto-models = { workspace = true, optional = true }
 futures = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
@@ -74,6 +85,7 @@ log = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
+serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true }
 
 [dev-dependencies]
@@ -111,7 +123,6 @@ required-features = ["test_utils"]
 [[bench]]
 harness = false
 name = "aggregate_vectorized"
-required-features = ["test_utils"]
 
 [[bench]]
 harness = false

@@ -95,11 +95,11 @@ macro_rules! create_higher_order {
     ($UDF:ident, $HIGHER_ORDER_UDF_FN:ident, $CTOR:path) => {
         #[doc = concat!("HigherOrderFunction that returns a [`HigherOrderUDF`](datafusion_expr::HigherOrderUDF) for ")]
         #[doc = stringify!($UDF)]
-        pub fn $HIGHER_ORDER_UDF_FN() -> std::sync::Arc<dyn datafusion_expr::HigherOrderUDF> {
+        pub fn $HIGHER_ORDER_UDF_FN() -> std::sync::Arc<datafusion_expr::HigherOrderUDF> {
             // Singleton instance of [`$UDF`], ensures the UDF is only created once
-            static INSTANCE: std::sync::LazyLock<std::sync::Arc<dyn datafusion_expr::HigherOrderUDF>> =
+            static INSTANCE: std::sync::LazyLock<std::sync::Arc<datafusion_expr::HigherOrderUDF>> =
                 std::sync::LazyLock::new(|| {
-                    std::sync::Arc::new($CTOR())
+                    std::sync::Arc::new(datafusion_expr::HigherOrderUDF::new_from_impl($CTOR()))
                 });
             std::sync::Arc::clone(&INSTANCE)
         }
