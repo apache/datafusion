@@ -598,6 +598,14 @@ In addition, topk_tpch is available from the bench.sh script:
 ./bench.sh run topk_tpch
 ```
 
+To benchmark TopK queries on pre-sorted TPC-H input, use:
+
+```bash
+./bench.sh run topk_sorted_tpch
+```
+
+This runs `dfbench sort-tpch --sorted --limit 100` through the benchmark script.
+
 ## IMDB
 
 Run Join Order Benchmark (JOB) on IMDB dataset.
