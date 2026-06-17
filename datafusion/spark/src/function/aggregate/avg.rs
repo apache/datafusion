@@ -289,7 +289,6 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
@@ -464,7 +463,6 @@ mod tests {
         acc.merge_batch(
             &state,
             &[0, 0, 0],
-            None,
             1, // single group
         )
         .unwrap();
@@ -486,7 +484,7 @@ mod tests {
             Some(3.0),
         ]))];
         let state = acc.convert_to_state(&input, None).unwrap();
-        acc.merge_batch(&state, &[0, 0, 0], None, 1).unwrap();
+        acc.merge_batch(&state, &[0, 0, 0], 1).unwrap();
 
         let result = acc.evaluate(EmitTo::All).unwrap();
         let result = result.as_primitive::<Float64Type>();
