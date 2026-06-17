@@ -244,10 +244,12 @@ where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
     pub fn new(output_type: OutputType) -> Self {
+        let map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
+        let map_size = map.allocation_size();
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
-            map_size: 0,
+            map,
+            map_size,
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()], // first offset is always 0
             random_state: RandomState::default(),
@@ -872,6 +874,47 @@ mod tests {
         let size_after_values2 = set.size();
         assert!(size_after_values2 > size_after_values1);
         assert!(size_after_values2 > total_strings1_len + total_strings2_len);
+    }
+
+    /// Verify that `size()` accounts for the initial hash table allocation
+    /// from `HashTable::with_capacity(INITIAL_MAP_CAPACITY)`.
+    ///
+    /// Regression test: `map_size` was previously initialized to 0 despite
+    /// the hash table pre-allocating memory, causing `size()` to undercount
+    /// until the first hash table resize.
+    #[test]
+    fn test_size_accounts_for_initial_hash_table_allocation() {
+        let set = ArrowBytesSet::<i32>::new(OutputType::Utf8);
+        let initial_size = set.size();
+
+        // Compute the exact allocation for a HashTable with the same
+        // capacity and entry type used by ArrowBytesMap
+        let expected_ht_alloc =
+            hashbrown::hash_table::HashTable::<Entry<i32, ()>>::with_capacity(
+                INITIAL_MAP_CAPACITY,
+            )
+            .allocation_size();
+
+        // The hash table must allocate non-trivial memory for 128 entries
+        assert!(
+            expected_ht_alloc > 0,
+            "hash table should allocate memory for {INITIAL_MAP_CAPACITY} entries"
+        );
+
+        // size() = map_size + buffer_capacity + offsets + hashes_buffer
+        // At creation the non-map components are:
+        //   buffer:  INITIAL_BUFFER_CAPACITY bytes
+        //   offsets: vec with 1 element
+        //   hashes:  empty vec (0 bytes)
+        //
+        // Before the fix (map_size=0), size() ≈ INITIAL_BUFFER_CAPACITY + sizeof(i32),
+        // missing the hash table allocation entirely.
+        // After the fix, size() includes expected_ht_alloc as well.
+        assert!(
+            initial_size >= expected_ht_alloc + INITIAL_BUFFER_CAPACITY,
+            "size() ({initial_size}) should include both hash table allocation \
+             ({expected_ht_alloc}) and buffer capacity ({INITIAL_BUFFER_CAPACITY})"
+        );
     }
 
     #[test]

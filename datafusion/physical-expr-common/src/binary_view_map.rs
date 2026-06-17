@@ -155,10 +155,12 @@ where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
     pub fn new(output_type: OutputType) -> Self {
+        let map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
+        let map_size = map.allocation_size();
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
-            map_size: 0,
+            map,
+            map_size,
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
@@ -713,6 +715,43 @@ mod tests {
         assert!(size_after_values2 > size_after_values1);
 
         assert_eq!(set.len(), 10);
+    }
+
+    /// Verify that `size()` accounts for the initial hash table allocation
+    /// from `HashTable::with_capacity(INITIAL_MAP_CAPACITY)`.
+    ///
+    /// Regression test: `map_size` was previously initialized to 0 despite
+    /// the hash table pre-allocating memory, causing `size()` to undercount
+    /// until the first hash table resize.
+    #[test]
+    fn test_size_accounts_for_initial_hash_table_allocation() {
+        let set = ArrowBytesViewSet::new(OutputType::Utf8View);
+        let initial_size = set.size();
+
+        // Compute the exact allocation for a HashTable with the same
+        // capacity and entry type used by ArrowBytesViewMap
+        let expected_ht_alloc =
+            hashbrown::hash_table::HashTable::<Entry<()>>::with_capacity(
+                INITIAL_MAP_CAPACITY,
+            )
+            .allocation_size();
+
+        assert!(
+            expected_ht_alloc > 0,
+            "hash table should allocate memory for {INITIAL_MAP_CAPACITY} entries"
+        );
+
+        // For ArrowBytesViewMap, all non-map components (views, in_progress,
+        // completed, nulls, hashes_buffer) start empty, so:
+        //   size() = map_size + 0
+        //
+        // Before the fix (map_size=0), size() was 0 at creation,
+        // missing the hash table allocation entirely.
+        // After the fix, size() == expected_ht_alloc.
+        assert!(
+            initial_size >= expected_ht_alloc,
+            "size() ({initial_size}) should include hash table allocation ({expected_ht_alloc})"
+        );
     }
 
     #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
