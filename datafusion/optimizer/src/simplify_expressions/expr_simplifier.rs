@@ -39,6 +39,7 @@ use datafusion_common::{
     metadata::FieldMetadata,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
+use datafusion_expr::expr::HigherOrderFunction;
 use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
     and, binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
@@ -645,6 +646,9 @@ impl ConstEvaluator {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
+            Expr::HigherOrderFunction(HigherOrderFunction { func, .. }) => {
+                Self::volatility_ok(func.signature().volatility)
+            }
             Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field }) => {
                 if let (
                     Ok(DataType::Struct(source_fields)),
@@ -691,7 +695,9 @@ impl ConstEvaluator {
             | Expr::Like { .. }
             | Expr::SimilarTo { .. }
             | Expr::Case(_)
-            | Expr::InList { .. } => true,
+            | Expr::InList { .. }
+            | Expr::Lambda(_)
+            | Expr::LambdaVariable(_) => true,
         }
     }
 
@@ -1784,6 +1790,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
             }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
                 let lhs = to_inlist(*left).unwrap();
                 let rhs = to_inlist(*right).unwrap();
+                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                // Expr contains Arc with interior mutability but is intentionally used as hash key
                 let mut seen: HashSet<Expr> = HashSet::new();
                 let list = lhs
                     .list
@@ -2174,6 +2182,7 @@ impl<'a> StringScalar<'a> {
     }
 }
 
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
     let lhs_set: HashSet<&Expr> = iter_conjunction(lhs).collect();
     iter_conjunction(rhs).any(|e| lhs_set.contains(&e) && !e.is_volatile())
@@ -2258,6 +2267,7 @@ fn to_inlist(expr: Expr) -> Option<InList> {
 
 /// Return the union of two inlist expressions
 /// maintaining the order of the elements in the two lists
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
     // extend the list in l1 with the elements in l2 that are not already in l1
     let l1_items: HashSet<_> = l1.list.iter().collect();
@@ -2276,6 +2286,7 @@ fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
 
 /// Return the intersection of two inlist expressions
 /// maintaining the order of the elements in the two lists
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn inlist_intersection(mut l1: InList, l2: &InList, negated: bool) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
@@ -2292,6 +2303,7 @@ fn inlist_intersection(mut l1: InList, l2: &InList, negated: bool) -> Result<Exp
 
 /// Return the all items in l1 that are not in l2
 /// maintaining the order of the elements in the two lists
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
@@ -2903,6 +2915,21 @@ mod tests {
         // null & A --> null
         {
             let expr = null.clone() & col("c3");
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
+    fn test_simplify_concat_by_null() {
+        let null = Expr::Literal(ScalarValue::Utf8(None), None);
+        // A || null --> null
+        {
+            let expr = binary_expr(col("c1"), Operator::StringConcat, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null || A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::StringConcat, col("c1"));
             assert_eq!(simplify(expr), null);
         }
     }
@@ -3524,6 +3551,32 @@ mod tests {
         );
         // Too many patterns (MAX_REGEX_ALTERNATIONS_EXPANSION)
         assert_no_change(regex_match(col("c1"), lit("foo|bar|baz|blarg|bozo|etc")));
+    }
+
+    #[test]
+    fn test_simplify_not_regex_match() {
+        let pattern = || lit("foo.*");
+
+        // NOT (c1 ~ pattern)  --> c1 !~ pattern
+        assert_eq!(
+            simplify(regex_match(col("c1"), pattern()).not()),
+            regex_not_match(col("c1"), pattern()),
+        );
+        // NOT (c1 !~ pattern) --> c1 ~ pattern
+        assert_eq!(
+            simplify(regex_not_match(col("c1"), pattern()).not()),
+            regex_match(col("c1"), pattern()),
+        );
+        // NOT (c1 ~* pattern)  --> c1 !~* pattern
+        assert_eq!(
+            simplify(regex_imatch(col("c1"), pattern()).not()),
+            regex_not_imatch(col("c1"), pattern()),
+        );
+        // NOT (c1 !~* pattern) --> c1 ~* pattern
+        assert_eq!(
+            simplify(regex_not_imatch(col("c1"), pattern()).not()),
+            regex_imatch(col("c1"), pattern()),
+        );
     }
 
     #[track_caller]

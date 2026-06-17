@@ -19,7 +19,10 @@ mod aggregate_function;
 mod cast;
 mod field_reference;
 mod if_then;
+mod lambda;
+mod lambda_variable;
 mod literal;
+mod placeholder;
 mod scalar_function;
 mod singular_or_list;
 mod subquery;
@@ -29,7 +32,10 @@ pub use aggregate_function::*;
 pub use cast::*;
 pub use field_reference::*;
 pub use if_then::*;
+pub use lambda::*;
+pub use lambda_variable::*;
 pub use literal::*;
+pub use placeholder::*;
 pub use scalar_function::*;
 pub use singular_or_list::*;
 pub use subquery::*;
@@ -142,13 +148,18 @@ pub fn to_substrait_rex(
         #[expect(deprecated)]
         Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
-        Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::Placeholder(expr) => producer.handle_placeholder(expr, schema),
         Expr::OuterReferenceColumn(_, _) => {
             // OuterReferenceColumn requires tracking outer query schema context for correlated
             // subqueries. This is a complex feature that is not yet implemented.
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
         Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::HigherOrderFunction(expr) => {
+            producer.handle_higher_order_function(expr, schema)
+        }
+        Expr::Lambda(expr) => producer.handle_lambda(expr, schema),
+        Expr::LambdaVariable(expr) => producer.handle_lambda_variable(expr, schema),
     }
 }
 

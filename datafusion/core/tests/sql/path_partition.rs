@@ -609,8 +609,7 @@ async fn create_partitioned_alltypes_parquet_table(
                 .iter()
                 .map(|x| (x.0.to_owned(), x.1.clone()))
                 .collect::<Vec<_>>(),
-        )
-        .with_session_config_options(&ctx.copied_config());
+        );
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let store_path =
@@ -774,7 +773,7 @@ impl ObjectStore for MirroringObjectStore {
             };
 
             if parts.next().is_some() {
-                common_prefixes.insert(prefix.child(common_prefix));
+                common_prefixes.insert(prefix.clone().join(common_prefix));
             } else {
                 let object = ObjectMeta {
                     location: k.clone(),

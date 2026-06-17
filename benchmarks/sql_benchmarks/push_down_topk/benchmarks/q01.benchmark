@@ -1,0 +1,22 @@
+-- LEFT JOIN, ORDER BY a column from the preserved (left) side, small LIMIT.
+-- Canonical push_down_topk_through_join case: the TopK can be duplicated
+-- below the join over the customer scan so only the top 10 rows (by
+-- c_acctbal) are joined against orders.
+
+name Q01
+group push_down_topk
+
+load sql_benchmarks/push_down_topk/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from customer;
+----
+true
+
+run
+SELECT c_custkey, c_acctbal
+FROM customer LEFT JOIN orders ON c_custkey = o_custkey
+ORDER BY c_acctbal
+LIMIT 10;
+
+cleanup sql_benchmarks/push_down_topk/init/cleanup.sql

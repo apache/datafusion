@@ -1,0 +1,29 @@
+name Q14
+group smj
+
+init
+set datafusion.optimizer.prefer_hash_join=false;
+
+expect_plan SortMergeJoinExec
+
+run
+-- Q14: LEFT ANTI 1M x 10M | 1:10
+WITH t1_sorted AS (
+    SELECT value % 105000 as key, value as data
+FROM range(1000000)
+ORDER BY key, data
+    ),
+    t2_sorted AS (
+SELECT value % 100000 as key
+FROM range(10000000)
+ORDER BY key
+    )
+SELECT t1_sorted.key, t1_sorted.data
+FROM t1_sorted
+WHERE NOT EXISTS (
+    SELECT 1 FROM t2_sorted
+    WHERE t2_sorted.key = t1_sorted.key
+)
+
+cleanup
+reset datafusion.optimizer.prefer_hash_join;

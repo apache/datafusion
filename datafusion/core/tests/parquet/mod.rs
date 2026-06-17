@@ -44,6 +44,7 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+mod content_defined_chunking;
 mod custom_reader;
 #[cfg(feature = "parquet_encryption")]
 mod encryption;
@@ -59,7 +60,7 @@ mod schema_coercion;
 mod utils;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();
@@ -725,11 +726,11 @@ fn make_bytearray_batch(
     let name: StringArray = std::iter::repeat_n(Some(name), num_rows).collect();
     let service_string: StringArray = string_values.iter().map(Some).collect();
     let service_binary: BinaryArray = binary_values.iter().map(Some).collect();
-    let service_fixedsize: FixedSizeBinaryArray = fixedsize_values
-        .iter()
-        .map(|value| Some(value.as_slice()))
-        .collect::<Vec<_>>()
-        .into();
+    let service_fixedsize = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+        fixedsize_values.iter().map(|value| Some(value.as_slice())),
+        3,
+    )
+    .unwrap();
     let service_large_binary: LargeBinaryArray =
         large_binary_values.iter().map(Some).collect();
 

@@ -25,7 +25,7 @@ mod tests {
     use datafusion_ffi::execution_plan::tests::EmptyExec;
     use datafusion_ffi::physical_optimizer::ForeignPhysicalOptimizerRule;
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_physical_optimizer::PhysicalOptimizerRule;
+    use datafusion_physical_optimizer::{ConfigOnlyContext, PhysicalOptimizerRule};
     use datafusion_physical_plan::ExecutionPlan;
 
     fn create_test_plan() -> Arc<dyn ExecutionPlan> {
@@ -38,12 +38,7 @@ mod tests {
     fn test_ffi_physical_optimizer_rule() -> Result<(), DataFusionError> {
         let module = get_module()?;
 
-        let ffi_rule = module.create_physical_optimizer_rule().ok_or(
-            DataFusionError::NotImplemented(
-                "External module failed to implement create_physical_optimizer_rule"
-                    .to_string(),
-            ),
-        )?();
+        let ffi_rule = (module.create_physical_optimizer_rule)();
 
         let foreign_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
             (&ffi_rule).into();
@@ -64,6 +59,32 @@ mod tests {
         let plan = create_test_plan();
         let config = ConfigOptions::new();
         let optimized = foreign_rule.optimize(plan, &config)?;
+
+        assert_eq!(optimized.name(), "GlobalLimitExec");
+        assert_eq!(optimized.children().len(), 1);
+        assert_eq!(optimized.children()[0].name(), "empty-exec");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_physical_optimizer_rule_with_context() -> Result<(), DataFusionError> {
+        let module = get_module()?;
+
+        let ffi_rule = (module.create_context_aware_optimizer_rule)();
+
+        let foreign_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            (&ffi_rule).into();
+
+        // Verify that plain optimize fails (proving we need context path)
+        let plan = create_test_plan();
+        let config = ConfigOptions::new();
+        assert!(foreign_rule.optimize(plan, &config).is_err());
+
+        // Verify context-aware path works
+        let plan = create_test_plan();
+        let context = ConfigOnlyContext::new(&config);
+        let optimized = foreign_rule.optimize_with_context(plan, &context)?;
 
         assert_eq!(optimized.name(), "GlobalLimitExec");
         assert_eq!(optimized.children().len(), 1);

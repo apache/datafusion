@@ -1,0 +1,134 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# The sqllogictest harness registers range_partitioned(range_key, non_range_key, value)
+# as an in-memory source with four physical source partitions:
+#
+# partition 0: range_key in [..., 10), rows (1, 1, 10), (5, 2, 50)
+# partition 1: range_key in [10, 20), rows (10, 1, 100), (15, 2, 150)
+# partition 2: range_key in [20, 30), rows (20, 1, 200), (25, 2, 250)
+# partition 3: range_key in [30, ...), rows (30, 1, 300), (35, 2, 350)
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+##########
+# TEST 1: Aggregate on Range Partition Column
+# Scanning range_key preserves source Range partitioning metadata.
+# Planning still inserts Hash repartitioning today; later optimizer PRs can
+# use this baseline to show when the repartition is removed.
+##########
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) FROM range_partitioned GROUP BY range_key;
+----
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[range_key@0 as range_key], aggr=[sum(range_partitioned.value)]
+02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[range_key@0 as range_key], aggr=[sum(range_partitioned.value)]
+04)------DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4)
+
+query II
+SELECT range_key, SUM(value) FROM range_partitioned GROUP BY range_key ORDER BY range_key;
+----
+1 10
+5 50
+10 100
+15 150
+20 200
+25 250
+30 300
+35 350
+
+
+##########
+# TEST 2: Aggregate on Non-Range Column
+# Projecting away range_key means the scan output no longer contains the
+# expression needed to describe range partitioning, so it reports
+# UnknownPartitioning with the same partition count.
+##########
+
+query TT
+EXPLAIN SELECT non_range_key, SUM(value) FROM range_partitioned GROUP BY non_range_key;
+----
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[non_range_key@0 as non_range_key], aggr=[sum(range_partitioned.value)]
+02)--RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[non_range_key@0 as non_range_key], aggr=[sum(range_partitioned.value)]
+04)------DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1], output_partitioning=UnknownPartitioning(4)
+
+query II
+SELECT non_range_key, SUM(value) FROM range_partitioned GROUP BY non_range_key ORDER BY non_range_key;
+----
+1 610
+2 800
+
+
+##########
+# TEST 3: Join on Range Partition Column
+# Both inputs expose Range partitioning on range_key. Join planning currently
+# reaches the unsupported Range output-partitioning path; later optimizer PRs
+# can replace this baseline with a successful plan and result test.
+##########
+
+query error This feature is not implemented: Join output partitioning with range partitioning is not implemented
+SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+JOIN range_partitioned r ON l.range_key = r.range_key;
+
+##########
+# TEST 4: Union of Range Partitioned Inputs
+# Each input exposes Range partitioning on range_key. This records current
+# UNION ALL behavior before later PRs decide whether compatible range inputs can
+# preserve Range partitioning across the union.
+##########
+
+query TT
+EXPLAIN SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned;
+----
+physical_plan
+01)UnionExec
+02)--DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4)
+03)--DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4)
+
+query II
+SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned
+ORDER BY range_key, value;
+----
+1 10
+1 10
+5 50
+5 50
+10 100
+10 100
+15 150
+15 150
+20 200
+20 200
+25 250
+25 250
+30 300
+30 300
+35 350
+35 350
+
+statement ok
+reset datafusion.explain.physical_plan_only;

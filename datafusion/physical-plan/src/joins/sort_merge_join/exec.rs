@@ -19,7 +19,6 @@
 //! A Sort-Merge join plan consumes two sorted children plans and produces
 //! joined output by given join type and other options.
 
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -46,7 +45,6 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
     plan_err,
@@ -420,10 +418,6 @@ impl ExecutionPlan for SortMergeJoinExec {
         "SortMergeJoinExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -453,23 +447,6 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to join keys from both sides
-        let mut tnr = TreeNodeRecursion::Continue;
-        for (left, right) in &self.on {
-            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
-            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
-        }
-        // Apply to join filter expressions if present
-        if let Some(filter) = &self.filter {
-            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
-        }
-        Ok(tnr)
     }
 
     fn with_new_children(
@@ -605,6 +582,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             left_stats,
             right_stats,
             &self.on,
+            self.null_equality,
             &self.join_type,
             &self.schema,
         )?))

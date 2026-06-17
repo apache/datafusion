@@ -35,8 +35,8 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan, LogicalPlanBuilder,
-    Operator, expr, lit,
+    BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
+    LogicalPlanBuilder, Operator, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -137,6 +137,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(_) => Ok(Transformed::no(plan)),
+            // Subquery nodes are scope boundaries for correlation. A nested
+            // Subquery's outer references belong to a different decorrelation
+            // level and must not be pulled up into the current scope.
+            LogicalPlan::Subquery(_) => {
+                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            }
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
                 if plan_hold_outer {
@@ -506,18 +512,12 @@ fn agg_exprs_evaluation_result_on_empty_batch(
         let result_expr = e
             .clone()
             .transform_up(|expr| {
-                let new_expr = match expr {
-                    Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
-                        if func.name() == "count" {
-                            Transformed::yes(Expr::Literal(
-                                ScalarValue::Int64(Some(0)),
-                                None,
-                            ))
-                        } else {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null, None))
-                        }
-                    }
-                    _ => Transformed::no(expr),
+                let new_expr = if let Expr::AggregateFunction(agg) = &expr {
+                    let return_type = expr.get_type(schema.as_ref())?;
+                    let default_value = agg.func.default_value(&return_type)?;
+                    Transformed::yes(Expr::Literal(default_value, None))
+                } else {
+                    Transformed::no(expr)
                 };
                 Ok(new_expr)
             })

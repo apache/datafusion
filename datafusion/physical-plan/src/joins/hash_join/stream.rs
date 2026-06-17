@@ -35,6 +35,7 @@ use crate::joins::hash_join::shared_bounds::{
 use crate::joins::utils::{
     OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
 };
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
     hash_utils::create_hashes,
@@ -170,6 +171,113 @@ impl ProcessProbeBatchState {
     }
 }
 
+/// Lifecycle of this partition's build-data report to the shared coordinator.
+///
+/// `Scheduled` means the reporting `OnceFut` has been constructed but is lazy:
+/// the coordinator has not necessarily observed the report. Only `Delivered`
+/// guarantees the coordinator saw it, so `Drop` must still cancel a `Scheduled`
+/// partition — otherwise sibling partitions can wait forever for a report that
+/// never runs.
+#[derive(Debug, PartialEq, Eq)]
+enum BuildReportState {
+    NotReported,
+    Scheduled,
+    Delivered,
+    Canceled,
+    Finalized,
+}
+
+/// Owns the stream-side lifecycle for one partition's build-data report.
+struct BuildReportHandle {
+    partition: usize,
+    mode: PartitionMode,
+    build_accumulator: Option<Arc<SharedBuildAccumulator>>,
+    waiter: Option<OnceFut<()>>,
+    state: BuildReportState,
+}
+
+impl BuildReportHandle {
+    fn new(
+        partition: usize,
+        mode: PartitionMode,
+        build_accumulator: Option<Arc<SharedBuildAccumulator>>,
+    ) -> Self {
+        Self {
+            partition,
+            mode,
+            build_accumulator,
+            waiter: None,
+            state: BuildReportState::NotReported,
+        }
+    }
+
+    fn has_accumulator(&self) -> bool {
+        self.build_accumulator.is_some()
+    }
+
+    fn schedule(&mut self, build_data: PartitionBuildData) {
+        let Some(build_accumulator) = &self.build_accumulator else {
+            // Defensive no-op terminal state; current callers avoid scheduling
+            // unless an accumulator is present.
+            self.finalize();
+            return;
+        };
+
+        debug_assert!(matches!(self.state, BuildReportState::NotReported));
+        let acc = Arc::clone(build_accumulator);
+        self.waiter = Some(OnceFut::new(async move {
+            acc.report_build_data(build_data).await
+        }));
+        self.state = BuildReportState::Scheduled;
+    }
+
+    fn poll_delivery(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<()>> {
+        if let Some(ref mut fut) = self.waiter {
+            ready!(fut.get_shared(cx))?;
+            if !matches!(self.state, BuildReportState::Delivered) {
+                debug_assert!(matches!(self.state, BuildReportState::Scheduled));
+                self.state = BuildReportState::Delivered;
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn cancel_pending(&mut self) {
+        if matches!(
+            self.state,
+            BuildReportState::Delivered
+                | BuildReportState::Canceled
+                | BuildReportState::Finalized
+        ) {
+            return;
+        }
+
+        if self.mode == PartitionMode::Partitioned
+            && let Some(build_accumulator) = &self.build_accumulator
+        {
+            build_accumulator.report_canceled_partition(self.partition);
+            self.state = BuildReportState::Canceled;
+        } else {
+            self.finalize();
+        }
+    }
+
+    fn finalize(&mut self) {
+        self.state = BuildReportState::Finalized;
+    }
+
+    #[cfg(test)]
+    fn state(&self) -> &BuildReportState {
+        &self.state
+    }
+}
+
+impl Drop for BuildReportHandle {
+    fn drop(&mut self) {
+        self.cancel_pending();
+    }
+}
+
 /// [`Stream`] for [`super::HashJoinExec`] that does the actual join.
 ///
 /// This stream:
@@ -214,11 +322,8 @@ pub(super) struct HashJoinStream {
     build_indices_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
-    /// Shared build accumulator for coordinating dynamic filter updates (collects hash maps and/or bounds, optional)
-    build_accumulator: Option<Arc<SharedBuildAccumulator>>,
-    /// Optional future to signal when build information has been reported by all partitions
-    /// and the dynamic filter has been updated
-    build_waiter: Option<OnceFut<()>>,
+    /// Owns this partition's build-data report lifecycle.
+    build_report: BuildReportHandle,
     /// Partitioning mode to use
     mode: PartitionMode,
     /// Output buffer for coalescing small batches into larger ones with optional fetch limit.
@@ -398,12 +503,65 @@ impl HashJoinStream {
             probe_indices_buffer: Vec::with_capacity(batch_size),
             build_indices_buffer: Vec::with_capacity(batch_size),
             right_side_ordered,
-            build_accumulator,
-            build_waiter: None,
+            build_report: BuildReportHandle::new(partition, mode, build_accumulator),
             mode,
             output_buffer,
             null_aware,
         }
+    }
+
+    /// Returns the next state after the build side has been fully collected
+    /// and any required build-side coordination has completed.
+    fn state_after_build_ready(
+        join_type: JoinType,
+        left_data: &JoinLeftData,
+    ) -> HashJoinStreamState {
+        if left_data.map().is_empty()
+            && join_type.empty_build_side_produces_empty_result()
+        {
+            HashJoinStreamState::Completed
+        } else {
+            HashJoinStreamState::FetchProbeBatch
+        }
+    }
+
+    /// Transitions state after build-side data has been collected, automatically
+    /// reporting build data to the accumulator when one is present.
+    ///
+    /// If a `build_accumulator` is configured, this method constructs the
+    /// appropriate [`PartitionBuildData`], schedules the reporting future, and
+    /// returns [`HashJoinStreamState::WaitPartitionBoundsReport`]. Otherwise it
+    /// delegates to [`Self::state_after_build_ready`].
+    fn transition_after_build_collected(
+        &mut self,
+        left_data: &Arc<JoinLeftData>,
+    ) -> HashJoinStreamState {
+        if !self.build_report.has_accumulator() {
+            return Self::state_after_build_ready(self.join_type, left_data.as_ref());
+        }
+
+        let pushdown = left_data.membership().clone();
+        let bounds = left_data
+            .bounds
+            .clone()
+            .unwrap_or_else(|| PartitionBounds::new(vec![]));
+
+        let build_data = match self.mode {
+            PartitionMode::Partitioned => PartitionBuildData::Partitioned {
+                partition_id: self.partition,
+                pushdown,
+                bounds,
+            },
+            PartitionMode::CollectLeft => {
+                PartitionBuildData::CollectLeft { pushdown, bounds }
+            }
+            PartitionMode::Auto => unreachable!(
+                "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
+            ),
+        };
+
+        self.build_report.schedule(build_data);
+        HashJoinStreamState::WaitPartitionBoundsReport
     }
 
     /// Separate implementation function that unpins the [`HashJoinStream`] so
@@ -466,10 +624,10 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        if let Some(ref mut fut) = self.build_waiter {
-            ready!(fut.get_shared(cx))?;
-        }
-        self.state = HashJoinStreamState::FetchProbeBatch;
+        ready!(self.build_report.poll_delivery(cx))?;
+        let build_side = self.build_side.try_as_ready()?;
+        self.state =
+            Self::state_after_build_ready(self.join_type, build_side.left_data.as_ref());
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
@@ -494,54 +652,7 @@ impl HashJoinStream {
         // not the build side (left). The probe-side NULL check happens during process_probe_batch.
         // The probe_side_has_null flag will be set there if any probe batch contains NULL.
 
-        // Handle dynamic filter build-side information accumulation
-        //
-        // Dynamic filter coordination between partitions:
-        // Report hash maps (Partitioned mode) or bounds (CollectLeft mode) to the accumulator
-        // which will handle synchronization and filter updates
-        if let Some(ref build_accumulator) = self.build_accumulator {
-            let build_accumulator = Arc::clone(build_accumulator);
-
-            let left_side_partition_id = match self.mode {
-                PartitionMode::Partitioned => self.partition,
-                PartitionMode::CollectLeft => 0,
-                PartitionMode::Auto => unreachable!(
-                    "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
-                ),
-            };
-
-            // Determine pushdown strategy based on availability of InList values
-            let pushdown = left_data.membership().clone();
-
-            // Construct the appropriate build data enum variant based on partition mode
-            let build_data = match self.mode {
-                PartitionMode::Partitioned => PartitionBuildData::Partitioned {
-                    partition_id: left_side_partition_id,
-                    pushdown,
-                    bounds: left_data
-                        .bounds
-                        .clone()
-                        .unwrap_or_else(|| PartitionBounds::new(vec![])),
-                },
-                PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
-                    pushdown,
-                    bounds: left_data
-                        .bounds
-                        .clone()
-                        .unwrap_or_else(|| PartitionBounds::new(vec![])),
-                },
-                PartitionMode::Auto => unreachable!(
-                    "PartitionMode::Auto should not be present at execution time"
-                ),
-            };
-
-            self.build_waiter = Some(OnceFut::new(async move {
-                build_accumulator.report_build_data(build_data).await
-            }));
-            self.state = HashJoinStreamState::WaitPartitionBoundsReport;
-        } else {
-            self.state = HashJoinStreamState::FetchProbeBatch;
-        }
+        self.state = self.transition_after_build_collected(&left_data);
 
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
         Poll::Ready(Ok(StatefulStreamResult::Continue))
@@ -557,6 +668,11 @@ impl HashJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         match ready!(self.right.poll_next_unpin(cx)) {
             None => {
+                // Release the probe-side input pipeline's resources. The schema
+                // is preserved so callers that still query `self.right.schema()`
+                // (e.g. for unmatched-build emission) keep working.
+                let right_schema = self.right.schema();
+                self.right = Box::pin(EmptyRecordBatchStream::new(right_schema));
                 self.state = HashJoinStreamState::ExhaustedProbeSide;
             }
             Some(Ok(batch)) => {
@@ -643,10 +759,14 @@ impl HashJoinStream {
             }
         }
 
-        // if the left side is empty, we can skip the (potentially expensive) join operation
+        // If the build side is empty, this stream only reaches ProcessProbeBatch for
+        // join types whose output still depends on probe rows.
         let is_empty = build_side.left_data.map().is_empty();
 
-        if is_empty && self.filter.is_none() {
+        if is_empty {
+            // Invariant: state_after_build_ready should have already completed
+            // join types whose result is fixed to empty when the build side is empty.
+            debug_assert!(!self.join_type.empty_build_side_produces_empty_result());
             let result = build_batch_empty_build_side(
                 &self.schema,
                 build_side.left_data.batch(),
@@ -923,5 +1043,77 @@ impl Stream for HashJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::joins::hash_join::shared_bounds::{
+        PushdownStrategy, completed_partitions_for_test,
+        make_partitioned_accumulator_for_test,
+    };
+
+    fn empty_build_data(partition_id: usize) -> PartitionBuildData {
+        PartitionBuildData::Partitioned {
+            partition_id,
+            pushdown: PushdownStrategy::Empty,
+            bounds: PartitionBounds::new(vec![]),
+        }
+    }
+
+    fn partitioned_handle(acc: &Arc<SharedBuildAccumulator>) -> BuildReportHandle {
+        BuildReportHandle::new(0, PartitionMode::Partitioned, Some(Arc::clone(acc)))
+    }
+
+    #[test]
+    fn build_report_handle_cancels_scheduled_partition_on_drop() {
+        let acc = Arc::new(make_partitioned_accumulator_for_test(2));
+
+        {
+            let mut handle = partitioned_handle(&acc);
+            handle.schedule(empty_build_data(0));
+            assert_eq!(handle.state(), &BuildReportState::Scheduled);
+        }
+
+        assert_eq!(completed_partitions_for_test(&acc), 1);
+    }
+
+    #[test]
+    fn build_report_handle_does_not_cancel_delivered_partition_on_drop() {
+        let acc = Arc::new(make_partitioned_accumulator_for_test(1));
+
+        {
+            let mut handle = partitioned_handle(&acc);
+            handle.schedule(empty_build_data(0));
+            let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
+            assert!(matches!(handle.poll_delivery(&mut cx), Poll::Ready(Ok(()))));
+            assert_eq!(handle.state(), &BuildReportState::Delivered);
+        }
+
+        assert_eq!(completed_partitions_for_test(&acc), 1);
+    }
+
+    #[test]
+    fn build_report_handle_cancel_pending_is_idempotent() {
+        let acc = Arc::new(make_partitioned_accumulator_for_test(2));
+        let mut handle = partitioned_handle(&acc);
+        handle.schedule(empty_build_data(0));
+
+        handle.cancel_pending();
+        handle.cancel_pending();
+
+        assert_eq!(handle.state(), &BuildReportState::Canceled);
+        assert_eq!(completed_partitions_for_test(&acc), 1);
+    }
+
+    #[test]
+    fn build_report_handle_no_accumulator_finalizes() {
+        let mut handle = BuildReportHandle::new(0, PartitionMode::Partitioned, None);
+
+        handle.schedule(empty_build_data(0));
+        handle.cancel_pending();
+
+        assert_eq!(handle.state(), &BuildReportState::Finalized);
     }
 }

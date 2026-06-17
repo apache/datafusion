@@ -19,7 +19,6 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -31,8 +30,10 @@ use crate::execution_plan::{
     Boundedness, CardinalityEffect, EmissionType, has_same_children_properties,
 };
 use crate::expressions::PhysicalSortExpr;
+use crate::filter::FilterExec;
 use crate::filter_pushdown::{
-    ChildFilterDescription, FilterDescription, FilterPushdownPhase,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDown,
 };
 use crate::limit::LimitStream;
 use crate::metrics::{
@@ -54,11 +55,10 @@ use crate::{
     Statistics,
 };
 
-use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
     unwrap_or_internal_err,
@@ -419,8 +419,6 @@ impl ExternalSorter {
                 Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
         }
 
-        Self::organize_stringview_arrays(globally_sorted_batches)?;
-
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
         let batches_to_spill = std::mem::take(globally_sorted_batches);
@@ -432,10 +430,9 @@ impl ExternalSorter {
             })?;
 
         for batch in batches_to_spill {
-            in_progress_file.append_batch(&batch)?;
+            let gc_sliced_size = in_progress_file.append_batch(&batch)?;
 
-            *max_record_batch_size =
-                (*max_record_batch_size).max(batch.get_sliced_size()?);
+            *max_record_batch_size = (*max_record_batch_size).max(gc_sliced_size);
         }
 
         assert_or_internal_err!(
@@ -460,71 +457,6 @@ impl ExternalSorter {
                 max_record_batch_memory,
             });
         }
-
-        Ok(())
-    }
-
-    /// Reconstruct `globally_sorted_batches` to organize the payload buffers of each
-    /// `StringViewArray` in sequential order by calling `gc()` on them.
-    ///
-    /// Note this is a workaround until <https://github.com/apache/arrow-rs/issues/7185> is
-    /// available
-    ///
-    /// # Rationale
-    /// After (merge-based) sorting, all batches will be sorted into a single run,
-    /// but physically this sorted run is chunked into many small batches. For
-    /// `StringViewArray`s inside each sorted run, their inner buffers are not
-    /// re-constructed by default, leading to non-sequential payload locations
-    /// (permutated by `interleave()` Arrow kernel). A single payload buffer might
-    /// be shared by multiple `RecordBatch`es.
-    /// When writing each batch to disk, the writer has to write all referenced buffers,
-    /// because they have to be read back one by one to reduce memory usage. This
-    /// causes extra disk reads and writes, and potentially execution failure.
-    ///
-    /// # Example
-    /// Before sorting:
-    /// batch1 -> buffer1
-    /// batch2 -> buffer2
-    ///
-    /// sorted_batch1 -> buffer1
-    ///               -> buffer2
-    /// sorted_batch2 -> buffer1
-    ///               -> buffer2
-    ///
-    /// Then when spilling each batch, the writer has to write all referenced buffers
-    /// repeatedly.
-    fn organize_stringview_arrays(
-        globally_sorted_batches: &mut Vec<RecordBatch>,
-    ) -> Result<()> {
-        let mut organized_batches = Vec::with_capacity(globally_sorted_batches.len());
-
-        for batch in globally_sorted_batches.drain(..) {
-            let mut new_columns: Vec<Arc<dyn Array>> =
-                Vec::with_capacity(batch.num_columns());
-
-            let mut arr_mutated = false;
-            for array in batch.columns() {
-                if let Some(string_view_array) =
-                    array.as_any().downcast_ref::<StringViewArray>()
-                {
-                    let new_array = string_view_array.gc();
-                    new_columns.push(Arc::new(new_array));
-                    arr_mutated = true;
-                } else {
-                    new_columns.push(Arc::clone(array));
-                }
-            }
-
-            let organized_batch = if arr_mutated {
-                RecordBatch::try_new(batch.schema(), new_columns)?
-            } else {
-                batch
-            };
-
-            organized_batches.push(organized_batch);
-        }
-
-        *globally_sorted_batches = organized_batches;
 
         Ok(())
     }
@@ -1045,6 +977,30 @@ impl SortExec {
         self.fetch
     }
 
+    /// Returns the dynamic filter expression for this sort (TopK), if set.
+    pub fn dynamic_filter_expr(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
+        self.filter.as_ref().map(|f| f.read().expr())
+    }
+
+    /// Replace the dynamic filter expression for this sort.
+    ///
+    ///
+    /// Resets any internal state which may depend on the previous dynamic filter.
+    ///
+    /// Validates that the filter's children reference valid columns in
+    /// the sort's input schema.
+    pub fn with_dynamic_filter_expr(
+        mut self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        let input_schema = self.input.schema();
+        for child in filter.children() {
+            child.data_type(&input_schema)?;
+        }
+        self.filter = Some(Arc::new(RwLock::new(TopKDynamicFilters::new(filter))));
+        Ok(self)
+    }
+
     fn output_partitioning_helper(
         input: &Arc<dyn ExecutionPlan>,
         preserve_partitioning: bool,
@@ -1176,10 +1132,6 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -1189,32 +1141,14 @@ impl ExecutionPlan for SortExec {
             vec![Distribution::UnspecifiedDistribution]
         } else {
             // global sort
-            // TODO support RangePartition and OrderedDistribution
+            // TODO support range partitioning and OrderedDistribution.
+            // See https://github.com/apache/datafusion/issues/22395
             vec![Distribution::SinglePartition]
         }
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to sort expressions
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-        }
-
-        // Apply to dynamic filter expression if present (when fetch is Some, TopK mode)
-        if let Some(filter) = &self.filter {
-            let filter_guard = filter.read();
-            tnr = tnr.visit_sibling(|| f(filter_guard.expr().as_ref()))?;
-        }
-
-        Ok(tnr)
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -1247,7 +1181,6 @@ impl ExecutionPlan for SortExec {
         let children = self.children().into_iter().cloned().collect();
         let new_sort = self.with_new_children(children)?;
         let mut new_sort = new_sort
-            .as_any()
             .downcast_ref::<SortExec>()
             .expect("cloned 1 lines above this line, we know the type")
             .clone();
@@ -1312,6 +1245,7 @@ impl ExecutionPlan for SortExec {
                                 break;
                             }
                         }
+                        drop(input);
                         topk.emit()
                     })
                     .try_flatten(),
@@ -1336,6 +1270,7 @@ impl ExecutionPlan for SortExec {
                             let batch = batch?;
                             sorter.insert_batch(batch).await?;
                         }
+                        drop(input);
                         sorter.sort().await
                     })
                     .try_flatten(),
@@ -1430,6 +1365,58 @@ impl ExecutionPlan for SortExec {
 
         Ok(FilterDescription::new().with_child(child))
     }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &datafusion_common::config::ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // For a plain sort (no fetch) we intercept any unsupported filters
+        // by inserting a FilterExec below this Sort. Moving the filter below
+        // Sort is safe because Sort preserves all rows.
+        //
+        // Why not fetch (TopK)?
+        // A sort with fetch limits the number of output rows.  Inserting a
+        // FilterExec *below* the TopK would change semantics.  A filter *above*
+        // the TopK is supposed to post-filter its output (e.g. "take the top 10
+        // rows, then keep only those with a > 5").  Pushing the filter below
+        // Sort changes the meaning to "filter first, then take top 10", which
+        // produces a different result.
+        if self.fetch.is_some() {
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
+        }
+
+        // Collect parent filters that were NOT successfully pushed to our child.
+        let unsupported_filters: Vec<Arc<dyn PhysicalExpr>> = child_pushdown_result
+            .parent_filters
+            .iter()
+            .filter(|&f| matches!(f.all(), PushedDown::No))
+            .map(|f| Arc::clone(&f.filter))
+            .collect();
+
+        if unsupported_filters.is_empty() {
+            // All filters were pushed — nothing extra to do.
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
+        }
+
+        // Build a single conjunctive predicate from the unsupported filters
+        // and insert a FilterExec between this SortExec and its child.
+        let predicate = datafusion_physical_expr::conjunction(unsupported_filters);
+        let new_child =
+            Arc::new(FilterExec::try_new(predicate, Arc::clone(self.input()))?)
+                as Arc<dyn ExecutionPlan>;
+        let new_sort = Arc::new(
+            SortExec::new(self.expr.clone(), new_child)
+                .with_fetch(self.fetch())
+                .with_preserve_partitioning(self.preserve_partitioning()),
+        ) as Arc<dyn ExecutionPlan>;
+
+        Ok(FilterPushdownPropagation {
+            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
+            updated_node: Some(new_sort),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1509,10 +1496,6 @@ mod tests {
             Self::static_name()
         }
 
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
@@ -1526,13 +1509,6 @@ mod tests {
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(
@@ -2744,6 +2720,71 @@ mod tests {
         // The reserved memory for the sliced batch should be less than that of the full batch
         assert!(reserved > sliced_reserved);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let sort = SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            }])
+            .unwrap(),
+            child,
+        )
+        .with_fetch(Some(10));
+
+        // SortExec with fetch creates a dynamic filter automatically.
+        let original_id = sort
+            .dynamic_filter_expr()
+            .expect("should have dynamic filter with fetch")
+            .expression_id()
+            .expect("DynamicFilterPhysicalExpr always has an expression_id");
+
+        // with_dynamic_filter replaces it with a new TopKDynamicFilters.
+        let new_df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("a", 0)) as _],
+            lit(true),
+        ));
+        let new_id = new_df
+            .expression_id()
+            .expect("DynamicFilterPhysicalExpr always has an expression_id");
+        let sort = sort.with_dynamic_filter_expr(Arc::clone(&new_df))?;
+        let restored_id = sort
+            .dynamic_filter_expr()
+            .expect("should still have dynamic filter")
+            .expression_id()
+            .expect("DynamicFilterPhysicalExpr always has an expression_id");
+        assert_eq!(restored_id, new_id);
+        assert_ne!(restored_id, original_id);
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_dynamic_filter_rejects_invalid_columns() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let sort = SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            }])
+            .unwrap(),
+            child,
+        )
+        .with_fetch(Some(10));
+
+        // Column index 99 is out of bounds for the input schema.
+        let df = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("bad", 99)) as _],
+            lit(true),
+        ));
+        assert!(sort.with_dynamic_filter_expr(df).is_err());
         Ok(())
     }
 

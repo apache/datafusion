@@ -120,7 +120,7 @@ impl StringAgg {
 
     /// Extract the delimiter string from the second argument expression.
     fn extract_delimiter(args: &AccumulatorArgs) -> Result<String> {
-        let Some(lit) = args.exprs[1].as_any().downcast_ref::<Literal>() else {
+        let Some(lit) = args.exprs[1].downcast_ref::<Literal>() else {
             return not_impl_err!("string_agg delimiter must be a string literal");
         };
 
@@ -413,11 +413,10 @@ impl GroupsAccumulator for StringAggGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // State is always LargeUtf8, which update_batch already handles.
-        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+        self.update_batch(values, group_indices, None, total_num_groups)
     }
 
     fn convert_to_state(
@@ -898,7 +897,7 @@ mod tests {
 
         // Simulate a second accumulator's state (LargeUtf8 partial strings)
         let partial_state: ArrayRef = Arc::new(LargeStringArray::from(vec!["c,d", "e"]));
-        acc.merge_batch(&[partial_state], &[0, 1], None, 2)?;
+        acc.merge_batch(&[partial_state], &[0, 1], 2)?;
 
         let result = evaluate_groups(&mut acc, EmitTo::All);
         assert_eq!(

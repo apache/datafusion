@@ -22,27 +22,19 @@ use crate::logical_plan::{
 };
 use crate::physical_plan::{
     DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
-    PhysicalProtoConverterExtension,
+    PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use crate::protobuf;
 use datafusion_common::{Result, plan_datafusion_err};
 use datafusion_execution::TaskContext;
-use datafusion_expr::{
-    AggregateUDF, Expr, LogicalPlan, Volatility, WindowUDF, create_udaf, create_udf,
-    create_udwf,
-};
+use datafusion_expr::{Expr, LogicalPlan};
 use prost::{
     Message,
     bytes::{Bytes, BytesMut},
 };
 use std::sync::Arc;
 
-// Reexport Bytes which appears in the API
-use datafusion_execution::registry::FunctionRegistry;
-use datafusion_expr::planner::ExprPlanner;
 use datafusion_physical_plan::ExecutionPlan;
-
-mod registry;
 
 /// Encodes something (such as [`Expr`]) to/from a stream of
 /// bytes.
@@ -65,26 +57,21 @@ pub trait Serializeable: Sized {
     /// Convert `self` to an opaque byte stream
     fn to_bytes(&self) -> Result<Bytes>;
 
-    /// Convert `bytes` (the output of [`to_bytes`]) back into an
-    /// object. This will error if the serialized bytes contain any
-    /// user defined functions, in which case use
-    /// [`from_bytes_with_registry`]
+    /// Convert `bytes` (the output of [`to_bytes`]) back into an object. This
+    /// will error if the serialized bytes contain any user defined functions,
+    /// in which case use [`from_bytes_with_ctx`]
     ///
     /// [`to_bytes`]: Self::to_bytes
-    /// [`from_bytes_with_registry`]: Self::from_bytes_with_registry
+    /// [`from_bytes_with_ctx`]: Self::from_bytes_with_ctx
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        Self::from_bytes_with_registry(bytes, &registry::NoRegistry {})
+        Self::from_bytes_with_ctx(bytes, &TaskContext::default())
     }
 
-    /// Convert `bytes` (the output of [`to_bytes`]) back into an
-    /// object resolving user defined functions with the specified
-    /// `registry`
+    /// Convert `bytes` (the output of [`to_bytes`]) back into an object,
+    /// resolving user defined functions with the specified `ctx`
     ///
     /// [`to_bytes`]: Self::to_bytes
-    fn from_bytes_with_registry(
-        bytes: &[u8],
-        registry: &dyn FunctionRegistry,
-    ) -> Result<Self>;
+    fn from_bytes_with_ctx(bytes: &[u8], ctx: &TaskContext) -> Result<Self>;
 }
 
 impl Serializeable for Expr {
@@ -100,100 +87,22 @@ impl Serializeable for Expr {
 
         let bytes: Bytes = buffer.into();
 
-        // the produced byte stream may lead to "recursion limit" errors, see
+        // The produced byte stream may lead to "recursion limit" errors, see
         // https://github.com/apache/datafusion/issues/3968
-        // Until the underlying prost issue ( https://github.com/tokio-rs/prost/issues/736 ) is fixed, we try to
-        // deserialize the data here and check for errors.
-        //
-        // Need to provide some placeholder registry because the stream may contain UDFs
-        struct PlaceHolderRegistry;
-
-        impl FunctionRegistry for PlaceHolderRegistry {
-            fn udfs(&self) -> std::collections::HashSet<String> {
-                std::collections::HashSet::default()
-            }
-
-            fn udf(&self, name: &str) -> Result<Arc<datafusion_expr::ScalarUDF>> {
-                Ok(Arc::new(create_udf(
-                    name,
-                    vec![],
-                    arrow::datatypes::DataType::Null,
-                    Volatility::Immutable,
-                    Arc::new(|_| unimplemented!()),
-                )))
-            }
-
-            fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
-                Ok(Arc::new(create_udaf(
-                    name,
-                    vec![arrow::datatypes::DataType::Null],
-                    Arc::new(arrow::datatypes::DataType::Null),
-                    Volatility::Immutable,
-                    Arc::new(|_| unimplemented!()),
-                    Arc::new(vec![]),
-                )))
-            }
-
-            fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
-                Ok(Arc::new(create_udwf(
-                    name,
-                    arrow::datatypes::DataType::Null,
-                    Arc::new(arrow::datatypes::DataType::Null),
-                    Volatility::Immutable,
-                    Arc::new(|| unimplemented!()),
-                )))
-            }
-            fn register_udaf(
-                &mut self,
-                _udaf: Arc<AggregateUDF>,
-            ) -> Result<Option<Arc<AggregateUDF>>> {
-                datafusion_common::internal_err!(
-                    "register_udaf called in Placeholder Registry!"
-                )
-            }
-            fn register_udf(
-                &mut self,
-                _udf: Arc<datafusion_expr::ScalarUDF>,
-            ) -> Result<Option<Arc<datafusion_expr::ScalarUDF>>> {
-                datafusion_common::internal_err!(
-                    "register_udf called in Placeholder Registry!"
-                )
-            }
-            fn register_udwf(
-                &mut self,
-                _udaf: Arc<WindowUDF>,
-            ) -> Result<Option<Arc<WindowUDF>>> {
-                datafusion_common::internal_err!(
-                    "register_udwf called in Placeholder Registry!"
-                )
-            }
-
-            fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
-                vec![]
-            }
-
-            fn udafs(&self) -> std::collections::HashSet<String> {
-                std::collections::HashSet::default()
-            }
-
-            fn udwfs(&self) -> std::collections::HashSet<String> {
-                std::collections::HashSet::default()
-            }
-        }
-        Expr::from_bytes_with_registry(&bytes, &PlaceHolderRegistry)?;
+        // Until the underlying prost issue ( https://github.com/tokio-rs/prost/issues/736 )
+        // is fixed, verify the bytes can be decoded without hitting that limit.
+        protobuf::LogicalExprNode::decode(bytes.as_ref())
+            .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
 
         Ok(bytes)
     }
 
-    fn from_bytes_with_registry(
-        bytes: &[u8],
-        registry: &dyn FunctionRegistry,
-    ) -> Result<Self> {
+    fn from_bytes_with_ctx(bytes: &[u8], ctx: &TaskContext) -> Result<Self> {
         let protobuf = protobuf::LogicalExprNode::decode(bytes)
             .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
 
         let extension_codec = DefaultLogicalExtensionCodec {};
-        logical_plan::from_proto::parse_expr(&protobuf, registry, &extension_codec)
+        logical_plan::from_proto::parse_expr(&protobuf, ctx, &extension_codec)
             .map_err(|e| plan_datafusion_err!("Error parsing protobuf into Expr: {e}"))
     }
 }
@@ -327,7 +236,8 @@ pub fn physical_plan_from_json(
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DefaultPhysicalProtoConverter {};
-    proto_converter.proto_to_execution_plan(ctx, &extension_codec, &back)
+    let decode_ctx = PhysicalPlanDecodeContext::new(ctx, &extension_codec);
+    proto_converter.proto_to_execution_plan(&back, &decode_ctx)
 }
 
 /// Deserialize a PhysicalPlan from bytes
@@ -369,5 +279,6 @@ pub fn physical_plan_from_bytes_with_proto_converter(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
         .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
-    proto_converter.proto_to_execution_plan(ctx, extension_codec, &protobuf)
+    let decode_ctx = PhysicalPlanDecodeContext::new(ctx, extension_codec);
+    proto_converter.proto_to_execution_plan(&protobuf, &decode_ctx)
 }

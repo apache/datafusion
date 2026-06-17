@@ -59,6 +59,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 - [pow](#pow)
 - [power](#power)
 - [radians](#radians)
+- [rand](#rand)
 - [random](#random)
 - [round](#round)
 - [signum](#signum)
@@ -226,11 +227,11 @@ atan2(expression_y, expression_x)
 
 ```sql
 > SELECT atan2(1, 1);
-+------------+
-| atan2(1,1) |
-+------------+
-| 0.7853982  |
-+------------+
++--------------------+
+| atan2(1,1)         |
++--------------------+
+| 0.7853981633974483 |
++--------------------+
 ```
 
 ### `atanh`
@@ -419,7 +420,7 @@ exp(numeric_expression)
 
 ### `factorial`
 
-Factorial. Returns 1 if value is less than 2.
+Factorial of a non-negative integer. Errors if the argument is negative or the result overflows.
 
 ```sql
 factorial(numeric_expression)
@@ -739,6 +740,10 @@ radians(numeric_expression)
 +----------------+
 ```
 
+### `rand`
+
+_Alias of [random](#random)._
+
 ### `random`
 
 Returns a random float value in the range [0, 1).
@@ -758,6 +763,10 @@ random()
 | 0.7389238902938  |
 +------------------+
 ```
+
+#### Aliases
+
+- rand
 
 ### `round`
 
@@ -2415,6 +2424,26 @@ current_date()
     SELECT current_date();
 ```
 
+#### Example
+
+```sql
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-23     |
++----------------+
+
+-- The current date is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_date();
++----------------+
+| current_date() |
++----------------+
+| 2024-12-24     |
++----------------+
+```
+
 #### Aliases
 
 - today
@@ -2431,6 +2460,26 @@ The session time zone can be set using the statement 'SET datafusion.execution.t
 current_time()
     (optional) SET datafusion.execution.time_zone = '+00:00';
     SELECT current_time();
+```
+
+#### Example
+
+```sql
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 06:30:00.123456789 |
++--------------------+
+
+-- The current time is based on the session time zone (UTC by default)
+> SET datafusion.execution.time_zone = 'Asia/Tokyo';
+> SELECT current_time();
++--------------------+
+| current_time()     |
++--------------------+
+| 15:30:00.123456789 |
++--------------------+
 ```
 
 ### `current_timestamp`
@@ -2533,9 +2582,26 @@ date_part(part, expression)
   - dow (day of the week where Sunday is 0)
   - doy (day of the year)
   - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
-  - isodow (day of the week where Monday is 0)
+  - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SELECT date_part('year', '2024-05-01T00:00:00');
++-----------------------------------------------------+
+| date_part(Utf8("year"),Utf8("2024-05-01T00:00:00")) |
++-----------------------------------------------------+
+| 2024                                                |
++-----------------------------------------------------+
+> SELECT extract(day FROM timestamp '2024-05-01T00:00:00');
++----------------------------------------------------+
+| date_part(Utf8("DAY"),Utf8("2024-05-01T00:00:00")) |
++----------------------------------------------------+
+| 1                                                  |
++----------------------------------------------------+
+```
 
 #### Alternative Syntax
 
@@ -2581,6 +2647,23 @@ date_trunc(precision, expression)
   - microsecond / MICROSECOND
 
 - **expression**: Timestamp or time expression to operate on. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SELECT date_trunc('month', '2024-05-15T10:30:00');
++-----------------------------------------------+
+| date_trunc(Utf8("month"),Utf8("2024-05-15T10:30:00")) |
++-----------------------------------------------+
+| 2024-05-01T00:00:00                           |
++-----------------------------------------------+
+> SELECT date_trunc('hour', '2024-05-15T10:30:00');
++----------------------------------------------+
+| date_trunc(Utf8("hour"),Utf8("2024-05-15T10:30:00")) |
++----------------------------------------------+
+| 2024-05-15T10:00:00                          |
++----------------------------------------------+
+```
 
 #### Aliases
 
@@ -2692,6 +2775,26 @@ The `now()` return value is determined at query time and will return the same ti
 
 ```sql
 now()
+```
+
+#### Example
+
+```sql
+> SELECT now();
++----------------------------------+
+| now()                            |
++----------------------------------+
+| 2024-12-23T06:30:00.123456789    |
++----------------------------------+
+
+-- The timezone of the returned timestamp depends on the session time zone
+> SET datafusion.execution.time_zone = 'America/New_York';
+> SELECT now();
++--------------------------------------+
+| now()                                |
++--------------------------------------+
+| 2024-12-23T01:30:00.123456789-05:00  |
++--------------------------------------+
 ```
 
 #### Aliases
@@ -3140,9 +3243,13 @@ _Alias of [current_date](#current_date)._
 
 ## Array Functions
 
+- [any_match](#any_match)
+- [array_add](#array_add)
+- [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
 - [array_cat](#array_cat)
+- [array_compact](#array_compact)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
@@ -3152,6 +3259,7 @@ _Alias of [current_date](#current_date)._
 - [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
+- [array_filter](#array_filter)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -3162,11 +3270,13 @@ _Alias of [current_date](#current_date)._
 - [array_max](#array_max)
 - [array_min](#array_min)
 - [array_ndims](#array_ndims)
+- [array_normalize](#array_normalize)
 - [array_pop_back](#array_pop_back)
 - [array_pop_front](#array_pop_front)
 - [array_position](#array_position)
 - [array_positions](#array_positions)
 - [array_prepend](#array_prepend)
+- [array_product](#array_product)
 - [array_push_back](#array_push_back)
 - [array_push_front](#array_push_front)
 - [array_remove](#array_remove)
@@ -3178,19 +3288,29 @@ _Alias of [current_date](#current_date)._
 - [array_replace_n](#array_replace_n)
 - [array_resize](#array_resize)
 - [array_reverse](#array_reverse)
+- [array_scale](#array_scale)
 - [array_slice](#array_slice)
 - [array_sort](#array_sort)
+- [array_subtract](#array_subtract)
+- [array_sum](#array_sum)
 - [array_to_string](#array_to_string)
+- [array_transform](#array_transform)
 - [array_union](#array_union)
 - [arrays_overlap](#arrays_overlap)
 - [arrays_zip](#arrays_zip)
 - [cardinality](#cardinality)
+- [cosine_distance](#cosine_distance)
+- [dot_product](#dot_product)
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
+- [inner_product](#inner_product)
+- [list_add](#list_add)
+- [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
+- [list_compact](#list_compact)
 - [list_concat](#list_concat)
 - [list_contains](#list_contains)
 - [list_dims](#list_dims)
@@ -3200,6 +3320,7 @@ _Alias of [current_date](#current_date)._
 - [list_empty](#list_empty)
 - [list_except](#list_except)
 - [list_extract](#list_extract)
+- [list_filter](#list_filter)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
@@ -3209,11 +3330,13 @@ _Alias of [current_date](#current_date)._
 - [list_length](#list_length)
 - [list_max](#list_max)
 - [list_ndims](#list_ndims)
+- [list_normalize](#list_normalize)
 - [list_pop_back](#list_pop_back)
 - [list_pop_front](#list_pop_front)
 - [list_position](#list_position)
 - [list_positions](#list_positions)
 - [list_prepend](#list_prepend)
+- [list_product](#list_product)
 - [list_push_back](#list_push_back)
 - [list_push_front](#list_push_front)
 - [list_remove](#list_remove)
@@ -3225,9 +3348,13 @@ _Alias of [current_date](#current_date)._
 - [list_replace_n](#list_replace_n)
 - [list_resize](#list_resize)
 - [list_reverse](#list_reverse)
+- [list_scale](#list_scale)
 - [list_slice](#list_slice)
 - [list_sort](#list_sort)
+- [list_subtract](#list_subtract)
+- [list_sum](#list_sum)
 - [list_to_string](#list_to_string)
+- [list_transform](#list_transform)
 - [list_union](#list_union)
 - [list_zip](#list_zip)
 - [make_array](#make_array)
@@ -3235,6 +3362,67 @@ _Alias of [current_date](#current_date)._
 - [range](#range)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
+
+### `any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
+### `array_add`
+
+Returns the element-wise sum of two numeric arrays of equal length, computed as `array1[i] + array2[i]` per position. NULL is propagated per element: if either input element at position `i` is NULL, the corresponding output element is NULL (positions are preserved). Returns NULL if either entire input array is NULL. Errors if the per-row lengths differ. Returns an empty array if both inputs are empty.
+
+```sql
+array_add(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_add([1.0, 2.0, 3.0], [10.0, 20.0, 30.0]);
++---------------------------------------------------------+
+| array_add(List([1.0,2.0,3.0]),List([10.0,20.0,30.0]))   |
++---------------------------------------------------------+
+| [11.0, 22.0, 33.0]                                      |
++---------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_add
+
+### `array_any_match`
+
+Returns whether any elements of an array match the given predicate. Returns true if one or more elements match, false if none match (including empty arrays), and null if the predicate returns null for some elements and false for all others.
+
+```sql
+any_match(array, predicate)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **predicate**: Lambda predicate that returns a boolean
+
+#### Example
+
+```sql
+> select any_match([1, 2, 3], x -> x > 2);
++----------------------------------+
+| any_match([1, 2, 3], x -> x > 2) |
++----------------------------------+
+| true                             |
++----------------------------------+
+```
+
+#### Aliases
+
+- any_match
+- list_any_match
 
 ### `array_any_value`
 
@@ -3296,6 +3484,33 @@ array_append(array, element)
 ### `array_cat`
 
 _Alias of [array_concat](#array_concat)._
+
+### `array_compact`
+
+Removes null values from the array.
+
+```sql
+array_compact(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_compact([1, NULL, 2, NULL, 3]) arr;
++-----------+
+| arr       |
++-----------+
+| [1, 2, 3] |
++-----------+
+```
+
+#### Aliases
+
+- list_compact
 
 ### `array_concat`
 
@@ -3484,6 +3699,34 @@ array_except(array1, array2)
 ### `array_extract`
 
 _Alias of [array_element](#array_element)._
+
+### `array_filter`
+
+filters the values of an array using a boolean lambda
+
+```sql
+array_filter(array, x -> x > 2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda that returns a boolean. Elements for which the lambda returns true are kept.
+
+#### Example
+
+```sql
+> select array_filter([1, 2, 3, 4, 5], x -> x > 2);
++--------------------------------------------+
+| array_filter([1, 2, 3, 4, 5], x -> x > 2) |
++--------------------------------------------+
+| [3, 4, 5]                                  |
++--------------------------------------------+
+```
+
+#### Aliases
+
+- list_filter
 
 ### `array_has`
 
@@ -3720,6 +3963,33 @@ array_ndims(array, element)
 
 - list_ndims
 
+### `array_normalize`
+
+Returns the L2-normalized vector for the input numeric array, computed as `array[i] / sqrt(sum(array[i]^2))` per element. Returns NULL if the input is NULL, contains NULL elements, or has zero magnitude (all elements are zero). Returns an empty array for an empty input array.
+
+```sql
+array_normalize(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_normalize([3.0, 4.0]);
++-----------------------------+
+| array_normalize(List([3.0,4.0])) |
++-----------------------------+
+| [0.6, 0.8]                  |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_normalize
+
 ### `array_pop_back`
 
 Returns the array without the last element.
@@ -3869,6 +4139,33 @@ array_prepend(element, array)
 - list_prepend
 - array_push_front
 - list_push_front
+
+### `array_product`
+
+Returns the product of the elements in the input numeric array. NULL elements inside the array are skipped (matching SQL aggregate convention). Returns NULL if the input is NULL, every element is NULL, or the array is empty. The result is always returned as `Float64`.
+
+```sql
+array_product(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_product([1.0, 2.0, 3.0]);
++------------------------------------+
+| array_product(List([1.0,2.0,3.0])) |
++------------------------------------+
+| 6.0                                |
++------------------------------------+
+```
+
+#### Aliases
+
+- list_product
 
 ### `array_push_back`
 
@@ -4162,6 +4459,34 @@ array_reverse(array)
 
 - list_reverse
 
+### `array_scale`
+
+Returns a new array with each element of the input array multiplied by a scalar value, computed as `array[i] * scalar`. Returns NULL if the input row is NULL or the scalar is NULL. If a NULL element appears in the input array at position `i`, the result element at position `i` is NULL. Returns an empty array for an empty input array.
+
+```sql
+array_scale(array, scalar)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **scalar**: Numeric scalar to multiply each element by. Can be a constant or column expression.
+
+#### Example
+
+```sql
+> select array_scale([1.0, 2.0, 3.0], 2.0);
++----------------------------------+
+| array_scale(List([1.0,2.0,3.0]),Float64(2.0)) |
++----------------------------------+
+| [2.0, 4.0, 6.0]                  |
++----------------------------------+
+```
+
+#### Aliases
+
+- list_scale
+
 ### `array_slice`
 
 Returns a slice of the array based on 1-indexed start and end positions.
@@ -4221,6 +4546,61 @@ array_sort(array, desc, nulls_first)
 
 - list_sort
 
+### `array_subtract`
+
+Returns the element-wise difference of two numeric arrays of equal length, computed as `array1[i] - array2[i]` per position. NULL is propagated per element: if either input element at position `i` is NULL, the corresponding output element is NULL (positions are preserved). Returns NULL if either entire input array is NULL. Errors if the per-row lengths differ. Returns an empty array if both inputs are empty.
+
+```sql
+array_subtract(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_subtract([10.0, 20.0, 30.0], [1.0, 2.0, 3.0]);
++--------------------------------------------------------------+
+| array_subtract(List([10.0,20.0,30.0]),List([1.0,2.0,3.0]))   |
++--------------------------------------------------------------+
+| [9.0, 18.0, 27.0]                                            |
++--------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_subtract
+
+### `array_sum`
+
+Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL, every element is NULL, or the array is empty.
+
+```sql
+array_sum(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_sum([1.0, 2.0, 3.0]);
++----------------------------+
+| array_sum(List([1.0,2.0,3.0])) |
++----------------------------+
+| 6.0                        |
++----------------------------+
+```
+
+#### Aliases
+
+- list_sum
+
 ### `array_to_string`
 
 Converts each element to its text representation.
@@ -4251,6 +4631,34 @@ array_to_string(array, delimiter[, null_string])
 - list_to_string
 - array_join
 - list_join
+
+### `array_transform`
+
+transforms the values of an array
+
+```sql
+array_transform(array, x -> x*2)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda
+
+#### Example
+
+```sql
+> select array_transform([1, 2, 3, 4, 5], x -> x*2);
++-------------------------------------------+
+| array_transform([1, 2, 3, 4, 5], x -> x*2)       |
++-------------------------------------------+
+| [2, 4, 6, 8, 10]                          |
++-------------------------------------------+
+```
+
+#### Aliases
+
+- list_transform
 
 ### `array_union`
 
@@ -4347,6 +4755,34 @@ cardinality(array)
 +--------------------------------------+
 ```
 
+### `cosine_distance`
+
+Returns the cosine distance between two input arrays of equal length. The cosine distance is defined as 1 - cosine_similarity, i.e. `1 - dot(a,b) / (||a|| * ||b||)`. Returns NULL if either array is NULL or contains only zeros.
+
+```sql
+cosine_distance(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select cosine_distance([1.0, 0.0], [0.0, 1.0]);
++-----------------------------------------------+
+| cosine_distance(List([1.0,0.0]),List([0.0,1.0])) |
++-----------------------------------------------+
+| 1.0                                           |
++-----------------------------------------------+
+```
+
+### `dot_product`
+
+_Alias of [inner_product](#inner_product)._
+
 ### `empty`
 
 Returns 1 for an empty array or 0 for a non-empty array.
@@ -4429,6 +4865,42 @@ generate_series(start, stop[, step])
 +------------------------------------+
 ```
 
+### `inner_product`
+
+Returns the inner product (dot product) of two input arrays of equal length, computed as `sum(array1[i] * array2[i])`. Returns NULL if either array is NULL or contains NULL elements. Returns 0.0 for two empty arrays.
+
+```sql
+inner_product(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select inner_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
++-------------------------------------------------------+
+| inner_product(List([1.0,2.0,3.0]),List([4.0,5.0,6.0])) |
++-------------------------------------------------------+
+| 32.0                                                  |
++-------------------------------------------------------+
+```
+
+#### Aliases
+
+- dot_product
+
+### `list_add`
+
+_Alias of [array_add](#array_add)._
+
+### `list_any_match`
+
+_Alias of [array_any_match](#array_any_match)._
+
 ### `list_any_value`
 
 _Alias of [array_any_value](#array_any_value)._
@@ -4440,6 +4912,10 @@ _Alias of [array_append](#array_append)._
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
+
+### `list_compact`
+
+_Alias of [array_compact](#array_compact)._
 
 ### `list_concat`
 
@@ -4477,6 +4953,10 @@ _Alias of [array_except](#array_except)._
 
 _Alias of [array_element](#array_element)._
 
+### `list_filter`
+
+_Alias of [array_filter](#array_filter)._
+
 ### `list_has`
 
 _Alias of [array_has](#array_has)._
@@ -4513,6 +4993,10 @@ _Alias of [array_max](#array_max)._
 
 _Alias of [array_ndims](#array_ndims)._
 
+### `list_normalize`
+
+_Alias of [array_normalize](#array_normalize)._
+
 ### `list_pop_back`
 
 _Alias of [array_pop_back](#array_pop_back)._
@@ -4532,6 +5016,10 @@ _Alias of [array_positions](#array_positions)._
 ### `list_prepend`
 
 _Alias of [array_prepend](#array_prepend)._
+
+### `list_product`
+
+_Alias of [array_product](#array_product)._
 
 ### `list_push_back`
 
@@ -4577,6 +5065,10 @@ _Alias of [array_resize](#array_resize)._
 
 _Alias of [array_reverse](#array_reverse)._
 
+### `list_scale`
+
+_Alias of [array_scale](#array_scale)._
+
 ### `list_slice`
 
 _Alias of [array_slice](#array_slice)._
@@ -4585,9 +5077,21 @@ _Alias of [array_slice](#array_slice)._
 
 _Alias of [array_sort](#array_sort)._
 
+### `list_subtract`
+
+_Alias of [array_subtract](#array_subtract)._
+
+### `list_sum`
+
+_Alias of [array_sum](#array_sum)._
+
 ### `list_to_string`
 
 _Alias of [array_to_string](#array_to_string)._
+
+### `list_transform`
+
+_Alias of [array_transform](#array_transform)._
 
 ### `list_union`
 
@@ -4709,6 +5213,8 @@ _Alias of [string_to_array](#string_to_array)._
 ### `named_struct`
 
 Returns an Arrow struct using the specified name and input expressions pairs.
+For information on comparing and ordering struct values (including `NULL` handling),
+see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).
 
 ```sql
 named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])
@@ -4750,6 +5256,8 @@ _Alias of [struct](#struct)._
 Returns an Arrow struct using the specified input expressions optionally named.
 Fields in the returned struct use the optional name or the `cN` naming convention.
 For example: `c0`, `c1`, `c2`, etc.
+For information on comparing and ordering struct values (including `NULL` handling),
+see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).
 
 ```sql
 struct(expression1[, ..., expression_n])
@@ -4907,6 +5415,11 @@ SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
 ['two']
 
 SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
+----
+[NULL]
+
+-- non-existing key
+SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'a');
 ----
 []
 ```
@@ -5184,11 +5697,16 @@ union_tag(union_expression)
 ## Other Functions
 
 - [arrow_cast](#arrow_cast)
+- [arrow_field](#arrow_field)
 - [arrow_metadata](#arrow_metadata)
 - [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
+- [cast_to_type](#cast_to_type)
+- [file_row_index](#file_row_index)
 - [get_field](#get_field)
+- [try_cast_to_type](#try_cast_to_type)
 - [version](#version)
+- [with_metadata](#with_metadata)
 
 ### `arrow_cast`
 
@@ -5226,6 +5744,36 @@ arrow_cast(expression, datatype)
 +---------------------------+---------------------+
 | 2023-01-02T12:53:02+08:00 | 2023-01-02T12:53:02 |
 +---------------------------+---------------------+
+```
+
+### `arrow_field`
+
+Returns a struct containing the Arrow field information of the expression, including name, data type, nullability, and metadata.
+
+```sql
+arrow_field(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select arrow_field(1);
++-------------------------------------------------------------+
+| arrow_field(Int64(1))                                       |
++-------------------------------------------------------------+
+| {name: lit, data_type: Int64, nullable: false, metadata: {}} |
++-------------------------------------------------------------+
+
+> select arrow_field(1)['data_type'];
++-----------------------------------+
+| arrow_field(Int64(1))[data_type]  |
++-----------------------------------+
+| Int64                             |
++-----------------------------------+
 ```
 
 ### `arrow_metadata`
@@ -5307,6 +5855,58 @@ arrow_typeof(expression)
 +---------------------------+------------------------+
 ```
 
+### `cast_to_type`
+
+Casts the first argument to the data type of the second argument. Only the type of the second argument is used; its value is ignored.
+
+```sql
+cast_to_type(expression, reference)
+```
+
+#### Arguments
+
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
+- **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
+
+#### Example
+
+```sql
+> select cast_to_type('42', NULL::INTEGER) as a;
++----+
+| a  |
++----+
+| 42 |
++----+
+
+> select cast_to_type(1 + 2, NULL::DOUBLE) as b;
++-----+
+| b   |
++-----+
+| 3.0 |
++-----+
+```
+
+### `file_row_index`
+
+Returns the zero-based row offset within the source file
+that produced the current row.
+
+The value is scoped to one file, so rows from different files in the same scan
+can have the same row index. This function is intended to be rewritten at
+file-scan time. If the input file is not known (for example, if this function
+is evaluated outside a file scan, or was not pushed down into one), direct
+evaluation returns an error.
+
+```sql
+file_row_index()
+```
+
+#### Example
+
+```sql
+SELECT file_row_index() FROM t;
+```
+
 ### `get_field`
 
 Returns a field within a map or a struct with the given key.
@@ -5359,6 +5959,32 @@ get_field(expression, field_name[, field_name2, ...])
 +--------+
 ```
 
+### `try_cast_to_type`
+
+Casts the first argument to the data type of the second argument, returning NULL if the cast fails. Only the type of the second argument is used; its value is ignored.
+
+```sql
+try_cast_to_type(expression, reference)
+```
+
+#### Arguments
+
+- **expression**: The expression to cast. It can be a constant, column, or function, and any combination of operators.
+- **reference**: Reference expression whose data type determines the target cast type. The value is ignored.
+
+#### Example
+
+```sql
+> select try_cast_to_type('123', NULL::INTEGER) as a,
+         try_cast_to_type('not_a_number', NULL::INTEGER) as b;
+
++-----+------+
+| a   | b    |
++-----+------+
+| 123 | NULL |
++-----+------+
+```
+
 ### `version`
 
 Returns the version of DataFusion.
@@ -5376,4 +6002,33 @@ version()
 +--------------------------------------------+
 | Apache DataFusion 42.0.0, aarch64 on macos |
 +--------------------------------------------+
+```
+
+### `with_metadata`
+
+Attaches Arrow field metadata (key/value pairs) to the input expression. Keys must be non-empty constant strings and values must be constant strings (empty values are allowed). Existing metadata on the input field is preserved; new keys overwrite on collision. This is the inverse of `arrow_metadata`.
+
+```sql
+with_metadata(expression, key1, value1[, key2, value2, ...])
+```
+
+#### Arguments
+
+- **expression**: The expression whose output Arrow field should be annotated. Values flow through unchanged.
+- **key**: Metadata key. Must be a non-empty constant string literal.
+- **value**: Metadata value. Must be a constant string literal (may be empty).
+
+#### Example
+
+```sql
+> select arrow_metadata(with_metadata(column1, 'unit', 'ms'), 'unit') from (values (1));
++---------------------------------------------------------------+
+| arrow_metadata(with_metadata(column1,Utf8("unit"),Utf8("ms")),Utf8("unit")) |
++---------------------------------------------------------------+
+| ms                                                            |
++---------------------------------------------------------------+
+> select arrow_metadata(with_metadata(column1, 'unit', 'ms', 'source', 'sensor')) from (values (1));
++--------------------------+
+| {source: sensor, unit: ms} |
++--------------------------+
 ```

@@ -1,0 +1,38 @@
+name Q13
+group tpch
+subgroup sf${BENCH_SIZE:-1}
+
+init sql_benchmarks/tpch/init/set_config.sql
+
+load sql_benchmarks/tpch/init/load_${TPCH_FILE_TYPE:-parquet}.sql
+
+assert I
+SELECT COUNT(*) > 0 from lineitem;
+----
+true
+
+run
+select
+    c_count,
+    count(*) as custdist
+from
+    (
+        select
+            c_custkey,
+            count(o_orderkey)
+        from
+            customer left outer join orders on
+                        c_custkey = o_custkey
+                    and o_comment not like '%special%requests%'
+        group by
+            c_custkey
+    ) as c_orders (c_custkey, c_count)
+group by
+    c_count
+order by
+    custdist desc,
+    c_count desc;
+
+result sql_benchmarks/tpch/results/sf${BENCH_SIZE:-1}/q13.csv
+
+cleanup sql_benchmarks/tpch/init/cleanup.sql

@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use datafusion_common::{Constraints, Statistics, not_impl_err};
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::Expr;
+use datafusion_expr::statistics::StatisticsRequest;
 
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
@@ -48,11 +49,7 @@ use datafusion_physical_plan::ExecutionPlan;
 /// [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/record_batch/struct.RecordBatch.html
 /// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
-pub trait TableProvider: Debug + Sync + Send {
-    /// Returns the table provider as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
+pub trait TableProvider: Any + Debug + Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
@@ -268,7 +265,6 @@ pub trait TableProvider: Debug + Sync + Send {
     ///
     /// #[async_trait]
     /// impl TableProvider for TestDataSource {
-    /// # fn as_any(&self) -> &dyn Any { todo!() }
     /// # fn schema(&self) -> SchemaRef { todo!() }
     /// # fn table_type(&self) -> TableType { todo!() }
     /// # async fn scan(&self, s: &dyn Session, p: Option<&Vec<usize>>, f: &[Expr], l: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -385,12 +381,33 @@ pub trait TableProvider: Debug + Sync + Send {
     }
 }
 
+impl dyn TableProvider {
+    /// Returns `true` if the table provider is of type `T`.
+    ///
+    /// Prefer this over `downcast_ref::<T>().is_some()`. Works correctly when
+    /// called on `Arc<dyn TableProvider>` via auto-deref.
+    pub fn is<T: TableProvider>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this table provider to a concrete type `T`,
+    /// returning `None` if the provider is not of that type.
+    ///
+    /// Works correctly when called on `Arc<dyn TableProvider>` via auto-deref,
+    /// unlike `(&arc as &dyn Any).downcast_ref::<T>()` which would attempt to
+    /// downcast the `Arc` itself.
+    pub fn downcast_ref<T: TableProvider>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
+}
+
 /// Arguments for scanning a table with [`TableProvider::scan_with_args`].
 #[derive(Debug, Clone, Default)]
 pub struct ScanArgs<'a> {
     filters: Option<&'a [Expr]>,
     projection: Option<&'a [usize]>,
     limit: Option<usize>,
+    statistics_requests: &'a [StatisticsRequest],
 }
 
 impl<'a> ScanArgs<'a> {
@@ -451,6 +468,32 @@ impl<'a> ScanArgs<'a> {
     /// Returns the row limit, or `None` if no limit was specified.
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+
+    /// Specifies the statistics the caller may use when optimizing the query.
+    ///
+    /// This is intended to allow the `TableProvider` to cheaply provide
+    /// statistics that may help, such as those it has in an in-memory catalog
+    /// or from some other metadata source.
+    ///
+    /// `TableProvider`s read these via [`Self::statistics_requests()`]; anything
+    /// a `TableProvider` cannot answer cheaply it simply ignores. DataFusion's
+    /// own `TableProvider`s ignore this field — it exists so a request can be
+    /// threaded from a custom optimizer rule (which annotates
+    /// `TableScan::statistics_requests`) through to a custom `TableProvider`.
+    pub fn with_statistics_requests(
+        mut self,
+        statistics_requests: &'a [StatisticsRequest],
+    ) -> Self {
+        self.statistics_requests = statistics_requests;
+        self
+    }
+
+    /// Get the statistics requests for the scan. Empty if none were set.
+    ///
+    /// See [`Self::with_statistics_requests`] for more details
+    pub fn statistics_requests(&self) -> &'a [StatisticsRequest] {
+        self.statistics_requests
     }
 }
 

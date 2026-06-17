@@ -17,7 +17,6 @@
 
 //! [`SortPreservingMergeExec`] merges multiple sorted streams into one sorted stream.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
@@ -31,11 +30,9 @@ use crate::{
     check_if_same_properties,
 };
 
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use crate::execution_plan::{EvaluationType, SchedulingType};
@@ -235,10 +232,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -255,7 +248,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             metrics: self.metrics.clone(),
             fetch: limit,
             cache: Arc::clone(&self.cache),
-            enable_round_robin_repartition: true,
+            enable_round_robin_repartition: self.enable_round_robin_repartition,
         }))
     }
 
@@ -290,17 +283,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
     }
 
     fn with_new_children(
@@ -1418,20 +1400,11 @@ mod tests {
         fn name(&self) -> &'static str {
             Self::static_name()
         }
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
-        }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
         fn with_new_children(
             self: Arc<Self>,
@@ -1513,11 +1486,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = Schema::new(vec![Field::new("c1", DataType::UInt64, false)]);
         let properties = CongestedExec::compute_properties(Arc::new(schema.clone()));
-        let &partition_count = match properties.output_partitioning() {
-            Partitioning::RoundRobinBatch(partitions) => partitions,
-            Partitioning::Hash(_, partitions) => partitions,
-            Partitioning::UnknownPartitioning(partitions) => partitions,
-        };
+        let partition_count = properties.output_partitioning().partition_count();
         let source = CongestedExec {
             schema: schema.clone(),
             cache: Arc::new(properties),

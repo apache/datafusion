@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt;
 use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
@@ -135,6 +136,24 @@ impl DateTruncGranularity {
     }
 }
 
+impl fmt::Display for DateTruncGranularity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Microsecond => "microsecond",
+            Self::Millisecond => "millisecond",
+            Self::Second => "second",
+            Self::Minute => "minute",
+            Self::Hour => "hour",
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+            Self::Quarter => "quarter",
+            Self::Year => "year",
+        };
+        f.write_str(value)
+    }
+}
+
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = "Truncates a timestamp or time value to a specified precision.",
@@ -166,7 +185,21 @@ impl DateTruncGranularity {
     argument(
         name = "expression",
         description = "Timestamp or time expression to operate on. Can be a constant, column, or function."
-    )
+    ),
+    sql_example = r#"```sql
+> SELECT date_trunc('month', '2024-05-15T10:30:00');
++-----------------------------------------------+
+| date_trunc(Utf8("month"),Utf8("2024-05-15T10:30:00")) |
++-----------------------------------------------+
+| 2024-05-01T00:00:00                           |
++-----------------------------------------------+
+> SELECT date_trunc('hour', '2024-05-15T10:30:00');
++----------------------------------------------+
+| date_trunc(Utf8("hour"),Utf8("2024-05-15T10:30:00")) |
++----------------------------------------------+
+| 2024-05-15T10:00:00                          |
++----------------------------------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DateTruncFunc {
@@ -615,6 +648,7 @@ fn date_trunc_coarse(
     value: i64,
     tz: Option<Tz>,
 ) -> Result<i64> {
+    let input = value;
     let value = match tz {
         Some(tz) => {
             // Use chrono DateTime<Tz> to clear the various fields because need to clear per timezone,
@@ -631,8 +665,11 @@ fn date_trunc_coarse(
         }
     }?;
 
-    // `with_x(0)` are infallible because `0` are always a valid
-    Ok(value.unwrap())
+    value.ok_or_else(|| {
+        exec_datafusion_err!(
+            "Timestamp {input} out of range after truncating to {granularity}"
+        )
+    })
 }
 
 /// Fast path for fine granularities (hour and smaller) that can be handled
@@ -704,7 +741,13 @@ fn general_date_trunc(
     };
 
     // convert to nanoseconds
-    let nano = date_trunc_coarse(granularity, scale * value, tz)?;
+    let nano = date_trunc_coarse(
+        granularity,
+        value
+            .checked_mul(scale)
+            .ok_or_else(|| exec_datafusion_err!("Timestamp {value} out of range"))?,
+        tz,
+    )?;
 
     let result = match tu {
         Second => match granularity {
@@ -857,6 +900,19 @@ mod tests {
             let result = date_trunc_coarse(granularity_enum, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
         });
+    }
+
+    #[test]
+    fn date_trunc_out_of_range_lower_bound_returns_error() {
+        let timestamp = string_to_timestamp_nanos("1677-09-22T00:00:00Z").unwrap();
+        let err = date_trunc_coarse(DateTruncGranularity::Year, timestamp, None)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("out of range after truncating to year"),
+            "{err}"
+        );
     }
 
     #[test]

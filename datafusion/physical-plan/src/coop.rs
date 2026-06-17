@@ -71,11 +71,9 @@
 //! that report [`SchedulingType::NonCooperative`] in their [plan properties](ExecutionPlan::properties).
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::PhysicalExpr;
 #[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -262,10 +260,6 @@ impl ExecutionPlan for CooperativeExec {
         "CooperativeExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> Arc<Schema> {
         self.input.schema()
     }
@@ -280,13 +274,6 @@ impl ExecutionPlan for CooperativeExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
