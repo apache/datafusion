@@ -1,0 +1,169 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Merged key of USING / NATURAL joins.
+#
+# The single merged key column exposed by a USING / NATURAL join equals
+# COALESCE(left.k, right.k): for an outer join a row present on only one side
+# must expose the key from the present side, not NULL. This matters for
+# RIGHT / FULL joins, whose left key is NULL-padded on right-only rows.
+#
+# Regression coverage for https://github.com/apache/datafusion/issues/22881,
+# where the merged key was resolved to the left column unconditionally and so
+# came out NULL for right-only rows of RIGHT / FULL joins.
+#
+# Tables: a has keys {1,2,3}, b has keys {2,3,4}.
+#   matched: 2, 3 ; left-only: 1 ; right-only: 4
+
+statement ok
+create table a(k int, x int) as values (1, 10), (2, 20), (3, 30);
+
+statement ok
+create table b(k int, y int) as values (2, 200), (3, 300), (4, 400);
+
+##########
+# Already correct: INNER / LEFT (left key is never NULL-padded)
+##########
+
+query I nosort
+SELECT k FROM a INNER JOIN b USING (k) ORDER BY k
+----
+2
+3
+
+query I nosort
+SELECT k FROM a LEFT JOIN b USING (k) ORDER BY k
+----
+1
+2
+3
+
+##########
+# The bug: RIGHT / FULL merged key must come from the preserved side
+##########
+
+query I nosort
+SELECT k FROM a RIGHT JOIN b USING (k) ORDER BY k NULLS LAST
+----
+2
+3
+4
+
+query I nosort
+SELECT k FROM a FULL JOIN b USING (k) ORDER BY k NULLS LAST
+----
+1
+2
+3
+4
+
+query I nosort
+SELECT k FROM a NATURAL RIGHT JOIN b ORDER BY k NULLS LAST
+----
+2
+3
+4
+
+query I nosort
+SELECT k FROM a NATURAL FULL JOIN b ORDER BY k NULLS LAST
+----
+1
+2
+3
+4
+
+##########
+# Downstream of the merged key: WHERE must see the coalesced value, not the
+# wrong NULL (ORDER BY is covered separately below)
+##########
+
+# right-only row (k = 4) must be findable by its merged key
+query III nosort
+SELECT k, x, y FROM a FULL JOIN b USING (k) WHERE k = 4
+----
+4 NULL 400
+
+##########
+# Guards / reference: these are already correct and must stay correct
+##########
+
+# qualified access to each side is independent of the merged key
+query II nosort
+SELECT a.k, b.k FROM a FULL JOIN b USING (k) ORDER BY coalesce(a.k, b.k)
+----
+1 NULL
+2 2
+3 3
+NULL 4
+
+# the explicit form is the reference for what the merged key should equal
+query I nosort
+SELECT coalesce(a.k, b.k) AS k FROM a FULL JOIN b ON a.k = b.k ORDER BY k
+----
+1
+2
+3
+4
+
+##########
+# Wildcard over the join: the merged key must appear once and carry the right
+# value. (commit 2 target -- the materialized merged column must dedupe under *)
+##########
+
+query III nosort
+SELECT * FROM a RIGHT JOIN b USING (k) ORDER BY k NULLS LAST
+----
+2 20 200
+3 30 300
+4 NULL 400
+
+query III nosort
+SELECT * FROM a FULL JOIN b USING (k) ORDER BY k NULLS LAST
+----
+1 10 NULL
+2 20 200
+3 30 300
+4 NULL 400
+
+statement ok
+drop table a
+
+statement ok
+drop table b
+
+##########
+# ORDER BY on the merged key: a right-only row with a small key must sort by
+# its real value, not as a NULL
+##########
+
+statement ok
+create table c(k int, x int) as values (5, 50);
+
+statement ok
+create table d(k int, y int) as values (0, 0), (5, 500);
+
+query II nosort
+SELECT x, k FROM c RIGHT JOIN d USING (k) ORDER BY k
+----
+NULL 0
+50 5
+
+statement ok
+drop table c
+
+statement ok
+drop table d
