@@ -270,7 +270,7 @@ mod tests {
     fn test_cast_preimage_timestamp_precision_narrowing_inequality() {
         let schema = expr_test_schema();
 
-        for (op, lit_ms, expected) in vec![
+        for (op, lit_ms, expected) in [
             (
                 Operator::Gt,
                 1000,
@@ -322,7 +322,7 @@ mod tests {
     fn test_cast_preimage_timestamp_precision_narrowing_distinctness() {
         let schema = expr_test_schema();
 
-        for (op, expected) in vec![
+        for (op, expected) in [
             (
                 Operator::IsNotDistinctFrom,
                 col("ts_nano")
@@ -372,7 +372,7 @@ mod tests {
     fn test_cast_preimage_timestamp_literal_left_range() {
         let schema = expr_test_schema();
 
-        for (op, expected) in vec![
+        for (op, expected) in [
             (
                 Operator::Lt,
                 col("ts_nano").gt_eq(lit_timestamp_nano(1_001_000_000)),
