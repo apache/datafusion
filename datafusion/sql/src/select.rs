@@ -38,12 +38,11 @@ use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
-    normalize_col, normalize_col_with_schemas_ambiguity_and_outer_using,
-    normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
+    normalize_col, normalize_col_with_schemas_ambiguity_and_outer_using, normalize_sorts,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
+    expr_as_column_expr, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -880,22 +879,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     );
                 }
 
-                let mut using_columns = HashSet::new();
-                expr_to_columns(&filter_expr, &mut using_columns)?;
+                // Resolve unqualified references against the real USING / NATURAL
+                // join columns so the merged key is recognized (and, for
+                // RIGHT / FULL, coalesced) rather than reported as ambiguous.
+                let using_columns = plan.using_columns()?;
+                let outer_using_keys = plan.outer_using_key_pairs()?;
                 let mut schema_stack: Vec<Vec<&DFSchema>> =
                     vec![vec![plan.schema()], fallback_schemas];
                 for sc in planner_context.outer_schemas_iter() {
                     schema_stack.push(vec![sc.as_ref()]);
                 }
 
-                let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
+                let filter_expr = normalize_col_with_schemas_ambiguity_and_outer_using(
                     filter_expr,
                     schema_stack
                         .iter()
                         .map(|sc| sc.as_slice())
                         .collect::<Vec<&[&DFSchema]>>()
                         .as_slice(),
-                    &[using_columns],
+                    &using_columns,
+                    &outer_using_keys,
                 )?;
 
                 Ok(LogicalPlan::Filter(Filter::try_new(
