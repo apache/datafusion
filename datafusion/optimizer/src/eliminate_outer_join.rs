@@ -146,9 +146,10 @@ impl OptimizerRule for EliminateOuterJoin {
     }
 }
 
-/// Determine which null-padded sides of `join` are rejected by `predicate`.
-/// Return `Some(new_join_plan)` if that side-level evidence can tighten the
-/// join type (e.g. LEFT → INNER), `None` otherwise.
+/// Attempt to simplify an outer join by analyzing `predicate` for
+/// null-rejection.  If the predicate filters out rows padded with NULLs on one
+/// or both sides, return a copy of `join` rewritten to an equivalent join type
+/// that omits those rows in the first place; otherwise return `None`.
 fn try_simplify_join(join: &Join, predicate: &Expr) -> Option<LogicalPlan> {
     if !join.join_type.is_outer() {
         return None;
