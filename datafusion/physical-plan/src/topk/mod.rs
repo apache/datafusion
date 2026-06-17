@@ -314,6 +314,10 @@ impl TopK {
 
             // update the filter representation of our TopK heap
             self.update_filter()?;
+        } else {
+            // The heap did not change, but this batch's prefix may still prove
+            // that no later rows can enter the TopK.
+            self.attempt_early_completion(&batch)?;
         }
 
         Ok(())
@@ -1101,15 +1105,25 @@ mod tests {
         assert_eq!(record_batch_store.batches_size, 0);
     }
 
-    /// Builds an `(a Int32, b Float64)` schema and a `TopK` with full sort
-    /// `(a ASC, b ASC)`, input prefix `[a]`, `k = 3`, `batch_size = 2`. Used by
-    /// the prefix-completion tests below to keep their per-scenario logic in focus.
-    fn build_ab_prefix_topk() -> Result<(Arc<Schema>, TopK)> {
-        let schema = Arc::new(Schema::new(vec![
+    fn make_ab_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Float64, false),
-        ]));
+        ]))
+    }
 
+    fn make_topk_filter() -> Arc<RwLock<TopKDynamicFilters>> {
+        Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+            DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+        ))))
+    }
+
+    /// Builds the `(a, b)` fixture used by prefix-completion tests:
+    /// full sort `(a, b)`, input prefix `[a]`, `k = 3`, and batch size 2.
+    fn make_ab_topk(
+        schema: SchemaRef,
+        filter: Arc<RwLock<TopKDynamicFilters>>,
+    ) -> Result<TopK> {
         let sort_expr_a = PhysicalSortExpr {
             expr: col("a", schema.as_ref())?,
             options: SortOptions::default(),
@@ -1119,68 +1133,52 @@ mod tests {
             options: SortOptions::default(),
         };
 
-        // Input ordering uses only column "a" (a prefix of the full sort on (a, b)).
-        let prefix = vec![sort_expr_a.clone()];
-        let full_expr = LexOrdering::from([sort_expr_a, sort_expr_b]);
-
-        let topk = TopK::try_new(
+        TopK::try_new(
             0,
-            Arc::clone(&schema),
-            prefix,
-            full_expr,
+            schema,
+            vec![sort_expr_a.clone()],
+            LexOrdering::from([sort_expr_a, sort_expr_b]),
             3,
             2,
             Arc::new(RuntimeEnv::default()),
             &ExecutionPlanMetricsSet::new(),
-            Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
-                DynamicFilterPhysicalExpr::new(vec![], lit(true)),
-            )))),
-        )?;
-        Ok((schema, topk))
+            filter,
+        )
     }
 
-    /// This test validates that the `try_finish` method marks the TopK operator as finished
-    /// when the prefix (on column "a") of the last row in the current batch is strictly greater
-    /// than the max top‑k row.
-    /// The full sort expression is defined on both columns ("a", "b"), but the input ordering is only on "a".
+    fn make_ab_batch(
+        schema: SchemaRef,
+        a: &[Option<i32>],
+        b: &[f64],
+    ) -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(a.to_vec())) as ArrayRef,
+                Arc::new(Float64Array::from(b.to_vec())) as ArrayRef,
+            ],
+        )?)
+    }
+
     #[tokio::test]
-    async fn test_try_finish_marks_finished_with_prefix() -> Result<()> {
-        let (schema, mut topk) = build_ab_prefix_topk()?;
+    async fn test_early_completion_marks_finished_with_prefix() -> Result<()> {
+        let schema = make_ab_schema();
+        let mut topk = make_ab_topk(Arc::clone(&schema), make_topk_filter())?;
 
-        // Create the first batch with two columns:
-        // Column "a": [1, 1, 2], Column "b": [20.0, 15.0, 30.0].
-        let array_a1: ArrayRef =
-            Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(2)]));
-        let array_b1: ArrayRef = Arc::new(Float64Array::from(vec![20.0, 15.0, 30.0]));
-        let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![array_a1, array_b1])?;
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(1), Some(1), Some(2)],
+            &[20.0, 15.0, 30.0],
+        )?)?;
+        assert!(!topk.finished);
 
-        // Insert the first batch.
-        // At this point the heap is not yet “finished” because the prefix of the last row of the batch
-        // is not strictly greater than the prefix of the max top‑k row (both being `2`).
-        topk.insert_batch(batch1)?;
-        assert!(
-            !topk.finished,
-            "Expected 'finished' to be false after the first batch."
-        );
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(2), Some(3)],
+            &[10.0, 20.0],
+        )?)?;
+        assert!(topk.finished);
 
-        // Create the second batch with two columns:
-        // Column "a": [2, 3], Column "b": [10.0, 20.0].
-        let array_a2: ArrayRef = Arc::new(Int32Array::from(vec![Some(2), Some(3)]));
-        let array_b2: ArrayRef = Arc::new(Float64Array::from(vec![10.0, 20.0]));
-        let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![array_a2, array_b2])?;
-
-        // Insert the second batch.
-        // The last row in this batch has a prefix value of `3`,
-        // which is strictly greater than the max top‑k row (with value `2`),
-        // so try_finish should mark the TopK as finished.
-        topk.insert_batch(batch2)?;
-        assert!(
-            topk.finished,
-            "Expected 'finished' to be true after the second batch."
-        );
-
-        // Verify the TopK correctly emits the top k rows from both batches
-        // (the value 10.0 for b is from the second batch).
         let results: Vec<_> = topk.emit()?.try_collect().await?;
         assert_batches_eq!(
             &[
@@ -1201,47 +1199,71 @@ mod tests {
     /// Regression test for #22849: a batch whose rows are entirely rejected by the
     /// heap's dynamic filter must still trigger `attempt_early_completion` when its
     /// last row's prefix is worse than the heap's worst.
-    ///
-    /// Before the fix, the `!filter.has_true()` short-circuit returned without calling
-    /// `attempt_early_completion`. Because the heap's filter is itself derived from the
-    /// heap's worst row, a batch from a strictly-worse prefix is exactly the case the
-    /// filter rejects entirely — i.e. the very signal the early-exit was designed to
-    /// detect was being silently dropped.
     #[tokio::test]
-    async fn test_try_finish_fires_when_filter_rejects_entire_batch() -> Result<()> {
-        let (schema, mut topk) = build_ab_prefix_topk()?;
+    async fn test_early_completion_fires_when_filter_rejects_entire_batch() -> Result<()>
+    {
+        let schema = make_ab_schema();
+        let mut topk = make_ab_topk(Arc::clone(&schema), make_topk_filter())?;
 
-        // Batch 1 fills the heap with (1, 20.0), (1, 15.0), (2, 30.0).
-        // heap.max becomes (a=2, b=30.0); update_filter tightens the heap filter to
-        //   a < 2 OR (a = 2 AND b < 30.0).
-        let array_a1: ArrayRef =
-            Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(2)]));
-        let array_b1: ArrayRef = Arc::new(Float64Array::from(vec![20.0, 15.0, 30.0]));
-        let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![array_a1, array_b1])?;
-        topk.insert_batch(batch1)?;
-        assert!(
-            !topk.finished,
-            "Expected 'finished' to be false after batch 1 \
-             (last row prefix a=2 equals heap.max prefix a=2, not strictly greater)."
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(1), Some(1), Some(2)],
+            &[20.0, 15.0, 30.0],
+        )?)?;
+        assert!(!topk.finished);
+
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(3), Some(3)],
+            &[10.0, 20.0],
+        )?)?;
+        assert!(topk.finished);
+
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+---+------+",
+                "| a | b    |",
+                "+---+------+",
+                "| 1 | 15.0 |",
+                "| 1 | 20.0 |",
+                "| 2 | 30.0 |",
+                "+---+------+",
+            ],
+            &results
         );
 
-        // Batch 2: every row has a=3, so the heap's filter (a < 2 OR (a = 2 AND b < 30))
-        // rejects every row. Before the fix, `insert_batch` would short-circuit on
-        //   `!filter.has_true()` and return without checking the prefix; `finished`
-        // would stay false even though no future batch could improve the heap.
-        let array_a2: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(3)]));
-        let array_b2: ArrayRef = Arc::new(Float64Array::from(vec![10.0, 20.0]));
-        let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![array_a2, array_b2])?;
-        topk.insert_batch(batch2)?;
-        assert!(
-            topk.finished,
-            "Expected 'finished' to be true after batch 2 \
-             (filter rejected every row, but the batch's last row prefix a=3 \
-              is strictly greater than heap.max prefix a=2)."
-        );
+        Ok(())
+    }
 
-        // The emitted top-k is unchanged from after batch 1 since none of batch 2's
-        // rows could improve the heap.
+    #[tokio::test]
+    async fn test_early_completion_fires_when_batch_makes_no_replacements() -> Result<()>
+    {
+        let schema = make_ab_schema();
+        let filter = make_topk_filter();
+        let mut topk = make_ab_topk(Arc::clone(&schema), Arc::clone(&filter))?;
+
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(1), Some(1), Some(2)],
+            &[20.0, 15.0, 30.0],
+        )?)?;
+        assert!(!topk.finished);
+
+        let replacements_before = topk.metrics.row_replacements.value();
+
+        // Keep the dynamic filter permissive so the second batch reaches
+        // `find_new_topk_items`; all of its rows are worse than the heap max,
+        // so this specifically exercises the `replacements == 0` path.
+        filter.read().expr().update(lit(true))?;
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(3), Some(3)],
+            &[10.0, 20.0],
+        )?)?;
+        assert_eq!(topk.metrics.row_replacements.value(), replacements_before);
+        assert!(topk.finished);
+
         let results: Vec<_> = topk.emit()?.try_collect().await?;
         assert_batches_eq!(
             &[
