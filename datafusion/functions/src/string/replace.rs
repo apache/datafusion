@@ -162,12 +162,7 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_string_view_array(&args[1])?;
     let to_array = as_string_view_array(&args[2])?;
 
-    replace_arrays(
-        string_array,
-        from_array,
-        to_array,
-        GenericStringArrayBuilder::<i32>::with_capacity(string_array.len(), 0),
-    )
+    replace_arrays::<_, i32>(string_array, from_array, to_array)
 }
 
 /// Replaces all occurrences in string of substring from with substring to.
@@ -177,25 +172,20 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_generic_string_array::<T>(&args[1])?;
     let to_array = as_generic_string_array::<T>(&args[2])?;
 
-    replace_arrays(
-        string_array,
-        from_array,
-        to_array,
-        GenericStringArrayBuilder::<T>::with_capacity(string_array.len(), 0),
-    )
+    replace_arrays::<_, T>(string_array, from_array, to_array)
 }
 
 fn replace_arrays<'a, S, O>(
     string_array: S,
     from_array: S,
     to_array: S,
-    mut builder: GenericStringArrayBuilder<O>,
 ) -> Result<ArrayRef>
 where
     S: StringArrayType<'a> + Copy,
     O: OffsetSizeTrait,
 {
     let len = string_array.len();
+    let mut builder = GenericStringArrayBuilder::<O>::with_capacity(len, 0);
     let nulls = NullBuffer::union_many([
         string_array.nulls(),
         from_array.nulls(),

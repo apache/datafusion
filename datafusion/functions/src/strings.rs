@@ -616,12 +616,16 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
             value_buffer: &mut self.value_buffer,
         };
         f(&mut writer);
-        if let Err(e) = self.try_push_offset_for_len(self.value_buffer.len()) {
-            // SAFETY: `old_len` was the initialized length before `f` wrote to
-            // this owned buffer, so shrinking back preserves initialized data.
-            unsafe { self.value_buffer.set_len(old_len) };
-            return Err(e);
-        }
+        let next_offset = match try_offset::<O>(self.value_buffer.len()) {
+            Ok(offset) => offset,
+            Err(e) => {
+                // SAFETY: `old_len` was the initialized length before `f` wrote to
+                // this owned buffer, so shrinking back preserves initialized data.
+                unsafe { self.value_buffer.set_len(old_len) };
+                return Err(e);
+            }
+        };
+        self.offsets_buffer.push(next_offset);
         Ok(())
     }
 
