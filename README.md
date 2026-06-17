@@ -63,6 +63,8 @@ See [use cases] for examples. The following related subprojects target end users
 
 - [DataFusion Python](https://github.com/apache/datafusion-python/) offers a Python interface for SQL and DataFrame
   queries.
+- [DataFusion Java](https://github.com/apache/datafusion-java/) offers a Java interface for SQL and DataFrame
+  queries.
 - [DataFusion Comet](https://github.com/apache/datafusion-comet/) is an accelerator for Apache Spark based on
   DataFusion.
 
@@ -104,8 +106,14 @@ It lets you start quickly from a fully working engine, and then customize those 
 
 Please see the [contributor guide] and [communication] pages for more information.
 
+We discuss our [roadmap] via GitHub issues and invite you
+to join the conversation. The current discussion is the
+[DataFusion 2026 Q3-Q4 Roadmap Discussion].
+
 [contributor guide]: https://datafusion.apache.org/contributor-guide
 [communication]: https://datafusion.apache.org/contributor-guide/communication.html
+[roadmap]: https://datafusion.apache.org/contributor-guide/roadmap.html
+[datafusion 2026 q3-q4 roadmap discussion]: https://github.com/apache/datafusion/issues/22882
 
 ## Crate features
 

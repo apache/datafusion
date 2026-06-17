@@ -55,6 +55,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 log = { workspace = true }
 num-traits = { workspace = true }
@@ -63,13 +64,15 @@ rand = { workspace = true }
 serde_json = { workspace = true }
 sha1 = "0.11"
 sha2 = { workspace = true }
+twox-hash = "2.1"
 url = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
 # for SessionStateBuilderSpark tests
-datafusion = { workspace = true, default-features = false }
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
+tokio = { workspace = true, features = ["rt"] }
 
 [[bench]]
 harness = false
@@ -98,3 +101,7 @@ name = "unhex"
 [[bench]]
 harness = false
 name = "sha2"
+
+[[bench]]
+harness = false
+name = "floor"

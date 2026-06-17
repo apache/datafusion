@@ -29,7 +29,6 @@ use crate::morsel::{FileOpenerMorselizer, Morselizer};
 #[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
@@ -63,7 +62,7 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
 /// * [`ParquetSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ParquetSource.html)
 ///
 /// [`DataSource`]: crate::source::DataSource
-pub trait FileSource: Send + Sync {
+pub trait FileSource: Any + Send + Sync {
     /// Creates a `dyn FileOpener` based on given parameters.
     ///
     /// Note: File sources with a native morsel implementation should return an
@@ -91,8 +90,6 @@ pub trait FileSource: Send + Sync {
         let opener = self.create_file_opener(object_store, base_config, partition)?;
         Ok(Box::new(FileOpenerMorselizer::new(opener)))
     }
-    /// Any
-    fn as_any(&self) -> &dyn Any;
 
     /// Returns the table schema for the overall table (including partition columns, if any)
     ///
@@ -282,6 +279,19 @@ pub trait FileSource: Send + Sync {
         Ok(SortOrderPushdownResult::Unsupported)
     }
 
+    /// Reorder files in the shared work queue to optimize query performance.
+    ///
+    /// For example, TopK queries benefit from reading files with the best
+    /// statistics first, so the dynamic filter threshold tightens quickly.
+    ///
+    /// The default implementation returns files unchanged (no reordering).
+    fn reorder_files(
+        &self,
+        files: Vec<crate::PartitionedFile>,
+    ) -> Vec<crate::PartitionedFile> {
+        files
+    }
+
     /// Try to push down a projection into this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should
@@ -341,25 +351,16 @@ pub trait FileSource: Send + Sync {
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
     }
+}
 
-    /// Apply a function to all physical expressions used by this file source.
-    ///
-    /// This includes:
-    /// - Filter predicates (which may contain dynamic filters)
-    /// - Projection expressions
-    ///
-    /// The function `f` is called once for each expression. The function should
-    /// return `TreeNodeRecursion::Continue` to continue visiting other expressions,
-    /// or `TreeNodeRecursion::Stop` to stop visiting expressions early.
-    ///
-    /// Implementations must explicitly visit all expressions. There is no default
-    /// implementation to ensure that all FileSource implementations handle this correctly.
-    ///
-    /// See [`ExecutionPlan::apply_expressions`] for more details and examples.
-    ///
-    /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion>;
+impl dyn FileSource {
+    /// Returns `true` if this source is of type `T`.
+    pub fn is<T: FileSource>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this source to a concrete type `T`.
+    pub fn downcast_ref<T: FileSource>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
 }

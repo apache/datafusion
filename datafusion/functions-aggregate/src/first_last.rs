@@ -426,7 +426,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             return Ok(true);
         }
 
-        assert!(new_ordering_values.len() == self.ordering_req.len());
+        debug_assert!(new_ordering_values.len() == self.ordering_req.len());
         let current_ordering = &self.orderings[group_idx];
         compare_rows(current_ordering, new_ordering_values, &self.sort_options).map(|x| {
             if self.pick_first_in_group {
@@ -485,7 +485,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         self.state.update(group_idx, array, idx)?;
         self.is_sets.set_bit(group_idx, true);
 
-        assert!(orderings.len() == self.ordering_req.len());
+        debug_assert!(orderings.len() == self.ordering_req.len());
         let old_size = ScalarValue::size_of_vec(&self.orderings[group_idx]);
         self.orderings[group_idx].clear();
         self.orderings[group_idx].extend_from_slice(orderings);
@@ -650,7 +650,7 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
                 ordering_cols.push(Vec::with_capacity(self.orderings.len()));
             }
             for row in orderings.into_iter() {
-                assert_eq!(row.len(), self.ordering_req.len());
+                debug_assert!(row.len() == self.ordering_req.len());
                 for (col_idx, ordering) in row.into_iter().enumerate() {
                     ordering_cols[col_idx].push(ordering);
                 }
@@ -671,7 +671,6 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         self.resize_states(total_num_groups);
@@ -690,7 +689,7 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         let groups = self.get_filtered_extreme_of_each_group(
             &val_and_order_cols[1..],
             group_indices,
-            opt_filter,
+            None,
             vals,
             Some(is_set_arr),
         )?;
@@ -784,8 +783,7 @@ impl Accumulator for TrivialFirstValueAccumulator {
                 first_idx = Some(0);
             }
             if let Some(first_idx) = first_idx {
-                let mut row = get_row_at_idx(values, first_idx)?;
-                self.first = row.swap_remove(0);
+                self.first = ScalarValue::try_from_array(&values[0], first_idx)?;
                 self.first.compact();
                 self.is_set = true;
             }
@@ -831,6 +829,8 @@ pub struct FirstValueAccumulator {
     orderings: Vec<ScalarValue>,
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
+    // derived from `ordering_req`.
+    sort_options: Vec<SortOptions>,
     // Stores whether incoming data already satisfies the ordering requirement.
     is_input_pre_ordered: bool,
     // Ignore null values.
@@ -850,11 +850,13 @@ impl FirstValueAccumulator {
             .iter()
             .map(ScalarValue::try_from)
             .collect::<Result<_>>()?;
+        let sort_options = get_sort_options(&ordering_req);
         ScalarValue::try_from(data_type).map(|first| Self {
             first,
             is_set: false,
             orderings,
             ordering_req,
+            sort_options,
             is_input_pre_ordered,
             ignore_nulls,
         })
@@ -927,12 +929,8 @@ impl Accumulator for FirstValueAccumulator {
             let row = get_row_at_idx(values, first_idx)?;
             if !self.is_set
                 || (!self.is_input_pre_ordered
-                    && compare_rows(
-                        &self.orderings,
-                        &row[1..],
-                        &get_sort_options(&self.ordering_req),
-                    )?
-                    .is_gt())
+                    && compare_rows(&self.orderings, &row[1..], &self.sort_options)?
+                        .is_gt())
             {
                 self.update_with_new_row(row);
             }
@@ -960,10 +958,10 @@ impl Accumulator for FirstValueAccumulator {
             let mut first_row = get_row_at_idx(&filtered_states, first_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let first_ordering = &first_row[1..is_set_idx];
-            let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is an earlier version in new data.
             if !self.is_set
-                || compare_rows(&self.orderings, first_ordering, &sort_options)?.is_gt()
+                || compare_rows(&self.orderings, first_ordering, &self.sort_options)?
+                    .is_gt()
             {
                 // Update with first value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
@@ -1176,8 +1174,7 @@ impl Accumulator for TrivialLastValueAccumulator {
             last_idx = Some(value.len() - 1);
         }
         if let Some(last_idx) = last_idx {
-            let mut row = get_row_at_idx(values, last_idx)?;
-            self.last = row.swap_remove(0);
+            self.last = ScalarValue::try_from_array(&values[0], last_idx)?;
             self.last.compact();
             self.is_set = true;
         }
@@ -1221,6 +1218,8 @@ struct LastValueAccumulator {
     orderings: Vec<ScalarValue>,
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
+    // derived from `ordering_req`.
+    sort_options: Vec<SortOptions>,
     // Stores whether incoming data already satisfies the ordering requirement.
     is_input_pre_ordered: bool,
     // Ignore null values.
@@ -1240,11 +1239,13 @@ impl LastValueAccumulator {
             .iter()
             .map(ScalarValue::try_from)
             .collect::<Result<_>>()?;
+        let sort_options = get_sort_options(&ordering_req);
         ScalarValue::try_from(data_type).map(|last| Self {
             last,
             is_set: false,
             orderings,
             ordering_req,
+            sort_options,
             is_input_pre_ordered,
             ignore_nulls,
         })
@@ -1317,12 +1318,7 @@ impl Accumulator for LastValueAccumulator {
             // Update when there is a more recent entry
             if !self.is_set
                 || self.is_input_pre_ordered
-                || compare_rows(
-                    &self.orderings,
-                    orderings,
-                    &get_sort_options(&self.ordering_req),
-                )?
-                .is_lt()
+                || compare_rows(&self.orderings, orderings, &self.sort_options)?.is_lt()
             {
                 self.update_with_new_row(row);
             }
@@ -1350,12 +1346,12 @@ impl Accumulator for LastValueAccumulator {
             let mut last_row = get_row_at_idx(&filtered_states, last_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let last_ordering = &last_row[1..is_set_idx];
-            let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set
                 || self.is_input_pre_ordered
-                || compare_rows(&self.orderings, last_ordering, &sort_options)?.is_lt()
+                || compare_rows(&self.orderings, last_ordering, &self.sort_options)?
+                    .is_lt()
             {
                 // Update with last value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
@@ -1590,12 +1586,7 @@ mod tests {
             group_acc.compute_size_of_orderings()
         );
 
-        group_acc.merge_batch(
-            &state,
-            &[0, 1, 2],
-            Some(&BooleanArray::from(vec![true, false, false])),
-            3,
-        )?;
+        group_acc.merge_batch(&state, &[0, 1, 2], 3)?;
 
         assert_eq!(
             group_acc.size_of_orderings,
@@ -1611,8 +1602,11 @@ mod tests {
         let binding = group_acc.evaluate(EmitTo::All)?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
+        // group 0 keeps merged value=1 (ordering=1).
+        // group 1 keeps merged value=-6 (ordering=-6 < 6, so -6 is "first").
+        // group 2 had no merged value (is_set=false), so update_batch value=6 wins.
         let expect: PrimitiveArray<Int64Type> =
-            Int64Array::from(vec![Some(1), Some(6), Some(6), None]);
+            Int64Array::from(vec![Some(1), Some(-6), Some(6), None]);
 
         assert_eq!(eval_result, &expect);
 
@@ -1683,7 +1677,7 @@ mod tests {
                 group_acc.compute_size_of_orderings()
             );
 
-            group_acc.merge_batch(&s, &Vec::from_iter(0..s[0].len()), None, 100)?;
+            group_acc.merge_batch(&s, &Vec::from_iter(0..s[0].len()), 100)?;
             assert_eq!(
                 group_acc.size_of_orderings,
                 group_acc.compute_size_of_orderings()
@@ -1756,12 +1750,7 @@ mod tests {
         ];
         assert_eq!(state, expected_state);
 
-        group_acc.merge_batch(
-            &state,
-            &[0, 1, 2],
-            Some(&BooleanArray::from(vec![true, false, false])),
-            3,
-        )?;
+        group_acc.merge_batch(&state, &[0, 1, 2], 3)?;
 
         val_with_orderings.clear();
         val_with_orderings.push(Arc::new(Int64Array::from(vec![66, 6])));
@@ -1772,6 +1761,10 @@ mod tests {
         let binding = group_acc.evaluate(EmitTo::All)?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
+        // group 0: merged value=1 (ordering=1, is_set=true), update not called.
+        // group 1: merged value=-6 (ordering=-6, is_set=true); update ordering=66 > -6
+        //          → LAST_VALUE keeps the higher ordering, so group 1 becomes 66.
+        // group 2: is_set=false after merge; update_batch sets it to 6.
         let expect: PrimitiveArray<Int64Type> =
             Int64Array::from(vec![Some(1), Some(66), Some(6), None]);
 

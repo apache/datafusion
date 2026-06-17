@@ -19,18 +19,24 @@ use crate::extensions::Extensions;
 use crate::logical_plan::producer::{
     from_aggregate, from_aggregate_function, from_alias, from_between, from_binary_expr,
     from_case, from_cast, from_column, from_distinct, from_empty_relation, from_exists,
-    from_filter, from_in_list, from_in_subquery, from_join, from_like, from_limit,
-    from_literal, from_placeholder, from_projection, from_repartition,
-    from_scalar_function, from_scalar_subquery, from_set_comparison, from_sort,
-    from_subquery_alias, from_table_scan, from_try_cast, from_unary_expr, from_union,
-    from_values, from_window, from_window_function, to_substrait_rel, to_substrait_rex,
+    from_filter, from_higher_order_function, from_in_list, from_in_subquery, from_join,
+    from_lambda, from_lambda_variable, from_like, from_limit, from_literal,
+    from_placeholder, from_projection, from_repartition, from_scalar_function,
+    from_scalar_subquery, from_set_comparison, from_sort, from_subquery_alias,
+    from_table_scan, from_try_cast, from_unary_expr, from_union, from_values,
+    from_window, from_window_function, to_substrait_rel, to_substrait_rex,
+    to_substrait_type_from_field,
 };
-use datafusion::common::{Column, DFSchemaRef, ScalarValue, substrait_err};
+use datafusion::arrow::datatypes::FieldRef;
+use datafusion::common::{
+    Column, DFSchemaRef, HashMap, ScalarValue, not_impl_err, substrait_err,
+};
 use datafusion::execution::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::logical_expr::Subquery;
 use datafusion::logical_expr::expr::{
-    Alias, Exists, InList, InSubquery, Placeholder, SetComparison, WindowFunction,
+    Alias, Exists, InList, InSubquery, Lambda, LambdaVariable, Placeholder,
+    SetComparison, WindowFunction,
 };
 use datafusion::logical_expr::{
     Aggregate, Between, BinaryExpr, Case, Cast, Distinct, EmptyRelation, Expr, Extension,
@@ -56,16 +62,19 @@ use substrait::proto::{
 /// # use std::sync::Arc;
 /// # use substrait::proto::{Expression, Rel};
 /// # use substrait::proto::rel::RelType;
+/// # use datafusion::arrow::datatypes::FieldRef;
 /// # use datafusion::common::DFSchemaRef;
 /// # use datafusion::error::Result;
 /// # use datafusion::execution::SessionState;
 /// # use datafusion::logical_expr::{Between, Extension, Projection};
 /// # use datafusion_substrait::extensions::Extensions;
-/// # use datafusion_substrait::logical_plan::producer::{from_projection, SubstraitProducer};
+/// # use datafusion_substrait::logical_plan::producer::{from_projection, SubstraitProducer, DefaultSubstraitLambdaProducer, lambda_parameters_map};
 ///
 /// struct CustomSubstraitProducer {
 ///     extensions: Extensions,
 ///     state: Arc<SessionState>,
+///     // You can reuse existing producer code related to lambdas
+///     lambda_producer: DefaultSubstraitLambdaProducer,
 /// }
 ///
 /// impl SubstraitProducer for CustomSubstraitProducer {
@@ -81,6 +90,33 @@ use substrait::proto::{
 ///     fn get_extensions(self) -> Extensions {
 ///         self.extensions
 ///     }
+///
+///    fn push_lambda_parameters(
+///        &mut self,
+///        lambda_parameters: Vec<FieldRef>,
+///    ) -> datafusion::common::Result<()> {
+///        let lambda_parameters_map = lambda_parameters_map(self, lambda_parameters)?;
+///
+///        self.lambda_producer
+///            .push_lambda_parameters(lambda_parameters_map);
+///
+///        Ok(())
+///    }
+///
+///    fn pop_lambda_parameters(&mut self) -> datafusion::common::Result<()> {
+///        self.lambda_producer.pop_lambda_parameters()
+///    }
+///
+///    fn lambda_variable(&self, name: &str) -> datafusion::common::Result<(u32, i32)> {
+///        self.lambda_producer.lambda_variable(name)
+///    }
+///
+///    fn lambda_parameter_type(
+///        &self,
+///        name: &str,
+///    ) -> datafusion::common::Result<substrait::proto::Type> {
+///        self.lambda_producer.lambda_parameter_type(name)
+///    }
 ///
 ///     // You can set additional metadata on the Rels you produce
 ///     fn handle_projection(&mut self, plan: &Projection) -> Result<Box<Rel>> {
@@ -334,6 +370,14 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_scalar_function(self, scalar_fn, schema)
     }
 
+    fn handle_higher_order_function(
+        &mut self,
+        scalar_fn: &expr::HigherOrderFunction,
+        schema: &DFSchemaRef,
+    ) -> datafusion::common::Result<Expression> {
+        from_higher_order_function(self, scalar_fn, schema)
+    }
+
     fn handle_aggregate_function(
         &mut self,
         agg_fn: &expr::AggregateFunction,
@@ -396,11 +440,65 @@ pub trait SubstraitProducer: Send + Sync + Sized {
     ) -> datafusion::common::Result<Expression> {
         from_placeholder(self, placeholder)
     }
+
+    fn handle_lambda(
+        &mut self,
+        lambda: &Lambda,
+        schema: &DFSchemaRef,
+    ) -> datafusion::common::Result<Expression> {
+        from_lambda(self, lambda, schema)
+    }
+
+    fn handle_lambda_variable(
+        &mut self,
+        lambda_variable: &LambdaVariable,
+        schema: &DFSchemaRef,
+    ) -> datafusion::common::Result<Expression> {
+        from_lambda_variable(self, lambda_variable, schema)
+    }
+
+    // Lambda related methods
+
+    /// Push the given `lambda_parameters` into this producer so they can be referenced by lambda variables
+    ///
+    /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaProducer] and forward this method to it
+    fn push_lambda_parameters(
+        &mut self,
+        _lambda_parameters: Vec<FieldRef>,
+    ) -> datafusion::common::Result<()> {
+        not_impl_err!("SubstraitProducer::push_lambda_parameters")
+    }
+
+    /// Pop the last pushed `lambda_parameters` so that it unshadow any previously shadowed lambda parameter
+    ///
+    /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaProducer] and forward this method to it
+    fn pop_lambda_parameters(&mut self) -> datafusion::common::Result<()> {
+        not_impl_err!("SubstraitProducer::pop_lambda_parameters")
+    }
+
+    /// Get the (`steps_out`, `field_idx`) of the lambda variable with the given `name`. `steps_out` refers to the number
+    /// of lambda boundaries to traverse (0 = current lambda), and `field_idx` refers to the index within the lambda parameters
+    ///
+    /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaProducer] and forward this method to it
+    fn lambda_variable(&self, _name: &str) -> datafusion::common::Result<(u32, i32)> {
+        not_impl_err!("SubstraitProducer::lambda_variable")
+    }
+
+    /// Get the type of the lambda parameter with the given `name`
+    ///
+    /// Note for custom implementations it's possible to embed a [DefaultSubstraitLambdaProducer] and forward this method to it
+    fn lambda_parameter_type(
+        &self,
+        _name: &str,
+    ) -> datafusion::common::Result<substrait::proto::Type> {
+        not_impl_err!("SubstraitProducer::lambda_parameter_type")
+    }
 }
 
 pub struct DefaultSubstraitProducer<'a> {
     extensions: Extensions,
     serializer_registry: &'a dyn SerializerRegistry,
+    lambda_producer: DefaultSubstraitLambdaProducer,
 }
 
 impl<'a> DefaultSubstraitProducer<'a> {
@@ -408,6 +506,7 @@ impl<'a> DefaultSubstraitProducer<'a> {
         DefaultSubstraitProducer {
             extensions: Extensions::default(),
             serializer_registry: state.serializer_registry().as_ref(),
+            lambda_producer: DefaultSubstraitLambdaProducer::new(),
         }
     }
 }
@@ -462,4 +561,109 @@ impl SubstraitProducer for DefaultSubstraitProducer<'_> {
             rel_type: Some(rel_type),
         }))
     }
+
+    fn push_lambda_parameters(
+        &mut self,
+        lambda_parameters: Vec<FieldRef>,
+    ) -> datafusion::common::Result<()> {
+        let lambda_parameters_map = lambda_parameters_map(self, lambda_parameters)?;
+
+        self.lambda_producer
+            .push_lambda_parameters(lambda_parameters_map);
+
+        Ok(())
+    }
+
+    fn pop_lambda_parameters(&mut self) -> datafusion::common::Result<()> {
+        self.lambda_producer.pop_lambda_parameters()
+    }
+
+    fn lambda_variable(&self, name: &str) -> datafusion::common::Result<(u32, i32)> {
+        self.lambda_producer.lambda_variable(name)
+    }
+
+    fn lambda_parameter_type(
+        &self,
+        name: &str,
+    ) -> datafusion::common::Result<substrait::proto::Type> {
+        self.lambda_producer.lambda_parameter_type(name)
+    }
+}
+
+/// Default implementation of lambda related methods of the [SubstraitProducer] trait
+///
+/// Can be embedded into a custom [SubstraitProducer] to implement them
+pub struct DefaultSubstraitLambdaProducer {
+    lambdas_variables: Vec<HashMap<String, (usize, substrait::proto::Type)>>,
+}
+
+impl Default for DefaultSubstraitLambdaProducer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DefaultSubstraitLambdaProducer {
+    pub fn new() -> Self {
+        Self {
+            lambdas_variables: Vec::new(),
+        }
+    }
+
+    /// Note you can construct the `lambda_parameters` argument using [lambda_parameters_map]
+    pub fn push_lambda_parameters(
+        &mut self,
+        lambda_parameters: HashMap<String, (usize, substrait::proto::Type)>,
+    ) {
+        self.lambdas_variables.push(lambda_parameters);
+    }
+
+    pub fn pop_lambda_parameters(&mut self) -> datafusion::common::Result<()> {
+        match self.lambdas_variables.pop() {
+            Some(_) => Ok(()),
+            None => substrait_err!("no lambda_parameters to pop"),
+        }
+    }
+
+    pub fn lambda_variable(&self, name: &str) -> datafusion::common::Result<(u32, i32)> {
+        for (steps_out, lambda_parameters) in
+            self.lambdas_variables.iter().rev().enumerate()
+        {
+            if let Some((field_idx, _type)) = lambda_parameters.get(name) {
+                return Ok((steps_out as u32, *field_idx as i32));
+            }
+        }
+
+        substrait_err!("unknown lambda variable {name}")
+    }
+
+    pub fn lambda_parameter_type(
+        &self,
+        name: &str,
+    ) -> datafusion::common::Result<substrait::proto::Type> {
+        for lambda_parameters in self.lambdas_variables.iter().rev() {
+            if let Some((_field_idx, type_)) = lambda_parameters.get(name) {
+                return Ok(type_.clone());
+            }
+        }
+
+        substrait_err!("unknown lambda variable {name}")
+    }
+}
+
+/// Produces a map of lambda parameters as expected by [DefaultSubstraitLambdaProducer::push_lambda_parameters]
+pub fn lambda_parameters_map(
+    producer: &mut impl SubstraitProducer,
+    lambda_parameters: Vec<FieldRef>,
+) -> datafusion::common::Result<HashMap<String, (usize, substrait::proto::Type)>> {
+    lambda_parameters
+        .into_iter()
+        .enumerate()
+        .map(|(field_idx, field)| {
+            Ok((
+                field.name().clone(),
+                (field_idx, to_substrait_type_from_field(producer, &field)?),
+            ))
+        })
+        .collect::<datafusion::common::Result<_>>()
 }

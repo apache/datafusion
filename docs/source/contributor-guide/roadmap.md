@@ -19,7 +19,7 @@ under the License.
 
 # Roadmap and Improvement Proposals
 
-The [project introduction](../user-guide/introduction) explains the
+The [project introduction](../user-guide/introduction.md) explains the
 overview and goals of DataFusion, and our development efforts largely
 align to that vision.
 
@@ -52,12 +52,16 @@ any single organization or coordinating committee. We typically discuss our
 roadmap using GitHub issues, approximately quarterly, and invite you to join the
 discussion.
 
+The current roadmap discussion is
+[DataFusion 2026 Q3-Q4 Roadmap Discussion](https://github.com/apache/datafusion/issues/22882).
+
 For more information:
 
 1. [Search for issues labeled `roadmap`](https://github.com/apache/datafusion/issues?q=is%3Aissue%20%20%20roadmap)
-2. [DataFusion Road Map: Q1 2026](https://github.com/apache/datafusion/issues/18494)
-3. [DataFusion Road Map: Q3-Q4 2025](https://github.com/apache/datafusion/issues/15878)
-4. [2024 Q4 / 2025 Q1 Roadmap](https://github.com/apache/datafusion/issues/13274)
+2. [DataFusion 2026 Q3-Q4 Roadmap Discussion](https://github.com/apache/datafusion/issues/22882)
+3. [DataFusion Road Map: Q1 2026](https://github.com/apache/datafusion/issues/18494)
+4. [DataFusion Road Map: Q3-Q4 2025](https://github.com/apache/datafusion/issues/15878)
+5. [2024 Q4 / 2025 Q1 Roadmap](https://github.com/apache/datafusion/issues/13274)
 
 ## Improvement Proposals
 

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{calculate_binary_decimal_math, calculate_binary_math};
+use crate::utils::{calculate_binary_decimal_math_cast, calculate_binary_math};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType::{
@@ -486,7 +486,7 @@ fn round_columnar(
         }
         (Decimal32(input_precision, scale), Decimal32(precision, new_scale)) => {
             // reduce scale to reclaim integer precision
-            let result = calculate_binary_decimal_math::<
+            let result = calculate_binary_decimal_math_cast::<
                 Decimal32Type,
                 Int32Type,
                 Decimal32Type,
@@ -518,11 +518,12 @@ fn round_columnar(
                 },
                 *precision,
                 *new_scale,
+                &DataType::Int32,
             )?;
             result as _
         }
         (Decimal64(input_precision, scale), Decimal64(precision, new_scale)) => {
-            let result = calculate_binary_decimal_math::<
+            let result = calculate_binary_decimal_math_cast::<
                 Decimal64Type,
                 Int32Type,
                 Decimal64Type,
@@ -551,11 +552,12 @@ fn round_columnar(
                 },
                 *precision,
                 *new_scale,
+                &DataType::Int32,
             )?;
             result as _
         }
         (Decimal128(input_precision, scale), Decimal128(precision, new_scale)) => {
-            let result = calculate_binary_decimal_math::<
+            let result = calculate_binary_decimal_math_cast::<
                 Decimal128Type,
                 Int32Type,
                 Decimal128Type,
@@ -584,11 +586,12 @@ fn round_columnar(
                 },
                 *precision,
                 *new_scale,
+                &DataType::Int32,
             )?;
             result as _
         }
         (Decimal256(input_precision, scale), Decimal256(precision, new_scale)) => {
-            let result = calculate_binary_decimal_math::<
+            let result = calculate_binary_decimal_math_cast::<
                 Decimal256Type,
                 Int32Type,
                 Decimal256Type,
@@ -617,6 +620,7 @@ fn round_columnar(
                 },
                 *precision,
                 *new_scale,
+                &DataType::Int32,
             )?;
             result as _
         }

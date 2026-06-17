@@ -37,12 +37,15 @@
 //! * [`LogicalPlan::with_new_exprs`]: Create a new plan with different expressions
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
+use std::sync::Arc;
+
+use crate::logical_plan::plan::RangePartitioning;
 use crate::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
     DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
     LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
     Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
-    Values, Window, dml::CopyTo,
+    Values, Window, builder::unnest_with_options, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -203,6 +206,7 @@ impl TreeNode for LogicalPlan {
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded,
+                show_statistics,
             }) => plan.map_elements(f)?.update_data(|plan| {
                 LogicalPlan::Explain(Explain {
                     verbose,
@@ -211,17 +215,24 @@ impl TreeNode for LogicalPlan {
                     stringified_plans,
                     schema,
                     logical_optimization_succeeded,
+                    show_statistics,
                 })
             }),
             LogicalPlan::Analyze(Analyze {
                 verbose,
+                format,
                 input,
                 schema,
+                analyze_level,
+                analyze_categories,
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Analyze(Analyze {
                     verbose,
+                    format,
                     input,
                     schema,
+                    analyze_level,
+                    analyze_categories,
                 })
             }),
             LogicalPlan::Dml(DmlStatement {
@@ -329,13 +340,18 @@ impl TreeNode for LogicalPlan {
                 static_term,
                 recursive_term,
                 is_distinct,
+                schema,
             }) => (static_term, recursive_term).map_elements(f)?.update_data(
                 |(static_term, recursive_term)| {
+                    // Ordinary child rewrites preserve derived schemas. Call
+                    // `LogicalPlan::recompute_schema` when child schemas should
+                    // be reconciled again.
                     LogicalPlan::RecursiveQuery(RecursiveQuery {
                         name,
                         static_term,
                         recursive_term,
                         is_distinct,
+                        schema,
                     })
                 },
             ),
@@ -414,6 +430,7 @@ impl LogicalPlan {
                 Partitioning::Hash(expr, _) | Partitioning::DistributeBy(expr) => {
                     expr.apply_elements(f)
                 }
+                Partitioning::Range(range) => range.ordering().to_vec().apply_elements(f),
                 Partitioning::RoundRobinBatch(_) => Ok(TreeNodeRecursion::Continue),
             },
             LogicalPlan::Window(Window { window_expr, .. }) => {
@@ -519,6 +536,19 @@ impl LogicalPlan {
                 Partitioning::DistributeBy(expr) => expr
                     .map_elements(f)?
                     .update_data(Partitioning::DistributeBy),
+                Partitioning::Range(range) => {
+                    let split_points = range.split_points().to_vec();
+                    range
+                        .ordering()
+                        .to_vec()
+                        .map_elements(f)?
+                        .map_data(|ordering| {
+                            Ok(Partitioning::Range(RangePartitioning::try_new(
+                                ordering,
+                                split_points,
+                            )?))
+                        })?
+                }
                 Partitioning::RoundRobinBatch(_) => Transformed::no(partitioning_scheme),
             }
             .update_data(|partitioning_scheme| {
@@ -584,17 +614,29 @@ impl LogicalPlan {
                 .map_elements(f)?
                 .update_data(|expr| LogicalPlan::Sort(Sort { expr, input, fetch })),
             LogicalPlan::Extension(Extension { node }) => {
-                // would be nice to avoid this copy -- maybe can
-                // update extension to just observer Exprs
-                let exprs = node.expressions().map_elements(f)?;
-                let plan = LogicalPlan::Extension(Extension {
-                    node: UserDefinedLogicalNode::with_exprs_and_inputs(
-                        node.as_ref(),
-                        exprs.data,
-                        node.inputs().into_iter().cloned().collect::<Vec<_>>(),
-                    )?,
-                });
-                Transformed::new(plan, exprs.transformed, exprs.tnr)
+                let raw_exprs = node.expressions();
+                if raw_exprs.is_empty() {
+                    // No expressions to transform — skip expensive clone of
+                    // all inputs and reconstruction via with_exprs_and_inputs.
+                    Transformed::no(LogicalPlan::Extension(Extension { node }))
+                } else {
+                    // TODO: a more general optimization would be to change
+                    // `UserDefinedLogicalNode::expressions()` to return
+                    // references (`&[Expr]`) instead of cloned `Vec<Expr>`,
+                    // and only clone + rebuild when the transform actually
+                    // modifies an expression. This would avoid the clone +
+                    // `with_exprs_and_inputs` rebuild even for non-empty
+                    // expression lists when the transform is a no-op.
+                    let exprs = raw_exprs.map_elements(f)?;
+                    let plan = LogicalPlan::Extension(Extension {
+                        node: UserDefinedLogicalNode::with_exprs_and_inputs(
+                            node.as_ref(),
+                            exprs.data,
+                            node.inputs().into_iter().cloned().collect::<Vec<_>>(),
+                        )?,
+                    });
+                    Transformed::new(plan, exprs.transformed, exprs.tnr)
+                }
             }
             LogicalPlan::TableScan(TableScan {
                 table_name,
@@ -603,6 +645,7 @@ impl LogicalPlan {
                 projected_schema,
                 filters,
                 fetch,
+                statistics_requests,
             }) => filters.map_elements(f)?.update_data(|filters| {
                 LogicalPlan::TableScan(TableScan {
                     table_name,
@@ -611,6 +654,7 @@ impl LogicalPlan {
                     projected_schema,
                     filters,
                     fetch,
+                    statistics_requests,
                 })
             }),
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
@@ -644,9 +688,39 @@ impl LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
+            LogicalPlan::Unnest(Unnest {
+                input,
+                exec_columns,
+                options,
+                ..
+            }) => {
+                let exprs: Vec<Expr> =
+                    exec_columns.into_iter().map(Expr::Column).collect();
+                exprs.map_elements(f)?.map_data(|mapped_exprs| {
+                    let new_columns = mapped_exprs
+                        .into_iter()
+                        .map(|e| match e {
+                            Expr::Column(c) => Ok(c),
+                            other => internal_err!(
+                                "Expected Expr::Column for Unnest exec_columns, got {other:?}"
+                            ),
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    // Rebuild through `unnest_with_options` so the derived
+                    // `list_type_columns`, `struct_type_columns`,
+                    // `dependency_indices`, and `schema` are recomputed from
+                    // the (possibly rewritten) columns rather than carried over
+                    // stale. This keeps `map_expressions` consistent with
+                    // `with_new_exprs`.
+                    unnest_with_options(
+                        Arc::unwrap_or_clone(input),
+                        new_columns,
+                        options,
+                    )
+                })?
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
@@ -808,7 +882,7 @@ impl LogicalPlan {
         transform_down_up_with_subqueries_impl(self, &mut f_down, &mut f_up)
     }
 
-    /// Similarly to [`Self::apply`], calls `f` on  this node and its inputs
+    /// Similarly to [`Self::apply`], calls `f` on this node and its inputs,
     /// including subqueries that may appear in expressions such as `IN (SELECT
     /// ...)`.
     pub fn apply_subqueries<F: FnMut(&Self) -> Result<TreeNodeRecursion>>(
@@ -821,14 +895,38 @@ impl LogicalPlan {
                 | Expr::InSubquery(InSubquery { subquery, .. })
                 | Expr::SetComparison(SetComparison { subquery, .. })
                 | Expr::ScalarSubquery(subquery) => {
-                    // use a synthetic plan so the collector sees a
-                    // LogicalPlan::Subquery (even though it is
-                    // actually a Subquery alias)
+                    // Wrap in LogicalPlan::Subquery to match f's signature
                     f(&LogicalPlan::Subquery(subquery.clone()))
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
             })
         })
+    }
+
+    /// Returns true if any expression in this node contains a subquery
+    /// (Exists, InSubquery, SetComparison, or ScalarSubquery).
+    fn has_subquery_expressions(&self) -> bool {
+        let mut found = false;
+        let _ = self.apply_expressions(|expr| {
+            if found {
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            expr.apply(|e| {
+                if matches!(
+                    e,
+                    Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                        | Expr::ScalarSubquery(_)
+                ) {
+                    found = true;
+                    Ok(TreeNodeRecursion::Stop)
+                } else {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+            })
+        });
+        found
     }
 
     /// Similarly to [`Self::map_children`], rewrites all subqueries that may
@@ -839,6 +937,14 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        // Fast path: skip the expensive ownership-based expression traversal
+        // when this node has no subquery expressions. This avoids
+        // map_expressions → transform_down walking every expression node
+        // via consume+recreate just to find no subqueries.
+        if !self.has_subquery_expressions() {
+            return Ok(Transformed::no(self));
+        }
+
         self.map_expressions(|expr| {
             expr.transform_down(|expr| match expr {
                 Expr::Exists(Exists { subquery, negated }) => {
@@ -886,6 +992,20 @@ impl LogicalPlan {
                     }),
                 _ => Ok(Transformed::no(expr)),
             })
+        })
+    }
+
+    /// Similar to [`Self::map_subqueries`], but only applies `f` to
+    /// uncorrelated subqueries (those with no outer column references).
+    pub fn map_uncorrelated_subqueries<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        self.map_subqueries(|subquery_plan| match &subquery_plan {
+            LogicalPlan::Subquery(sq) if sq.outer_ref_columns.is_empty() => {
+                f(subquery_plan)
+            }
+            _ => Ok(Transformed::no(subquery_plan)),
         })
     }
 }

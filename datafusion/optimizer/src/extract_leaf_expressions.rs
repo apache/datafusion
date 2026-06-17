@@ -21,7 +21,7 @@
 //! [`ExtractLeafExpressions`] (pass 1) and [`PushDownLeafProjections`] (pass 2).
 
 use indexmap::{IndexMap, IndexSet};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use datafusion_common::alias::AliasGenerator;
@@ -247,9 +247,7 @@ fn extract_from_plan(
                 Some(plan) => Ok(plan),
                 // No extractions for this input — recover the LogicalPlan
                 // without cloning (refcount is 1 since build returned None).
-                None => {
-                    Ok(Arc::try_unwrap(input_arc).unwrap_or_else(|arc| (*arc).clone()))
-                }
+                None => Ok(Arc::unwrap_or_clone(input_arc)),
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -829,12 +827,8 @@ fn split_and_push_projection(
 
     let original_schema = proj.schema.as_ref();
     let mut recovery_exprs: Vec<Expr> = Vec::with_capacity(proj.expr.len());
-    let mut needs_recovery = false;
     let mut has_new_extractions = false;
     let mut proj_exprs_captured: usize = 0;
-    // Track standalone column expressions (Case B) to detect column refs
-    // from extracted aliases (Case A) that aren't also standalone expressions.
-    let mut standalone_columns: IndexSet<Column> = IndexSet::new();
 
     for (expr, (qualifier, field)) in proj.expr.iter().zip(original_schema.iter()) {
         if let Expr::Alias(alias) = expr
@@ -856,7 +850,6 @@ fn split_and_push_projection(
         } else if let Expr::Column(col) = expr {
             // Plain column pass-through — track it in the extractor
             extractors[0].columns_needed.insert(col.clone());
-            standalone_columns.insert(col.clone());
             recovery_exprs.push(expr.clone());
             proj_exprs_captured += 1;
         } else {
@@ -877,21 +870,12 @@ fn split_and_push_projection(
                 original_name != &expr_name
             };
             let recovery_expr = if needs_alias {
-                needs_recovery = true;
                 transformed_expr
                     .clone()
                     .alias_qualified(qualifier.cloned(), original_name)
             } else {
                 transformed_expr.clone()
             };
-
-            // If the expression was transformed (i.e., has extracted sub-parts),
-            // it differs from what the pushed projection outputs → needs recovery.
-            // Also, any non-column, non-__datafusion_extracted expression needs recovery
-            // because the pushed extraction projection won't output it directly.
-            if transformed.transformed || !matches!(expr, Expr::Column(_)) {
-                needs_recovery = true;
-            }
 
             recovery_exprs.push(recovery_expr);
         }
@@ -913,17 +897,6 @@ fn split_and_push_projection(
     // If no extractions found, nothing to do
     if extraction_pairs.is_empty() {
         return Ok(None);
-    }
-
-    // If columns_needed has entries that aren't standalone projection columns
-    // (i.e., they came from column refs inside extracted aliases), a merge
-    // into an inner projection will widen the schema with those extra columns,
-    // requiring a recovery projection to restore the original schema.
-    if columns_needed
-        .iter()
-        .any(|c| !standalone_columns.contains(c))
-    {
-        needs_recovery = true;
     }
 
     // ── Phase 2: Push down ──────────────────────────────────────────────
@@ -960,6 +933,37 @@ fn split_and_push_projection(
             LogicalPlan::Projection(extraction)
         }
     };
+
+    // The recovery projection restores the original projection's output. We need
+    // it whenever `base_plan` no longer exposes the same set of output column
+    // names, which happens two ways:
+    //   * a column is *renamed* — a transformed expression now surfaces as its
+    //     internal `__datafusion_extracted_*` alias instead of the original name;
+    //   * a column is *leaked* — pushing the projection down widens `base_plan`
+    //     with an inner extraction projection's *other* extracted aliases bubbling
+    //     up through a Filter. A schema-caching parent like SubqueryAlias then
+    //     keeps a stale schema (see `map_children` in `logical_plan/tree_node.rs`)
+    //     and the later `optimize_projections` pass fails to resolve columns.
+    //
+    // Both are captured by comparing the *set of unqualified field names*. We
+    // compare by unqualified name rather than the full qualified schema on
+    // purpose: extracted aliases are globally unique, so name-only comparison is
+    // unambiguous for them, while it ignores the benign column reordering and the
+    // `SubqueryAlias` re-qualification (`sub.__datafusion_extracted_1` vs
+    // `__datafusion_extracted_1`) that a qualified/ordered comparison would
+    // spuriously treat as drift, stacking redundant recovery projections.
+    let base_names: BTreeSet<&str> = base_plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect();
+    let original_names: BTreeSet<&str> = original_schema
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect();
+    let needs_recovery = base_names != original_names;
 
     // Wrap with recovery projection if the output schema changed
     if needs_recovery {
@@ -1142,6 +1146,12 @@ fn try_push_into_inputs(
 ) -> Result<Option<LogicalPlan>> {
     let inputs = node.inputs();
     if inputs.is_empty() {
+        return Ok(None);
+    }
+
+    // Unnest may output a column with the same name but different value/type
+    // than its input column. Name-based routing cannot distinguish those.
+    if matches!(node, LogicalPlan::Unnest(_)) {
         return Ok(None);
     }
 
@@ -1613,9 +1623,10 @@ mod tests {
 
         ## After Pushdown
         Projection: __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name"))
-          Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2
-              TableScan: test projection=[user]
+          Projection: test.user, __datafusion_extracted_2
+            Filter: __datafusion_extracted_1 = Utf8("active")
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2
+                TableScan: test projection=[user]
 
         ## Optimized
         Projection: __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name"))
@@ -1677,12 +1688,16 @@ mod tests {
 
         ## After Pushdown
         Projection: test.user, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("label"))
+          Projection: test.user, __datafusion_extracted_2
+            Filter: __datafusion_extracted_1 > Int32(150)
+              Projection: leaf_udf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user, leaf_udf(test.user, Utf8("label")) AS __datafusion_extracted_2
+                TableScan: test projection=[user]
+
+        ## Optimized
+        Projection: test.user, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("label"))
           Filter: __datafusion_extracted_1 > Int32(150)
             Projection: leaf_udf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user, leaf_udf(test.user, Utf8("label")) AS __datafusion_extracted_2
               TableScan: test projection=[user]
-
-        ## Optimized
-        (same as after pushdown)
         "#)
     }
 
@@ -1889,17 +1904,13 @@ mod tests {
         ## After Pushdown
         Projection: test.id, test.user
           Filter: __datafusion_extracted_1 IS NOT NULL
-            Filter: __datafusion_extracted_2 = Utf8("active")
-              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.id, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
-                TableScan: test projection=[id, user]
-
-        ## Optimized
-        Projection: test.id, test.user
-          Filter: __datafusion_extracted_1 IS NOT NULL
             Projection: test.id, test.user, __datafusion_extracted_1
               Filter: __datafusion_extracted_2 = Utf8("active")
                 Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.id, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
                   TableScan: test projection=[id, user]
+
+        ## Optimized
+        (same as after pushdown)
         "#)
     }
 
@@ -2008,9 +2019,10 @@ mod tests {
         ## After Pushdown
         Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), COUNT(Int32(1))
           Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
-            Filter: __datafusion_extracted_2 = Utf8("active")
-              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
-                TableScan: test projection=[user]
+            Projection: test.user, __datafusion_extracted_1
+              Filter: __datafusion_extracted_2 = Utf8("active")
+                Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
+                  TableScan: test projection=[user]
 
         ## Optimized
         Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), COUNT(Int32(1))
@@ -2089,17 +2101,13 @@ mod tests {
         ## After Pushdown
         Projection: test.a, test.b, test.c
           Filter: __datafusion_extracted_1 = Int32(2)
-            Filter: __datafusion_extracted_2 = Int32(1)
-              Projection: leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c, leaf_udf(test.b, Utf8("y")) AS __datafusion_extracted_1
-                TableScan: test projection=[a, b, c]
-
-        ## Optimized
-        Projection: test.a, test.b, test.c
-          Filter: __datafusion_extracted_1 = Int32(2)
             Projection: test.a, test.b, test.c, __datafusion_extracted_1
               Filter: __datafusion_extracted_2 = Int32(1)
                 Projection: leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c, leaf_udf(test.b, Utf8("y")) AS __datafusion_extracted_1
                   TableScan: test projection=[a, b, c]
+
+        ## Optimized
+        (same as after pushdown)
         "#)
     }
 
@@ -2309,21 +2317,15 @@ mod tests {
         ## After Pushdown
         Projection: test.id, test.user, right.id, right.user
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Inner Join: __datafusion_extracted_2 = __datafusion_extracted_3
-              Projection: leaf_udf(test.user, Utf8("id")) AS __datafusion_extracted_2, test.id, test.user, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1
-                TableScan: test projection=[id, user]
-              Projection: leaf_udf(right.user, Utf8("id")) AS __datafusion_extracted_3, right.id, right.user
-                TableScan: right projection=[id, user]
-
-        ## Optimized
-        Projection: test.id, test.user, right.id, right.user
-          Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: test.id, test.user, __datafusion_extracted_1, right.id, right.user
+            Projection: test.id, test.user, right.id, right.user, __datafusion_extracted_1
               Inner Join: __datafusion_extracted_2 = __datafusion_extracted_3
                 Projection: leaf_udf(test.user, Utf8("id")) AS __datafusion_extracted_2, test.id, test.user, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1
                   TableScan: test projection=[id, user]
                 Projection: leaf_udf(right.user, Utf8("id")) AS __datafusion_extracted_3, right.id, right.user
                   TableScan: right projection=[id, user]
+
+        ## Optimized
+        (same as after pushdown)
         "#)
     }
 
@@ -2676,10 +2678,11 @@ mod tests {
 
         ## After Pushdown
         Projection: __datafusion_extracted_2 AS leaf_udf(sub.user,Utf8("name"))
-          Filter: __datafusion_extracted_1 = Utf8("active")
-            SubqueryAlias: sub
-              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, test.user
-                TableScan: test projection=[user]
+          Projection: sub.user, __datafusion_extracted_2
+            Filter: __datafusion_extracted_1 = Utf8("active")
+              SubqueryAlias: sub
+                Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, test.user
+                  TableScan: test projection=[user]
 
         ## Optimized
         Projection: __datafusion_extracted_2 AS leaf_udf(sub.user,Utf8("name"))
@@ -2851,9 +2854,10 @@ mod tests {
 
         ## After Pushdown
         Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name"))
-          Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2
-              TableScan: test projection=[id, user]
+          Projection: test.id, test.user, __datafusion_extracted_2
+            Filter: __datafusion_extracted_1 = Utf8("active")
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2
+                TableScan: test projection=[id, user]
 
         ## Optimized
         Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name"))
@@ -2888,9 +2892,10 @@ mod tests {
 
         ## After Pushdown
         Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("status"))
-          Filter: __datafusion_extracted_1 > Int32(5)
-            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2
-              TableScan: test projection=[id, user]
+          Projection: test.id, test.user, __datafusion_extracted_2
+            Filter: __datafusion_extracted_1 > Int32(5)
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2
+                TableScan: test projection=[id, user]
 
         ## Optimized
         Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("status"))
@@ -2942,11 +2947,12 @@ mod tests {
 
         ## After Pushdown
         Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name")), __datafusion_extracted_3 AS leaf_udf(right.user,Utf8("status"))
-          Left Join:  Filter: test.id = right.id AND __datafusion_extracted_1 > Int32(5)
-            Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, test.id, test.user
-              TableScan: test projection=[id, user]
-            Projection: leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_1, right.id, right.user, leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_3
-              TableScan: right projection=[id, user]
+          Projection: test.id, test.user, right.id, right.user, __datafusion_extracted_2, __datafusion_extracted_3
+            Left Join:  Filter: test.id = right.id AND __datafusion_extracted_1 > Int32(5)
+              Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, test.id, test.user
+                TableScan: test projection=[id, user]
+              Projection: leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_1, right.id, right.user, leaf_udf(right.user, Utf8("status")) AS __datafusion_extracted_3
+                TableScan: right projection=[id, user]
 
         ## Optimized
         Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name")), __datafusion_extracted_3 AS leaf_udf(right.user,Utf8("status"))
@@ -2987,9 +2993,10 @@ mod tests {
 
         ## After Pushdown
         Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name")), __datafusion_extracted_3 AS leaf_udf(test.user,Utf8("status"))
-          Filter: __datafusion_extracted_1 > Int32(5)
-            Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_3
-              TableScan: test projection=[id, user]
+          Projection: test.id, test.user, __datafusion_extracted_2, __datafusion_extracted_3
+            Filter: __datafusion_extracted_1 > Int32(5)
+              Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_2, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_3
+                TableScan: test projection=[id, user]
 
         ## Optimized
         Projection: test.id, __datafusion_extracted_2 AS leaf_udf(test.user,Utf8("name")), __datafusion_extracted_3 AS leaf_udf(test.user,Utf8("status"))
@@ -3033,6 +3040,125 @@ mod tests {
         Projection: __datafusion_extracted_1, test.id
           Projection: test.user, test.id, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1
             TableScan: test
+        "#);
+
+        Ok(())
+    }
+
+    /// Regression test: the optimizer must not push extractions through
+    /// `Unnest`.
+    ///
+    /// `try_push_into_inputs` routes extracted pairs to inputs by column name.
+    /// `Unnest` can emit an output column with the same name as its input
+    /// column but a different value/type (the unnested element), so name-based
+    /// routing cannot tell the two apart. `try_push_into_inputs` therefore
+    /// treats `Unnest` as a barrier and bails instead of pushing through it
+    /// (see the `matches!(node, LogicalPlan::Unnest(_))` guard there).
+    #[test]
+    fn test_no_push_through_unnest() -> Result<()> {
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let schema = Schema::new(vec![
+            Field::new("list_col", DataType::new_list(DataType::Int32, true), true),
+            Field::new("other_col", DataType::Int32, true),
+        ]);
+        let table_scan =
+            datafusion_expr::logical_plan::table_scan(Some("t"), &schema, None)?
+                .build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .unnest_column("list_col")?
+            .filter(leaf_udf(col("list_col"), "x").eq(lit(1i32)))?
+            .build()?;
+
+        let ctx = OptimizerContext::new().with_max_passes(1);
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        insta::assert_snapshot!(format!("{optimized}"), @r#"
+        Projection: list_col, t.other_col
+          Filter: __datafusion_extracted_1 = Int32(1)
+            Projection: leaf_udf(list_col, Utf8("x")) AS __datafusion_extracted_1, list_col, t.other_col
+              Unnest: lists[t.list_col|depth=1] structs[]
+                TableScan: t
+        "#);
+
+        Ok(())
+    }
+
+    /// Regression test: a leaf expression used in **both** the filter and the
+    /// projection, with the **bare base column** also projected, over a
+    /// `SubqueryAlias` whose projection emits an **extra column the outer query
+    /// never consumes** (`synth`).
+    ///
+    /// This reproduces a production failure where the leaf-pushdown passes drop
+    /// the bare passthrough column from an intermediate schema, causing the
+    /// subsequent `optimize_projections` run to fail with:
+    /// `Schema error: No field named __datafusion_extracted_N`.
+    ///
+    /// Equivalent SQL:
+    /// ```sql
+    /// CREATE VIEW v AS SELECT user, id, id + 1 AS synth FROM test;
+    /// SELECT user['status'], user, id FROM v WHERE user['status'] IS NOT NULL;
+    /// ```
+    #[test]
+    fn test_subquery_alias_with_unconsumed_column() -> Result<()> {
+        let table_scan = test_table_scan_with_struct()?;
+
+        // This is the plan shape *after* `push_down_filter` has run: it pushes
+        // the `leaf_udf(...)` filter down through the `SubqueryAlias` and below
+        // the view's inner projection. The filter and the outer projection now
+        // each contain the same leaf expression but are separated by the
+        // `SubqueryAlias`, so they extract into two *independent* aliases
+        // (`__datafusion_extracted_1` from the filter, `__datafusion_extracted_2`
+        // from the projection) instead of deduplicating into one.
+        //
+        // The view projects an extra `synth` column the outer query never
+        // consumes — without it the bug does not manifest.
+        let inner = LogicalPlanBuilder::from(table_scan)
+            .filter(leaf_udf(col("user"), "status").is_not_null())?
+            .project(vec![
+                col("user"),
+                col("id"),
+                (col("id") + lit(1u32)).alias("synth"),
+            ])?
+            .alias("v")?
+            .build()?;
+
+        // Outer projection: leaf expr + the bare base column + id.
+        let plan = LogicalPlanBuilder::from(inner)
+            .project(vec![
+                leaf_udf(col("v.user"), "status"),
+                col("v.user"),
+                col("v.id"),
+            ])?
+            .build()?;
+
+        // Run the leaf-pushdown passes followed by `optimize_projections`,
+        // exactly as the default optimizer schedules them. `optimize_projections`
+        // is what prunes the unused `synth` column and validates the plan; if the
+        // leaf passes drop the bare `v.user` passthrough column it fails with
+        // `Schema error: No field named __datafusion_extracted_N`.
+        let ctx = OptimizerContext::new();
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+            Arc::new(OptimizeProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        // The bare `test.user` passthrough column is preserved and the view's
+        // output schema (`user`, `id`, `__datafusion_extracted_2`) is restored
+        // by a recovery projection, so `optimize_projections` succeeds.
+        insta::assert_snapshot!(format!("{optimized}"), @r#"
+        Projection: __datafusion_extracted_2 AS leaf_udf(v.user,Utf8("status")), v.user, v.id
+          SubqueryAlias: v
+            Projection: test.user, test.id, __datafusion_extracted_2
+              Filter: __datafusion_extracted_1 IS NOT NULL
+                Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2
+                  TableScan: test projection=[id, user]
         "#);
 
         Ok(())

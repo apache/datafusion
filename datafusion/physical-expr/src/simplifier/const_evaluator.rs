@@ -48,7 +48,7 @@ pub fn simplify_const_expr(
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     let batch = create_dummy_batch()?;
     // If expr is already a const literal or can't be evaluated into one.
-    if expr.as_any().is::<Literal>() || (!can_evaluate_as_constant(&expr)) {
+    if expr.is::<Literal>() || (!can_evaluate_as_constant(&expr)) {
         return Ok(Transformed::no(expr));
     }
 
@@ -90,12 +90,12 @@ pub(crate) fn simplify_const_expr_immediate(
     batch: &RecordBatch,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     // Already a literal - nothing to do
-    if expr.as_any().is::<Literal>() {
+    if expr.is::<Literal>() {
         return Ok(Transformed::no(expr));
     }
 
     // Column references cannot be evaluated at plan time
-    if expr.as_any().is::<Column>() {
+    if expr.is::<Column>() {
         return Ok(Transformed::no(expr));
     }
 
@@ -107,12 +107,18 @@ pub(crate) fn simplify_const_expr_immediate(
     // Since transform visits bottom-up, children have already been simplified.
     // If all children are now Literals, this node can be const-evaluated.
     // This is O(k) where k = number of children, instead of O(subtree).
-    let all_children_literal = expr
-        .children()
-        .iter()
-        .all(|child| child.as_any().is::<Literal>());
-
-    if !all_children_literal {
+    //
+    // Leaf nodes (zero children) are rejected here. Const-folding is only
+    // sound for a node whose value is fully determined by its child literals;
+    // a leaf has no children, so there is nothing to derive constness from.
+    // The known leaves that are constant (`Literal`) or known-non-constant
+    // (`Column`, volatile) are handled by the dedicated checks above. Any
+    // other leaf is opaque to the simplifier and must be preserved as-is,
+    // otherwise `all` over an empty child list would vacuously hold and the
+    // node would be evaluated against the dummy batch, producing a value
+    // unrelated to its real runtime semantics.
+    let children = expr.children();
+    if children.is_empty() || !children.iter().all(|c| c.is::<Literal>()) {
         return Ok(Transformed::no(expr));
     }
 
@@ -169,7 +175,7 @@ fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut can_evaluate = true;
 
     expr.apply(|e| {
-        if e.as_any().is::<Column>() || e.is_volatile_node() {
+        if e.is::<Column>() || e.is_volatile_node() {
             can_evaluate = false;
             Ok(TreeNodeRecursion::Stop)
         } else {
@@ -189,7 +195,7 @@ fn can_evaluate_as_constant(expr: &Arc<dyn PhysicalExpr>) -> bool {
 pub fn has_column_references(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut has_columns = false;
     expr.apply(|expr| {
-        if expr.as_any().downcast_ref::<Column>().is_some() {
+        if expr.downcast_ref::<Column>().is_some() {
             has_columns = true;
             Ok(TreeNodeRecursion::Stop)
         } else {

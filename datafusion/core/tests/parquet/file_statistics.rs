@@ -30,8 +30,10 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::DFSchema;
 use datafusion_common::stats::Precision;
 use datafusion_execution::cache::DefaultListFilesCache;
-use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+use datafusion_execution::cache::cache_manager::{
+    CacheManagerConfig, FileStatisticsCache,
+};
+use datafusion_execution::cache::file_statistics_cache::DefaultFileStatisticsCache;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{Expr, col, lit};
@@ -50,13 +52,13 @@ async fn check_stats_precision_with_filter_pushdown() {
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
     let table_path = ListingTableUrl::parse(filename).unwrap();
 
-    let opt =
-        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
+    let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
     let table = get_listing_table(&table_path, None, &opt).await;
 
     let (_, _, state) = get_cache_runtime_state();
     let mut options: ConfigOptions = state.config().options().as_ref().clone();
     options.execution.parquet.pushdown_filters = true;
+    options.execution.collect_statistics = true;
 
     // Scan without filter, stats are exact
     let exec = table.scan(&state, None, &[], None).await.unwrap();
@@ -105,13 +107,16 @@ async fn load_table_stats_with_session_level_cache() {
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
     let table_path = ListingTableUrl::parse(filename).unwrap();
 
-    let (cache1, _, state1) = get_cache_runtime_state();
+    let (cache1, _, mut state1) = get_cache_runtime_state();
+    let cfg_1 = state1.config_mut();
+    cfg_1.options_mut().execution.collect_statistics = true;
 
     // Create a separate DefaultFileStatisticsCache
-    let (cache2, _, state2) = get_cache_runtime_state();
+    let (cache2, _, mut state2) = get_cache_runtime_state();
+    let cfg_2 = state2.config_mut();
+    cfg_2.options_mut().execution.collect_statistics = true;
 
-    let opt =
-        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
+    let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
 
     let table1 = get_listing_table(&table_path, Some(cache1), &opt).await;
     let table2 = get_listing_table(&table_path, Some(cache2), &opt).await;
@@ -198,10 +203,7 @@ async fn list_files_with_session_level_cache() {
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
     let data_source_exec = exec1.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
-    let parquet1 = data_source
-        .as_any()
-        .downcast_ref::<FileScanConfig>()
-        .unwrap();
+    let parquet1 = data_source.downcast_ref::<FileScanConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet1.file_groups;
@@ -214,10 +216,7 @@ async fn list_files_with_session_level_cache() {
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
     let data_source_exec = exec2.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
-    let parquet2 = data_source
-        .as_any()
-        .downcast_ref::<FileScanConfig>()
-        .unwrap();
+    let parquet2 = data_source.downcast_ref::<FileScanConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state2), 1);
     let fg2 = &parquet2.file_groups;
@@ -230,10 +229,7 @@ async fn list_files_with_session_level_cache() {
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
     let data_source_exec = exec3.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
-    let parquet3 = data_source
-        .as_any()
-        .downcast_ref::<FileScanConfig>()
-        .unwrap();
+    let parquet3 = data_source.downcast_ref::<FileScanConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet3.file_groups;
@@ -245,7 +241,7 @@ async fn list_files_with_session_level_cache() {
 
 async fn get_listing_table(
     table_path: &ListingTableUrl,
-    static_cache: Option<Arc<DefaultFileStatisticsCache>>,
+    static_cache: Option<Arc<dyn FileStatisticsCache>>,
     opt: &ListingOptions,
 ) -> ListingTable {
     let schema = opt
@@ -258,12 +254,9 @@ async fn get_listing_table(
     let config1 = ListingTableConfig::new(table_path.clone())
         .with_listing_options(opt.clone())
         .with_schema(schema);
-    let table = ListingTable::try_new(config1).unwrap();
-    if let Some(c) = static_cache {
-        table.with_cache(Some(c))
-    } else {
-        table
-    }
+    ListingTable::try_new(config1)
+        .unwrap()
+        .with_cache(static_cache)
 }
 
 fn get_cache_runtime_state() -> (
@@ -276,7 +269,7 @@ fn get_cache_runtime_state() -> (
     let list_file_cache = Arc::new(DefaultListFilesCache::default());
 
     let cache_config = cache_config
-        .with_files_statistics_cache(Some(file_static_cache.clone()))
+        .with_file_statistics_cache(Some(file_static_cache.clone()))
         .with_list_files_cache(Some(list_file_cache.clone()));
 
     let rt = RuntimeEnvBuilder::new()

@@ -37,6 +37,7 @@
 
 extern crate core;
 
+mod higher_order_function;
 mod literal;
 mod operation;
 mod partition_evaluator;
@@ -79,6 +80,8 @@ pub mod statistics {
 mod predicate_bounds;
 pub mod preimage;
 pub mod ptr_eq;
+#[cfg(not(feature = "sql"))]
+pub mod sql;
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;
@@ -112,6 +115,11 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
+pub use higher_order_function::{
+    HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    HigherOrderTypeSignature, HigherOrderUDF, HigherOrderUDFImpl, LambdaArgument,
+    LambdaParametersProgress, ValueOrLambda,
+};
 pub use literal::{
     Literal, TimestampLiteral, lit, lit_timestamp_nano, lit_with_metadata,
 };
@@ -133,7 +141,7 @@ pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();

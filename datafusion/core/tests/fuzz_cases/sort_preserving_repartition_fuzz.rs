@@ -118,7 +118,7 @@ mod sp_repartition_fuzz_tests {
         schema: SchemaRef,
     ) -> Option<ArrayRef> {
         for expr in eq_group.iter() {
-            let col = expr.as_any().downcast_ref::<Column>().unwrap();
+            let col = expr.downcast_ref::<Column>().unwrap();
             let (idx, _field) = schema.column_with_name(col.name()).unwrap();
             if let Some(res) = &existing_vec[idx] {
                 return Some(res.clone());
@@ -149,7 +149,7 @@ mod sp_repartition_fuzz_tests {
 
         // Fill constant columns
         for constant in eq_properties.constants() {
-            let col = constant.expr.as_any().downcast_ref::<Column>().unwrap();
+            let col = constant.expr.downcast_ref::<Column>().unwrap();
             let (idx, _field) = schema.column_with_name(col.name()).unwrap();
             let arr =
                 Arc::new(UInt64Array::from_iter_values(vec![0; n_elem])) as ArrayRef;
@@ -161,7 +161,7 @@ mod sp_repartition_fuzz_tests {
             let (sort_columns, indices): (Vec<_>, Vec<_>) = ordering
                 .iter()
                 .map(|PhysicalSortExpr { expr, options }| {
-                    let col = expr.as_any().downcast_ref::<Column>().unwrap();
+                    let col = expr.downcast_ref::<Column>().unwrap();
                     let (idx, _field) = schema.column_with_name(col.name()).unwrap();
                     let arr = generate_random_array(n_elem, n_distinct);
                     (
@@ -187,7 +187,7 @@ mod sp_repartition_fuzz_tests {
                     .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
 
             for expr in eq_group.iter() {
-                let col = expr.as_any().downcast_ref::<Column>().unwrap();
+                let col = expr.downcast_ref::<Column>().unwrap();
                 let (idx, _field) = schema.column_with_name(col.name()).unwrap();
                 schema_vec[idx] = Some(representative_array.clone());
             }

@@ -333,9 +333,7 @@ impl RunOpt {
         );
         let extension = DEFAULT_PARQUET_EXTENSION;
 
-        let options = ListingOptions::new(format)
-            .with_file_extension(extension)
-            .with_collect_stat(state.config().collect_statistics());
+        let options = ListingOptions::new(format).with_file_extension(extension);
 
         let table_path = ListingTableUrl::parse(path)?;
         let schema = options.infer_schema(&state, &table_path).await?;
@@ -351,7 +349,9 @@ impl RunOpt {
             .with_listing_options(options)
             .with_schema(schema);
 
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        Ok(Arc::new(ListingTable::try_new(config)?.with_cache(
+            ctx.runtime_env().cache_manager.get_file_statistic_cache(),
+        )))
     }
 
     fn iterations(&self) -> usize {

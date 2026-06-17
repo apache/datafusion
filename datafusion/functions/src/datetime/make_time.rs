@@ -142,10 +142,11 @@ impl ScalarUDFImpl for MakeTimeFunc {
                 let minutes = minutes.as_primitive::<Int32Type>();
                 let seconds = seconds.as_primitive::<Int32Type>();
 
-                let nulls = NullBuffer::union(
-                    NullBuffer::union(hours.nulls(), minutes.nulls()).as_ref(),
+                let nulls = NullBuffer::union_many([
+                    hours.nulls(),
+                    minutes.nulls(),
                     seconds.nulls(),
-                );
+                ]);
 
                 let mut values = Vec::with_capacity(len);
                 for i in 0..len {

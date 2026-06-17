@@ -256,8 +256,8 @@ where
         let end = offset_window[1];
         let len = end - start;
 
-        // array is null
-        if len == O::usize_as(0) {
+        // array or index is null
+        if array.is_null(row_index) || indexes.is_null(row_index) {
             mutable.extend_nulls(1);
             continue;
         }
@@ -602,14 +602,12 @@ fn combine_input_nulls(
     to_array: &Int64Array,
     stride: Option<&Int64Array>,
 ) -> Option<NullBuffer> {
-    [
+    NullBuffer::union_many([
         array.nulls(),
         from_array.nulls(),
         to_array.nulls(),
         stride.and_then(|s| s.nulls()),
-    ]
-    .into_iter()
-    .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls))
+    ])
 }
 
 fn general_array_slice<O: OffsetSizeTrait>(
@@ -1064,11 +1062,9 @@ where
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let start = offset_window[0];
-        let end = offset_window[1];
-        let len = end - start;
 
         // array is null
-        if len == O::usize_as(0) {
+        if array.is_null(row_index) {
             mutable.extend_nulls(1);
             continue;
         }
@@ -1101,14 +1097,18 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{array_element_udf, general_list_view_array_slice};
+    use super::{
+        array_element_udf, general_array_any_value, general_array_element,
+        general_list_view_array_slice,
+    };
     use arrow::array::{
         Array, ArrayRef, GenericListViewArray, Int32Array, Int64Array, ListViewArray,
         cast::AsArray,
     };
-    use arrow::buffer::ScalarBuffer;
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{Column, DFSchema, Result};
+    use arrow::array::{ListArray, RecordBatch};
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::{DataType, Field, Int32Type};
+    use datafusion_common::{Column, DFSchema, Result, assert_batches_eq};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{Expr, ExprSchemable};
     use std::collections::HashMap;
@@ -1167,6 +1167,73 @@ mod tests {
             ExprSchemable::get_type(&udf_expr, &schema).unwrap(),
             fixed_size_list_type
         );
+    }
+
+    #[test]
+    fn test_array_element_null_handling() -> Result<()> {
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 4, 5]));
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+
+        let list_array = ListArray::new(field, offsets, values, Some(nulls));
+        let indexes = Int64Array::from(vec![1, 1, 1]);
+
+        let result = general_array_element(&list_array, &indexes)?;
+
+        let expected = [
+            "+--------+",
+            "| result |",
+            "+--------+",
+            "| 1      |",
+            "|        |",
+            "| 5      |",
+            "+--------+",
+        ];
+
+        let batch = RecordBatch::try_from_iter([("result", result)])?;
+
+        assert_batches_eq!(expected, &[batch]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_element_null_index_with_non_zero_buffer_returns_null() -> Result<()> {
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4)]),
+            Some(vec![Some(5)]),
+        ]);
+        let indexes = Int64Array::new(
+            ScalarBuffer::from(vec![1, 1, 1]),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let result = general_array_element(&list_array, &indexes)?;
+        let expected = Int32Array::from(vec![Some(1), None, Some(5)]);
+
+        assert_eq!(result.as_primitive::<Int32Type>(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_any_null_handling() -> Result<()> {
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 4, 5]));
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+
+        let list_array = ListArray::new(field, offsets, values, Some(nulls));
+
+        let result = general_array_any_value(&list_array)?;
+
+        assert!(!result.is_null(0));
+        assert!(result.is_null(1));
+        assert!(!result.is_null(2));
+
+        Ok(())
     }
 
     #[test]

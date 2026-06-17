@@ -16,13 +16,16 @@
 // under the License.
 
 use datafusion_common::datatype::DataTypeExt;
-use datafusion_expr::expr::{AggregateFunctionParams, Unnest, WindowFunctionParams};
+use datafusion_expr::expr::{
+    AggregateFunctionParams, HigherOrderFunction, WindowFunctionParams,
+};
+use datafusion_expr::expr::{Lambda, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Array, BinaryOperator, CaseWhen, DuplicateTreatment, Expr as AstExpr, Function,
-    Ident, Interval, ObjectName, OrderByOptions, Subscript, TimezoneInfo, UnaryOperator,
-    ValueWithSpan,
+    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
+    Subscript, TimezoneInfo, UnaryOperator,
 };
+use sqlparser::ast::{CaseWhen, DuplicateTreatment, OrderByOptions, ValueWithSpan};
 use std::sync::Arc;
 use std::vec;
 
@@ -145,6 +148,32 @@ impl Unparser<'_> {
                 ))))
             }
             Expr::Column(col) => self.col_to_sql(col),
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsDistinctFrom,
+                right,
+            }) => {
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
+
+                Ok(ast::Expr::Nested(Box::new(ast::Expr::IsDistinctFrom(
+                    Box::new(l),
+                    Box::new(r),
+                ))))
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::IsNotDistinctFrom,
+                right,
+            }) => {
+                let l = self.expr_to_sql_inner(left.as_ref())?;
+                let r = self.expr_to_sql_inner(right.as_ref())?;
+
+                Ok(ast::Expr::Nested(Box::new(ast::Expr::IsNotDistinctFrom(
+                    Box::new(l),
+                    Box::new(r),
+                ))))
+            }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
@@ -288,7 +317,8 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                escape_char: escape_char.map(|c| SingleQuotedString(c.to_string())),
+                escape_char: escape_char
+                    .map(|c| SingleQuotedString(c.to_string()).into()),
                 any: false,
             }),
             Expr::Like(Like {
@@ -304,7 +334,7 @@ impl Unparser<'_> {
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                         escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string())),
+                            .map(|c| SingleQuotedString(c.to_string()).into()),
                         any: false,
                     })
                 } else {
@@ -313,7 +343,7 @@ impl Unparser<'_> {
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                         escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string())),
+                            .map(|c| SingleQuotedString(c.to_string()).into()),
                         any: false,
                     })
                 }
@@ -552,6 +582,36 @@ impl Unparser<'_> {
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+                let func_name = func.name();
+
+                if let Some(expr) = self
+                    .dialect
+                    .higher_order_function_to_sql_overrides(self, func_name, args)?
+                {
+                    return Ok(expr);
+                }
+
+                self.function_to_sql_internal(func_name, args)
+            }
+            Expr::Lambda(Lambda { params, body }) => {
+                Ok(ast::Expr::Lambda(ast::LambdaFunction {
+                    params: ast::OneOrManyWithParens::Many(
+                        params
+                            .iter()
+                            .map(|param| ast::LambdaFunctionParameter {
+                                name: self.new_ident_quoted_if_needs(param.clone()),
+                                data_type: None,
+                            })
+                            .collect(),
+                    ),
+                    body: Box::new(self.expr_to_sql_inner(body)?),
+                    syntax: ast::LambdaSyntax::Arrow,
+                }))
+            }
+            Expr::LambdaVariable(l) => Ok(ast::Expr::Identifier(
+                self.new_ident_quoted_if_needs(l.name.clone()),
+            )),
         }
     }
 
@@ -567,11 +627,11 @@ impl Unparser<'_> {
             "get_field" => self.get_field_to_sql(args),
             "map" => self.map_to_sql(args),
             // TODO: support for the construct and access functions of the `map` type
-            _ => self.scalar_function_to_sql_internal(func_name, args),
+            _ => self.function_to_sql_internal(func_name, args),
         }
     }
 
-    fn scalar_function_to_sql_internal(
+    fn function_to_sql_internal(
         &self,
         func_name: &str,
         args: &[Expr],
@@ -1324,6 +1384,8 @@ impl Unparser<'_> {
             ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::ListView(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::LargeListView(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::Date32(Some(_)) => {
                 let date = v
                     .to_array()?
@@ -1839,17 +1901,19 @@ mod tests {
     use std::{sync::Arc, vec};
 
     use crate::unparser::dialect::SqliteDialect;
-    use arrow::array::{LargeListArray, ListArray};
+    use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        ColumnarValue, HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda,
         Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col, cube, exists,
-        grouping_set, interval_datetime_lit, interval_year_month_lit, lit, not,
-        not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast, when,
+        grouping_set, interval_datetime_lit, interval_year_month_lit, lambda, lambda_var,
+        lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast,
+        when,
     };
     use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
@@ -1902,6 +1966,41 @@ mod tests {
         }
     }
     // See sql::tests for E2E tests.
+
+    #[derive(Debug, Hash, Eq, PartialEq)]
+    struct DummyHigherOrderUDF;
+
+    impl HigherOrderUDFImpl for DummyHigherOrderUDF {
+        fn name(&self) -> &str {
+            "dummy_higher_order_function"
+        }
+
+        fn signature(&self) -> &datafusion_expr::HigherOrderSignature {
+            unimplemented!()
+        }
+
+        fn lambda_parameters(
+            &self,
+            _step: usize,
+            _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
+            unimplemented!()
+        }
+
+        fn return_field_from_args(
+            &self,
+            _args: datafusion_expr::HigherOrderReturnFieldArgs,
+        ) -> Result<FieldRef> {
+            unimplemented!()
+        }
+
+        fn invoke_with_args(
+            &self,
+            _args: datafusion_expr::HigherOrderFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
 
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
@@ -1986,6 +2085,13 @@ mod tests {
                     .call(vec![col("a"), col("b")])
                     .is_not_null(),
                 r#"dummy_udf(a, b) IS NOT NULL"#,
+            ),
+            (
+                Expr::HigherOrderFunction(HigherOrderFunction::new(
+                    Arc::new(HigherOrderUDF::new_from_impl(DummyHigherOrderUDF)),
+                    vec![col("a"), lambda(["v"], -lambda_var("v"))],
+                )),
+                r#"dummy_higher_order_function(a, (v) -> -v)"#,
             ),
             (
                 Expr::Like(Like {
@@ -2346,6 +2452,28 @@ mod tests {
                 Expr::Literal(
                     ScalarValue::LargeList(Arc::new(
                         LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                            Some(vec![Some(1), Some(2), Some(3)]),
+                        ]),
+                    )),
+                    None,
+                ),
+                "[1, 2, 3]",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::ListView(Arc::new(
+                        ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                            Some(vec![Some(1), Some(2), Some(3)]),
+                        ]),
+                    )),
+                    None,
+                ),
+                "[1, 2, 3]",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::LargeListView(Arc::new(
+                        LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
                             Some(vec![Some(1), Some(2), Some(3)]),
                         ]),
                     )),
@@ -3525,5 +3653,75 @@ mod tests {
             assert_eq!(actual, expected);
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_bigquery_dialect_overrides() -> Result<()> {
+        let bigquery_dialect: Arc<dyn Dialect> = Arc::new(BigQueryDialect::new());
+        let unparser = Unparser::new(bigquery_dialect.as_ref());
+
+        // date_field_extract_style: EXTRACT instead of date_part
+        let expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::new_from_impl(
+                datafusion_functions::datetime::date_part::DatePartFunc::new(),
+            )),
+            args: vec![lit("YEAR"), col("date_col")],
+        });
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "EXTRACT(YEAR FROM `date_col`)");
+
+        // interval_style: SQL standard instead of PostgresVerbose
+        let expr = interval_year_month_lit("3 months");
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "INTERVAL '3' MONTH");
+
+        // float64_ast_dtype: FLOAT64 instead of DOUBLE
+        let expr = cast(col("a"), DataType::Float64);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS FLOAT64)");
+
+        // supports_column_alias_in_table_alias: false
+        assert!(!bigquery_dialect.supports_column_alias_in_table_alias());
+
+        // utf8_cast_dtype: STRING instead of VARCHAR
+        let expr = cast(col("a"), DataType::Utf8);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS STRING)");
+
+        // large_utf8_cast_dtype: STRING instead of TEXT
+        let expr = cast(col("a"), DataType::LargeUtf8);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS STRING)");
+
+        // timestamp_cast_dtype: TIMESTAMP (no WITH TIME ZONE)
+        let expr = cast(
+            col("a"),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+        );
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS TIMESTAMP)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_distinct_from() {
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("c1")),
+            Operator::IsDistinctFrom,
+            Box::new(lit(true)),
+        ));
+
+        let sql = expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(c1 IS DISTINCT FROM true)");
+
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("c1")),
+            Operator::IsNotDistinctFrom,
+            Box::new(lit(true)),
+        ));
+
+        let sql = expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(c1 IS NOT DISTINCT FROM true)");
     }
 }

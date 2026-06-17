@@ -106,14 +106,20 @@ pub async fn from_aggregate_rel(
                     not_impl_err!("Aggregate without aggregate function is not supported")
                 }
             };
-            aggr_exprs.push(agg_func?.as_ref().clone());
+            aggr_exprs.push(std::sync::Arc::unwrap_or_clone(agg_func?));
         }
 
-        // Ensure that all expressions have a unique name
+        // Ensure that all expressions have a unique name. Both grouping and
+        // aggregate expressions become fields in the aggregate's output schema,
+        // so they share a single namespace.
         let mut name_tracker = NameTracker::new();
         let group_exprs = group_exprs
-            .iter()
-            .map(|e| name_tracker.get_uniquely_named_expr(e.clone()))
+            .into_iter()
+            .map(|e| name_tracker.get_uniquely_named_expr(e))
+            .collect::<Result<Vec<Expr>, _>>()?;
+        let aggr_exprs = aggr_exprs
+            .into_iter()
+            .map(|e| name_tracker.get_uniquely_named_expr(e))
             .collect::<Result<Vec<Expr>, _>>()?;
 
         input.aggregate(group_exprs, aggr_exprs)?.build()

@@ -20,10 +20,9 @@ use datafusion_catalog::Session;
 use datafusion_common::plan_err;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_format::FileFormat;
-use datafusion_execution::config::SessionConfig;
 use datafusion_expr::SortExpr;
 use futures::StreamExt;
-use futures::{TryStreamExt, future};
+use futures::TryStreamExt;
 use itertools::Itertools;
 use std::sync::Arc;
 
@@ -38,13 +37,6 @@ pub struct ListingOptions {
     /// The expected partition column names in the folder structure.
     /// See [Self::with_table_partition_cols] for details
     pub table_partition_cols: Vec<(String, DataType)>,
-    /// Set true to try to guess statistics from the files.
-    /// This can add a lot of overhead as it will usually require files
-    /// to be opened and at least partially parsed.
-    pub collect_stat: bool,
-    /// Group files to avoid that the number of partitions exceeds
-    /// this limit
-    pub target_partitions: usize,
     /// Optional pre-known sort order(s). Must be `SortExpr`s.
     ///
     /// DataFusion may take advantage of this ordering to omit sorts
@@ -68,28 +60,13 @@ impl ListingOptions {
     /// Default values:
     /// - use default file extension filter
     /// - no input partition to discover
-    /// - one target partition
-    /// - do not collect statistics
     pub fn new(format: Arc<dyn FileFormat>) -> Self {
         Self {
             file_extension: format.get_ext(),
             format,
             table_partition_cols: vec![],
-            collect_stat: false,
-            target_partitions: 1,
             file_sort_order: vec![],
         }
-    }
-
-    /// Set options from [`SessionConfig`] and returns self.
-    ///
-    /// Currently this sets `target_partitions` and `collect_stat`
-    /// but if more options are added in the future that need to be coordinated
-    /// they will be synchronized through this method.
-    pub fn with_session_config_options(mut self, config: &SessionConfig) -> Self {
-        self = self.with_target_partitions(config.target_partitions());
-        self = self.with_collect_stat(config.collect_statistics());
-        self
     }
 
     /// Set file extension on [`ListingOptions`] and returns self.
@@ -205,40 +182,6 @@ impl ListingOptions {
         self
     }
 
-    /// Set stat collection on [`ListingOptions`] and returns self.
-    ///
-    /// ```
-    /// # use std::sync::Arc;
-    /// # use datafusion_catalog_listing::ListingOptions;
-    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
-    ///
-    /// let listing_options =
-    ///     ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
-    ///
-    /// assert_eq!(listing_options.collect_stat, true);
-    /// ```
-    pub fn with_collect_stat(mut self, collect_stat: bool) -> Self {
-        self.collect_stat = collect_stat;
-        self
-    }
-
-    /// Set number of target partitions on [`ListingOptions`] and returns self.
-    ///
-    /// ```
-    /// # use std::sync::Arc;
-    /// # use datafusion_catalog_listing::ListingOptions;
-    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
-    ///
-    /// let listing_options =
-    ///     ListingOptions::new(Arc::new(ParquetFormat::default())).with_target_partitions(8);
-    ///
-    /// assert_eq!(listing_options.target_partitions, 8);
-    /// ```
-    pub fn with_target_partitions(mut self, target_partitions: usize) -> Self {
-        self.target_partitions = target_partitions;
-        self
-    }
-
     /// Set file sort order on [`ListingOptions`] and returns self.
     ///
     /// ```
@@ -263,7 +206,15 @@ impl ListingOptions {
     /// Infer the schema of the files at the given path on the provided object store.
     ///
     /// If the table_path contains one or more files (i.e. it is a directory /
-    /// prefix of files) their schema is merged by calling [`FileFormat::infer_schema`]
+    /// prefix of files) their schema is merged by calling [`FileFormat::infer_schema`].
+    ///
+    /// Returns a `Plan` error if `table_path` contains no files at all (e.g. an
+    /// empty or non-existent directory), since an inferred schema with zero
+    /// columns produces confusing "column not found" errors at query time.
+    /// Callers that need to support empty locations must declare an explicit
+    /// schema instead of relying on inference. Locations that contain files
+    /// which all happen to be 0-byte are still accepted — the empty files are
+    /// filtered out before format-specific inference runs.
     ///
     /// Note: The inferred schema does not include any partitioning columns.
     ///
@@ -275,13 +226,26 @@ impl ListingOptions {
     ) -> datafusion_common::Result<SchemaRef> {
         let store = state.runtime_env().object_store(table_path)?;
 
-        let files: Vec<_> = table_path
+        let all_files: Vec<_> = table_path
             .list_all_files(state, store.as_ref(), &self.file_extension)
             .await?
-            // Empty files cannot affect schema but may throw when trying to read for it
-            .try_filter(|object_meta| future::ready(object_meta.size > 0))
             .try_collect()
             .await?;
+
+        if all_files.is_empty() {
+            return plan_err!(
+                "No files found at {}. \
+                 Cannot infer schema from an empty location; either add data files \
+                 or declare an explicit schema for the table.",
+                table_path
+            );
+        }
+
+        // Empty files cannot affect schema but may throw when trying to read for it
+        let files: Vec<_> = all_files
+            .into_iter()
+            .filter(|object_meta| object_meta.size > 0)
+            .collect();
 
         let schema = self.format.infer_schema(state, &store, &files).await?;
 

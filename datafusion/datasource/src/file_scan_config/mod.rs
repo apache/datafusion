@@ -24,12 +24,12 @@ use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
     file_compression_type::FileCompressionType, file_stream::FileStreamBuilder,
-    source::DataSource, statistics::MinMaxStatistics,
+    file_stream::work_source::SharedWorkSource, source::DataSource,
+    statistics::MinMaxStatistics,
 };
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::Fields;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
 };
@@ -38,6 +38,7 @@ use datafusion_execution::{
 };
 use datafusion_expr::Operator;
 
+use crate::source::OpenArgs;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -55,7 +56,8 @@ use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
-use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
+use std::any::Any;
+use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// [`FileScanConfig`] represents scanning data from a group of files
 ///
@@ -75,14 +77,11 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 ///
 /// # Example
 /// ```
-/// # use std::any::Any;
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
 /// # use object_store::ObjectStore;
 /// # use datafusion_common::Result;
-/// # use datafusion_common::tree_node::TreeNodeRecursion;
 /// # use datafusion_datasource::file::FileSource;
-/// # use datafusion_physical_plan::PhysicalExpr;
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -106,14 +105,12 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// # };
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
-/// #  fn as_any(&self) -> &dyn Any { self  }
 /// #  fn table_schema(&self) -> &TableSchema { &self.table_schema }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
 /// #  fn file_type(&self) -> &str { "parquet" }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
-/// #  fn apply_expressions(&self, _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 /// #  }
 /// # impl ParquetSource {
 /// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
@@ -241,7 +238,9 @@ pub struct FileScanConfig {
 ///     ];
 ///
 ///     // Create table schema with file schema and partition columns
-///     let table_schema = TableSchema::new(file_schema, partition_cols);
+///     let table_schema = TableSchema::builder(file_schema)
+///         .with_table_partition_cols(partition_cols)
+///         .build();
 ///
 ///     // Create a builder for scanning Parquet files from a local filesystem
 ///     let config = FileScanConfigBuilder::new(
@@ -580,6 +579,15 @@ impl DataSource for FileScanConfig {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        self.open_with_args(OpenArgs::new(partition, context))
+    }
+
+    fn open_with_args(&self, args: OpenArgs) -> Result<SendableRecordBatchStream> {
+        let OpenArgs {
+            partition,
+            context,
+            sibling_state,
+        } = args;
         let object_store = context.runtime_env().object_store(&self.object_store_url)?;
         let batch_size = self
             .batch_size
@@ -589,16 +597,21 @@ impl DataSource for FileScanConfig {
 
         let morselizer = source.create_morselizer(object_store, self, partition)?;
 
+        // Extract the shared work source from the sibling state if it exists.
+        // This allows multiple sibling streams to steal work from a single
+        // shared queue of unopened files.
+        let shared_work_source = sibling_state
+            .as_ref()
+            .and_then(|state| state.downcast_ref::<SharedWorkSource>())
+            .cloned();
+
         let stream = FileStreamBuilder::new(self)
             .with_partition(partition)
+            .with_shared_work_source(shared_work_source)
             .with_morselizer(morselizer)
             .with_metrics(source.metrics())
             .build()?;
         Ok(Box::pin(cooperative(stream)))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
@@ -620,7 +633,7 @@ impl DataSource for FileScanConfig {
                             .iter()
                             .map(|proj_expr| {
                                 if let Some(column) =
-                                    proj_expr.expr.as_any().downcast_ref::<Column>()
+                                    proj_expr.expr.downcast_ref::<Column>()
                                 {
                                     if column.name() == proj_expr.alias {
                                         column.name().to_string()
@@ -926,14 +939,19 @@ impl DataSource for FileScanConfig {
     ///   │     → SortExec removed, fetch (LIMIT) pushed to DataSourceExec
     ///   │
     ///   ├─► FileSource returns Inexact
-    ///   │     (reverse_row_groups=true)
-    ///   │     → SortExec kept, scan optimized
+    ///   │     (e.g. column_in_file_schema: opener will reorder RGs at runtime)
+    ///   │     → rebuild_with_source: sort files by stats; if the post-sort
+    ///   │       file groups are non-overlapping AND the request now validates
+    ///   │       AND no NULLs sit in the sort columns of non-last files,
+    ///   │       upgrade back to Exact (SortExec removed). Otherwise stays
+    ///   │       Inexact and SortExec is kept while the scan is still
+    ///   │       optimised via `sort_order_for_reorder` / `reverse_row_groups`.
     ///   │
     ///   └─► FileSource returns Unsupported
-    ///         (ordering stripped because files in wrong order)
+    ///         (e.g. expression sort key or partition column)
     ///         → try_sort_file_groups_by_statistics():
     ///           1. Sort files within each group by min/max statistics
-    ///           2. Re-check: non-overlapping + ordering valid?
+    ///           2. Re-check: non-overlapping + ordering valid + no NULLs?
     ///              YES → Exact → SortExec removed
     ///              NO  → Inexact (files reordered, Sort stays)
     /// ```
@@ -962,8 +980,42 @@ impl DataSource for FileScanConfig {
                 }
             }
             SortOrderPushdownResult::Inexact { inner } => {
-                Ok(SortOrderPushdownResult::Inexact {
-                    inner: Arc::new(self.rebuild_with_source(inner, false, order)?),
+                let mut config = self.rebuild_with_source(inner, false, order)?;
+                // `rebuild_with_source` reorders files by stats; if the
+                // post-sort files are non-overlapping AND the request now
+                // validates against the new file groups, `output_ordering`
+                // is preserved and we can upgrade back to Exact. This
+                // restores the sort-elimination behaviour that lived in
+                // the `Unsupported` → `try_sort_file_groups_by_statistics`
+                // path before #21956 routed `column_in_file_schema` cases
+                // here.
+                if config.output_ordering.is_empty() {
+                    return Ok(SortOrderPushdownResult::Inexact {
+                        inner: Arc::new(config),
+                    });
+                }
+                // Upgrading to Exact: the post-sort file groups are
+                // non-overlapping and each file's declared ordering
+                // re-validates, so reading the files in their natural
+                // (declared-sorted) order already yields the requested
+                // ordering — exactly like the `Unsupported` → Exact path,
+                // which reads files in natural order too.
+                //
+                // Drop the runtime row-group reorder hints the Inexact
+                // source carried (`sort_order_for_reorder` /
+                // `reverse_row_groups`) by restoring the original,
+                // hint-free source. With the `SortExec` removed those
+                // hints are not just redundant but unsafe: for a DESC
+                // request the opener sorts row groups ASC-by-min and then
+                // reverses them, which reorders two row groups within a
+                // single file that share the same `min` incorrectly
+                // (e.g. a file `[10,8,8,8]` whose row groups are
+                // `[10,8]` and `[8,8]` would stream as `8,8,10,8`).
+                // The `SortExec` used to mask this; once it is gone the
+                // reordered stream is the final, wrong answer.
+                config.file_source = Arc::clone(&self.file_source);
+                Ok(SortOrderPushdownResult::Exact {
+                    inner: Arc::new(config),
                 })
             }
             SortOrderPushdownResult::Unsupported => {
@@ -984,12 +1036,18 @@ impl DataSource for FileScanConfig {
         Some(Arc::new(new_config))
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Delegate to the file source
-        self.file_source.apply_expressions(f)
+    /// Create any shared state that should be passed between sibling streams
+    /// during one execution.
+    ///
+    /// This returns `None` when sibling streams must not share work, such as
+    /// when file order must be preserved or the file groups define the output
+    /// partitioning needed for the rest of the plan
+    fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        if self.preserve_order || self.partitioned_by_file_group {
+            return None;
+        }
+
+        Some(Arc::new(SharedWorkSource::from_config(self)) as Arc<dyn Any + Send + Sync>)
     }
 }
 
@@ -1039,7 +1097,7 @@ impl FileScanConfig {
     }
 
     /// Get the table partition columns
-    pub fn table_partition_cols(&self) -> &Vec<FieldRef> {
+    pub fn table_partition_cols(&self) -> &Fields {
         self.file_source.table_schema().table_partition_cols()
     }
 
@@ -1075,7 +1133,7 @@ impl FileScanConfig {
             // (e.g. due to unnecessary projections being removed)
             reassign_expr_columns(Arc::clone(expr), schema)
                 .ok()
-                .and_then(|expr| match expr.as_any().downcast_ref::<BinaryExpr>() {
+                .and_then(|expr| match expr.downcast_ref::<BinaryExpr>() {
                     Some(expr) if expr.op() == &Operator::Eq => {
                         Some((Arc::clone(expr.left()), Arc::clone(expr.right())))
                     }
@@ -1367,20 +1425,32 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::TableSchema;
+    use crate::source::DataSourceExec;
     use crate::test_util::col;
+    use crate::{TableSchema, TableSchemaBuilder};
     use crate::{
         generate_test_files, test_util::MockSource, tests::aggr_test_schema,
         verify_sort_integrity,
     };
 
+    use arrow::array::{Int32Array, RecordBatch};
     use arrow::datatypes::Field;
     use datafusion_common::ColumnStatistics;
     use datafusion_common::stats::Precision;
+    use datafusion_common::{Result, assert_batches_eq, internal_err};
+    use datafusion_execution::TaskContext;
     use datafusion_expr::SortExpr;
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::projection::ProjectionExpr;
+    use datafusion_physical_expr::projection::ProjectionExprs;
+    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::execution_plan::collect;
+    use futures::FutureExt as _;
+    use futures::StreamExt as _;
+    use futures::stream;
+    use object_store::ObjectStore;
+    use std::fmt::Debug;
 
     #[derive(Clone)]
     struct InexactSortPushdownSource {
@@ -1400,15 +1470,11 @@ mod tests {
     impl FileSource for InexactSortPushdownSource {
         fn create_file_opener(
             &self,
-            _object_store: Arc<dyn object_store::ObjectStore>,
+            _object_store: Arc<dyn ObjectStore>,
             _base_config: &FileScanConfig,
             _partition: usize,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
             unimplemented!()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn table_schema(&self) -> &TableSchema {
@@ -1435,13 +1501,6 @@ mod tests {
             Ok(SortOrderPushdownResult::Inexact {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
     }
 
@@ -1793,10 +1852,14 @@ mod tests {
         statistics: Statistics,
         table_partition_cols: Vec<Field>,
     ) -> FileScanConfig {
-        let table_schema = TableSchema::new(
-            file_schema,
-            table_partition_cols.into_iter().map(Arc::new).collect(),
-        );
+        let table_schema = TableSchema::builder(file_schema)
+            .with_table_partition_cols(
+                table_partition_cols
+                    .into_iter()
+                    .map(Arc::new)
+                    .collect::<Fields>(),
+            )
+            .build();
         FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("test:///").unwrap(),
             Arc::new(MockSource::new(table_schema.clone())),
@@ -1812,14 +1875,13 @@ mod tests {
         let file_schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
 
-        let table_schema = TableSchema::new(
-            Arc::clone(&file_schema),
-            vec![Arc::new(Field::new(
+        let table_schema = TableSchemaBuilder::from(&file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
                 "date",
                 wrap_partition_type_in_dict(DataType::Utf8),
                 false,
-            ))],
-        );
+            ))])
+            .build();
 
         let file_source: Arc<dyn FileSource> =
             Arc::new(MockSource::new(table_schema.clone()));
@@ -1881,7 +1943,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
 
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
 
         // Create a file source with a filter
         let file_source: Arc<dyn FileSource> = Arc::new(
@@ -1918,7 +1980,7 @@ mod tests {
 
         for class in eq_group.iter() {
             for expr in class.iter() {
-                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                if let Some(col) = expr.downcast_ref::<Column>() {
                     assert_ne!(
                         col.name(),
                         "c2",
@@ -1934,7 +1996,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
 
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
 
         let file_source: Arc<dyn FileSource> =
             Arc::new(MockSource::new(table_schema.clone()));
@@ -1996,10 +2058,14 @@ mod tests {
         )];
         let file = PartitionedFile::new("test_file.parquet", 100);
 
-        let table_schema = TableSchema::new(
-            Arc::clone(&schema),
-            partition_cols.iter().map(|f| Arc::new(f.clone())).collect(),
-        );
+        let table_schema = TableSchemaBuilder::from(&schema)
+            .with_table_partition_cols(
+                partition_cols
+                    .iter()
+                    .map(|f| Arc::new(f.clone()))
+                    .collect::<Fields>(),
+            )
+            .build();
 
         let file_source: Arc<dyn FileSource> =
             Arc::new(MockSource::new(table_schema.clone()));
@@ -2035,7 +2101,10 @@ mod tests {
             Some(vec![0, 2])
         );
         assert_eq!(new_config.limit, Some(10));
-        assert_eq!(*new_config.table_partition_cols(), partition_cols);
+        assert_eq!(
+            *new_config.table_partition_cols(),
+            Fields::from(partition_cols)
+        );
         assert_eq!(new_config.file_groups.len(), 1);
         assert_eq!(new_config.file_groups[0].len(), 1);
         assert_eq!(
@@ -2245,7 +2314,7 @@ mod tests {
         let file_group = FileGroup::new(vec![PartitionedFile::new("test.parquet", 1024)])
             .with_statistics(Arc::new(file_group_stats));
 
-        let table_schema = TableSchema::new(Arc::clone(&schema), vec![]);
+        let table_schema = TableSchema::from(&schema);
 
         // Create a FileScanConfig with projection: only keep columns 0 and 2
         let config = FileScanConfigBuilder::new(
@@ -2286,6 +2355,88 @@ mod tests {
         // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
+    }
+
+    /// Regression test for reusing a `DataSourceExec` after its execution-local
+    /// shared work queue has been drained.
+    ///
+    /// This test uses a single file group with two files so the scan creates a
+    /// shared unopened-file queue. Executing after `reset_state` must recreate
+    /// the shared queue and return the same rows again.
+    #[tokio::test]
+    async fn reset_state_recreates_shared_work_source() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let file_source = Arc::new(
+            MockSource::new(Arc::clone(&schema))
+                .with_file_opener(Arc::new(ResetStateTestFileOpener { schema })),
+        );
+
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_group(FileGroup::new(vec![
+                    PartitionedFile::new("file1.parquet", 100),
+                    PartitionedFile::new("file2.parquet", 100),
+                ]))
+                .build();
+
+        let exec: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Running the same scan after resetting the state, should
+        // produce the same answer.
+        let first_run = collect(Arc::clone(&exec), Arc::clone(&task_ctx)).await?;
+        let reset_exec = exec.reset_state()?;
+        let second_run = collect(reset_exec, task_ctx).await?;
+
+        let expected = [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 1     |",
+            "| 2     |",
+            "+-------+",
+        ];
+        assert_batches_eq!(expected, &first_run);
+        assert_batches_eq!(expected, &second_run);
+
+        Ok(())
+    }
+
+    /// Test-only `FileOpener` that turns file names like `file1.parquet` into a
+    /// single-batch stream containing that numeric value
+    #[derive(Debug)]
+    struct ResetStateTestFileOpener {
+        schema: SchemaRef,
+    }
+
+    impl crate::file_stream::FileOpener for ResetStateTestFileOpener {
+        fn open(
+            &self,
+            file: PartitionedFile,
+        ) -> Result<crate::file_stream::FileOpenFuture> {
+            let value = file
+                .object_meta
+                .location
+                .as_ref()
+                .trim_start_matches("file")
+                .trim_end_matches(".parquet")
+                .parse::<i32>()
+                .expect("invalid test file name");
+            let schema = Arc::clone(&self.schema);
+            Ok(async move {
+                let batch = RecordBatch::try_new(
+                    schema,
+                    vec![Arc::new(Int32Array::from(vec![value]))],
+                )
+                .expect("test batch should be valid");
+                Ok(stream::iter(vec![Ok(batch)]).boxed())
+            }
+            .boxed())
+        }
     }
 
     #[test]
@@ -2350,10 +2501,7 @@ mod tests {
             Partitioning::Hash(exprs, num_partitions) => {
                 assert_eq!(num_partitions, 3);
                 assert_eq!(exprs.len(), 1);
-                assert_eq!(
-                    exprs[0].as_any().downcast_ref::<Column>().unwrap().name(),
-                    "date"
-                );
+                assert_eq!(exprs[0].downcast_ref::<Column>().unwrap().name(), "date");
             }
             _ => panic!("Expected Hash partitioning"),
         }
@@ -2383,7 +2531,7 @@ mod tests {
                 assert_eq!(exprs.len(), 2);
                 let col_names: Vec<_> = exprs
                     .iter()
-                    .map(|e| e.as_any().downcast_ref::<Column>().unwrap().name())
+                    .map(|e| e.downcast_ref::<Column>().unwrap().name())
                     .collect();
                 assert_eq!(col_names, vec!["year", "month"]);
             }
@@ -2397,7 +2545,7 @@ mod tests {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
 
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
 
         let file_groups = vec![FileGroup::new(vec![
@@ -2420,7 +2568,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let pushed_files = pushed_config.file_groups[0].files();
@@ -2433,7 +2580,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let pushed_files = pushed_config.file_groups[0].files();
@@ -2476,15 +2622,11 @@ mod tests {
     impl FileSource for ExactSortPushdownSource {
         fn create_file_opener(
             &self,
-            _object_store: Arc<dyn object_store::ObjectStore>,
+            _object_store: Arc<dyn ObjectStore>,
             _base_config: &FileScanConfig,
             _partition: usize,
         ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
             unimplemented!()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn table_schema(&self) -> &TableSchema {
@@ -2512,20 +2654,13 @@ mod tests {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
         }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
-        }
     }
 
     #[test]
     fn sort_pushdown_unsupported_source_files_get_sorted() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![FileGroup::new(vec![
@@ -2545,7 +2680,6 @@ mod tests {
             panic!("Expected Inexact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2560,7 +2694,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_already_sorted() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![FileGroup::new(vec![
@@ -2584,7 +2718,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_descending_sort() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![FileGroup::new(vec![
@@ -2610,7 +2744,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2624,7 +2757,7 @@ mod tests {
     fn sort_pushdown_exact_source_non_overlapping_returns_exact() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -2648,7 +2781,6 @@ mod tests {
             panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         assert!(!pushed_config.output_ordering.is_empty());
@@ -2659,7 +2791,7 @@ mod tests {
     fn sort_pushdown_exact_source_overlapping_downgraded_to_inexact() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -2683,7 +2815,6 @@ mod tests {
             panic!("Expected Inexact (downgraded), got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         assert!(pushed_config.output_ordering.is_empty());
@@ -2694,7 +2825,7 @@ mod tests {
     fn sort_pushdown_exact_source_out_of_order_returns_exact() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -2718,7 +2849,6 @@ mod tests {
             panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2733,7 +2863,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_single_file_groups() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![
@@ -2759,7 +2889,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_multiple_groups() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![
@@ -2784,7 +2914,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files0 = pushed_config.file_groups[0].files();
@@ -2800,7 +2929,7 @@ mod tests {
     fn sort_pushdown_unsupported_source_partial_statistics() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let file_groups = vec![
@@ -2825,7 +2954,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files0 = pushed_config.file_groups[0].files();
@@ -2841,7 +2969,7 @@ mod tests {
     fn sort_pushdown_inexact_source_with_statistics_sorting() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
 
         let file_groups = vec![FileGroup::new(vec![
@@ -2860,7 +2988,6 @@ mod tests {
             panic!("Expected Inexact result");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         let files = pushed_config.file_groups[0].files();
@@ -2879,7 +3006,7 @@ mod tests {
         // time (all values in group 0 < group 1), degrading to single-threaded I/O.
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -2911,7 +3038,6 @@ mod tests {
             panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
 
@@ -2938,7 +3064,7 @@ mod tests {
         // sorting (which would undo the reversal). The result is Inexact.
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(InexactSortPushdownSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -2964,7 +3090,6 @@ mod tests {
             panic!("Expected Inexact for reverse scan, got {result:?}");
         };
         let pushed_config = inner
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
 
@@ -3006,7 +3131,7 @@ mod tests {
         // Should NOT upgrade to Exact — NULLs would appear in wrong position.
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
@@ -3039,7 +3164,7 @@ mod tests {
         // Files are non-overlapping, no NULLs → should upgrade to Exact
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
-        let table_schema = TableSchema::new(Arc::clone(&file_schema), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
         let file_source = Arc::new(MockSource::new(table_schema));
 
         let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));

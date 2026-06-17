@@ -28,8 +28,13 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility, col, logical_plan::LogicalPlan,
+    ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
+    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
+    LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ValueOrLambda, Volatility, col,
+    expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
+    lambda,
+    logical_plan::LogicalPlan,
     test::function_stub::sum_udaf,
 };
 use datafusion_functions::{string, unicode};
@@ -51,7 +56,9 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
-use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
+use sqlparser::dialect::{
+    DatabricksDialect, Dialect, GenericDialect, HiveDialect, MySqlDialect,
+};
 use sqlparser::parser::Parser;
 
 mod cases;
@@ -93,7 +100,7 @@ fn parse_decimals_3() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1),1,1)
+    Projection: Decimal128(0.1,1,1)
       EmptyRelation: rows=1
     "
     );
@@ -107,7 +114,7 @@ fn parse_decimals_4() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1),2,2)
+    Projection: Decimal128(0.01,2,2)
       EmptyRelation: rows=1
     "
     );
@@ -121,7 +128,7 @@ fn parse_decimals_5() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(10),2,1)
+    Projection: Decimal128(1.0,2,1)
       EmptyRelation: rows=1
     "
     );
@@ -135,7 +142,7 @@ fn parse_decimals_6() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1001),4,2)
+    Projection: Decimal128(10.01,4,2)
       EmptyRelation: rows=1
     "
     );
@@ -149,7 +156,7 @@ fn parse_decimals_7() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1000000000000000000000),22,2)
+    Projection: Decimal128(10000000000000000000.00,22,2)
       EmptyRelation: rows=1
     "
     );
@@ -177,7 +184,7 @@ fn parse_decimals_9() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(18446744073709551616),20,0)
+    Projection: Decimal128(18446744073709551616,20,0)
       EmptyRelation: rows=1
     "
     );
@@ -718,7 +725,7 @@ fn plan_insert_no_target_columns() {
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named nonexistent. \
+    "Schema error: No field named nonexistent.\n\
     Valid fields are id, price."
 )]
 #[case::target_column_count_mismatch(
@@ -1674,7 +1681,10 @@ fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() 
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @r#"Schema error: No field named doesnotexist. Valid fields are "sum(person.age)", person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person."😀"."#
+        @r#"
+Schema error: No field named doesnotexist.
+Valid fields are "sum(person.age)", person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person."😀".
+"#
     );
 }
 
@@ -2051,6 +2061,16 @@ fn select_where_compound_identifiers() {
       Filter: public.aggregate_test_100.c3 > Float64(0.1)
         TableScan: public.aggregate_test_100
     "
+    );
+}
+
+#[test]
+fn select_unknown_deep_compound_identifier_returns_error() {
+    let err = logical_plan("SELECT a.b.c.d.e.f")
+        .expect_err("six-part compound identifier should be unsupported");
+    assert_contains!(
+        err.to_string(),
+        "This feature is not implemented: compound identifier: [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"]"
     );
 }
 
@@ -3478,13 +3498,26 @@ fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }
 
+fn logical_plan_with_config(
+    sql: &str,
+    config_options: datafusion_common::config::ConfigOptions,
+) -> Result<LogicalPlan> {
+    logical_plan_with_config_and_options(sql, config_options, ParserOptions::default())
+}
+
 fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<LogicalPlan> {
     let dialect = &GenericDialect {};
     logical_plan_with_dialect_and_options(sql, dialect, options)
 }
 
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
-    let state = MockSessionState::default().with_aggregate_function(sum_udaf());
+    let state = MockSessionState::default()
+        .with_aggregate_function(sum_udaf())
+        .with_higher_order_function(Arc::new(HigherOrderUDF::new_from_impl(
+            MockArrayReduce::new(),
+        )))
+        .with_scalar_function(make_array_udf())
+        .with_expr_planner(Arc::new(CustomExprPlanner {})); // plan array literal
     let context = MockContextProvider { state };
     let planner = SqlToRel::new(&context);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
@@ -3497,7 +3530,25 @@ fn logical_plan_with_dialect_and_options(
     dialect: &dyn Dialect,
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
-    let state = MockSessionState::default()
+    let state = mock_session_state();
+
+    logical_plan_from_state(sql, dialect, options, state)
+}
+
+fn logical_plan_with_config_and_options(
+    sql: &str,
+    config_options: datafusion_common::config::ConfigOptions,
+    options: ParserOptions,
+) -> Result<LogicalPlan> {
+    let dialect = &GenericDialect {};
+    let mut state = mock_session_state();
+    state.config_options = config_options;
+
+    logical_plan_from_state(sql, dialect, options, state)
+}
+
+fn mock_session_state() -> MockSessionState {
+    MockSessionState::default()
         .with_scalar_function(Arc::new(unicode::character_length().as_ref().clone()))
         .with_scalar_function(Arc::new(string::concat().as_ref().clone()))
         .with_scalar_function(Arc::new(make_udf(
@@ -3534,8 +3585,15 @@ fn logical_plan_with_dialect_and_options(
         .with_aggregate_function(grouping_udaf())
         .with_window_function(rank_udwf())
         .with_window_function(row_number_udwf())
-        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+}
 
+fn logical_plan_from_state(
+    sql: &str,
+    dialect: &dyn Dialect,
+    options: ParserOptions,
+    state: MockSessionState,
+) -> Result<LogicalPlan> {
     let context = MockContextProvider { state };
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
@@ -3804,6 +3862,39 @@ fn in_subquery_uncorrelated() {
             TableScan: person
         SubqueryAlias: p
           TableScan: person
+    "
+    );
+}
+
+#[test]
+fn subquery_order_by_is_eliminated_by_default() {
+    let sql = "SELECT x.* FROM (SELECT id FROM person ORDER BY id) x";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan.display_indent_schema().to_string(),
+        @r"
+    Projection: x.id [id:UInt32]
+      SubqueryAlias: x [id:UInt32]
+        Projection: person.id [id:UInt32]
+          TableScan: person [id:UInt32, first_name:Utf8, last_name:Utf8, age:Int32, state:Utf8, salary:Float64, birth_date:Timestamp(ns), 😀:Int32]
+    "
+    );
+}
+
+#[test]
+fn subquery_order_by_can_be_preserved() {
+    let sql = "SELECT x.* FROM (SELECT id FROM person ORDER BY id) x";
+    let mut config_options = datafusion_common::config::ConfigOptions::new();
+    config_options.sql_parser.enable_subquery_sort_elimination = false;
+    let plan = logical_plan_with_config(sql, config_options).unwrap();
+    assert_snapshot!(
+        plan.display_indent_schema().to_string(),
+        @r"
+    Projection: x.id [id:UInt32]
+      SubqueryAlias: x [id:UInt32]
+        Sort: person.id ASC NULLS LAST [id:UInt32]
+          Projection: person.id [id:UInt32]
+            TableScan: person [id:UInt32, first_name:Utf8, last_name:Utf8, age:Int32, state:Utf8, salary:Float64, birth_date:Timestamp(ns), 😀:Int32]
     "
     );
 }
@@ -4890,7 +4981,7 @@ fn assert_field_not_found(mut err: DataFusionError, name: &str) {
 }
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for tests
     let _ = env_logger::try_init();
@@ -5254,4 +5345,160 @@ Sort: customer.c_custkey ASC NULLS LAST
       TableScan: customer
 "#
     );
+}
+
+#[test]
+fn test_progressive_lambda_parameters() {
+    let sql = "select array_reduce([1.0, 2.0], 0, (acc, v) -> acc + v, v -> -v)";
+
+    let expr = logical_plan_with_dialect(sql, &DatabricksDialect)
+        .unwrap()
+        .head_output_expr()
+        .unwrap()
+        .unwrap();
+
+    // taking into account the user defined coercion that coerced the List(Float64) to List(Float32),
+    // test that merge accumulator parameter and finish parameter correctly got the type of the merge
+    // lambda output (Float32 instead of Float64), and not the initial value type (Int64)
+    assert_eq!(
+        expr,
+        Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(MockArrayReduce::new())),
+            vec![
+                Expr::ScalarFunction(ScalarFunction::new_udf(
+                    make_array_udf(),
+                    // note the array being reduced is List(Float64)
+                    vec![
+                        Expr::Literal(1.0f64.into(), None),
+                        Expr::Literal(2.0f64.into(), None)
+                    ]
+                )),
+                Expr::Literal(0i64.into(), None),
+                lambda(
+                    ["acc", "v"],
+                    // lambda vars are Float32
+                    resolved_lambda_var("acc", DataType::Float32)
+                        + resolved_lambda_var("v", DataType::Float32)
+                ),
+                lambda(["v"], -resolved_lambda_var("v", DataType::Float32)),
+            ]
+        ))
+    )
+}
+
+fn resolved_lambda_var(name: &str, dt: DataType) -> Expr {
+    Expr::LambdaVariable(LambdaVariable::new(
+        name.to_string(),
+        Some(Arc::new(Field::new(name.to_string(), dt, true))),
+    ))
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct MockArrayReduce {
+    signature: HigherOrderSignature,
+}
+
+impl MockArrayReduce {
+    #[expect(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+        }
+    }
+}
+
+impl HigherOrderUDFImpl for MockArrayReduce {
+    fn name(&self) -> &str {
+        "array_reduce"
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn signature(&self) -> &HigherOrderSignature {
+        &self.signature
+    }
+
+    fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [_list, initial] = arg_types else {
+            unreachable!()
+        };
+
+        Ok(vec![
+            DataType::new_list(DataType::Float32, true),
+            initial.clone(),
+        ])
+    }
+
+    fn lambda_parameters(
+        &self,
+        step: usize,
+        fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ) -> Result<LambdaParametersProgress> {
+        // optional finish not supported for simplicity
+        let [
+            ValueOrLambda::Value(list),
+            ValueOrLambda::Value(initial_value),
+            ValueOrLambda::Lambda(merge),
+            ValueOrLambda::Lambda(_finish),
+        ] = fields
+        else {
+            unreachable!()
+        };
+
+        let list_field = match list.data_type() {
+            DataType::List(field) => field,
+            _ => unreachable!(),
+        };
+
+        Ok(match (step, merge) {
+            (0, None) => {
+                // at the first step, we use the initial_value as merge accumulator,
+                // and return None for finish since we don't know the output of merge
+                LambdaParametersProgress::Partial(vec![
+                    // merge
+                    Some(vec![Arc::clone(initial_value), Arc::clone(list_field)]),
+                    // finish
+                    None,
+                ])
+            }
+            (1, Some(accumulator)) | (0, Some(accumulator)) => {
+                // now we can use the merge output as it's accumulator and
+                // as the finish parameter
+                LambdaParametersProgress::Complete(vec![
+                    // merge
+                    vec![Arc::clone(accumulator), Arc::clone(list_field)],
+                    // finish
+                    vec![Arc::clone(accumulator)],
+                ])
+            }
+            (1, None) => {
+                unreachable!()
+            }
+            _ => todo!(),
+        })
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: HigherOrderReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        // optional finish not supported for simplicity
+        let [
+            ValueOrLambda::Value(_list),
+            ValueOrLambda::Value(_initial_value),
+            ValueOrLambda::Lambda(_merge),
+            ValueOrLambda::Lambda(finish),
+        ] = args.arg_fields
+        else {
+            unreachable!()
+        };
+
+        Ok(Arc::clone(finish))
+    }
+
+    fn invoke_with_args(&self, _args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
+        unreachable!()
+    }
 }

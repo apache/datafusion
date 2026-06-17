@@ -34,12 +34,17 @@ pub mod binary_map {
 pub mod async_scalar_function;
 pub mod equivalence;
 pub mod expressions;
+pub mod higher_order_function;
 pub mod intervals;
 mod partitioning;
 mod physical_expr;
 pub mod planner;
 pub mod projection;
+/// Shared test helpers for the `try_to_proto` / `try_from_proto` unit tests
+#[cfg(all(test, feature = "proto"))]
+pub(crate) mod proto_test_util;
 mod scalar_function;
+pub mod scalar_subquery;
 pub mod simplifier;
 pub mod statistics;
 pub mod utils;
@@ -53,10 +58,12 @@ pub mod execution_props {
 
 pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use analysis::{AnalysisContext, ExprBoundaries, analyze};
+pub use datafusion_common::SplitPoint;
 pub use equivalence::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, calculate_union,
 };
-pub use partitioning::{Distribution, Partitioning};
+pub use expressions::{DynamicFilterTracker, DynamicFilterTracking};
+pub use partitioning::{Distribution, Partitioning, RangePartitioning};
 pub use physical_expr::{
     add_offset_to_expr, add_offset_to_physical_sort_exprs, create_lex_ordering,
     create_ordering, create_physical_sort_expr, create_physical_sort_exprs,
@@ -69,6 +76,7 @@ pub use datafusion_physical_expr_common::sort_expr::{
     PhysicalSortRequirement,
 };
 
+pub use higher_order_function::HigherOrderFunctionExpr;
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
 pub use simplifier::PhysicalExprSimplifier;

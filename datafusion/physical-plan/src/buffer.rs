@@ -18,7 +18,7 @@
 //! [`BufferExec`] decouples production and consumption on messages by buffering the input in the
 //! background up to a certain capacity.
 
-use crate::execution_plan::{CardinalityEffect, SchedulingType};
+use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -31,7 +31,6 @@ use crate::{
 };
 use arrow::array::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -102,7 +101,8 @@ impl BufferExec {
     /// Builds a new [BufferExec] with the provided capacity in bytes.
     pub fn new(input: Arc<dyn ExecutionPlan>, capacity: usize) -> Self {
         let properties = PlanProperties::clone(input.properties())
-            .with_scheduling_type(SchedulingType::Cooperative);
+            .with_scheduling_type(SchedulingType::Cooperative)
+            .with_evaluation_type(EvaluationType::Eager);
 
         Self {
             input,
@@ -166,13 +166,6 @@ impl ExecutionPlan for BufferExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

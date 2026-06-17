@@ -1,0 +1,897 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init_data.slt.part
+
+## array_has/array_has_all/array_has_any
+
+# If lhs is empty, return false
+query B
+select array_has([], 1);
+----
+false
+
+# If rhs is Null, we returns Null
+query BBB
+select array_has([], null),
+       array_has([1, 2, 3], null),
+       array_has([null, 1], null);
+----
+NULL NULL NULL
+
+# Always return false if not contained even if list has null elements
+query BB
+select array_has([1, null, 2], 3),
+       array_has([null, null, null], 3);
+----
+false false
+
+#TODO: array_has_all and array_has_any cannot handle NULL
+#query BBBB
+#select array_has_any([], null),
+#       array_has_any([1, 2, 3], null),
+#       array_has_all([], null),
+#       array_has_all([1, 2, 3], null);
+#----
+#false false false false
+
+query BBBBBBBBBBBB
+select array_has(make_array(1,2), 1),
+       array_has(make_array(1,2,NULL), 1),
+       array_has(make_array([2,3], [3,4]), make_array(2,3)),
+       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([1], [2,3])),
+       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([4,5], [6])),
+       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([1])),
+       array_has(make_array([[[1]]]), make_array([[1]])),
+       array_has(make_array([[[1]]], [[[1], [2]]]), make_array([[2]])),
+       array_has(make_array([[[1]]], [[[1], [2]]]), make_array([[1], [2]])),
+       list_has(make_array(1,2,3), 4),
+       array_contains(make_array(1,2,3), 3),
+       list_contains(make_array(1,2,3), 0)
+;
+----
+true true true true true false true false true false true false
+
+query BBBBBBBBBBBB
+select array_has(arrow_cast(make_array(1,2), 'LargeList(Int64)'), 1),
+       array_has(arrow_cast(make_array(1,2,NULL), 'LargeList(Int64)'), 1),
+       array_has(arrow_cast(make_array([2,3], [3,4]), 'LargeList(List(Int64))'), make_array(2,3)),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'LargeList(List(List(Int64)))'), make_array([1], [2,3])),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'LargeList(List(List(Int64)))'), make_array([4,5], [6])),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'LargeList(List(List(Int64)))'), make_array([1])),
+       array_has(arrow_cast(make_array([[[1]]]), 'LargeList(List(List(List(Int64))))'), make_array([[1]])),
+       array_has(arrow_cast(make_array([[[1]]], [[[1], [2]]]), 'LargeList(List(List(List(Int64))))'), make_array([[2]])),
+       array_has(arrow_cast(make_array([[[1]]], [[[1], [2]]]), 'LargeList(List(List(List(Int64))))'), make_array([[1], [2]])),
+       list_has(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), 4),
+       array_contains(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), 3),
+       list_contains(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), 0)
+;
+----
+true true true true true false true false true false true false
+
+query BBBBBBBBBBBB
+select array_has(arrow_cast(make_array(1,2), 'FixedSizeList(2, Int64)'), 1),
+       array_has(arrow_cast(make_array(1,2,NULL), 'FixedSizeList(3, Int64)'), 1),
+       array_has(arrow_cast(make_array([2,3], [3,4]), 'FixedSizeList(2, List(Int64))'), make_array(2,3)),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'FixedSizeList(2, List(List(Int64)))'), make_array([1], [2,3])),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'FixedSizeList(2, List(List(Int64)))'), make_array([4,5], [6])),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'FixedSizeList(2, List(List(Int64)))'), make_array([1])),
+       array_has(arrow_cast(make_array([[[1]]]), 'FixedSizeList(1, List(List(List(Int64))))'), make_array([[1]])),
+       array_has(arrow_cast(make_array([[[1]]], [[[1], [2]]]), 'FixedSizeList(2, List(List(List(Int64))))'), make_array([[2]])),
+       array_has(arrow_cast(make_array([[[1]]], [[[1], [2]]]), 'FixedSizeList(2, List(List(List(Int64))))'), make_array([[1], [2]])),
+       list_has(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), 4),
+       array_contains(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), 3),
+       list_contains(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), 0)
+;
+----
+true true true true true false true false true false true false
+
+query BBB
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from array_has_table_1D;
+----
+true true true
+false false false
+
+query BBB
+select array_has(arrow_cast(column1, 'LargeList(Int64)'), column2),
+       array_has_all(arrow_cast(column3, 'LargeList(Int64)'), arrow_cast(column4, 'LargeList(Int64)')),
+       array_has_any(arrow_cast(column5, 'LargeList(Int64)'), arrow_cast(column6, 'LargeList(Int64)'))
+from array_has_table_1D;
+----
+true true true
+false false false
+
+query B
+select array_has(column1, column2)
+from array_has_table_null;
+----
+true
+true
+false
+false
+false
+
+# array_has([1, 3, 5], 1) -> true (array contains element)
+# array_has([], 1) -> false (empty array, not null)
+# array_has(null, 1) -> null (null array)
+query BB
+select array_has(column1, column2), array_has(null, column2)
+from array_has_table_empty;
+----
+true NULL
+false NULL
+NULL NULL
+
+# Test for issue: array_has should return false for empty arrays, not null
+# This test demonstrates the correct behavior with COALESCE to show the distinction
+# array_has([1, 3, 5], 1) -> 'true'
+# array_has([], 1) -> 'false' (empty array should return false)
+# array_has(null, 1) -> 'null' (null array should return null)
+query ?T
+SELECT column1, COALESCE(CAST(array_has(column1, column2) AS VARCHAR), 'null')
+from array_has_table_empty;
+----
+[1, 3, 5] true
+[] false
+NULL null
+
+query B
+select array_has(column1, column2)
+from fixed_size_array_has_table_1D;
+----
+true
+false
+
+query BB
+select array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from fixed_size_array_has_table_1D;
+----
+true true
+false false
+
+query BBB
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from array_has_table_1D_Float;
+----
+true true false
+false false true
+
+query BBB
+select array_has(arrow_cast(column1, 'LargeList(Float64)'), column2),
+       array_has_all(arrow_cast(column3, 'LargeList(Float64)'), arrow_cast(column4, 'LargeList(Float64)')),
+       array_has_any(arrow_cast(column5, 'LargeList(Float64)'), arrow_cast(column6, 'LargeList(Float64)'))
+from array_has_table_1D_Float;
+----
+true true false
+false false true
+
+query B
+select array_has(column1, column2)
+from fixed_size_array_has_table_1D_Float;
+----
+true
+false
+
+query BB
+select array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from fixed_size_array_has_table_1D_Float;
+----
+true true
+false true
+
+query BBB
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from array_has_table_1D_Boolean;
+----
+false true true
+true true true
+
+query BBB
+select array_has(arrow_cast(column1, 'LargeList(Boolean)'), column2),
+       array_has_all(arrow_cast(column3, 'LargeList(Boolean)'), arrow_cast(column4, 'LargeList(Boolean)')),
+       array_has_any(arrow_cast(column5, 'LargeList(Boolean)'), arrow_cast(column6, 'LargeList(Boolean)'))
+from array_has_table_1D_Boolean;
+----
+false true true
+true true true
+
+query B
+select array_has(column1, column2)
+from fixed_size_array_has_table_1D_Boolean;
+----
+false
+true
+
+query BB
+select array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from fixed_size_array_has_table_1D_Boolean;
+----
+true true
+true true
+
+query BBBBBBBB
+select array_has_all(column3, arrow_cast(column4,'LargeList(Boolean)')),
+       array_has_any(column5, arrow_cast(column6,'LargeList(Boolean)')),
+       array_has_all(column3, arrow_cast(column4,'List(Boolean)')),
+       array_has_any(column5, arrow_cast(column6,'List(Boolean)')),
+       array_has_all(arrow_cast(column3, 'LargeList(Boolean)'), column4),
+       array_has_any(arrow_cast(column5, 'LargeList(Boolean)'), column6),
+       array_has_all(arrow_cast(column3, 'List(Boolean)'), column4),
+       array_has_any(arrow_cast(column5, 'List(Boolean)'), column6)
+from fixed_size_array_has_table_1D_Boolean;
+----
+true true true true true true true true
+true true true true true true true true
+
+query BBB
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from array_has_table_1D_UTF8;
+----
+true true false
+false false true
+
+query BBB
+select array_has(arrow_cast(column1, 'LargeList(Utf8)'), column2),
+       array_has_all(arrow_cast(column3, 'LargeList(Utf8)'), arrow_cast(column4, 'LargeList(Utf8)')),
+       array_has_any(arrow_cast(column5, 'LargeList(Utf8)'), arrow_cast(column6, 'LargeList(Utf8)'))
+from array_has_table_1D_UTF8;
+----
+true true false
+false false true
+
+query B
+select array_has(column1, column2)
+from fixed_size_array_has_table_1D_UTF8;
+----
+true
+false
+
+query BB
+select array_has(column1, column2),
+       array_has_all(column3, column4)
+from array_has_table_2D;
+----
+false true
+true false
+
+query BB
+select array_has(arrow_cast(column1, 'LargeList(List(Int64))'), column2),
+       array_has_all(arrow_cast(column3, 'LargeList(List(Int64))'), arrow_cast(column4, 'LargeList(List(Int64))'))
+from array_has_table_2D;
+----
+false true
+true false
+
+query B
+select array_has(arrow_cast(column1, 'LargeList(List(Int64))'), column2)
+from fixed_size_array_has_table_2D;
+----
+false
+false
+
+query B
+select array_has_all(arrow_cast(column3, 'LargeList(List(Int64))'), arrow_cast(column4, 'LargeList(List(Int64))'))
+from fixed_size_array_has_table_2D;
+----
+true
+false
+
+query B
+select array_has_all(column1, column2)
+from array_has_table_2D_float;
+----
+true
+false
+
+query B
+select array_has_all(arrow_cast(column1, 'LargeList(List(Float64))'), arrow_cast(column2, 'LargeList(List(Float64))'))
+from array_has_table_2D_float;
+----
+true
+false
+
+query B
+select array_has_all(column1, column2)
+from fixed_size_array_has_table_2D_float;
+----
+false
+false
+
+query B
+select array_has(column1, column2) from array_has_table_3D;
+----
+false
+true
+false
+false
+true
+false
+true
+
+query B
+select array_has(arrow_cast(column1, 'LargeList(List(List(Int64)))'), column2) from array_has_table_3D;
+----
+false
+true
+false
+false
+true
+false
+true
+
+query B
+select array_has(column1, column2) from fixed_size_array_has_table_3D;
+----
+false
+false
+false
+false
+true
+true
+true
+
+query BBBB
+select array_has(column1, make_array(5, 6)),
+       array_has(column1, make_array(7, NULL)),
+       array_has(column2, 5.5),
+       array_has(column3, 'o')
+from arrays;
+----
+false false false true
+true false true false
+true false false true
+false true false false
+NULL NULL false false
+false false NULL false
+false false false NULL
+
+query BBBB
+select array_has(arrow_cast(column1, 'LargeList(List(Int64))'), make_array(5, 6)),
+       array_has(arrow_cast(column1, 'LargeList(List(Int64))'), make_array(7, NULL)),
+       array_has(arrow_cast(column2, 'LargeList(Float64)'), 5.5),
+       array_has(arrow_cast(column3, 'LargeList(Utf8)'), 'o')
+from arrays;
+----
+false false false true
+true false true false
+true false false true
+false true false false
+NULL NULL false false
+false false NULL false
+false false false NULL
+
+# Row 1: [[NULL,2],[3,NULL]], [1.1,2.2,3.3], ['L','o','r','e','m']
+# Row 2: [[3,4],[5,6]], [NULL,5.5,6.6], ['i','p',NULL,'u','m']
+# Row 3: [[5,6],[7,8]], [7.7,8.8,9.9], ['d',NULL,'l','o','r']
+# Row 4: [[7,NULL],[9,10]], [10.1,NULL,12.2], ['s','i','t','a','b']
+# Row 5: NULL, [13.3,14.4,15.5], ['a','m','e','t','x']
+# Row 6: [[11,12],[13,14]], NULL, [',','a','b','c','d']
+# Row 7: [[15,16],[NULL,18]], [16.6,17.7,18.8], NULL
+query BBBB
+select array_has(column1, make_array(5, 6)),
+       array_has(column1, make_array(7, NULL)),
+       array_has(column2, 5.5),
+       array_has(column3, 'o')
+from fixed_size_arrays;
+----
+false false false true
+true false true false
+true false false true
+false true false false
+NULL NULL false false
+false false NULL false
+false false false NULL
+
+query BBBB
+select array_has_all(make_array(1,2,3), []),
+       array_has_any(make_array(1,2,3), []),
+       array_has_all(make_array('aa','bb','cc'), []),
+       array_has_any(make_array('aa','bb','cc'), [])
+;
+----
+true false true false
+
+query BBBBBBBBBBBBB
+select array_has_all(make_array(1,2,3), make_array(1,3)),
+       array_has_all(make_array(1,2,3), make_array(1,4)),
+       array_has_all(make_array([1,2], [3,4]), make_array([1,2])),
+       array_has_all(make_array([1,2], [3,4]), make_array([1,3])),
+       array_has_all(make_array([1,2], [3,4]), make_array([1,2], [3,4], [5,6])),
+       array_has_all(make_array([[1,2,3]]), make_array([[1]])),
+       array_has_all(make_array([[1,2,3]]), make_array([[1,2,3]])),
+       array_has_any(make_array(1,2,3), make_array(1,10,100)),
+       array_has_any(make_array(1,2,3), make_array(10,100)),
+       array_has_any(make_array([1,2], [3,4]), make_array([1,10], [10,4])),
+       array_has_any(make_array([1,2], [3,4]), make_array([10,20], [3,4])),
+       array_has_any(make_array([[1,2,3]]), make_array([[1,2,3], [4,5,6]])),
+       array_has_any(make_array([[1,2,3]]), make_array([[1,2,3]], [[4,5,6]]))
+;
+----
+true false true false false false true true false false true false true
+
+query BBBBBBBBBBBBB
+select array_has_all(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_cast(make_array(1,3), 'LargeList(Int64)')),
+       array_has_all(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(1,4), 'LargeList(Int64)')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,2]), 'LargeList(List(Int64))')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,3]), 'LargeList(List(Int64))')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,2], [3,4], [5,6]), 'LargeList(List(Int64))')),
+       array_has_all(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1]]), 'LargeList(List(List(Int64)))')),
+       array_has_all(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))')),
+       array_has_any(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(1,10,100), 'LargeList(Int64)')),
+       array_has_any(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(10,100),'LargeList(Int64)')),
+       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,10], [10,4]), 'LargeList(List(Int64))')),
+       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([10,20], [3,4]), 'LargeList(List(Int64))')),
+       array_has_any(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3], [4,5,6]]), 'LargeList(List(List(Int64)))')),
+       array_has_any(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3]], [[4,5,6]]), 'LargeList(List(List(Int64)))'))
+;
+----
+true false true false false false true true false false true false true
+
+query BBBBBBBBBBBBB
+select array_has_all(arrow_cast(make_array(1,2,3), 'FixedSizeList(3, Int64)'), arrow_cast(make_array(1, 3), 'FixedSizeList(2, Int64)')),
+       array_has_all(arrow_cast(make_array(1,2,3),'FixedSizeList(3, Int64)'), arrow_cast(make_array(1, 4), 'FixedSizeList(2, Int64)')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array([1,2]), 'FixedSizeList(1, List(Int64))')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array([1,3]), 'FixedSizeList(1, List(Int64))')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array([1,2], [3,4], [5,6]), 'FixedSizeList(3, List(Int64))')),
+       array_has_all(arrow_cast(make_array([[1,2,3]]), 'FixedSizeList(1, List(List(Int64)))'), arrow_cast(make_array([[1]]), 'FixedSizeList(1, List(List(Int64)))')),
+       array_has_all(arrow_cast(make_array([[1,2,3]]), 'FixedSizeList(1, List(List(Int64)))'), arrow_cast(make_array([[1,2,3]]), 'FixedSizeList(1, List(List(Int64)))')),
+       array_has_any(arrow_cast(make_array(1,2,3),'FixedSizeList(3, Int64)'), arrow_cast(make_array(1,10,100), 'FixedSizeList(3, Int64)')),
+       array_has_any(arrow_cast(make_array(1,2,3),'FixedSizeList(3, Int64)'), arrow_cast(make_array(10, 100),'FixedSizeList(2, Int64)')),
+       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array([1,10], [10,4]), 'FixedSizeList(2, List(Int64))')),
+       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'FixedSizeList(2, List(Int64))'), arrow_cast(make_array([10,20], [3,4]), 'FixedSizeList(2, List(Int64))')),
+       array_has_any(arrow_cast(make_array([[1,2,3]]), 'FixedSizeList(1, List(List(Int64)))'), arrow_cast(make_array([[1,2,3], [4,5,6]]), 'FixedSizeList(1, List(List(Int64)))')),
+       array_has_any(arrow_cast(make_array([[1,2,3]]), 'FixedSizeList(1, List(List(Int64)))'), arrow_cast(make_array([[1,2,3]], [[4,5,6]]), 'FixedSizeList(2, List(List(Int64)))'))
+;
+----
+true false true false false false true true false false true false true
+
+# rewrite various array_has operations to InList where the haystack is a literal list
+# NB that `col in (a, b, c)` is simplified to OR if there are <= 3 elements, so we make 4-element haystack lists
+
+query I
+with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE needle IN ('7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c');
+----
+1
+
+query TT
+explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE needle IN ('7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c');
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: test
+04)------SubqueryAlias: t
+05)--------Projection:
+06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
+07)------------TableScan: generate_series() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+
+query I
+with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE needle = ANY(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c']);
+----
+1
+
+query TT
+explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE needle = ANY(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c']);
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: test
+04)------SubqueryAlias: t
+05)--------Projection:
+06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
+07)------------TableScan: generate_series() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+
+query I
+with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE array_has(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], needle);
+----
+1
+
+query TT
+explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE array_has(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], needle);
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: test
+04)------SubqueryAlias: t
+05)--------Projection:
+06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
+07)------------TableScan: generate_series() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+
+query I
+with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE array_has(arrow_cast(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], 'LargeList(Utf8View)'), needle);
+----
+1
+
+query TT
+explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE array_has(arrow_cast(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], 'LargeList(Utf8View)'), needle);
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: test
+04)------SubqueryAlias: t
+05)--------Projection:
+06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
+07)------------TableScan: generate_series() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+
+query I
+with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE array_has(arrow_cast(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], 'FixedSizeList(4, Utf8View)'), needle);
+----
+1
+
+query TT
+explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE array_has(arrow_cast(['7f4b18de3cfeb9b4ac78c381ee2ad278', 'a', 'b', 'c'], 'FixedSizeList(4, Utf8View)'), needle);
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: test
+04)------SubqueryAlias: t
+05)--------Projection:
+06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
+07)------------TableScan: generate_series() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+
+query I
+with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE array_has([needle], needle);
+----
+100000
+
+# The optimizer does not currently eliminate the filter;
+# Instead, it's rewritten as `IS NULL OR NOT NULL` due to SQL null semantics
+query TT
+explain with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
+select count(*) from test WHERE array_has([needle], needle);
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: test
+04)------SubqueryAlias: t
+05)--------Projection:
+06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IS NOT NULL OR Boolean(NULL)
+07)------------TableScan: generate_series() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IS NOT NULL OR NULL, projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+
+# any operator
+query ?
+select column3 from arrays where 'L'=any(column3);
+----
+[L, o, r, e, m]
+
+query I
+select count(*) from arrays where 'L'=any(column3);
+----
+1
+
+query I
+select count(*) from arrays where 'X'=any(column3);
+----
+0
+
+# any operator with comparison operators
+# Use inline arrays so the test data is visible and the needle (5)
+# falls within the range of some arrays but not others.
+statement ok
+CREATE TABLE any_op_test AS VALUES
+  (1, make_array(1, 2, 3)),
+  (2, make_array(4, 5, 6)),
+  (3, make_array(7, 8, 9)),
+  (4, make_array(3, 5, 7));
+
+# 5 > ANY(arr): true when array_min < 5
+# row1: min=1 < 5 ✓, row2: min=4 < 5 ✓, row3: min=7 < 5 ✗, row4: min=3 < 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 > any(column2) order by column1;
+----
+1 [1, 2, 3]
+2 [4, 5, 6]
+4 [3, 5, 7]
+
+# 5 >= ANY(arr): true when array_min <= 5
+# row1: min=1 <= 5 ✓, row2: min=4 <= 5 ✓, row3: min=7 <= 5 ✗, row4: min=3 <= 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 >= any(column2) order by column1;
+----
+1 [1, 2, 3]
+2 [4, 5, 6]
+4 [3, 5, 7]
+
+# 5 < ANY(arr): true when array_max > 5
+# row1: max=3 > 5 ✗, row2: max=6 > 5 ✓, row3: max=9 > 5 ✓, row4: max=7 > 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 < any(column2) order by column1;
+----
+2 [4, 5, 6]
+3 [7, 8, 9]
+4 [3, 5, 7]
+
+# 5 <= ANY(arr): true when array_max >= 5
+# row1: max=3 >= 5 ✗, row2: max=6 >= 5 ✓, row3: max=9 >= 5 ✓, row4: max=7 >= 5 ✓
+query I?
+select column1, column2 from any_op_test where 5 <= any(column2) order by column1;
+----
+2 [4, 5, 6]
+3 [7, 8, 9]
+4 [3, 5, 7]
+
+# 5 <> ANY(arr): true when array_min != 5 OR array_max != 5
+# row1: [1,2,3] min=1!=5 ✓, row2: [4,5,6] min=4!=5 ✓, row3: [7,8,9] min=7!=5 ✓, row4: [3,5,7] min=3!=5 ✓
+query I?
+select column1, column2 from any_op_test where 5 <> any(column2) order by column1;
+----
+1 [1, 2, 3]
+2 [4, 5, 6]
+3 [7, 8, 9]
+4 [3, 5, 7]
+
+# For a single-element array where the element equals the needle, <> should return false
+query B
+select 5 <> any(make_array(5));
+----
+false
+
+# For a uniform array [5,5,5], <> should also return false
+query B
+select 5 <> any(make_array(5, 5, 5));
+----
+false
+
+# Empty array: all operators should return false (no elements satisfy the condition)
+query B
+select 5 = any(make_array());
+----
+false
+
+query B
+select 5 <> any(make_array());
+----
+false
+
+query B
+select 5 > any(make_array());
+----
+false
+
+query B
+select 5 < any(make_array());
+----
+false
+
+query B
+select 5 >= any(make_array());
+----
+false
+
+query B
+select 5 <= any(make_array());
+----
+false
+
+# Mixed NULL + non-NULL array where no non-NULL element satisfies the condition
+# These return false (NULLs are skipped by array_min/array_max)
+query B
+select 5 > any(make_array(6, NULL));
+----
+false
+
+query B
+select 5 < any(make_array(3, NULL));
+----
+false
+
+query B
+select 5 >= any(make_array(6, NULL));
+----
+false
+
+query B
+select 5 <= any(make_array(3, NULL));
+----
+false
+
+# Mixed NULL + non-NULL array where a non-NULL element satisfies the condition
+query B
+select 5 > any(make_array(3, NULL));
+----
+true
+
+query B
+select 5 < any(make_array(6, NULL));
+----
+true
+
+query B
+select 5 >= any(make_array(5, NULL));
+----
+true
+
+query B
+select 5 <= any(make_array(5, NULL));
+----
+true
+
+query B
+select 5 <> any(make_array(3, NULL));
+----
+true
+
+query B
+select 5 <> any(make_array(5, NULL));
+----
+false
+
+# All-NULL array: all operators should return false
+query B
+select 5 > any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 < any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 >= any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 <= any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+query B
+select 5 <> any(make_array(NULL::INT, NULL::INT));
+----
+false
+
+# NULL left operand: should return NULL for non-empty arrays
+query B
+select NULL > any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL < any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL >= any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL <= any(make_array(1, 2, 3));
+----
+NULL
+
+query B
+select NULL <> any(make_array(1, 2, 3));
+----
+NULL
+
+# NULL left operand with empty array: should return false
+query B
+select NULL > any(make_array());
+----
+false
+
+# NULL array: should return NULL
+query B
+select 5 > any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 < any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 >= any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 <= any(NULL::INT[]);
+----
+NULL
+
+query B
+select 5 <> any(NULL::INT[]);
+----
+NULL
+
+statement ok
+DROP TABLE any_op_test;
+
+
+include ./cleanup.slt.part
