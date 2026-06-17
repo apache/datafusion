@@ -544,10 +544,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     /// Panics if the cumulative byte length exceeds `O::MAX`.
     #[inline]
     pub fn append_value(&mut self, value: &str) {
-        self.value_buffer.extend_from_slice(value.as_bytes());
-        let next_offset =
-            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
-        self.offsets_buffer.push(next_offset);
+        self.try_append_value(value)
+            .expect("byte array offset overflow");
     }
 
     /// See [`BulkNullStringArrayBuilder::append_placeholder`].
@@ -556,10 +554,8 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     /// prefer [`Self::try_append_placeholder`].
     #[inline]
     pub fn append_placeholder(&mut self) {
-        let next_offset =
-            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
-        self.offsets_buffer.push(next_offset);
-        self.placeholder_count += 1;
+        self.try_append_placeholder()
+            .expect("byte array offset overflow");
     }
 
     /// Fallible variant of [`Self::append_byte_map`].
@@ -598,11 +594,10 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
     #[inline]
-    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], mut map: F) {
-        self.value_buffer.extend(src.iter().map(|&b| map(b)));
-        let next_offset =
-            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
-        self.offsets_buffer.push(next_offset);
+    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
+        // SAFETY: caller upholds this method's UTF-8 contract.
+        unsafe { self.try_append_byte_map(src, map) }
+            .expect("byte array offset overflow");
     }
 
     /// Fallible variant of [`Self::append_with`].
@@ -643,6 +638,9 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     where
         F: FnOnce(&mut GenericStringWriter<'_>),
     {
+        // Do not delegate to `try_append_with`: it rolls back value_buffer on
+        // overflow before returning Err, which would change this infallible
+        // method's state if its panic is caught.
         let mut writer = GenericStringWriter {
             value_buffer: &mut self.value_buffer,
         };
@@ -1534,6 +1532,26 @@ mod tests {
         assert_eq!(
             &array,
             &StringArray::from(vec![Some("abc"), None, Some("DE"), Some("fé")])
+        );
+    }
+
+    #[test]
+    fn generic_string_builder_mixed_append_success_path() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(4, 16);
+        builder.append_value("ab");
+        builder.try_append_value("cd").unwrap();
+        // SAFETY: ASCII input and output.
+        unsafe {
+            builder.append_byte_map(b"ef", |b| b.to_ascii_uppercase());
+            builder
+                .try_append_byte_map(b"gh", |b| b.to_ascii_uppercase())
+                .unwrap();
+        }
+
+        let array = builder.finish(None).unwrap();
+        assert_eq!(
+            &array,
+            &StringArray::from(vec![Some("ab"), Some("cd"), Some("EF"), Some("GH")])
         );
     }
 
