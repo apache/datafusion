@@ -22,6 +22,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::conditional_expressions::CaseBuilder;
 use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
@@ -66,12 +67,22 @@ pub trait FunctionRewrite: Debug {
 
 /// Recursively call `LogicalPlanBuilder::normalize` on all [`Column`] expressions
 /// in the `expr` expression tree.
+///
+/// An unqualified reference to the merged key of a `RIGHT` / `FULL`
+/// `USING` / `NATURAL` join resolves to `COALESCE(left, right)` (expressed as the
+/// equivalent `CASE`), since the left key is NULL-padded on right-only rows.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
+    let outer_using_keys = plan.outer_using_key_pairs()?;
     expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
+                let was_unqualified = c.relation.is_none();
                 let col = LogicalPlanBuilder::normalize(plan, c)?;
-                Transformed::yes(Expr::Column(col))
+                Transformed::yes(merged_using_key_or_column(
+                    col,
+                    was_unqualified,
+                    &outer_using_keys,
+                )?)
             } else {
                 Transformed::no(expr)
             }
@@ -80,18 +91,67 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     .data()
 }
 
+/// Resolve a normalized column to itself, or -- when it is the merged key of a
+/// `RIGHT` / `FULL` `USING` / `NATURAL` join referenced *unqualified* -- to the
+/// equivalent `COALESCE(left, right)`.
+///
+/// The COALESCE is built as `CASE WHEN key IS NOT NULL THEN key ELSE other END`
+/// (the same form `coalesce` is simplified to, and buildable here without
+/// depending on the functions crate), aliased to the key name so the output
+/// column keeps its name.
+fn merged_using_key_or_column(
+    col: Column,
+    was_unqualified: bool,
+    outer_using_keys: &[(Column, Column)],
+) -> Result<Expr> {
+    if was_unqualified
+        && let Some((l, r)) = outer_using_keys
+            .iter()
+            .find(|(l, r)| l == &col || r == &col)
+    {
+        let other = if l == &col { r } else { l };
+        let case = CaseBuilder::new(
+            None,
+            vec![Expr::Column(col.clone()).is_not_null()],
+            vec![Expr::Column(col.clone())],
+            Some(Box::new(Expr::Column(other.clone()))),
+        )
+        .end()?;
+        return Ok(case.alias(col.name.clone()));
+    }
+    Ok(Expr::Column(col))
+}
+
 /// See [`Column::normalize_with_schemas_and_ambiguity_check`] for usage
 pub fn normalize_col_with_schemas_and_ambiguity_check(
     expr: Expr,
     schemas: &[&[&DFSchema]],
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
+    normalize_col_with_schemas_ambiguity_and_outer_using(
+        expr,
+        schemas,
+        using_columns,
+        &[],
+    )
+}
+
+/// Like [`normalize_col_with_schemas_and_ambiguity_check`], but additionally
+/// resolves the merged key of a `RIGHT` / `FULL` `USING` / `NATURAL` join (given
+/// as `(left, right)` column pairs) to `COALESCE(left, right)`.
+pub fn normalize_col_with_schemas_ambiguity_and_outer_using(
+    expr: Expr,
+    schemas: &[&[&DFSchema]],
+    using_columns: &[HashSet<Column>],
+    outer_using_keys: &[(Column, Column)],
+) -> Result<Expr> {
     // Normalize column inside Unnest
     if let Expr::Unnest(Unnest { expr }) = expr {
-        let e = normalize_col_with_schemas_and_ambiguity_check(
+        let e = normalize_col_with_schemas_ambiguity_and_outer_using(
             expr.as_ref().clone(),
             schemas,
             using_columns,
+            outer_using_keys,
         )?;
         return Ok(Expr::Unnest(Unnest { expr: Box::new(e) }));
     }
@@ -99,9 +159,14 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
+                let was_unqualified = c.relation.is_none();
                 let col =
                     c.normalize_with_schemas_and_ambiguity_check(schemas, using_columns)?;
-                Transformed::yes(Expr::Column(col))
+                Transformed::yes(merged_using_key_or_column(
+                    col,
+                    was_unqualified,
+                    outer_using_keys,
+                )?)
             } else {
                 Transformed::no(expr)
             }

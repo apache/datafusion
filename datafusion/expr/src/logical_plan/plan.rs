@@ -525,6 +525,39 @@ impl LogicalPlan {
         Ok(using_columns)
     }
 
+    /// Returns the `(left, right)` join-key column pairs of every `RIGHT` /
+    /// `FULL` `USING` / `NATURAL` join in this plan.
+    ///
+    /// For these join types the left key is NULL-padded on rows that exist only
+    /// on the right, so an unqualified reference to the merged key must resolve
+    /// to `COALESCE(left, right)` rather than to the left column alone.
+    pub fn outer_using_key_pairs(
+        &self,
+    ) -> Result<Vec<(Column, Column)>, DataFusionError> {
+        let mut pairs = vec![];
+
+        self.apply_with_subqueries(|plan| {
+            if let LogicalPlan::Join(Join {
+                join_constraint: JoinConstraint::Using,
+                join_type: JoinType::Right | JoinType::Full,
+                on,
+                ..
+            }) = plan
+            {
+                for (l, r) in on {
+                    if let (Some(l), Some(r)) =
+                        (l.get_as_join_column(), r.get_as_join_column())
+                    {
+                        pairs.push((l.to_owned(), r.to_owned()));
+                    }
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+
+        Ok(pairs)
+    }
+
     /// returns the first output expression of this `LogicalPlan` node.
     pub fn head_output_expr(&self) -> Result<Option<Expr>> {
         match self {

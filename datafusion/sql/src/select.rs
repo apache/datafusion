@@ -38,7 +38,8 @@ use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
-    normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
+    normalize_col, normalize_col_with_schemas_ambiguity_and_outer_using,
+    normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
@@ -973,10 +974,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
-                let col = normalize_col_with_schemas_and_ambiguity_check(
+                let col = normalize_col_with_schemas_ambiguity_and_outer_using(
                     expr,
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
+                    &plan.outer_using_key_pairs()?,
                 )?;
 
                 Ok(SelectExpr::Expression(col))
@@ -984,10 +986,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
                     self.sql_to_expr(expr, plan.schema(), planner_context)?;
-                let col = normalize_col_with_schemas_and_ambiguity_check(
+                let col = normalize_col_with_schemas_ambiguity_and_outer_using(
                     select_expr,
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
+                    &plan.outer_using_key_pairs()?,
                 )?;
                 let name = self.ident_normalizer.normalize(alias);
                 // avoiding adding an alias if the column name is the same.
