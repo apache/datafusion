@@ -440,7 +440,9 @@ fn timestamp_scale<T: ArrowTimestampType>() -> i64 {
 fn checked_scale_to_nanos(value: i64, scale: i64) -> Result<i64> {
     match value.checked_mul(scale) {
         Some(scaled) => Ok(scaled),
-        None => exec_err!("date_bin timestamp value {value} * scale {scale} overflows i64"),
+        None => {
+            exec_err!("date_bin timestamp value {value} * scale {scale} overflows i64")
+        }
     }
 }
 
@@ -583,7 +585,9 @@ fn date_bin_impl(
         let scale = timestamp_scale::<T>();
         value
             .and_then(|value| {
-                checked_scale_and_bin_to_nanos_or_null(value, scale, stride, stride_fn, origin)
+                checked_scale_and_bin_to_nanos_or_null(
+                    value, scale, stride, stride_fn, origin,
+                )
             })
             .map(|binned| binned / scale)
     }
@@ -699,8 +703,10 @@ fn date_bin_impl(
 
                 // Per-row errors become NULL, matching scalar behavior.
                 let result: PrimitiveArray<T> = array.unary_opt(|value| {
-                    checked_scale_and_bin_to_nanos_or_null(value, scale, stride, stride_fn, origin)
-                        .map(|binned| binned / scale)
+                    checked_scale_and_bin_to_nanos_or_null(
+                        value, scale, stride, stride_fn, origin,
+                    )
+                    .map(|binned| binned / scale)
                 });
 
                 let array = result.with_timezone_opt(tz_opt.clone());
@@ -788,9 +794,7 @@ fn date_bin_impl(
                                 stride_fn,
                                 origin,
                             )
-                            .map(|binned| {
-                                (binned % NANOSECONDS_IN_DAY) / NANOS_PER_MICRO
-                            })
+                            .map(|binned| (binned % NANOSECONDS_IN_DAY) / NANOS_PER_MICRO)
                         });
                     ColumnarValue::Array(Arc::new(result))
                 }
