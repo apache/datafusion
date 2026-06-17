@@ -620,7 +620,7 @@ pub trait ReadOptions<'a> {
 impl ReadOptions<'_> for CsvReadOptions<'_> {
     fn to_listing_options(
         &self,
-        config: &SessionConfig,
+        _config: &SessionConfig,
         table_options: TableOptions,
     ) -> ListingOptions {
         let file_format = CsvFormat::default()
@@ -639,7 +639,6 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
     }
@@ -660,7 +659,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 impl ReadOptions<'_> for ParquetReadOptions<'_> {
     fn to_listing_options(
         &self,
-        config: &SessionConfig,
+        _config: &SessionConfig,
         table_options: TableOptions,
     ) -> ListingOptions {
         let mut options = table_options.parquet;
@@ -685,7 +684,6 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
             .with_file_extension(self.file_extension)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
-            .with_session_config_options(config)
     }
 
     async fn get_resolved_schema(
@@ -703,7 +701,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 impl ReadOptions<'_> for JsonReadOptions<'_> {
     fn to_listing_options(
         &self,
-        config: &SessionConfig,
+        _config: &SessionConfig,
         table_options: TableOptions,
     ) -> ListingOptions {
         let file_format = JsonFormat::default()
@@ -714,7 +712,6 @@ impl ReadOptions<'_> for JsonReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
     }
@@ -735,14 +732,13 @@ impl ReadOptions<'_> for JsonReadOptions<'_> {
 impl ReadOptions<'_> for AvroReadOptions<'_> {
     fn to_listing_options(
         &self,
-        config: &SessionConfig,
+        _config: &SessionConfig,
         _table_options: TableOptions,
     ) -> ListingOptions {
         let file_format = AvroFormat;
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
@@ -761,14 +757,13 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
 impl ReadOptions<'_> for ArrowReadOptions<'_> {
     fn to_listing_options(
         &self,
-        config: &SessionConfig,
+        _config: &SessionConfig,
         _table_options: TableOptions,
     ) -> ListingOptions {
         let file_format = ArrowFormat;
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 

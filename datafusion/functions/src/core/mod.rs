@@ -28,6 +28,7 @@ pub mod arrowtypeof;
 pub mod cast_to_type;
 pub mod coalesce;
 pub mod expr_ext;
+pub mod file_row_index;
 pub mod getfield;
 pub mod greatest;
 mod greatest_least_utils;
@@ -67,6 +68,7 @@ make_udf_function!(version::VersionFunc, version);
 make_udf_function!(arrow_metadata::ArrowMetadataFunc, arrow_metadata);
 make_udf_function!(with_metadata::WithMetadataFunc, with_metadata);
 make_udf_function!(arrow_field::ArrowFieldFunc, arrow_field);
+make_udf_function!(file_row_index::FileRowIndexFunc, file_row_index);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -143,6 +145,9 @@ pub mod expr_fn {
         union_tag,
         "Returns the name of the currently selected field in the union",
         arg1
+    ),(
+        file_row_index,
+        "Returns the offset of the row within its source file",
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
@@ -196,5 +201,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         union_tag(),
         version(),
         r#struct(),
+        file_row_index(),
     ]
 }
