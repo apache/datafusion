@@ -148,6 +148,8 @@ mod tests {
         let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // Create: cast(c2 as INT32) != INT32(99)
+        // c2 is Int64 → Int64→Int32 is narrowing → blocked by family gate.
+        // The cast should stay.
         let column_expr = col("c2", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int32, None));
         let literal_expr = lit(ScalarValue::Int32(Some(99)));
@@ -157,16 +159,14 @@ mod tests {
         // Apply full simplification (uses TreeNodeRewriter)
         let optimized = simplifier.simplify(binary_expr).unwrap();
 
-        let optimized_binary = as_binary(&optimized);
-
-        // Should be optimized to: c2 != INT64(99) (c2 is INT64, literal cast to match)
-        let left_expr = optimized_binary.left();
+        // With the family gate, Int64→Int32 is blocked and the cast remains.
+        let result_binary = as_binary(&optimized);
+        let result_left = result_binary.left();
         assert!(
-            left_expr.downcast_ref::<CastExpr>().is_none()
-                && left_expr.downcast_ref::<TryCastExpr>().is_none()
+            result_left.downcast_ref::<CastExpr>().is_some()
+                || result_left.downcast_ref::<TryCastExpr>().is_some(),
+            "CAST(c2 AS Int32) should remain as Int64→Int32 is narrowing"
         );
-        let right_literal = as_literal(optimized_binary.right());
-        assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(99)));
     }
 
     #[test]
@@ -192,7 +192,7 @@ mod tests {
 
         let or_binary = as_binary(&optimized);
 
-        // Verify left side: c1 > INT32(5)
+        // Verify left side: c1 > INT32(5)  (Int32→Int64 widening, unwrapped)
         let left_binary = as_binary(or_binary.left());
         let left_left_expr = left_binary.left();
         assert!(
@@ -202,15 +202,15 @@ mod tests {
         let left_literal = as_literal(left_binary.right());
         assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(5)));
 
-        // Verify right side: c2 <= INT64(10)
+        // Verify right side: CAST(c2 AS Int32) <= 10  — Int64→Int32 is
+        // narrowing, blocked by the family gate, so the cast stays.
         let right_binary = as_binary(or_binary.right());
         let right_left_expr = right_binary.left();
         assert!(
-            right_left_expr.downcast_ref::<CastExpr>().is_none()
-                && right_left_expr.downcast_ref::<TryCastExpr>().is_none()
+            right_left_expr.downcast_ref::<CastExpr>().is_some()
+                || right_left_expr.downcast_ref::<TryCastExpr>().is_some(),
+            "CAST(c2 AS Int32) should remain as Int64→Int32 is narrowing"
         );
-        let right_literal = as_literal(right_binary.right());
-        assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(10)));
     }
 
     #[test]
