@@ -3365,7 +3365,7 @@ mod tests {
             JoinType::LeftMark,
             JoinType::RightMark,
         ] {
-            let (_, batches, _) = join_collect_with_partition_mode(
+            let (_, batches, metrics) = join_collect_with_partition_mode(
                 Arc::clone(&left),
                 Arc::clone(&right),
                 on.clone(),
@@ -3375,6 +3375,24 @@ mod tests {
                 Arc::new(TaskContext::default()),
             )
             .await?;
+
+            // For join types whose output requires a build-side match, an
+            // empty map guarantees an empty result, so `state_after_build_ready`
+            // completes the stream without ever fetching a probe batch (probe
+            // `input_rows` stays 0). All other join types must still scan the
+            // probe side. `input_rows` is summed across every partition.
+            let probe_rows = metrics
+                .sum_by_name("input_rows")
+                .map(|v| v.as_usize())
+                .unwrap_or(0);
+            if join_type.empty_map_produces_empty_result() {
+                assert_eq!(
+                    probe_rows, 0,
+                    "{join_type} should skip the probe side for an all-NULL build"
+                );
+            } else {
+                assert!(probe_rows > 0, "{join_type} must scan the probe side");
+            }
 
             match join_type {
                 JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
