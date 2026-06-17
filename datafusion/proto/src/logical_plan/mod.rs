@@ -59,8 +59,8 @@ use datafusion_datasource_json::file_format::{
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RecursiveQuery, SkipType,
-    TableSource, Unnest, WriteOp,
+    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RangePartitioning,
+    RecursiveQuery, SkipType, TableSource, Unnest, WriteOp,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
@@ -72,7 +72,7 @@ use datafusion_expr::{
         builder::project,
     },
 };
-use datafusion_proto_common::protobuf_common;
+use datafusion_proto_common::{FromProtoError, protobuf_common};
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_range_split_point;
@@ -747,6 +747,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     PartitionMethod::RoundRobin(partition_count) => {
                         Partitioning::RoundRobinBatch(*partition_count as usize)
                     }
+                    PartitionMethod::Range(protobuf::RangeRepartition {
+                        expr: pb_sort_expr,
+                        split_points,
+                    }) => Partitioning::Range(RangePartitioning::try_new(
+                        from_proto::parse_sorts(pb_sort_expr, ctx, extension_codec)?,
+                        split_points
+                            .iter()
+                            .map(from_proto::parse_protobuf_range_split_point)
+                            .collect::<Result<Vec<_>, FromProtoError>>()?,
+                    )?),
                 };
 
                 LogicalPlanBuilder::from(input)

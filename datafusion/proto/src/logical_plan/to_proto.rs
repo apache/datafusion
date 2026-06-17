@@ -693,10 +693,7 @@ pub fn serialize_range_split_point(
         value: split_point
             .values()
             .iter()
-            .map(|value| {
-                TryInto::<datafusion_proto_common::ScalarValue>::try_into(value)
-                    .map_err(Into::into)
-            })
+            .map(TryInto::<datafusion_proto_common::ScalarValue>::try_into)
             .collect::<Result<_, Error>>()?,
     })
 }
