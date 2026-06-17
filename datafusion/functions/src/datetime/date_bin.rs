@@ -802,11 +802,11 @@ fn date_bin_impl(
                     }
                     let array = array.as_primitive::<Time64NanosecondType>();
                     let result: PrimitiveArray<Time64NanosecondType> =
-                        array.unary_opt(|x| {
+                        array.try_unary(|x| {
                             stride_fn(stride, x, origin)
                                 .map(|binned_nanos| binned_nanos % (NANOSECONDS_IN_DAY))
-                                .ok()
-                        });
+                                .map_err(|e| ArrowError::ComputeError(e.to_string()))
+                        })?;
                     ColumnarValue::Array(Arc::new(result))
                 }
                 _ => {
