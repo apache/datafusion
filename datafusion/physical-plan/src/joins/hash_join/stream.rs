@@ -686,8 +686,9 @@ impl HashJoinStream {
                 // Precalculate hash values for fetched batch
                 let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
 
-                let mut valid_keys = None;
-                if let Map::HashMap(_) = self.build_side.try_as_ready()?.left_data.map() {
+                let valid_keys = if let Map::HashMap(_) =
+                    self.build_side.try_as_ready()?.left_data.map()
+                {
                     self.hashes_buffer.clear();
                     self.hashes_buffer.resize(batch.num_rows(), 0);
                     create_hashes(
@@ -695,8 +696,10 @@ impl HashJoinStream {
                         &self.random_state,
                         &mut self.hashes_buffer,
                     )?;
-                    valid_keys = matchable_join_keys(&keys_values, self.null_equality);
-                }
+                    matchable_join_keys(&keys_values, self.null_equality)
+                } else {
+                    None
+                };
 
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
