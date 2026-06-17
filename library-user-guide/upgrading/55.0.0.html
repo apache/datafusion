@@ -661,6 +661,38 @@ the variant, dereference the box with <code class="docutils literal notranslate"
 details, including the per-variant size breakdown and benchmark
 results.</p>
 </section>
+<section id="listingoptions-target-partitions-and-collect-stat-removed">
+<h3><code class="docutils literal notranslate"><span class="pre">ListingOptions::target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> removed<a class="headerlink" href="#listingoptions-target-partitions-and-collect-stat-removed" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> fields on
+<code class="docutils literal notranslate"><span class="pre">datafusion_catalog_listing::ListingOptions</span></code>, their builder methods
+(<code class="docutils literal notranslate"><span class="pre">with_target_partitions</span></code>, <code class="docutils literal notranslate"><span class="pre">with_collect_stat</span></code>), and the
+<code class="docutils literal notranslate"><span class="pre">with_session_config_options</span></code> helper have been removed.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> now reads both values directly from the active <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>
+at scan time instead of from a copy snapshotted onto the table at construction
+time.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Code that set <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> / <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> per table via
+<code class="docutils literal notranslate"><span class="pre">ListingOptions</span></code>, or read those public fields.</p></li>
+<li><p>Code that relied on a <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> freezing these values at construction
+time independently of the session config. The table now always reflects the
+current <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Configure these on the <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code> instead:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ListingOptions</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">format</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_target_partitions</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_collect_stat</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionConfig</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_target_partitions</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_collect_statistics</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/22969">PR #22969</a> for details.</p>
+</section>
 <section id="spark-map-functions-now-reject-duplicate-keys-by-default">
 <h3>Spark map functions now reject duplicate keys by default<a class="headerlink" href="#spark-map-functions-now-reject-duplicate-keys-by-default" title="Link to this heading">#</a></h3>
 <p>The Spark-compatibility map-construction functions (<code class="docutils literal notranslate"><span class="pre">map_from_arrays</span></code>,
@@ -746,6 +778,7 @@ silently or raised a non-configurable error.</p></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#queryplanner-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ddlstatement-createexternaltable-and-createfunction-are-now-boxed"><code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateExternalTable</span></code> and <code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> are now boxed</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#listingoptions-target-partitions-and-collect-stat-removed"><code class="docutils literal notranslate"><span class="pre">ListingOptions::target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spark-map-functions-now-reject-duplicate-keys-by-default">Spark map functions now reject duplicate keys by default</a></li>
 </ul>
 </li>
