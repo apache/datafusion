@@ -92,8 +92,8 @@ message ListingTableScanNode {
   datafusion_common.Schema schema = 5;
   repeated LogicalExprNode filters = 6;
   repeated PartitionColumn table_partition_cols = 7;
-  bool collect_stat = 8;
-  uint32 target_partitions = 9;
+  reserved 8; // was bool collect_stat
+  reserved 9; // was uint32 target_partitions
   oneof FileFormatType {
     datafusion_common.CsvFormat csv = 10;
     datafusion_common.ParquetFormat parquet = 11;
@@ -303,7 +303,7 @@ message FileFormatProto {
 }
 
 message DmlNode{
-   enum Type {
+  enum Type {
     UPDATE = 0;
     DELETE = 1;
     CTAS = 2;
@@ -1512,15 +1512,15 @@ message RecursiveQueryNode {
 }
 
 message CteWorkTableScanNode {
-    string name = 1;
-    datafusion_common.Schema schema = 2;
+  string name = 1;
+  datafusion_common.Schema schema = 2;
 }
 
 message EmptyTableScanNode {
-    TableReference table_name = 1;
-    datafusion_common.Schema schema = 2;
-    ProjectionColumns projection = 3;
-    repeated LogicalExprNode filters = 4;
+  TableReference table_name = 1;
+  datafusion_common.Schema schema = 2;
+  ProjectionColumns projection = 3;
+  repeated LogicalExprNode filters = 4;
 }
 
 enum GenerateSeriesName {
@@ -1529,44 +1529,44 @@ enum GenerateSeriesName {
 }
 
 message GenerateSeriesArgsContainsNull {
-    GenerateSeriesName name = 1;
+  GenerateSeriesName name = 1;
 }
 
 message GenerateSeriesArgsInt64 {
-    int64 start = 1;
-    int64 end = 2;
-    int64 step = 3;
-    bool include_end = 4;
-    GenerateSeriesName name = 5;
+  int64 start = 1;
+  int64 end = 2;
+  int64 step = 3;
+  bool include_end = 4;
+  GenerateSeriesName name = 5;
 }
 
 message GenerateSeriesArgsTimestamp {
-    int64 start = 1;
-    int64 end = 2;
-    datafusion_common.IntervalMonthDayNanoValue step = 3;
-    optional string tz = 4;
-    bool include_end = 5;
-    GenerateSeriesName name = 6;
+  int64 start = 1;
+  int64 end = 2;
+  datafusion_common.IntervalMonthDayNanoValue step = 3;
+  optional string tz = 4;
+  bool include_end = 5;
+  GenerateSeriesName name = 6;
 }
 
 message GenerateSeriesArgsDate {
-    int64 start = 1;
-    int64 end = 2;
-    datafusion_common.IntervalMonthDayNanoValue step = 3;
-    bool include_end = 4;
-    GenerateSeriesName name = 5;
+  int64 start = 1;
+  int64 end = 2;
+  datafusion_common.IntervalMonthDayNanoValue step = 3;
+  bool include_end = 4;
+  GenerateSeriesName name = 5;
 }
 
 message GenerateSeriesNode {
-    datafusion_common.Schema schema = 1;
-    uint32 target_batch_size = 2;
+  datafusion_common.Schema schema = 1;
+  uint32 target_batch_size = 2;
 
-    oneof args {
-        GenerateSeriesArgsContainsNull contains_null = 3;
-        GenerateSeriesArgsInt64 int64_args = 4;
-        GenerateSeriesArgsTimestamp timestamp_args = 5;
-        GenerateSeriesArgsDate date_args = 6;
-    }
+  oneof args {
+    GenerateSeriesArgsContainsNull contains_null = 3;
+    GenerateSeriesArgsInt64 int64_args = 4;
+    GenerateSeriesArgsTimestamp timestamp_args = 5;
+    GenerateSeriesArgsDate date_args = 6;
+  }
 }
 
 message SortMergeJoinExecNode {
