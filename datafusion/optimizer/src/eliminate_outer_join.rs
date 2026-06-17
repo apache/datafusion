@@ -250,6 +250,11 @@ struct NullRejectingSides {
 }
 
 impl NullRejectingSides {
+    /// The join side(s) a column belongs to.
+    ///
+    /// A bare column reference is null-rejecting on its own side: if the column
+    /// is NULL, every null-propagating operator above it yields NULL and the row
+    /// is filtered.
     fn for_column(col: &Column, left_schema: &DFSchema, right_schema: &DFSchema) -> Self {
         Self {
             left: left_schema.has_column(col),
@@ -272,9 +277,9 @@ impl NullRejectingSides {
     }
 }
 
-  /// Compute which join sides are null-rejected by `expr` in a WHERE clause.
-  /// For each marked side, rows padded with NULLs on that side are guaranteed to
-  /// evaluate to NULL or false and be filtered out.
+/// Compute which join sides are null-rejected by `expr` in a WHERE clause.
+/// For each marked side, rows padded with NULLs on that side are guaranteed to
+/// evaluate to NULL or false and be filtered out.
 ///
 /// `left_schema` and `right_schema` map column references to join sides.
 /// `top_level` is true only while walking the root WHERE context; nested
