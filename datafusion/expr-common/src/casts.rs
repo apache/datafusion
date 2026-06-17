@@ -102,19 +102,32 @@ pub fn cast_predicate_preimage(
     op: Operator,
     lit_value: &ScalarValue,
 ) -> Result<Option<CastPredicatePreimage>> {
-    if let Some(interval) =
-        timestamp_precision_narrowing_preimage(source_type, target_type, lit_value)?
-    {
-        return Ok(Some(CastPredicatePreimage::Range(interval)));
+    if let Some(preimage) = maybe_range_preimage(source_type, target_type, lit_value)? {
+        return Ok(Some(preimage));
     }
 
-    if is_timestamp_precision_narrowing_cast(source_type, target_type) {
+    if let Some(value) =
+        exact_preimage_int_to_str_eq_like(source_type, target_type, op, lit_value)
+    {
+        return Ok(Some(CastPredicatePreimage::Exact(value)));
+    }
+
+    Ok(exact_preimage_cast(source_type, target_type, lit_value)
+        .map(CastPredicatePreimage::Exact))
+}
+
+fn maybe_range_preimage(
+    source_type: &DataType,
+    target_type: &DataType,
+    lit_value: &ScalarValue,
+) -> Result<Option<CastPredicatePreimage>> {
+    if !is_timestamp_precision_narrowing_cast(source_type, target_type) {
         return Ok(None);
     }
 
     Ok(
-        exact_preimage_for_cast_predicate(source_type, target_type, op, lit_value)
-            .map(CastPredicatePreimage::Exact),
+        timestamp_narrowing_range_preimage(source_type, target_type, lit_value)?
+            .map(CastPredicatePreimage::Range),
     )
 }
 
@@ -122,12 +135,17 @@ pub fn cast_predicate_preimage(
 ///
 /// This intentionally returns `None` for timestamp precision narrowing: those
 /// casts are many-to-one and need range preimages instead.
-pub fn cast_predicate_exact_literal(
+pub fn exact_preimage_cast(
     source_type: &DataType,
     target_type: &DataType,
     lit_value: &ScalarValue,
 ) -> Option<ScalarValue> {
-    if is_timestamp_precision_narrowing_cast(source_type, target_type) {
+    // Apply a family-level safety gate: the source→target cast must be
+    // value-preserving over the full source domain. Timestamp precision
+    // narrowing is handled as a Range preimage, not an Exact preimage;
+    // timestamp widening / equal-unit casts still require the literal
+    // round-trip check below.
+    if !is_exact_cast_safe(source_type, target_type) {
         return None;
     }
 
@@ -164,24 +182,178 @@ fn is_timestamp_cast(source_type: &DataType, target_type: &DataType) -> bool {
     )
 }
 
-fn exact_preimage_for_cast_predicate(
-    source_type: &DataType,
-    target_type: &DataType,
-    op: Operator,
-    lit_value: &ScalarValue,
-) -> Option<ScalarValue> {
-    cast_to_string_equality_preimage(source_type, target_type, op, lit_value)
-        .or_else(|| cast_predicate_exact_literal(source_type, target_type, lit_value))
+/// Returns `true` when the cast from `source_type` to `target_type` is
+/// value-preserving (injective) and order-preserving at the family level —
+/// i.e. every value in the source domain can be round-tripped through the cast
+/// without information loss, and comparisons keep the same ordering.
+///
+/// This is a conservative gate used by [`exact_preimage_cast`]. Timestamp
+/// precision narrowing is not exact-safe (it is handled by
+/// [`CastPredicatePreimage::Range`]); timestamp widening / equal-unit casts are
+/// family-safe but still require the caller's literal round-trip check.
+fn is_exact_cast_safe(source_type: &DataType, target_type: &DataType) -> bool {
+    // Unwrap at most one level of dictionary for family-level checking.
+    let (src, tgt) = match (source_type, target_type) {
+        (DataType::Dictionary(_, v_src), DataType::Dictionary(_, v_tgt)) => {
+            (v_src.as_ref(), v_tgt.as_ref())
+        }
+        (DataType::Dictionary(_, v_src), tgt) => (v_src.as_ref(), tgt),
+        (src, DataType::Dictionary(_, v_tgt)) => (src, v_tgt.as_ref()),
+        _ => (source_type, target_type),
+    };
+
+    if src == tgt {
+        return true;
+    }
+    if is_timestamp_cast(src, tgt) {
+        return !is_timestamp_precision_narrowing_cast(src, tgt);
+    }
+
+    // Whitelist of family-level safe casts.  Anything not listed here is
+    // considered potentially information-losing and blocked.
+    if is_integer_type(src) && is_integer_type(tgt) {
+        return is_safe_integer_cast(src, tgt);
+    }
+    if matches!(
+        (src, tgt),
+        (DataType::Date32, DataType::Int32)
+            | (DataType::Int32, DataType::Date32)
+            | (DataType::Date64, DataType::Int64)
+            | (DataType::Int64, DataType::Date64)
+    ) {
+        // Date32 ↔ Int32 and Date64 ↔ Int64 share the same internal
+        // representation.  Date32 ↔ Date64 is NOT safe because the
+        // epoch unit differs.
+        return true;
+    }
+    if is_supported_string_type(src) && is_supported_string_type(tgt) {
+        // String width casts among Utf8 / LargeUtf8 / Utf8View.
+        return true;
+    }
+    if is_decimal_type(src) && is_decimal_type(tgt) {
+        // Decimal widening only: target integer digits and scale must
+        // be at least as large as source.
+        return is_safe_decimal_widening(src, tgt);
+    }
+    if is_integer_type(src) && is_decimal_type(tgt) {
+        // int / uint → decimal: allow only when the target can represent
+        // the full source integer domain.
+        return is_safe_integer_to_decimal(src, tgt);
+    }
+    if matches!((src, tgt), (DataType::FixedSizeBinary(_), DataType::Binary)) {
+        // FixedSizeBinary(n) → Binary is always widening.
+        return true;
+    }
+    if matches!(
+        (src, tgt),
+        (DataType::FixedSizeBinary(n1), DataType::FixedSizeBinary(n2)) if n1 == n2
+    ) {
+        return true;
+    }
+    false
 }
 
-/// Computes a singleton preimage for equality predicates over casts whose target
-/// value is a string representation of an integer source value.
+/// Returns `true` for integer types (signed and unsigned, excluding Date and
+/// Decimal).
+fn is_integer_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+    )
+}
+
+/// Integer cast that is value-preserving over the full source domain.
+fn is_safe_integer_cast(src: &DataType, tgt: &DataType) -> bool {
+    use DataType::*;
+    match (src, tgt) {
+        // Signed → wider signed
+        (Int8, Int16 | Int32 | Int64) => true,
+        (Int16, Int32 | Int64) => true,
+        (Int32, Int64) => true,
+        // Unsigned → wider unsigned
+        (UInt8, UInt16 | UInt32 | UInt64) => true,
+        (UInt16, UInt32 | UInt64) => true,
+        (UInt32, UInt64) => true,
+        // Unsigned → wider signed (full source range fits in target)
+        (UInt8, Int16 | Int32 | Int64) => true,
+        (UInt16, Int32 | Int64) => true,
+        (UInt32, Int64) => true,
+        // Anything else is narrowing, partial, or crosses signedness
+        // without guaranteed domain containment.
+        _ => false,
+    }
+}
+
+fn is_decimal_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Decimal128(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal32(_, _)
+    )
+}
+
+fn decimal_precision_scale(dt: &DataType) -> (u8, i8) {
+    match dt {
+        DataType::Decimal128(p, s)
+        | DataType::Decimal64(p, s)
+        | DataType::Decimal32(p, s) => (*p, *s),
+        _ => unreachable!(),
+    }
+}
+
+/// Target must have at least as many integer digits and at least as large a
+/// scale as source.
+fn is_safe_decimal_widening(src: &DataType, tgt: &DataType) -> bool {
+    let (p_src, s_src) = decimal_precision_scale(src);
+    let (p_tgt, s_tgt) = decimal_precision_scale(tgt);
+    if s_src < 0 || s_tgt < 0 {
+        return false;
+    }
+    let src_int = (p_src as i16) - (s_src as i16);
+    let tgt_int = (p_tgt as i16) - (s_tgt as i16);
+    tgt_int >= src_int && s_tgt >= s_src
+}
+
+/// Target decimal must be able to represent the full range of the source
+/// integer type at the target scale.
+fn is_safe_integer_to_decimal(int_type: &DataType, dec_type: &DataType) -> bool {
+    let required = integer_decimal_digits(int_type);
+    let (p, s) = decimal_precision_scale(dec_type);
+    if s < 0 {
+        return false;
+    }
+    (p as i32) - (s as i32) >= required as i32
+}
+
+/// Minimum number of decimal integer digits needed to store the worst-case
+/// value of each integer type without overflow.
+fn integer_decimal_digits(int_type: &DataType) -> u8 {
+    match int_type {
+        DataType::Int8 | DataType::UInt8 => 3, //   127 / 255
+        DataType::Int16 | DataType::UInt16 => 5, // 32767 / 65535
+        DataType::Int32 | DataType::UInt32 => 10, // ~2.1e9 / ~4.3e9
+        DataType::Int64 => 19,                 // 9_223_372_036_854_775_807
+        DataType::UInt64 => 20,                // 18_446_744_073_709_551_615
+        _ => unreachable!(),
+    }
+}
+
+/// Computes a singleton preimage for equality-like predicates over casts whose
+/// target value is a string representation of an integer source value.
 ///
 /// For example, `CAST(int_col AS Utf8) = '123'` can be rewritten to
 /// `int_col = 123`, but `CAST(int_col AS Utf8) = '0123'` cannot be rewritten to
 /// `int_col = 123` because casting `123` back to a string yields `'123'`, not
 /// `'0123'`.
-fn cast_to_string_equality_preimage(
+fn exact_preimage_int_to_str_eq_like(
     source_type: &DataType,
     target_type: &DataType,
     op: Operator,
@@ -196,7 +368,10 @@ fn cast_to_string_equality_preimage(
 
     match (op, lit_value) {
         (
-            Operator::Eq | Operator::NotEq,
+            Operator::Eq
+            | Operator::NotEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom,
             ScalarValue::Utf8(Some(_))
             | ScalarValue::Utf8View(Some(_))
             | ScalarValue::LargeUtf8(Some(_)),
@@ -225,12 +400,9 @@ fn cast_to_string_equality_preimage(
 /// Computes the source-domain preimage interval for timestamp precision
 /// narrowing casts.
 ///
-/// The preimage is computed entirely in the source timestamp domain and
-/// preserves `source_tz`.  The target timezone is intentionally *not* copied
-/// into the generated bounds: this models the raw timestamp values after
-/// truncation and avoids comparing source columns against target-timezone
-/// literals.
-fn timestamp_precision_narrowing_preimage(
+/// Bounds are source-domain literals, so they preserve `source_tz`. The target
+/// timezone belongs to the cast result and is not copied into the bounds.
+fn timestamp_narrowing_range_preimage(
     source_type: &DataType,
     target_type: &DataType,
     lit_value: &ScalarValue,
@@ -1854,5 +2026,215 @@ mod tests {
             }
             other => panic!("Expected CastPredicatePreimage::Range but got {other:?}"),
         }
+    }
+
+    // ── Gate safety tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_exact_predicate_gate_safe() {
+        // integer widening
+        assert_preimage_exact(
+            &DataType::Int32,
+            &DataType::Int64,
+            Operator::Eq,
+            &ScalarValue::Int64(Some(10)),
+            ScalarValue::Int32(Some(10)),
+        );
+        // unsigned → wider signed
+        assert_preimage_exact(
+            &DataType::UInt32,
+            &DataType::Int64,
+            Operator::Eq,
+            &ScalarValue::Int64(Some(100)),
+            ScalarValue::UInt32(Some(100)),
+        );
+        // int → decimal (full domain)
+        assert_preimage_exact(
+            &DataType::Int32,
+            &DataType::Decimal128(12, 2),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(10000), 12, 2),
+            ScalarValue::Int32(Some(100)),
+        );
+        // uint → decimal (full domain)
+        assert_preimage_exact(
+            &DataType::UInt64,
+            &DataType::Decimal128(20, 0),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(123), 20, 0),
+            ScalarValue::UInt64(Some(123)),
+        );
+        // decimal widening
+        assert_preimage_exact(
+            &DataType::Decimal128(10, 2),
+            &DataType::Decimal128(18, 4),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(1230000), 18, 4),
+            ScalarValue::Decimal128(Some(12300), 10, 2),
+        );
+        // Date32 ↔ Int32
+        assert_preimage_exact(
+            &DataType::Date32,
+            &DataType::Int32,
+            Operator::Eq,
+            &ScalarValue::Int32(Some(19000)),
+            ScalarValue::Date32(Some(19000)),
+        );
+        assert_preimage_exact(
+            &DataType::Int32,
+            &DataType::Date32,
+            Operator::Eq,
+            &ScalarValue::Date32(Some(19000)),
+            ScalarValue::Int32(Some(19000)),
+        );
+        // FixedSizeBinary(n) → Binary
+        assert_preimage_exact(
+            &DataType::FixedSizeBinary(4),
+            &DataType::Binary,
+            Operator::Eq,
+            &ScalarValue::Binary(Some(vec![1, 2, 3, 4])),
+            ScalarValue::FixedSizeBinary(4, Some(vec![1, 2, 3, 4])),
+        );
+    }
+
+    #[test]
+    fn test_exact_predicate_gate_blocked() {
+        // numeric narrowing
+        assert_preimage_none(
+            &DataType::Int64,
+            &DataType::Int32,
+            Operator::Eq,
+            &ScalarValue::Int32(Some(10)),
+        );
+        // signed → unsigned (even small values)
+        assert_preimage_none(
+            &DataType::Int32,
+            &DataType::UInt32,
+            Operator::Eq,
+            &ScalarValue::UInt32(Some(10)),
+        );
+        // unsigned → narrower signed
+        assert_preimage_none(
+            &DataType::UInt64,
+            &DataType::Int64,
+            Operator::Eq,
+            &ScalarValue::Int64(Some(10)),
+        );
+        // int → decimal with insufficient precision
+        assert_preimage_none(
+            &DataType::Int32,
+            &DataType::Decimal128(10, 2),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(10000), 10, 2),
+        );
+        // decimal → int
+        assert_preimage_none(
+            &DataType::Decimal128(18, 2),
+            &DataType::Int64,
+            Operator::Eq,
+            &ScalarValue::Int64(Some(123)),
+        );
+        // decimal scale narrowing
+        assert_preimage_none(
+            &DataType::Decimal128(18, 2),
+            &DataType::Decimal128(18, 1),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(1230), 18, 1),
+        );
+        // negative decimal scale is not accepted for exact predicate rewrites
+        assert_preimage_none(
+            &DataType::Decimal128(10, -1),
+            &DataType::Decimal128(18, 0),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(120), 18, 0),
+        );
+        assert_preimage_none(
+            &DataType::Int32,
+            &DataType::Decimal128(12, -1),
+            Operator::Eq,
+            &ScalarValue::Decimal128(Some(120), 12, -1),
+        );
+        // Date32 → Date64 (not same-value safe)
+        assert_preimage_none(
+            &DataType::Date32,
+            &DataType::Date64,
+            Operator::Eq,
+            &ScalarValue::Date64(Some(1641600000)),
+        );
+        // Binary → FixedSizeBinary (not a family-safe source cast)
+        assert_preimage_none(
+            &DataType::Binary,
+            &DataType::FixedSizeBinary(4),
+            Operator::Eq,
+            &ScalarValue::FixedSizeBinary(4, Some(vec![1, 2, 3, 4])),
+        );
+    }
+
+    // ── Integer → string distinctness tests ─────────────────────────────
+
+    #[test]
+    fn test_cast_to_string_is_distinct_from_round_trip() {
+        // IS DISTINCT FROM with round-trippable string
+        assert_preimage_exact(
+            &DataType::Int32,
+            &DataType::Utf8,
+            Operator::IsDistinctFrom,
+            &ScalarValue::Utf8(Some("123".to_string())),
+            ScalarValue::Int32(Some(123)),
+        );
+        // IS NOT DISTINCT FROM with round-trippable string
+        assert_preimage_exact(
+            &DataType::Int32,
+            &DataType::Utf8,
+            Operator::IsNotDistinctFrom,
+            &ScalarValue::Utf8(Some("123".to_string())),
+            ScalarValue::Int32(Some(123)),
+        );
+        // IS NOT DISTINCT FROM with non-round-trippable string (leading zero)
+        assert_preimage_none(
+            &DataType::Int32,
+            &DataType::Utf8,
+            Operator::IsNotDistinctFrom,
+            &ScalarValue::Utf8(Some("0123".to_string())),
+        );
+        // IS DISTINCT FROM with non-round-trippable string
+        assert_preimage_none(
+            &DataType::Int32,
+            &DataType::Utf8,
+            Operator::IsDistinctFrom,
+            &ScalarValue::Utf8(Some("0123".to_string())),
+        );
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+
+    fn assert_preimage_exact(
+        source_type: &DataType,
+        target_type: &DataType,
+        op: Operator,
+        lit_value: &ScalarValue,
+        expected_source: ScalarValue,
+    ) {
+        let result =
+            cast_predicate_preimage(source_type, target_type, op, lit_value).unwrap();
+        assert_eq!(
+            result,
+            Some(CastPredicatePreimage::Exact(expected_source)),
+            "expected Exact preimage for {source_type:?} → {target_type:?} {op:?} {lit_value:?}"
+        );
+    }
+
+    fn assert_preimage_none(
+        source_type: &DataType,
+        target_type: &DataType,
+        op: Operator,
+        lit_value: &ScalarValue,
+    ) {
+        let result =
+            cast_predicate_preimage(source_type, target_type, op, lit_value).unwrap();
+        assert_eq!(
+            result, None,
+            "expected None preimage for {source_type:?} → {target_type:?} {op:?} {lit_value:?}"
+        );
     }
 }

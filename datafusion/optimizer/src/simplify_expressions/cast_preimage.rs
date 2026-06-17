@@ -29,7 +29,7 @@ use datafusion_expr::{
     BinaryExpr, Cast, Expr, Operator, TryCast, lit, simplify::SimplifyContext,
 };
 use datafusion_expr_common::casts::{
-    CastPredicatePreimage, cast_predicate_exact_literal, cast_predicate_preimage,
+    CastPredicatePreimage, cast_predicate_preimage, exact_preimage_cast,
 };
 
 use super::udf_preimage::rewrite_with_preimage;
@@ -116,9 +116,12 @@ pub(super) fn supports_cast_predicate_for_inlist(
         return false;
     };
 
+    // IN-list rewrites only support singleton exact cast preimages. They do
+    // not use range preimages (for example timestamp precision narrowing) or
+    // binary-operator-only special cases such as integer-to-string equality.
     list.iter().all(|right| match right {
         Expr::Literal(lit_val, _) => {
-            cast_predicate_exact_literal(&source_type, target_type, lit_val).is_some()
+            exact_preimage_cast(&source_type, target_type, lit_val).is_some()
         }
         _ => false,
     })
@@ -140,7 +143,7 @@ pub(super) fn rewrite_cast_predicate_for_inlist(
         .map(|right| match right {
             Expr::Literal(lit_value, _) => {
                 let Some(value) =
-                    cast_predicate_exact_literal(&source_type, &target_type, &lit_value)
+                    exact_preimage_cast(&source_type, &target_type, &lit_value)
                 else {
                     return internal_err!(
                         "Can't cast the list expr {:?} to type {}",
@@ -195,7 +198,7 @@ mod tests {
     use datafusion_expr::{binary_expr, cast, col, in_list};
 
     #[test]
-    fn test_cast_predicate_exact_literal_unwrap() {
+    fn test_exact_preimage_cast_unwrap() {
         let schema = expr_test_schema();
 
         let expr = cast(col("c1"), DataType::Int64).gt(lit(10_i64));
@@ -388,6 +391,46 @@ mod tests {
         assert_eq!(optimize_test(expr, &schema), expected);
     }
 
+    #[test]
+    fn test_cast_predicate_unsafe_narrowing_kept() {
+        let schema = expr_test_schema();
+
+        // CAST(c2 AS Int32) = 5  — should NOT be unwrapped because
+        // Int64→Int32 is narrowing (blocked by the family gate).
+        let expr = cast(col("c2"), DataType::Int32).eq(lit(5_i32));
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
+
+        // CAST(c1 AS Int64) = 5  — should still be unwrapped
+        // (Int32→Int64 is widening, safe).
+        let expr = cast(col("c1"), DataType::Int64).eq(lit(5_i64));
+        let expected = col("c1").eq(lit(5_i32));
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_cast_predicate_int_to_string_distinctness() {
+        let schema = expr_test_schema();
+
+        // CAST(c1 AS Utf8) IS NOT DISTINCT FROM '123'
+        let expr = binary_expr(
+            cast(col("c1"), DataType::Utf8),
+            Operator::IsNotDistinctFrom,
+            lit("123"),
+        );
+        let expected = binary_expr(col("c1"), Operator::IsNotDistinctFrom, lit(123_i32));
+        assert_eq!(optimize_test(expr, &schema), expected);
+
+        // CAST(c1 AS Utf8) IS DISTINCT FROM '0123'
+        // Round-trip fails (0123 → 123 → "123" ≠ "0123"), so rewrite
+        // should NOT happen.
+        let expr = binary_expr(
+            cast(col("c1"), DataType::Utf8),
+            Operator::IsDistinctFrom,
+            lit("0123"),
+        );
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
+    }
+
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let simplifier = ExprSimplifier::new(
             SimplifyContext::builder()
@@ -403,6 +446,7 @@ mod tests {
             DFSchema::from_unqualified_fields(
                 vec![
                     Field::new("c1", DataType::Int32, false),
+                    Field::new("c2", DataType::Int64, false),
                     Field::new("ts_milli", timestamp_millis_type(), false),
                     Field::new("ts_nano", timestamp_nano_type(), false),
                 ]

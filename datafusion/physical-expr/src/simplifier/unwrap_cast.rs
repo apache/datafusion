@@ -853,6 +853,8 @@ mod tests {
 
         // Create a more complex expression with nested casts
         // (cast(c1 as INT64) > INT64(10)) AND (cast(c2 as INT32) = INT32(20))
+        // c2 is Int64 → the Int64→Int32 cast is narrowing and blocked
+        // by the family gate, so only the left side should be unwrapped.
         let c1_expr = col("c1", &schema).unwrap();
         let c1_cast = Arc::new(CastExpr::new(c1_expr, DataType::Int64, None));
         let c1_literal = lit(10i64);
@@ -871,23 +873,22 @@ mod tests {
             .transform_down(|node| unwrap_cast_in_comparison(node, &schema))
             .unwrap();
 
-        // Should be transformed
+        // Should be transformed (at least the left side)
         assert!(result.transformed);
 
-        // Verify both sides of the AND were optimized
+        // Verify both sides of the AND
         let optimized = result.data;
         let and_binary = optimized.downcast_ref::<BinaryExpr>().unwrap();
 
-        // Left side should be: c1 > INT32(10)
+        // Left side should be: c1 > INT32(10)  (Int32→Int64 widening, unwrapped)
         let left_binary = and_binary.left().downcast_ref::<BinaryExpr>().unwrap();
         assert!(!is_cast_expr(left_binary.left()));
         let left_literal = left_binary.right().downcast_ref::<Literal>().unwrap();
         assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(10)));
 
-        // Right side should be: c2 = INT64(20) (c2 is already INT64, literal cast to match)
+        // Right side CAST(c2 as INT32) = 20 should stay as-is
+        // (Int64→Int32 is narrowing, blocked by the family gate).
         let right_binary = and_binary.right().downcast_ref::<BinaryExpr>().unwrap();
-        assert!(!is_cast_expr(right_binary.left()));
-        let right_literal = right_binary.right().downcast_ref::<Literal>().unwrap();
-        assert_eq!(right_literal.value(), &ScalarValue::Int64(Some(20)));
+        assert!(is_cast_expr(right_binary.left()));
     }
 }
