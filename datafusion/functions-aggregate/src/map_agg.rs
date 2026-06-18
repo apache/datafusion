@@ -17,7 +17,7 @@
 
 //! `MAP_AGG` aggregate implementation: [`MapAgg`]
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::mem::{size_of, size_of_val, take};
 use std::sync::Arc;
 
@@ -26,7 +26,7 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
-use datafusion_common::utils::{compare_rows, get_row_at_idx};
+use datafusion_common::utils::{SingleRowListArrayBuilder, compare_rows, get_row_at_idx};
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -150,13 +150,11 @@ impl AggregateUDFImpl for MapAgg {
 }
 
 fn map_type(key_type: &DataType, value_type: &DataType) -> DataType {
-    let key_field = Arc::new(Field::new("key", key_type.clone(), false));
-    let value_field = Arc::new(Field::new("value", value_type.clone(), true));
-    let entries_field = Arc::new(Field::new(
-        "entries",
-        DataType::Struct(Fields::from(vec![key_field, value_field])),
-        false,
-    ));
+    let fields = Fields::from(vec![
+        Field::new("key", key_type.clone(), false),
+        Field::new("value", value_type.clone(), true),
+    ]);
+    let entries_field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
     DataType::Map(entries_field, false)
 }
 
@@ -168,14 +166,13 @@ fn build_single_map(
 ) -> Result<ArrayRef> {
     debug_assert_eq!(keys.len(), values.len());
 
-    let key_field = Arc::new(Field::new("key", key_type.clone(), false));
-    let value_field = Arc::new(Field::new("value", value_type.clone(), true));
+    let fields = Fields::from(vec![
+        Field::new("key", key_type.clone(), false),
+        Field::new("value", value_type.clone(), true),
+    ]);
     let entries_field = Arc::new(Field::new(
         "entries",
-        DataType::Struct(Fields::from(vec![
-            Arc::clone(&key_field),
-            Arc::clone(&value_field),
-        ])),
+        DataType::Struct(fields.clone()),
         false,
     ));
 
@@ -191,11 +188,7 @@ fn build_single_map(
         ScalarValue::iter_to_array(values)?
     };
 
-    let entries = StructArray::try_new(
-        Fields::from(vec![key_field, value_field]),
-        vec![key_array, value_array],
-        None,
-    )?;
+    let entries = StructArray::try_new(fields, vec![key_array, value_array], None)?;
 
     let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0i32, len as i32]));
     Ok(Arc::new(MapArray::try_new(
@@ -207,27 +200,26 @@ fn build_single_map(
     )?))
 }
 
-/// De-duplicates parallel key/value vectors keeping the first value seen for
-/// each key.
 fn dedup_first_wins(
     keys: Vec<ScalarValue>,
     values: Vec<ScalarValue>,
 ) -> (Vec<ScalarValue>, Vec<ScalarValue>) {
-    use std::collections::HashSet;
+    // First pass: mark each position that is the first occurrence of its key.
+    let mut seen = HashSet::with_capacity(keys.len());
+    let keep: Vec<bool> = keys.iter().map(|k| seen.insert(k)).collect();
 
-    let mut seen: HashSet<ScalarValue> = HashSet::with_capacity(keys.len());
-    let mut out_keys: Vec<ScalarValue> = Vec::with_capacity(keys.len());
-    let mut out_vals: Vec<ScalarValue> = Vec::with_capacity(keys.len());
-
-    for (k, v) in keys.into_iter().zip(values) {
-        // Keep only the first occurrence of each key; later ones are dropped.
-        if seen.insert(k.clone()) {
-            out_keys.push(k);
-            out_vals.push(v);
-        }
-    }
-
-    (out_keys, out_vals)
+    // Second pass: keep only the first-occurrence positions.
+    let out_keys = keys
+        .into_iter()
+        .zip(&keep)
+        .filter_map(|(k, &keep)| keep.then_some(k))
+        .collect();
+    let out_values = values
+        .into_iter()
+        .zip(&keep)
+        .filter_map(|(v, &keep)| keep.then_some(v))
+        .collect();
+    (out_keys, out_values)
 }
 
 /// Plain accumulator used when there is no `ORDER BY`.
@@ -388,12 +380,7 @@ impl OrderSensitiveMapAggAccumulator {
         }
 
         let struct_array = StructArray::try_new(struct_field, column_wise, None)?;
-        Ok(
-            datafusion_common::utils::SingleRowListArrayBuilder::new(Arc::new(
-                struct_array,
-            ))
-            .build_list_scalar(),
-        )
+        Ok(SingleRowListArrayBuilder::new(Arc::new(struct_array)).build_list_scalar())
     }
 }
 
