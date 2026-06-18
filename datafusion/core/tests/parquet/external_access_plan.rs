@@ -29,7 +29,7 @@ use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{DFSchema, assert_contains};
+use datafusion_common::{DFSchema, assert_batches_eq, assert_contains};
 use datafusion_datasource_parquet::{
     ParquetAccessPlan, ParquetRowSelection, RowGroupAccess,
 };
@@ -169,6 +169,13 @@ async fn row_selection_extension() {
             RowSelector::skip(7),
         ]))),
         expected_rows: 1,
+        expected_output: Some(&[
+            "+------+------------+",
+            "| utf8 | large_utf8 |",
+            "+------+------------+",
+            "| c    | c          |",
+            "+------+------------+",
+        ]),
         predicate: None,
     }
     .run()
@@ -192,6 +199,15 @@ async fn row_selection_extension_spanning_row_groups() {
             RowSelector::skip(3),
         ]))),
         expected_rows: 3,
+        expected_output: Some(&[
+            "+------+------------+",
+            "| utf8 | large_utf8 |",
+            "+------+------------+",
+            "|      |            |",
+            "| e    | e          |",
+            "| f    | f          |",
+            "+------+------------+",
+        ]),
         predicate: None,
     }
     .run()
@@ -212,6 +228,7 @@ async fn bad_row_selection_extension() {
             RowSelector::select(1),
         ]))),
         expected_rows: 10000,
+        expected_output: None,
         predicate: None,
     }
     .run()
@@ -245,6 +262,7 @@ async fn plan_and_filter() {
         access_plan,
         row_selection: None,
         expected_rows: 0,
+        expected_output: None,
         predicate: Some(predicate),
     }
     .run()
@@ -303,6 +321,7 @@ async fn bad_row_groups() {
         ])),
         row_selection: None,
         expected_rows: 0,
+        expected_output: None,
         predicate: None,
     }
     .run()
@@ -327,6 +346,7 @@ async fn bad_selection() {
         row_selection: None,
         // expects that we hit an error, this should not be run
         expected_rows: 10000,
+        expected_output: None,
         predicate: None,
     }
     .run()
@@ -378,6 +398,7 @@ impl Test {
             access_plan,
             row_selection: None,
             expected_rows,
+            expected_output: None,
             predicate: None,
         }
         .run()
@@ -396,6 +417,7 @@ struct TestFull {
     access_plan: Option<ParquetAccessPlan>,
     row_selection: Option<ParquetRowSelection>,
     expected_rows: usize,
+    expected_output: Option<&'static [&'static str]>,
     predicate: Option<Expr>,
 }
 
@@ -407,6 +429,7 @@ impl TestFull {
             access_plan,
             row_selection,
             expected_rows,
+            expected_output,
             predicate,
         } = self;
 
@@ -464,6 +487,9 @@ impl TestFull {
             "results: \n{}",
             pretty_format_batches(&results).unwrap()
         );
+        if let Some(expected_output) = expected_output {
+            assert_batches_eq!(expected_output, &results);
+        }
 
         std::fs::remove_file(file_name).unwrap();
 

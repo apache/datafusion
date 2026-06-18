@@ -178,6 +178,102 @@ impl RowGroupAccess {
     }
 }
 
+/// Single-pass cursor over a file-level [`RowSelection`].
+///
+/// `take` returns the next selector fragment capped to the requested row count,
+/// splitting the current selector when it straddles a row group boundary.
+struct OverallRowSelectionCursor {
+    selector_iter: std::vec::IntoIter<RowSelector>,
+    current: Option<RowSelector>,
+}
+
+impl OverallRowSelectionCursor {
+    fn new(selection: RowSelection) -> Self {
+        let selectors: Vec<RowSelector> = selection.into();
+        let mut selector_iter = selectors.into_iter();
+        let current = selector_iter.next();
+        Self {
+            selector_iter,
+            current,
+        }
+    }
+
+    /// Take up to `max_rows` rows from the current selector.
+    ///
+    /// If the current selector crosses the requested boundary, this returns the
+    /// leading fragment and keeps the remaining rows in `self.current` for the
+    /// next call.
+    #[inline]
+    fn take(&mut self, max_rows: usize) -> Option<RowSelector> {
+        let sel = self.current?;
+        let row_count = sel.row_count.min(max_rows);
+        self.current = if row_count < sel.row_count {
+            Some(RowSelector {
+                row_count: sel.row_count - row_count,
+                skip: sel.skip,
+            })
+        } else {
+            self.selector_iter.next()
+        };
+
+        Some(RowSelector {
+            row_count,
+            skip: sel.skip,
+        })
+    }
+
+    fn remaining_rows(self) -> usize {
+        self.current.map_or(0, |s| s.row_count)
+            + self.selector_iter.map(|s| s.row_count).sum::<usize>()
+    }
+}
+
+/// Accumulates the selector fragments that belong to one row group.
+struct RowGroupAccessBuilder {
+    /// Selector fragments belonging to this row group.
+    selectors: Vec<RowSelector>,
+    /// Number of selected rows accumulated for this row group.
+    selected: usize,
+    /// Number of skipped rows accumulated for this row group.
+    skipped: usize,
+    /// Number of rows still needed to complete this row group.
+    remaining: usize,
+}
+
+impl RowGroupAccessBuilder {
+    fn new(row_group_rows: usize) -> Self {
+        Self {
+            selectors: Vec::with_capacity(1),
+            selected: 0,
+            skipped: 0,
+            remaining: row_group_rows,
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, selector: RowSelector) {
+        self.remaining -= selector.row_count;
+
+        if selector.skip {
+            self.skipped += selector.row_count;
+        } else {
+            self.selected += selector.row_count;
+        }
+
+        self.selectors.push(selector);
+    }
+
+    fn into_access(self) -> RowGroupAccess {
+        if self.selected == 0 {
+            RowGroupAccess::Skip
+        } else if self.skipped == 0 {
+            RowGroupAccess::Scan
+        } else {
+            RowGroupAccess::Selection(self.selectors.into())
+        }
+    }
+}
+
 impl ParquetAccessPlan {
     /// Create a new `ParquetAccessPlan` that scans all row groups
     pub fn new_all(row_group_count: usize) -> Self {
@@ -220,9 +316,11 @@ impl ParquetAccessPlan {
         selection: RowSelection,
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<Self> {
-        let selectors: Vec<RowSelector> = selection.into();
-        let mut selector_iter = selectors.into_iter();
-        let mut current = selector_iter.next();
+        // Keep this as a single pass over the selector stream rather than
+        // repeatedly calling `RowSelection::split_off` per row group. The
+        // `split_off` version is simpler, but it clones/retains substantially
+        // more selector buffer capacity for highly fragmented selections.
+        let mut cursor = OverallRowSelectionCursor::new(selection);
 
         let mut selection_rows = 0usize;
         let mut file_rows = 0usize;
@@ -232,71 +330,19 @@ impl ParquetAccessPlan {
             let rg_rows = rg_meta.num_rows() as usize;
             file_rows += rg_rows;
 
-            // `leading` holds the first selector seen in this group when we have
-            // not yet seen a direction change; once both skip and select rows appear
-            // we promote to `mixed` so we can build the full RowSelection Vec.
-            // This avoids a heap allocation for the common all-scan / all-skip case.
-            let mut leading: Option<RowSelector> = None;
-            let mut mixed: Option<Vec<RowSelector>> = None;
-            let mut selected = 0usize;
-            let mut skipped = 0usize;
-            let mut remaining = rg_rows;
-
-            while remaining > 0 {
-                let Some(sel) = current else { break };
-                let take = sel.row_count.min(remaining);
-                selection_rows += take;
-                remaining -= take;
-
-                let rg_sel = RowSelector {
-                    row_count: take,
-                    skip: sel.skip,
+            let mut builder = RowGroupAccessBuilder::new(rg_rows);
+            while builder.remaining > 0 {
+                let Some(selector) = cursor.take(builder.remaining) else {
+                    break;
                 };
-                if sel.skip {
-                    skipped += take;
-                } else {
-                    selected += take;
-                }
-
-                if let Some(v) = &mut mixed {
-                    v.push(rg_sel);
-                } else if let Some(lead) = leading.as_mut() {
-                    if lead.skip == rg_sel.skip {
-                        // Merge adjacent same-direction pieces (e.g. a selector
-                        // split at a row-group boundary has the same direction as
-                        // its continuation).
-                        lead.row_count += rg_sel.row_count;
-                    } else {
-                        mixed = Some(vec![*lead, rg_sel]);
-                    }
-                } else {
-                    leading = Some(rg_sel);
-                }
-
-                current = if take < sel.row_count {
-                    Some(RowSelector {
-                        row_count: sel.row_count - take,
-                        skip: sel.skip,
-                    })
-                } else {
-                    selector_iter.next()
-                };
+                selection_rows += selector.row_count;
+                builder.push(selector);
             }
 
-            let access = if selected == 0 {
-                RowGroupAccess::Skip
-            } else if skipped == 0 {
-                RowGroupAccess::Scan
-            } else {
-                // Both `selected > 0` and `skipped > 0` means a direction change
-                // occurred, which always initialises `mixed`.
-                RowGroupAccess::Selection(mixed.unwrap_or_default().into())
-            };
-            row_groups.push(access);
+            row_groups.push(builder.into_access());
         }
 
-        selection_rows += current.map_or(0, |s| s.row_count)
-            + selector_iter.map(|s| s.row_count).sum::<usize>();
+        selection_rows += cursor.remaining_rows();
 
         if selection_rows != file_rows {
             return exec_err!(
@@ -945,6 +991,39 @@ mod test {
         assert_contains!(
             err,
             "Invalid Parquet RowSelection. File has 100 rows, but selection specifies 99 rows"
+        );
+    }
+
+    #[test]
+    fn test_new_from_overall_row_selection_boundary_splits() {
+        let row_selection = RowSelection::from(vec![
+            RowSelector::skip(5),
+            RowSelector::select(10),
+            RowSelector::skip(20),
+            RowSelector::select(25),
+            RowSelector::skip(40),
+        ]);
+
+        let access_plan = ParquetAccessPlan::try_new_from_overall_row_selection(
+            row_selection,
+            &ROW_GROUP_METADATA,
+        )
+        .unwrap();
+
+        assert_eq!(
+            access_plan,
+            ParquetAccessPlan::new(vec![
+                RowGroupAccess::Selection(
+                    vec![RowSelector::skip(5), RowSelector::select(5)].into()
+                ),
+                RowGroupAccess::Selection(
+                    vec![RowSelector::select(5), RowSelector::skip(15)].into()
+                ),
+                RowGroupAccess::Selection(
+                    vec![RowSelector::skip(5), RowSelector::select(25)].into()
+                ),
+                RowGroupAccess::Skip,
+            ])
         );
     }
 
