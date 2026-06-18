@@ -908,7 +908,6 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
@@ -920,7 +919,7 @@ where
         self.null_state.accumulate(
             group_indices,
             partial_counts,
-            opt_filter,
+            None,
             total_num_groups,
             |group_index, partial_count| {
                 // SAFETY: group_index is guaranteed to be in bounds
@@ -934,7 +933,7 @@ where
         self.null_state.accumulate(
             group_indices,
             partial_sums,
-            opt_filter,
+            None,
             total_num_groups,
             |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
                 // SAFETY: group_index is guaranteed to be in bounds
