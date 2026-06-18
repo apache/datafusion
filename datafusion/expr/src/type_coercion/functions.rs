@@ -1912,6 +1912,19 @@ mod tests {
                 Box::new(DataType::Utf8View),
             )]
         );
+        // Contrast: without encoding_preservation, Native strips dictionary entirely
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_int64()),
+                    vec![TypeSignatureClass::Integer],
+                    NativeType::Int64,
+                ),
+            )?,
+            vec![DataType::Int64]
+        );
+        // With encoding_preservation, dictionary wrapper is preserved, value coerced
         assert_eq!(
             dictionary_input(
                 DataType::Int32,
@@ -1927,6 +1940,22 @@ mod tests {
                 Box::new(DataType::Int64),
             )]
         );
+        // Contrast: without encoding_preservation, non-Native already passes through
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Integer,
+                    vec![],
+                    NativeType::Int64,
+                ),
+            )?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Int32),
+            )]
+        );
+        // With encoding_preservation, same result — no difference for non-Native
         assert_eq!(
             dictionary_input(
                 DataType::Int32,
