@@ -39,6 +39,7 @@ use crate::projection::{ProjectionExec, all_columns, make_with_child, update_exp
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
+use crate::statistics::StatisticsArgs;
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
@@ -1361,8 +1362,8 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if let Some(partition) = partition {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        if let Some(partition) = args.partition() {
             let partition_count = self.partitioning().partition_count();
             if partition_count == 0 {
                 return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
@@ -1375,7 +1376,8 @@ impl ExecutionPlan for RepartitionExec {
                 partition_count
             );
 
-            let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
+            let mut stats =
+                Arc::unwrap_or_clone(args.compute_child_statistics(&self.input, None)?);
 
             // Distribute statistics across partitions
             stats.num_rows = stats
@@ -1398,7 +1400,7 @@ impl ExecutionPlan for RepartitionExec {
 
             Ok(Arc::new(stats))
         } else {
-            self.input.partition_statistics(None)
+            args.compute_child_statistics(&self.input, None)
         }
     }
 
