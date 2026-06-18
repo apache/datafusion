@@ -617,14 +617,13 @@ impl Optimizer {
         while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
-            for rule in &self.rules {
-                // Re-check for each rule: early rules can remove subquery
-                // expressions, allowing later rules to use the cheaper in-place
-                // traversal in the same optimizer pass. This is also
-                // correctness-sensitive: the in-place path refreshes parent
-                // schemas after child schemas change.
-                let has_subqueries = plan_has_subqueries(&new_plan);
+            // Track subquery presence across the pass. Refresh after changed
+            // rules so decorrelation can move later rules onto the in-place
+            // path; that path refreshes parent schemas after child schemas
+            // change.
+            let mut has_subqueries = plan_has_subqueries(&new_plan);
 
+            for rule in &self.rules {
                 // If skipping failed rules, copy plan before attempting to rewrite
                 // as rewriting is destructive
                 let prev_plan = options
@@ -702,6 +701,7 @@ impl Optimizer {
                         new_plan = data;
                         observer(&new_plan, rule.as_ref());
                         if transformed {
+                            has_subqueries = plan_has_subqueries(&new_plan);
                             log_plan(rule.name(), &new_plan);
                         } else {
                             debug!(
