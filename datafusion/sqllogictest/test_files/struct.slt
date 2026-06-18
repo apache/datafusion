@@ -887,8 +887,12 @@ SELECT CAST({a: 1, b: 2, extra: 3} AS STRUCT(a INT, b INT));
 {a: 1, b: 2}
 
 # Test no overlap with mismatched field count - should fail because no field names match
-statement error DataFusion error: (Plan error|Error during planning|This feature is not implemented): (Cannot cast struct: at least one field name must match between source and target|Cannot cast struct with 3 fields to 2 fields without name overlap|Unsupported CAST from Struct)
+statement error DataFusion error: Error during planning: Cannot cast struct with 3 fields to 2
 SELECT CAST(struct(1, 'x', 'y') AS STRUCT(a INT, b VARCHAR));
+
+# Cannot cast to nullable struct field to non nullable struct field
+statement error Optimizer rule 'simplify_expressions' failed
+select arrow_cast(struct(10), 'Struct("c0": non-null Int64)')
 
 # Test nested struct with field reordering
 query ?
