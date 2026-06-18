@@ -96,7 +96,7 @@ pub trait Dialect: Send + Sync {
 
     /// The style to use when unparsing DISTINCT FROM style expressions
     fn distinct_from_style(&self) -> DistinctFromStyle {
-        DistinctFromStyle::Unsupported
+        DistinctFromStyle::FullText
     }
 
     /// The character length extraction style to use: `CharacterLengthStyle`
@@ -343,10 +343,8 @@ pub enum CharacterLengthStyle {
 pub enum DistinctFromStyle {
     /// DBMS supports `IS (NOT) DISTINCT FROM`
     FullText,
-    /// DMBS supports equivalent operations via `<=>` and `<>`
-    DiamondOperators,
-    /// DMBS does not support IS DISTINCT FROM operations
-    Unsupported,
+    /// DMBS supports equivalent operations via `<=>` and `NOT <=>`
+    Spaceship,
 }
 
 pub struct DefaultDialect {}
@@ -363,10 +361,6 @@ impl Dialect for DefaultDialect {
             || !identifier_regex.is_match(identifier)
             || identifier.chars().any(|c| c.is_ascii_uppercase());
         if needs_quote { Some('"') } else { None }
-    }
-
-    fn distinct_from_style(&self) -> DistinctFromStyle {
-        DistinctFromStyle::FullText
     }
 }
 
@@ -591,7 +585,7 @@ impl Dialect for MySqlDialect {
     }
 
     fn distinct_from_style(&self) -> DistinctFromStyle {
-        DistinctFromStyle::DiamondOperators
+        DistinctFromStyle::Spaceship
     }
 
     fn int64_cast_dtype(&self) -> ast::DataType {

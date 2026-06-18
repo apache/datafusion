@@ -160,18 +160,17 @@ impl Unparser<'_> {
                     DistinctFromStyle::FullText => Ok(ast::Expr::Nested(Box::new(
                         ast::Expr::IsDistinctFrom(Box::new(l), Box::new(r)),
                     ))),
-                    DistinctFromStyle::DiamondOperators => {
+                    DistinctFromStyle::Spaceship => {
                         Ok(ast::Expr::Nested(Box::new(ast::Expr::UnaryOp {
                             op: UnaryOperator::Not,
-                            expr: Box::new(ast::Expr::BinaryOp {
-                                left: Box::new(l),
-                                right: Box::new(r),
-                                op: BinaryOperator::Spaceship,
-                            }),
+                            expr: Box::new(ast::Expr::Nested(Box::new(
+                                ast::Expr::BinaryOp {
+                                    left: Box::new(l),
+                                    right: Box::new(r),
+                                    op: BinaryOperator::Spaceship,
+                                },
+                            ))),
                         })))
-                    }
-                    DistinctFromStyle::Unsupported => {
-                        not_impl_err!("dialect does not support expression: {expr:?}")
                     }
                 }
             }
@@ -187,15 +186,12 @@ impl Unparser<'_> {
                     DistinctFromStyle::FullText => Ok(ast::Expr::Nested(Box::new(
                         ast::Expr::IsNotDistinctFrom(Box::new(l), Box::new(r)),
                     ))),
-                    DistinctFromStyle::DiamondOperators => {
+                    DistinctFromStyle::Spaceship => {
                         Ok(ast::Expr::Nested(Box::new(ast::Expr::BinaryOp {
                             left: Box::new(l),
                             right: Box::new(r),
                             op: BinaryOperator::Spaceship,
                         })))
-                    }
-                    DistinctFromStyle::Unsupported => {
-                        not_impl_err!("dialect does not support expression: {expr:?}")
                     }
                 }
             }
@@ -3742,7 +3738,7 @@ mod tests {
         let sql = expr_to_sql(&expr).unwrap().to_string();
         assert_eq!(sql, "(c1 IS DISTINCT FROM true)");
         let sql = mysql_unparser.expr_to_sql(&expr).unwrap().to_string();
-        assert_eq!(sql, "(NOT `c1` <=> true)");
+        assert_eq!(sql, "(NOT (`c1` <=> true))");
 
         let expr = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(col("c1")),
