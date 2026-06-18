@@ -51,36 +51,38 @@ pub fn apply_file_schema_type_coercions(
     table_schema: &Schema,
     file_schema: &Schema,
 ) -> Option<Schema> {
+    // First pass: check whether any transformation is needed without building
+    // the full lookup map. For wide schemas this saves constructing a
+    // HashMap of every column (which is then discarded) once per file.
     let mut needs_view_transform = false;
     let mut needs_string_transform = false;
-
-    // Create a mapping of table field names to their data types for fast lookup
-    // and simultaneously check if we need any transformations
-    let table_fields: HashMap<_, _> = table_schema
-        .fields()
-        .iter()
-        .map(|f| {
-            let dt = f.data_type();
-            // Check if we need view type transformation
-            if matches!(dt, &DataType::Utf8View | &DataType::BinaryView) {
-                needs_view_transform = true;
-            }
-            // Check if we need string type transformation
-            if matches!(
-                dt,
-                &DataType::Utf8 | &DataType::LargeUtf8 | &DataType::Utf8View
-            ) {
-                needs_string_transform = true;
-            }
-
-            (f.name(), dt)
-        })
-        .collect();
+    for f in table_schema.fields() {
+        let dt = f.data_type();
+        if matches!(dt, &DataType::Utf8View | &DataType::BinaryView) {
+            needs_view_transform = true;
+        }
+        if matches!(
+            dt,
+            &DataType::Utf8 | &DataType::LargeUtf8 | &DataType::Utf8View
+        ) {
+            needs_string_transform = true;
+        }
+        if needs_view_transform && needs_string_transform {
+            break;
+        }
+    }
 
     // Early return if no transformation needed
     if !needs_view_transform && !needs_string_transform {
         return None;
     }
+
+    // Build a name -> data type lookup only when we actually need it.
+    let table_fields: HashMap<_, _> = table_schema
+        .fields()
+        .iter()
+        .map(|f| (f.name(), f.data_type()))
+        .collect();
 
     let transformed_fields: Vec<Arc<Field>> = file_schema
         .fields()
