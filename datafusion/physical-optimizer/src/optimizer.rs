@@ -188,12 +188,14 @@ impl PhysicalOptimizer {
             // [`EnsureRequirements`](crate::ensure_requirements) for the per-phase
             // breakdown, and <https://github.com/apache/datafusion/issues/21973>
             // for the original failure mode.
-            // Probe candidate BoundedWindowAggExec nodes for per-partition stats
-            // on their ORDER BY column. Skeleton step toward range-repartitioning
-            // unpartitioned RANGE-frame windows. Must run before EnsureRequirements
-            // so the window's child is still the raw source (no inserted Sort/SPM).
-            Arc::new(ParallelWindow::new()),
             Arc::new(EnsureRequirements::new()),
+            // Wrap the per-partition SortExec under a no-PARTITION-BY RANGE-frame
+            // window with a (currently passthrough) RangeRepartitionExec. The
+            // wrapper will eventually drive range routing; for now it just awaits
+            // `runtime_statistics` on each input partition and logs them. Runs
+            // *after* EnsureRequirements so the SortExec that EnsureRequirements
+            // inserts is in place.
+            Arc::new(ParallelWindow::new()),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),
             // Run once after the local sorting requirement is changed

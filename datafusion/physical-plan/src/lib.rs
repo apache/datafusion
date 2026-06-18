@@ -83,6 +83,7 @@ pub mod metrics;
 pub mod operator_statistics;
 pub mod placeholder_row;
 pub mod projection;
+pub mod range_repartition;
 pub mod recursive_query;
 pub mod repartition;
 pub mod scalar_subquery;

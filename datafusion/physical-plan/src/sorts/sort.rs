@@ -72,76 +72,49 @@ use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
 use crate::expressions::Column;
 use datafusion_common::ScalarValue;
-use datafusion_execution::RecordBatchStream;
-use futures::{Stream, StreamExt, TryStreamExt};
-use log::{debug, info, trace};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use datafusion_common::stats::Precision;
+use datafusion_physical_expr::PhysicalSortExpr;
+use futures::{StreamExt, TryStreamExt};
+use log::{debug, trace};
+use std::sync::Mutex;
 
-/// Stream adapter that observes the first and last value of one column as
-/// batches flow through, logging the resulting min/max once the upstream
-/// stream ends. Intended to wrap a sorted stream so the observed values are
-/// the exact partition-local extrema on the sort key.
-struct ObserveSortedMinMax {
-    inner: SendableRecordBatchStream,
-    state: Option<ObserveState>,
+/// One mutable slot per SortExec output partition. Populated by `execute()`
+/// after its input loop drains — every row has been observed exactly once
+/// by then (all three sort paths consume their entire input before emitting
+/// the first sorted batch). Surfaced through
+/// `ExecutionPlan::runtime_statistics`.
+type RuntimeStatsSlots = Arc<Vec<Mutex<Option<Arc<Statistics>>>>>;
+
+fn make_runtime_stats_slots(n_partitions: usize) -> RuntimeStatsSlots {
+    Arc::new((0..n_partitions).map(|_| Mutex::new(None)).collect())
 }
 
-struct ObserveState {
-    partition: usize,
-    col_idx: usize,
-    col_name: String,
-    descending: bool,
-    first: Option<ScalarValue>,
-    last: Option<ScalarValue>,
-    rows_seen: usize,
-}
-
-impl Stream for ObserveSortedMinMax {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.inner).poll_next(cx) {
-            Poll::Ready(Some(Ok(batch))) => {
-                if let Some(state) = self.state.as_mut()
-                    && batch.num_rows() > 0
-                {
-                    let col = batch.column(state.col_idx);
-                    let last_idx = col.len() - 1;
-                    if state.first.is_none() {
-                        state.first = ScalarValue::try_from_array(col, 0).ok();
-                    }
-                    state.last = ScalarValue::try_from_array(col, last_idx).ok();
-                    state.rows_seen += col.len();
-                }
-                Poll::Ready(Some(Ok(batch)))
-            }
-            Poll::Ready(None) => {
-                if let Some(state) = self.state.take() {
-                    let (min, max) = if state.descending {
-                        (state.last, state.first)
-                    } else {
-                        (state.first, state.last)
-                    };
-                    info!(
-                        "SortExec runtime min/max partition {} `{}`: min={:?} max={:?} rows={}",
-                        state.partition, state.col_name, min, max, state.rows_seen
-                    );
-                }
-                Poll::Ready(None)
-            }
-            other => other,
+/// Update `running_min`/`running_max` with values from one input batch,
+/// evaluating the leading sort expression to a column-shaped array and
+/// folding row-by-row. Type-agnostic: relies on `ScalarValue`'s ordering
+/// rather than per-type arrow kernels.
+fn update_running_min_max(
+    sort_expr: &PhysicalSortExpr,
+    batch: &RecordBatch,
+    running_min: &mut Option<ScalarValue>,
+    running_max: &mut Option<ScalarValue>,
+) -> Result<()> {
+    let col = sort_expr.expr.evaluate(batch)?.into_array(batch.num_rows())?;
+    for i in 0..col.len() {
+        if col.is_null(i) {
+            continue;
         }
+        let value = ScalarValue::try_from_array(&col, i)?;
+        *running_min = Some(match running_min.take() {
+            Some(current) if current <= value => current,
+            _ => value.clone(),
+        });
+        *running_max = Some(match running_max.take() {
+            Some(current) if current >= value => current,
+            _ => value,
+        });
     }
-}
-
-impl RecordBatchStream for ObserveSortedMinMax {
-    fn schema(&self) -> SchemaRef {
-        self.inner.schema()
-    }
+    Ok(())
 }
 
 struct ExternalSorterMetrics {
@@ -937,6 +910,10 @@ pub struct SortExec {
     /// If `fetch` is `Some`, this will also be set and a TopK operator may be used.
     /// If `fetch` is `None`, this will be `None`.
     filter: Option<Arc<RwLock<TopKDynamicFilters>>>,
+    /// Per-output-partition slot populated once that partition's input has
+    /// been fully consumed; exposes exact min/max on the leading sort key
+    /// via `ExecutionPlan::runtime_statistics`.
+    runtime_stats: RuntimeStatsSlots,
 }
 
 impl SortExec {

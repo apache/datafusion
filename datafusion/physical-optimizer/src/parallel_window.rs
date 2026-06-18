@@ -29,6 +29,8 @@ use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_plan::range_repartition::RangeRepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::BoundedWindowAggExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use log::info;
@@ -51,10 +53,19 @@ impl PhysicalOptimizerRule for ParallelWindow {
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let target_partitions = config.execution.target_partitions;
         let out = plan.transform_down(|node| {
-            if let Some(window) = node.downcast_ref::<BoundedWindowAggExec>() {
-                probe_candidate(window, target_partitions)?;
+            let Some(window) = node.downcast_ref::<BoundedWindowAggExec>() else {
+                return Ok(Transformed::no(node));
+            };
+            probe_candidate(window, target_partitions)?;
+            if !is_eligible(window) {
+                return Ok(Transformed::no(node));
             }
-            Ok(Transformed::no(node))
+            // Descend through whatever EnsureRequirements stacked on top of the
+            // sort (typically SortPreservingMergeExec) until we find the
+            // SortExec and wrap it with RangeRepartitionExec.
+            let new_child = wrap_first_sort_descendant(Arc::clone(&node.children()[0]))?;
+            let new_window = Arc::clone(&node).with_new_children(vec![new_child])?;
+            Ok(Transformed::yes(new_window))
         })?;
         Ok(out.data)
     }
@@ -66,6 +77,43 @@ impl PhysicalOptimizerRule for ParallelWindow {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Same shape gate that `probe_candidate` enforces, returned as a bool so
+/// the rule can decide whether to do the plan rewrite.
+fn is_eligible(window: &BoundedWindowAggExec) -> bool {
+    if !window.partition_keys().is_empty() {
+        return false;
+    }
+    let order_by = window.window_expr()[0].order_by();
+    if order_by.len() != 1 {
+        return false;
+    }
+    if order_by[0].expr.downcast_ref::<Column>().is_none() {
+        return false;
+    }
+    let frame = window.window_expr()[0].get_window_frame();
+    if frame.units != WindowFrameUnits::Range {
+        return false;
+    }
+    i64_halo(&frame.start_bound, &frame.end_bound).is_some()
+}
+
+/// Walk down through single-child operators until we hit a `SortExec`;
+/// replace it in-place with `RangeRepartitionExec(SortExec)` and rebuild
+/// the chain back up. If no `SortExec` is found, leave the subtree alone.
+fn wrap_first_sort_descendant(
+    node: Arc<dyn ExecutionPlan>,
+) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    if node.downcast_ref::<SortExec>().is_some() {
+        return Ok(Arc::new(RangeRepartitionExec::new(node)));
+    }
+    let children = node.children();
+    if children.len() != 1 {
+        return Ok(node);
+    }
+    let new_child = wrap_first_sort_descendant(Arc::clone(children[0]))?;
+    node.with_new_children(vec![new_child])
 }
 
 fn probe_candidate(
