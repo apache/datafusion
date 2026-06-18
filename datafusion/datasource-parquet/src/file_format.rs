@@ -626,7 +626,7 @@ pub async fn fetch_parquet_metadata(
     object_meta: &ObjectMeta,
     size_hint: Option<usize>,
     decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+    file_metadata_cache: Option<Arc<FileMetadataCache>>,
 ) -> Result<Arc<ParquetMetaData>> {
     let decryption_properties = decryption_properties.cloned().map(Arc::new);
     DFParquetMetadata::new(store, object_meta)
@@ -650,7 +650,7 @@ pub async fn fetch_statistics(
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
     decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+    file_metadata_cache: Option<Arc<FileMetadataCache>>,
 ) -> Result<Statistics> {
     let decryption_properties = decryption_properties.cloned().map(Arc::new);
     DFParquetMetadata::new(store, file)
