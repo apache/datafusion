@@ -310,6 +310,10 @@ fn cast_fixed_size_list_values_with_parent_nulls(
 ) -> Option<Result<ArrayRef>> {
     let parent_nulls = parent_nulls.filter(|nulls| nulls.null_count() > 0)?;
 
+    // FixedSizeList stores child slots for null parent lists. Those child
+    // values are semantically hidden, but recursive casts still inspect them.
+    // Only in that case, mask hidden child slots to null and retry; if there
+    // are no parent nulls, propagate the original cast error unchanged.
     let hidden_child_nulls = parent_nulls.expand(list_size as usize);
     let masked_values = mask_array_values(source_values, &hidden_child_nulls);
     Some(masked_values.and_then(|values| cast_column(&values, target_type, cast_options)))
