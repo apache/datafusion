@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, AsArray, DictionaryArray, Int8Array, Int16Array, Int32Array,
     Int64Array, ListBuilder, NullArray, StringBuilder, UInt8Array, UInt16Array,
-    UInt32Array, UInt64Array,
+    UInt32Array, UInt64Array, new_empty_array,
 };
 use arrow::datatypes::{
     ArrowNativeType, DataType, Int8Type, Int16Type, Int32Type, Int64Type, Schema,
@@ -39,9 +39,9 @@ use crate::aggregates::group_values::GroupValues;
 /// Caches the hashes for one dictionary column's values array.
 /// Rebuilt only when the `Arc` pointer changes (i.e. a new values array arrives).
 struct ColumnCache {
-    /// Keeps the values `Arc` alive and is compared with `Arc::ptr_eq` to detect staleness.
+    ///compared with `Arc::ptr_eq` to detect staleness.
     values: ArrayRef,
-    /// `value_hashes[k]` = hash of the value at dictionary index `k`.
+    /// `value_hashes[i]` = hash of the value at dictionary index `i`.
     value_hashes: Vec<u64>,
 }
 
@@ -75,7 +75,7 @@ impl ColumnCache {
     }
 
     fn clear_shrink(&mut self, shrink_to: usize) {
-        self.values = Arc::new(NullArray::new(0));
+        self.values = Arc::new(new_empty_array(self.values.data_type()));
         self.value_hashes.clear();
         self.value_hashes.shrink_to(shrink_to);
     }
@@ -84,6 +84,7 @@ impl ColumnCache {
 /// [`GroupValues`] for GROUP BY over **two or more** dictionary-typed columns.
 pub struct GroupDictionaryColumn {
     schema: SchemaRef,
+    /// Per-column dictionary caches, one entry per GROUP BY column.
     col_caches: Vec<ColumnCache>,
     /// `(row_hash, group_id)`.  Multiple entries may share the same hash value;
     /// byte-level comparison is used to resolve collisions.
@@ -100,11 +101,11 @@ pub struct GroupDictionaryColumn {
     row_offsets: Vec<usize>,
     /// Reused scratch buffer for encoding the current row.
     row_scratch: Vec<u8>,
+    /// Converts row-encoded bytes back into Arrow arrays for [`GroupValues::emit`].
     row_decoder: RowSetDecoder,
     random_state: RandomState,
 }
 
-/// Returns `true` when every field in `schema` is `DataType::Dictionary`.
 pub fn all_dictionary_schema(schema: &Schema) -> bool {
     schema
         .fields()
@@ -119,35 +120,35 @@ fn is_supported_value_type(data_type: &DataType) -> bool {
 
 impl GroupDictionaryColumn {
     pub fn new(schema: SchemaRef) -> Result<Self> {
-        if schema.fields().len() < 2 {
+        let n_cols = schema.fields().len();
+        if n_cols < 2 {
             return Err(internal_datafusion_err!(
                 "GroupDictionaryColumn requires at least 2 columns, got {}",
-                schema.fields().len()
+                n_cols
             ));
         }
-        for field in schema.fields() {
-            match field.data_type() {
-                DataType::Dictionary(_, value_type) => {
-                    if !is_supported_value_type(value_type) {
-                        return Err(internal_datafusion_err!(
-                            "GroupDictionaryColumn: unsupported dictionary value type \
-                             '{}' in column '{}'",
-                            value_type,
-                            field.name()
-                        ));
-                    }
+        schema
+            .fields()
+            .iter()
+            .try_for_each(|field| match field.data_type() {
+                DataType::Dictionary(_, value_type)
+                    if is_supported_value_type(value_type) =>
+                {
+                    Ok(())
                 }
-                _ => {
-                    return Err(internal_datafusion_err!(
-                        "GroupDictionaryColumn requires all columns to be Dictionary, \
-                         but '{}' has type {}",
-                        field.name(),
-                        field.data_type()
-                    ));
-                }
-            }
-        }
-        let n_cols = schema.fields().len();
+                DataType::Dictionary(_, value_type) => Err(internal_datafusion_err!(
+                    "GroupDictionaryColumn: unsupported dictionary value type \
+                     '{}' in column '{}'",
+                    value_type,
+                    field.name()
+                )),
+                _ => Err(internal_datafusion_err!(
+                    "GroupDictionaryColumn requires all columns to be Dictionary, \
+                     but '{}' has type {}",
+                    field.name(),
+                    field.data_type()
+                )),
+            })?;
         let row_decoder = RowSetDecoder::new(&schema);
         Ok(Self {
             schema,
@@ -170,7 +171,6 @@ fn dict_values_array(col: &dyn Array) -> ArrayRef {
     )
 }
 
-// Box is required: different key widths (Int8/Int16/Int32/Int64) produce different concrete iterator types.
 fn fill_keys(col: &dyn Array) -> Box<dyn Iterator<Item = Option<usize>> + '_> {
     downcast_dictionary_array!(
         col => {
@@ -197,29 +197,31 @@ impl GroupValues for GroupDictionaryColumn {
         }
         let n_rows = cols[0].len();
 
-        for (col_idx, col) in cols.iter().enumerate() {
-            self.col_caches[col_idx]
-                .update(dict_values_array(col.as_ref()), &self.random_state)?;
-        }
-
         // Downcast once per column; advance with .next() per row to avoid per-row downcast.
-        let mut key_iters: Vec<_> =
-            cols.iter().map(|col| fill_keys(col.as_ref())).collect();
+        let mut key_iters: Vec<_> = cols
+            .iter()
+            .enumerate()
+            .map(|(col_idx, col)| {
+                // update hash cache for each column
+                self.col_caches[col_idx]
+                    .update(dict_values_array(col.as_ref()), &self.random_state)?;
+                Ok(fill_keys(col.as_ref()))
+            })
+            .collect::<Result<_>>()?;
 
         let _ = groups.try_reserve(n_rows);
         for _row in 0..n_rows {
-            let mut hash = 0u64;
+            let mut combined_hash = 0u64;
             self.row_scratch.clear();
 
             for (col_idx, key_iter) in key_iters.iter_mut().enumerate() {
                 let key = key_iter.next().unwrap();
                 let cache = &self.col_caches[col_idx];
                 let value_hash = key.map_or(0, |key_idx| cache.value_hashes[key_idx]);
-                hash = combine_hashes(hash, value_hash);
+                combined_hash = combine_hashes(combined_hash, value_hash);
                 encode_value(key, cache.values.as_ref(), &mut self.row_scratch);
             }
 
-            let combined_hash = hash;
             let found = {
                 let row_scratch = self.row_scratch.as_slice();
                 let row_buffer = self.row_buffer.as_slice();
@@ -265,6 +267,7 @@ impl GroupValues for GroupDictionaryColumn {
             + self.row_offsets.len() * size_of::<usize>()
             + self.row_scratch.capacity()
             + cache_bytes
+            + self.row_decoder.size()
     }
 
     fn is_empty(&self) -> bool {
@@ -299,29 +302,25 @@ impl GroupValues for GroupDictionaryColumn {
             .into_iter()
             .zip(self.schema.fields())
             .map(|(values, field)| match field.data_type() {
-                DataType::Dictionary(key_type, _) => wrap_as_dictionary(
+                DataType::Dictionary(key_type, _) => Ok(wrap_as_dictionary(
                     values,
-                    &make_sequential_keys(n_emit, key_type),
+                    &make_sequential_keys(n_emit, key_type)?,
                     key_type,
-                ),
+                )),
                 _ => unreachable!("schema validated in GroupDictionaryColumn::new"),
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
         if n_emit == n_total {
             self.row_buffer.clear();
             self.row_offsets.clear();
             self.map.clear();
-            self.map_size = 0;
+            self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         } else {
             let retain_start = self.row_offsets[n_emit];
             self.row_offsets.drain(0..n_emit);
-            for offset in &mut self.row_offsets {
-                *offset -= retain_start;
-            }
+            self.row_offsets.iter_mut().for_each(|o| *o -= retain_start);
             self.row_buffer.drain(0..retain_start);
-            // avoiding this somehow would be nice. worse case this runs once
-            // VecDeque?
             // Shift remaining group ids in-place; retain gives &mut access so no rehashing occurs.
             self.map.retain(|(_, gid)| {
                 if *gid < n_emit {
@@ -342,19 +341,25 @@ impl GroupValues for GroupDictionaryColumn {
         self.row_buffer.clear();
         self.row_offsets.clear();
         self.row_offsets.shrink_to(num_rows);
+        self.row_scratch.clear();
+        self.row_scratch.shrink_to(0);
+        self.row_decoder.finish();
         for cache in &mut self.col_caches {
             cache.clear_shrink(num_rows);
         }
     }
 }
 
-// ── encoding / decoding ───────────────────────────────────────────────────────
-
-/// Wire format per column:
-///   null:              `[0x00]`
-///   non-null scalar:   `[0x01][len: u32 LE][utf8_bytes…]`
-///   non-null list:     `[0x01][content_len: u32 LE][n: u32 LE][elem…]`
-///                      where each elem is `[0x00]` (null) or `[0x01][len: u32 LE][utf8_bytes…]`
+/// Wire format per column — scalars are the primitive unit; non-scalars repeat them with metadata:
+///
+/// **Scalar** (`Utf8`):
+///   - null:     `[0x00]`
+///   - non-null: `[0x01][len: u64 LE][utf8_bytes…]`
+///
+/// **Non-scalar** (`List<Utf8>`): a length-prefixed sequence of scalars:
+///   - null:     `[0x00]`
+///   - non-null: `[0x01][content_len: u64 LE][n: u64 LE][scalar…]`
+///     where each `scalar` follows the scalar encoding above
 fn encode_value(key: Option<usize>, values: &dyn Array, buf: &mut Vec<u8>) {
     let key_idx = match key {
         None => {
@@ -371,30 +376,30 @@ fn encode_value(key: Option<usize>, values: &dyn Array, buf: &mut Vec<u8>) {
     match values.data_type() {
         DataType::Utf8 => {
             let bytes = values.as_string::<i32>().value(key_idx).as_bytes();
-            buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
             buf.extend_from_slice(bytes);
         }
         DataType::List(_) => {
             // Back-fill content_len after encoding all elements.
             let len_pos = buf.len();
-            buf.extend_from_slice(&[0u8; 4]);
+            buf.extend_from_slice(&[0u8; 8]);
             let content_start = buf.len();
 
             let list_element = values.as_list::<i32>().value(key_idx);
             let str_array = list_element.as_string::<i32>();
-            buf.extend_from_slice(&(str_array.len() as u32).to_le_bytes());
+            buf.extend_from_slice(&(str_array.len() as u64).to_le_bytes());
             for elem_idx in 0..str_array.len() {
                 if str_array.is_null(elem_idx) {
                     buf.push(0);
                 } else {
                     let elem_bytes = str_array.value(elem_idx).as_bytes();
                     buf.push(1);
-                    buf.extend_from_slice(&(elem_bytes.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(&(elem_bytes.len() as u64).to_le_bytes());
                     buf.extend_from_slice(elem_bytes);
                 }
             }
-            let content_len = (buf.len() - content_start) as u32;
-            buf[len_pos..len_pos + 4].copy_from_slice(&content_len.to_le_bytes());
+            let content_len = (buf.len() - content_start) as u64;
+            buf[len_pos..len_pos + 8].copy_from_slice(&content_len.to_le_bytes());
         }
         dt => panic!("unsupported dictionary value type: {dt}"),
     }
@@ -436,9 +441,9 @@ impl ColumnBuilder {
             }
             Self::ListUtf8(b) => {
                 let mut cursor = 0;
-                let n = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap())
+                let n = u64::from_le_bytes(bytes[cursor..cursor + 8].try_into().unwrap())
                     as usize;
-                cursor += 4;
+                cursor += 8;
                 for _ in 0..n {
                     match bytes[cursor] {
                         0 => {
@@ -447,10 +452,10 @@ impl ColumnBuilder {
                         }
                         _ => {
                             cursor += 1;
-                            let len = u32::from_le_bytes(
-                                bytes[cursor..cursor + 4].try_into().unwrap(),
+                            let len = u64::from_le_bytes(
+                                bytes[cursor..cursor + 8].try_into().unwrap(),
                             ) as usize;
-                            cursor += 4;
+                            cursor += 8;
                             // SAFETY: bytes come from Arrow string arrays, always valid UTF-8.
                             b.values().append_value(unsafe {
                                 std::str::from_utf8_unchecked(
@@ -492,10 +497,7 @@ impl RowSetDecoder {
         Self { builders }
     }
 
-    /// Expected format: one column entry per schema field, in schema order.
-    /// Each column: `[0x00]` (null) or `[0x01][content_len: u32 LE][content…]`.
-    /// Utf8 content: raw UTF-8 bytes.
-    /// List<Utf8> content: `[n: u32 LE][elem…]` where each elem is `[0x00]` or `[0x01][len: u32 LE][utf8_bytes…]`.
+    /// Inverse of [`encode_value`]; see its doc comment for the wire format.
     fn decode(&mut self, encoded: &[u8]) {
         let mut cursor = 0;
         for builder in &mut self.builders {
@@ -506,10 +508,10 @@ impl RowSetDecoder {
                 }
                 _ => {
                     cursor += 1;
-                    let len = u32::from_le_bytes(
-                        encoded[cursor..cursor + 4].try_into().unwrap(),
+                    let len = u64::from_le_bytes(
+                        encoded[cursor..cursor + 8].try_into().unwrap(),
                     ) as usize;
-                    cursor += 4;
+                    cursor += 8;
                     builder.append_bytes(&encoded[cursor..cursor + len]);
                     cursor += len;
                 }
@@ -520,34 +522,36 @@ impl RowSetDecoder {
     fn finish(&mut self) -> Vec<ArrayRef> {
         self.builders.iter_mut().map(|b| b.finish()).collect()
     }
+
+    fn size(&self) -> usize {
+        self.builders.capacity() * size_of::<ColumnBuilder>()
+    }
 }
 
-/// Build sequential keys `[0, 1, ..., n-1]` with the key type taken from the schema.
-/// All columns share the same key type, so callers should build this once and clone the Arc.
-fn make_sequential_keys(n: usize, key_type: &DataType) -> ArrayRef {
+/// Build sequential keys `[0, 1, ..., n-1]` for the given key type.
+macro_rules! make_keys {
+    ($n:expr, $ArrayType:ty, $max:expr) => {{
+        if $n > $max {
+            return Err(internal_datafusion_err!(
+                "too many groups ({}) for dictionary key type with max capacity {}",
+                $n,
+                $max
+            ));
+        }
+        Ok(Arc::new(<$ArrayType>::from_iter_values((0..$n).map(|i| i as _))) as ArrayRef)
+    }};
+}
+
+fn make_sequential_keys(n: usize, key_type: &DataType) -> Result<ArrayRef> {
     match key_type {
-        DataType::Int8 => Arc::new(Int8Array::from_iter_values((0..n).map(|i| i as i8))),
-        DataType::Int16 => {
-            Arc::new(Int16Array::from_iter_values((0..n).map(|i| i as i16)))
-        }
-        DataType::Int32 => {
-            Arc::new(Int32Array::from_iter_values((0..n).map(|i| i as i32)))
-        }
-        DataType::Int64 => {
-            Arc::new(Int64Array::from_iter_values((0..n).map(|i| i as i64)))
-        }
-        DataType::UInt8 => {
-            Arc::new(UInt8Array::from_iter_values((0..n).map(|i| i as u8)))
-        }
-        DataType::UInt16 => {
-            Arc::new(UInt16Array::from_iter_values((0..n).map(|i| i as u16)))
-        }
-        DataType::UInt32 => {
-            Arc::new(UInt32Array::from_iter_values((0..n).map(|i| i as u32)))
-        }
-        DataType::UInt64 => {
-            Arc::new(UInt64Array::from_iter_values((0..n).map(|i| i as u64)))
-        }
+        DataType::Int8 => make_keys!(n, Int8Array, i8::MAX as usize),
+        DataType::Int16 => make_keys!(n, Int16Array, i16::MAX as usize),
+        DataType::Int32 => make_keys!(n, Int32Array, i32::MAX as usize),
+        DataType::Int64 => make_keys!(n, Int64Array, i64::MAX as usize),
+        DataType::UInt8 => make_keys!(n, UInt8Array, u8::MAX as usize),
+        DataType::UInt16 => make_keys!(n, UInt16Array, u16::MAX as usize),
+        DataType::UInt32 => make_keys!(n, UInt32Array, u32::MAX as usize),
+        DataType::UInt64 => make_keys!(n, UInt64Array, usize::MAX),
         _ => unreachable!("schema validated in GroupDictionaryColumn::new"),
     }
 }
@@ -594,8 +598,7 @@ fn wrap_as_dictionary(
     }
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
-
+// in depth test exist on https://github.com/apache/datafusion/pull/22888 . these are mostly for correness and sanity check. --- IGNORE ---
 #[cfg(test)]
 mod tests {
     use super::*;
