@@ -572,11 +572,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 idents.len()
             )
         } else {
-            let fields = plan.schema().fields().clone();
+            let columns = plan.schema().columns().clone();
             LogicalPlanBuilder::from(plan)
-                .project(fields.iter().zip(idents).map(|(field, ident)| {
-                    Expr::Column(Column::from_qualified_name_ignore_case(field.name()))
-                        .alias(self.ident_normalizer.normalize(ident))
+                .project(columns.into_iter().zip(idents).map(|(col, ident)| {
+                    Expr::Column(col).alias(self.ident_normalizer.normalize(ident))
                 }))?
                 .build()
         }
