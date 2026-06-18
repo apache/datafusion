@@ -29,8 +29,7 @@ use arrow::datatypes::{
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType,
     Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Field, FieldRef, Float64Type, Int64Type, TimeUnit, UInt64Type,
-    i256,
+    DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type, i256,
 };
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
@@ -791,13 +790,8 @@ where
     layout: PhantomData<Layout>,
 }
 
-#[derive(Debug)]
-struct BuiltInAvgLayout;
-
-#[derive(Debug)]
-struct SparkAvgLayout;
-
-trait AvgStateLayout: Debug + Send + 'static {
+/// Maps AVG grouped-accumulator state arrays to and from a concrete field order.
+pub trait AvgStateLayout: Debug + Send + 'static {
     fn state_arrays<T, CountType>(
         sums: PrimitiveArray<T>,
         counts: PrimitiveArray<CountType>,
@@ -814,7 +808,11 @@ trait AvgStateLayout: Debug + Send + 'static {
         CountType: ArrowPrimitiveType;
 }
 
-impl AvgStateLayout for BuiltInAvgLayout {
+/// AVG state layout ordered as `[count, sum]`.
+#[derive(Debug)]
+pub struct CountSumAvgStateLayout;
+
+impl AvgStateLayout for CountSumAvgStateLayout {
     fn state_arrays<T, CountType>(
         sums: PrimitiveArray<T>,
         counts: PrimitiveArray<CountType>,
@@ -840,7 +838,11 @@ impl AvgStateLayout for BuiltInAvgLayout {
     }
 }
 
-impl AvgStateLayout for SparkAvgLayout {
+/// AVG state layout ordered as `[sum, count]`.
+#[derive(Debug)]
+pub struct SumCountAvgStateLayout;
+
+impl AvgStateLayout for SumCountAvgStateLayout {
     fn state_arrays<T, CountType>(
         sums: PrimitiveArray<T>,
         counts: PrimitiveArray<CountType>,
@@ -865,11 +867,6 @@ impl AvgStateLayout for SparkAvgLayout {
         )
     }
 }
-
-type BuiltInAvgGroupsAccumulator<T, F> =
-    AvgGroupsAccumulator<T, UInt64Type, BuiltInAvgLayout, F>;
-type SparkAvgGroupsAccumulator<F> =
-    AvgGroupsAccumulator<Float64Type, Int64Type, SparkAvgLayout, F>;
 
 impl<T, CountType, Layout, F> AvgGroupsAccumulator<T, CountType, Layout, F>
 where
@@ -905,7 +902,28 @@ where
     T: ArrowNumericType + Send + 'static,
     F: Fn(T::Native, u64) -> Result<T::Native> + Send + 'static,
 {
-    Box::new(BuiltInAvgGroupsAccumulator::<T, F>::new(
+    create_avg_groups_accumulator::<T, UInt64Type, CountSumAvgStateLayout, _>(
+        sum_data_type,
+        return_data_type,
+        avg_fn,
+    )
+}
+
+/// Creates an AVG grouped accumulator with caller-selected sum type, count type,
+/// and state field order.
+#[doc(hidden)]
+pub fn create_avg_groups_accumulator<T, CountType, Layout, F>(
+    sum_data_type: &DataType,
+    return_data_type: &DataType,
+    avg_fn: F,
+) -> Box<dyn GroupsAccumulator>
+where
+    T: ArrowNumericType + Send + 'static,
+    CountType: ArrowPrimitiveType + Send + 'static,
+    Layout: AvgStateLayout,
+    F: Fn(T::Native, CountType::Native) -> Result<T::Native> + Send + 'static,
+{
+    Box::new(AvgGroupsAccumulator::<T, CountType, Layout, F>::new(
         sum_data_type,
         return_data_type,
         avg_fn,
@@ -1079,20 +1097,6 @@ where
             + self.sums.capacity() * size_of::<T::Native>()
             + self.null_state.size()
     }
-}
-
-/// Creates the Spark AVG grouped accumulator using the built-in AVG state
-/// handling implementation while preserving Spark's `[sum, count]` state order
-/// and signed count type.
-#[doc(hidden)]
-pub fn spark_avg_groups_accumulator(
-    return_data_type: &DataType,
-) -> Box<dyn GroupsAccumulator> {
-    Box::new(SparkAvgGroupsAccumulator::<_>::new(
-        return_data_type,
-        return_data_type,
-        |sum: f64, count: i64| Ok(sum / count as f64),
-    ))
 }
 
 #[cfg(test)]

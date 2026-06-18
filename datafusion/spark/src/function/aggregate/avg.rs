@@ -30,7 +30,9 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, GroupsAccumulator, ReversedUDAF, Signature,
     TypeSignatureClass, Volatility,
 };
-use datafusion_functions_aggregate::average::spark_avg_groups_accumulator;
+use datafusion_functions_aggregate::average::{
+    SumCountAvgStateLayout, create_avg_groups_accumulator,
+};
 use std::mem::size_of_val;
 use std::sync::Arc;
 
@@ -127,7 +129,16 @@ impl AggregateUDFImpl for SparkAvg {
         // instantiate specialized accumulator based for the type
         match (&data_type, args.return_type()) {
             (DataType::Float64, DataType::Float64) => {
-                Ok(spark_avg_groups_accumulator(args.return_field.data_type()))
+                Ok(create_avg_groups_accumulator::<
+                    Float64Type,
+                    Int64Type,
+                    SumCountAvgStateLayout,
+                    _,
+                >(
+                    args.return_field.data_type(),
+                    args.return_field.data_type(),
+                    |sum: f64, count: i64| Ok(sum / count as f64),
+                ))
             }
             (dt, return_type) => {
                 not_impl_err!("AvgGroupsAccumulator for ({dt} --> {return_type})")
@@ -206,7 +217,11 @@ mod tests {
     use datafusion_expr::EmitTo;
 
     fn make_acc() -> Box<dyn GroupsAccumulator> {
-        spark_avg_groups_accumulator(&DataType::Float64)
+        create_avg_groups_accumulator::<Float64Type, Int64Type, SumCountAvgStateLayout, _>(
+            &DataType::Float64,
+            &DataType::Float64,
+            |sum: f64, count: i64| Ok(sum / count as f64),
+        )
     }
 
     fn assert_validity(array: &dyn Array, expected: &[bool]) {
