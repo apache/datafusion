@@ -280,6 +280,7 @@ impl WindowUDFImpl for NthValue {
                 state,
                 ignore_nulls: partition_evaluator_args.ignore_nulls(),
                 n: 0,
+                cached_result: None,
             }));
         }
 
@@ -313,6 +314,7 @@ impl WindowUDFImpl for NthValue {
             state,
             ignore_nulls: partition_evaluator_args.ignore_nulls(),
             n,
+            cached_result: None,
         }))
     }
 
@@ -375,6 +377,14 @@ pub(crate) struct NthValueEvaluator {
     state: NthValueState,
     ignore_nulls: bool,
     n: i64,
+    cached_result: Option<CachedScalarValue>,
+}
+
+#[derive(Debug)]
+struct CachedScalarValue {
+    array: ArrayRef,
+    index: usize,
+    value: ScalarValue,
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
@@ -467,7 +477,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                 return ScalarValue::try_from(arr.data_type());
             }
             match self.valid_index(arr, range) {
-                Some(index) => ScalarValue::try_from_array(arr, index),
+                Some(index) => self.scalar_value_at_index(arr, index),
                 None => ScalarValue::try_from(arr.data_type()),
             }
         }
@@ -483,6 +493,27 @@ impl PartitionEvaluator for NthValueEvaluator {
 }
 
 impl NthValueEvaluator {
+    fn scalar_value_at_index(
+        &mut self,
+        array: &ArrayRef,
+        index: usize,
+    ) -> Result<ScalarValue> {
+        if let Some(cached_result) = &self.cached_result
+            && cached_result.index == index
+            && Arc::ptr_eq(&cached_result.array, array)
+        {
+            return Ok(cached_result.value.clone());
+        }
+
+        let value = ScalarValue::try_from_array(array, index)?;
+        self.cached_result = Some(CachedScalarValue {
+            array: Arc::clone(array),
+            index,
+            value: value.clone(),
+        });
+        Ok(value)
+    }
+
     fn valid_index(&self, array: &ArrayRef, range: &Range<usize>) -> Option<usize> {
         let n_range = range.end - range.start;
         if self.ignore_nulls {
@@ -667,6 +698,27 @@ mod tests {
                 Some(-2),
             ]),
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_value_cache_is_array_specific() -> Result<()> {
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let input_fields = [Field::new("f", DataType::Int32, true).into()];
+        let input_exprs = [expr];
+        let mut evaluator = NthValue::first().partition_evaluator(
+            PartitionEvaluatorArgs::new(&input_exprs, &input_fields, false, false),
+        )?;
+
+        let first_values = vec![Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef];
+        let second_values = vec![Arc::new(Int32Array::from(vec![Some(10)])) as ArrayRef];
+        let range = Range { start: 0, end: 1 };
+
+        let first = evaluator.evaluate(&first_values, &range)?;
+        let second = evaluator.evaluate(&second_values, &range)?;
+
+        assert_eq!(first, ScalarValue::Int32(Some(1)));
+        assert_eq!(second, ScalarValue::Int32(Some(10)));
         Ok(())
     }
 
