@@ -114,7 +114,16 @@ impl InProgressSpillFile {
                 unreachable!() // Already checked inside current function
             }
         }
-        gc_batch.get_sliced_size()
+        // Reuse the sliced size computed for memory accounting (returned below)
+        // to also track the largest single batch spilled, avoiding a second
+        // size pass per spill. The batch is GC-compacted, so `get_sliced_size`
+        // is an accurate in-memory measure of what was written.
+        let sliced_size = gc_batch.get_sliced_size()?;
+        self.spill_writer
+            .metrics
+            .max_spilled_batch_size
+            .set_max(sliced_size);
+        Ok(sliced_size)
     }
 
     pub fn flush(&mut self) -> Result<()> {
@@ -224,6 +233,50 @@ mod tests {
             non_nullable_batch.with_schema(Arc::clone(&nullable_schema))?
         );
         assert_eq!(batches[1], nullable_batch);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_max_spilled_batch_size_metric() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+
+        let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let spill_metrics = SpillMetrics::new(&metrics_set, 0);
+        let spill_manager = Arc::new(SpillManager::new(
+            runtime,
+            spill_metrics.clone(),
+            Arc::clone(&schema),
+        ));
+
+        // No batch spilled yet: the gauge starts at zero.
+        assert_eq!(spill_metrics.max_spilled_batch_size.value(), 0);
+
+        let mut in_progress = spill_manager.create_in_progress_file("test")?;
+
+        // Append a small batch followed by a larger one. The metric should
+        // track the largest single batch, independent of append order.
+        let small = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2]))],
+        )?;
+        let large = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from((0i64..100).collect::<Vec<_>>()))],
+        )?;
+
+        in_progress.append_batch(&small)?;
+        in_progress.append_batch(&large)?;
+        in_progress.finish()?;
+
+        // The largest spilled batch is `large`, measured the same way the
+        // operator records it: `get_sliced_size` of the written batch. (GC is a
+        // no-op for non-view arrays, so measuring `large` directly matches.)
+        assert_eq!(
+            spill_metrics.max_spilled_batch_size.value(),
+            large.get_sliced_size()?
+        );
 
         Ok(())
     }

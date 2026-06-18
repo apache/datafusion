@@ -28,6 +28,7 @@ use super::metrics::{BaselineMetrics, SplitMetrics};
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
 use crate::spill::get_record_batch_memory_size;
+use crate::spill::spill_manager::GetSlicedSize;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::{Result, exec_err};
@@ -676,6 +677,12 @@ impl BatchSplitStream {
         let out = batch.slice(self.offset, to_take);
 
         self.metrics.batches_split.add(1);
+        // Best-effort: record the largest sliced batch size for diagnostics.
+        // `get_sliced_size` is an estimate (see `SplitMetrics::max_sliced_batch_size`),
+        // so a failure to compute it should not fail the query.
+        if let Ok(sliced_size) = out.get_sliced_size() {
+            self.metrics.max_sliced_batch_size.set_max(sliced_size);
+        }
         self.offset += to_take;
         if self.offset < batch.num_rows() {
             // More data remains in this batch, store it back
@@ -926,10 +933,12 @@ mod test {
         let adapter = RecordBatchStreamAdapter::new(Arc::clone(&schema), input_stream);
         let batch_stream = Box::pin(adapter) as SendableRecordBatchStream;
 
-        // Create a BatchSplitStream with batch_size = 500
+        // Create a BatchSplitStream with batch_size = 500. Clone the metrics so
+        // we can inspect them after the stream consumes its copy.
         let metrics = ExecutionPlanMetricsSet::new();
         let split_metrics = SplitMetrics::new(&metrics, 0);
-        let mut split_stream = BatchSplitStream::new(batch_stream, 500, split_metrics);
+        let mut split_stream =
+            BatchSplitStream::new(batch_stream, 500, split_metrics.clone());
 
         let mut total_rows = 0;
         let mut batch_count = 0;
@@ -943,6 +952,20 @@ mod test {
 
         assert_eq!(total_rows, 2000, "All rows should be preserved");
         assert_eq!(batch_count, 4, "Should have 4 batches of 500 rows each");
+
+        // The splitter records the largest sliced batch. All four slices have
+        // 500 rows, so the max equals the sliced size of one 500-row Int32 slice.
+        use crate::spill::spill_manager::GetSlicedSize;
+        let one_slice = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from((0..500).collect::<Vec<_>>()))],
+        )
+        .unwrap();
+        assert_eq!(split_metrics.batches_split.value(), 4);
+        assert_eq!(
+            split_metrics.max_sliced_batch_size.value(),
+            one_slice.get_sliced_size().unwrap(),
+        );
     }
 
     /// Consumes all the input's partitions into a

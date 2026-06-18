@@ -170,6 +170,9 @@ pub enum FFI_MetricValue {
         display: SString,
         as_usize_value: u64,
     },
+    MaxOutputBatchSize(u64),
+    MaxSpilledBatchSize(u64),
+    MaxSlicedBatchSize(u64),
 }
 
 // -----------------------------------------------------------------------------
@@ -412,6 +415,15 @@ impl From<&MetricValue> for FFI_MetricValue {
             MetricValue::SpillCount(c) => Self::SpillCount(c.value() as u64),
             MetricValue::SpilledBytes(c) => Self::SpilledBytes(c.value() as u64),
             MetricValue::OutputBytes(c) => Self::OutputBytes(c.value() as u64),
+            MetricValue::MaxOutputBatchSize(g) => {
+                Self::MaxOutputBatchSize(g.value() as u64)
+            }
+            MetricValue::MaxSpilledBatchSize(g) => {
+                Self::MaxSpilledBatchSize(g.value() as u64)
+            }
+            MetricValue::MaxSlicedBatchSize(g) => {
+                Self::MaxSlicedBatchSize(g.value() as u64)
+            }
             MetricValue::OutputBatches(c) => Self::OutputBatches(c.value() as u64),
             MetricValue::SpilledRows(c) => Self::SpilledRows(c.value() as u64),
             MetricValue::CurrentMemoryUsage(g) => {
@@ -468,6 +480,15 @@ impl From<FFI_MetricValue> for MetricValue {
             FFI_MetricValue::SpillCount(n) => Self::SpillCount(count_from_value(n)),
             FFI_MetricValue::SpilledBytes(n) => Self::SpilledBytes(count_from_value(n)),
             FFI_MetricValue::OutputBytes(n) => Self::OutputBytes(count_from_value(n)),
+            FFI_MetricValue::MaxOutputBatchSize(n) => {
+                Self::MaxOutputBatchSize(gauge_from_value(n))
+            }
+            FFI_MetricValue::MaxSpilledBatchSize(n) => {
+                Self::MaxSpilledBatchSize(gauge_from_value(n))
+            }
+            FFI_MetricValue::MaxSlicedBatchSize(n) => {
+                Self::MaxSlicedBatchSize(gauge_from_value(n))
+            }
             FFI_MetricValue::OutputBatches(n) => Self::OutputBatches(count_from_value(n)),
             FFI_MetricValue::SpilledRows(n) => Self::SpilledRows(count_from_value(n)),
             FFI_MetricValue::CurrentMemoryUsage(n) => {
@@ -602,6 +623,18 @@ mod tests {
         let g = Gauge::new();
         g.add(123);
         assert_value_roundtrip(MetricValue::CurrentMemoryUsage(g));
+
+        let max_batch = Gauge::new();
+        max_batch.set_max(4096);
+        assert_value_roundtrip(MetricValue::MaxOutputBatchSize(max_batch));
+
+        let max_spilled = Gauge::new();
+        max_spilled.set_max(8192);
+        assert_value_roundtrip(MetricValue::MaxSpilledBatchSize(max_spilled));
+
+        let max_sliced = Gauge::new();
+        max_sliced.set_max(2048);
+        assert_value_roundtrip(MetricValue::MaxSlicedBatchSize(max_sliced));
 
         let t = Time::new();
         t.add_duration(std::time::Duration::from_nanos(456));
