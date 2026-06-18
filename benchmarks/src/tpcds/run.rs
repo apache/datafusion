@@ -364,7 +364,6 @@ impl RunOpt {
         table: &str,
     ) -> Result<Arc<dyn TableProvider>> {
         let path = self.path.to_str().unwrap();
-        let target_partitions = self.partitions();
 
         // Obtain a snapshot of the SessionState
         let state = ctx.state();
@@ -380,9 +379,7 @@ impl RunOpt {
 
         let table_path = ListingTableUrl::parse(path)?;
         let options = ListingOptions::new(Arc::new(format))
-            .with_file_extension(DEFAULT_PARQUET_EXTENSION)
-            .with_target_partitions(target_partitions)
-            .with_collect_stat(state.config().collect_statistics());
+            .with_file_extension(DEFAULT_PARQUET_EXTENSION);
 
         let schema = options.infer_schema(&state, &table_path).await?;
         let constraints = table_constraints(table, schema.as_ref());

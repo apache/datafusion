@@ -183,12 +183,14 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     ///
     /// * `values`: arrays produced from previously calling `state` on other accumulators.
     ///
-    /// Other arguments are the same as for [`Self::update_batch`].
+    /// Other arguments are the same as for [`Self::update_batch`], except that
+    /// there is no `opt_filter` — aggregate filters are applied during the
+    /// partial (update) phase, so by the time intermediate states are merged
+    /// no per-row filtering is needed.
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()>;
 

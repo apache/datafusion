@@ -221,12 +221,8 @@ impl HashAggregateAccumulator {
         total_num_groups: usize,
     ) -> Result<()> {
         debug_assert!(values.filter.is_none());
-        self.accumulator.merge_batch(
-            &values.arguments,
-            group_indices,
-            None,
-            total_num_groups,
-        )
+        self.accumulator
+            .merge_batch(&values.arguments, group_indices, total_num_groups)
     }
 
     fn evaluate_final(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
