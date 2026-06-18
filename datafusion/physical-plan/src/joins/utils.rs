@@ -54,7 +54,7 @@ use arrow::array::{
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{self, FilterBuilder, and, take};
+use arrow::compute::{self, FilterBuilder, and, interleave, take};
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
@@ -1373,13 +1373,223 @@ pub(crate) fn build_batch_from_indices(
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
 
+/// Computes prefix-sum offsets for a sequence of build-side batches.
+///
+/// `offsets[k]` is the flat row index at which batch `k` begins in the logical
+/// concatenation of all batches, and `offsets[n]` is the total row count. This
+/// lets a flat build-side index be mapped back to a `(batch, row)` pair without
+/// materializing the concatenation.
+pub(crate) fn build_batch_offsets(
+    batch_row_counts: impl Iterator<Item = usize>,
+) -> Vec<usize> {
+    let mut acc = 0usize;
+    let mut offsets = batch_row_counts
+        .map(|n| {
+            let val = acc;
+            acc += n;
+            val
+        })
+        .collect::<Vec<_>>();
+    // Append the total row count so `offsets[batches.len()]` is the total and
+    // `offsets[k + 1]` is the (exclusive) end of batch `k`, as documented above.
+    offsets.push(acc);
+    offsets
+}
+
+/// Maps a flat build-side row index to a `(batch, row)` pair using `offsets`
+/// (see [`build_batch_offsets`]).
+#[inline]
+pub(crate) fn flat_index_to_batch_row(offsets: &[usize], flat: usize) -> (usize, usize) {
+    // The largest `k` with `offsets[k] <= flat`. `partition_point` returns the
+    // count of leading elements satisfying the predicate, i.e. `k + 1`. Using
+    // `<=` (rather than `<`) naturally skips over empty batches.
+    let batch = offsets.partition_point(|&o| o <= flat) - 1;
+    (batch, flat - offsets[batch])
+}
+
+/// Builds the `(batch, row)` index pairs consumed by [`interleave`] for a set of
+/// (possibly null) flat build-side indices.
+///
+/// Null slots are assigned a valid placeholder `(batch, row)` so that
+/// `interleave` never sees an out-of-bounds index; the value produced for those
+/// slots is overwritten with null afterwards by [`take_build_array`]. The
+/// placeholder is the location of the first non-null index, so it is only used
+/// when at least one index is non-null (callers short-circuit the all-null case).
+fn build_interleave_indices(
+    offsets: &[usize],
+    indices: &UInt64Array,
+) -> Vec<(usize, usize)> {
+    let placeholder = indices
+        .iter()
+        .flatten()
+        .next()
+        .map(|flat| flat_index_to_batch_row(offsets, flat as usize))
+        .unwrap_or((0, 0));
+
+    indices
+        .iter()
+        .map(|opt| match opt {
+            Some(flat) => flat_index_to_batch_row(offsets, flat as usize),
+            None => placeholder,
+        })
+        .collect()
+}
+
+/// Gathers rows from a build-side column physically stored across one or more
+/// batches, using flat indices into the logical concatenation of those batches.
+///
+/// This is the multi-batch analogue of `take(concat(arrays), indices)`, but it
+/// never materializes the concatenation. `pairs` must be `None` when there is a
+/// single build batch (the flat index is then the row index directly and the
+/// `take` kernel is used) and `Some` precomputed [`interleave`] pairs otherwise.
+fn take_build_array(
+    arrays: &[&dyn Array],
+    indices: &UInt64Array,
+    pairs: Option<&[(usize, usize)]>,
+) -> Result<ArrayRef, ArrowError> {
+    let data_type = arrays[0].data_type();
+    // Outer joins can leave every build index null; this also covers an empty
+    // build side. There is nothing to gather, so produce a typed all-null array.
+    if indices.null_count() == indices.len() {
+        return Ok(new_null_array(data_type, indices.len()));
+    }
+    match pairs {
+        // Single build batch: identical to the original `take` path, including
+        // native propagation of null indices to null output rows.
+        None => take(arrays[0], indices, None),
+        Some(pairs) => {
+            let values = interleave(arrays, pairs)?;
+            if indices.null_count() == 0 {
+                Ok(values)
+            } else {
+                // Restore nulls in the placeholder slots used for null indices.
+                let null_mask = compute::is_null(indices)?;
+                compute::nullif(&values, &null_mask)
+            }
+        }
+    }
+}
+
+/// Multi-batch analogue of [`build_batch_from_indices`].
+///
+/// The build side is provided as a slice of batches (sharing one schema) rather
+/// than a single concatenated batch, and `build_indices` are flat indices into
+/// the logical concatenation of those batches. Build-side columns are gathered
+/// with [`interleave`] (or `take`, for a single batch) instead of `take` over a
+/// concatenated batch, avoiding a copy of the entire build side into one
+/// contiguous batch.
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn build_batch_from_indices_multi(
+    schema: &Schema,
+    build_batches: &[RecordBatch],
+    probe_batch: &RecordBatch,
+    build_indices: &UInt64Array,
+    probe_indices: &UInt32Array,
+    column_indices: &[ColumnIndex],
+    build_side: JoinSide,
+    join_type: JoinType,
+) -> Result<RecordBatch> {
+    if schema.fields().is_empty() {
+        // For RightAnti and RightSemi joins, after `adjust_indices_by_join_type`
+        // the build_indices were untouched so only probe_indices hold the actual
+        // row count.
+        let row_count = match join_type {
+            JoinType::RightAnti | JoinType::RightSemi => probe_indices.len(),
+            _ => build_indices.len(),
+        };
+        return new_empty_schema_batch(schema, row_count);
+    }
+
+    // Precompute the interleave pairs once, shared across all build-side columns.
+    // Only needed when the build side spans more than one batch.
+    let build_pairs = (build_batches.len() > 1).then(|| {
+        let offsets =
+            build_batch_offsets(build_batches.iter().map(RecordBatch::num_rows));
+        build_interleave_indices(&offsets, build_indices)
+    });
+
+    let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
+
+    for column_index in column_indices {
+        let array = if column_index.side == JoinSide::None {
+            // For mark joins, the mark column is true when the index is not null.
+            Arc::new(compute::is_not_null(probe_indices)?)
+        } else if column_index.side == build_side {
+            let arrays: Vec<&dyn Array> = build_batches
+                .iter()
+                .map(|b| b.column(column_index.index).as_ref())
+                .collect();
+            take_build_array(&arrays, build_indices, build_pairs.as_deref())?
+        } else {
+            let array = probe_batch.column(column_index.index);
+            if array.is_empty() || probe_indices.null_count() == probe_indices.len() {
+                assert_eq!(probe_indices.null_count(), probe_indices.len());
+                new_null_array(array.data_type(), probe_indices.len())
+            } else {
+                take(array.as_ref(), probe_indices, None)?
+            }
+        };
+
+        columns.push(array);
+    }
+    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+}
+
+/// Multi-batch analogue of [`apply_join_filter_to_indices`].
+///
+/// The build side is provided as several batches rather than one concatenated
+/// batch; the intermediate batch fed to the filter is assembled with
+/// [`build_batch_from_indices_multi`]. The `max_intermediate_size` chunking path
+/// of the single-batch variant is not needed by the hash join and is omitted.
+pub(crate) fn apply_join_filter_to_indices_multi(
+    build_batches: &[RecordBatch],
+    probe_batch: &RecordBatch,
+    build_indices: UInt64Array,
+    probe_indices: UInt32Array,
+    filter: &JoinFilter,
+    build_side: JoinSide,
+    join_type: JoinType,
+) -> Result<(UInt64Array, UInt32Array)> {
+    if build_indices.is_empty() && probe_indices.is_empty() {
+        return Ok((build_indices, probe_indices));
+    };
+
+    let intermediate_batch = build_batch_from_indices_multi(
+        filter.schema(),
+        build_batches,
+        probe_batch,
+        &build_indices,
+        &probe_indices,
+        filter.column_indices(),
+        build_side,
+        join_type,
+    )?;
+
+    let filter_result = filter
+        .expression()
+        .evaluate(&intermediate_batch)?
+        .into_array(intermediate_batch.num_rows())?;
+
+    let mask = as_boolean_array(&filter_result)?;
+
+    let left_filtered = compute::filter(&build_indices, mask)?;
+    let right_filtered = compute::filter(&probe_indices, mask)?;
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
+}
+
 /// Returns a new [RecordBatch] for a probe batch when no probe row can find a
 /// match: the build-side map is empty, either because the build side has no
 /// rows or because none of its rows has a matchable (non-NULL) join key.
 /// The resulting batch has [Schema] `schema`.
+///
+/// `build_schema` is the schema of the (empty) build side, used only to determine
+/// the data types of the build-side columns that become all-null.
 pub(crate) fn build_batch_empty_build_side(
     schema: &Schema,
-    build_batch: &RecordBatch,
+    build_schema: &Schema,
     probe_batch: &RecordBatch,
     column_indices: &[ColumnIndex],
     join_type: JoinType,
@@ -1400,7 +1610,7 @@ pub(crate) fn build_batch_empty_build_side(
         .map(|column_index| match column_index.side {
             // left -> null array
             JoinSide::Left => new_null_array(
-                build_batch.column(column_index.index).data_type(),
+                build_schema.field(column_index.index).data_type(),
                 num_rows,
             ),
             // right -> respective right array
@@ -2198,6 +2408,66 @@ pub(super) fn equal_rows_arr(
     equal = iter
         .map(|(left, right)| {
             let arr_left = take(left.as_ref(), indices_left, None)?;
+            let arr_right = take(right.as_ref(), indices_right, None)?;
+            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equality)
+        })
+        .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
+
+    let filter_builder = FilterBuilder::new(&equal).optimize().build();
+
+    let left_filtered = filter_builder.filter(indices_left)?;
+    let right_filtered = filter_builder.filter(indices_right)?;
+
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
+}
+
+/// Multi-batch analogue of [`equal_rows_arr`].
+///
+/// Build-side join-key columns are laid out per key column then per build batch
+/// (`left_arrays[key][batch]`), matching the representation stored in
+/// `JoinLeftData`. `indices_left` are flat indices into the logical concatenation
+/// of the build batches; they always come straight from the hash table and so are
+/// never null. Matched build keys are gathered with [`interleave`] (or `take`,
+/// for a single batch) rather than `take` over a concatenated key array.
+pub(super) fn equal_rows_arr_multi(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[Vec<ArrayRef>],
+    right_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Result<(UInt64Array, UInt32Array)> {
+    let mut iter = left_arrays.iter().zip(right_arrays.iter());
+
+    let Some((first_left, first_right)) = iter.next() else {
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+    };
+
+    // Interleave pairs are shared across all key columns; only needed when the
+    // build side spans more than one batch.
+    let pairs = (first_left.len() > 1).then(|| {
+        let offsets = build_batch_offsets(first_left.iter().map(|a| a.len()));
+        build_interleave_indices(&offsets, indices_left)
+    });
+
+    let take_left = |arrays: &[ArrayRef]| -> Result<ArrayRef, ArrowError> {
+        let refs: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+        take_build_array(&refs, indices_left, pairs.as_deref())
+    };
+
+    let arr_left = take_left(first_left)?;
+    let arr_right = take(first_right.as_ref(), indices_right, None)?;
+
+    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
+
+    // Use map and try_fold to iterate over the remaining pairs of arrays.
+    // In each iteration, the matched rows are gathered and their equality is
+    // determined; the results are folded together with `and`.
+    equal = iter
+        .map(|(left, right)| {
+            let arr_left = take_left(left)?;
             let arr_right = take(right.as_ref(), indices_right, None)?;
             eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equality)
         })
@@ -4308,7 +4578,7 @@ mod tests {
 
         let result = build_batch_empty_build_side(
             &empty_schema,
-            &build_batch,
+            build_batch.schema_ref(),
             &probe_batch,
             &[], // no column indices with empty projection
             JoinType::Right,
