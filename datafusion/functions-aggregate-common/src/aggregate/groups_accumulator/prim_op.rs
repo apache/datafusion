@@ -135,8 +135,7 @@ where
         F: Fn(&mut V, V) + Send + Sync + 'static,
     {
         // Expand to ensure values are large enough
-        self.values
-            .resize(input.total_num_groups, starting_value);
+        self.values.resize(input.total_num_groups, starting_value);
 
         self.null_state.accumulate(
             input.group_indices,

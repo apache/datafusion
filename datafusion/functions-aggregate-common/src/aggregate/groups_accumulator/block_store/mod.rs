@@ -36,23 +36,51 @@ pub use vec_block_store::VecBlockStore;
 pub trait BlockStore<B: Block>:
     Debug + Index<usize, Output = B> + IndexMut<usize>
 {
+    /// Append or replace a block in the store.
+    ///
+    /// Blocked storage appends `block` to the accumulated block list. Flat
+    /// storage replaces its single backing block with `block`.
     fn push_block(&mut self, block: B);
 
+    /// Remove and return the next block to emit.
+    ///
+    /// Returns `None` when there are no active blocks left. Blocked storage
+    /// pops blocks in insertion order. Flat storage returns its single backing
+    /// block once, then becomes empty.
     fn pop_block(&mut self) -> Option<B>;
 
-    /// Ensure the store has a block available for pushing a new value.
-    fn allocate_block(&mut self);
+    /// Reserve block capacity for pushing one value.
+    ///
+    /// Implementations may allocate a new block only when the current storage
+    /// cannot accept another value without growing. This does not change the
+    /// logical number of values held by the store.
+    fn reserve_blocks(&mut self);
 
-    /// Ensure the store can hold `total_num_groups` values.
+    /// Ensure the store contains slots for `total_num_groups` values.
+    ///
+    /// Missing slots are appended and filled with `default_value`. Existing
+    /// values are preserved, and implementations do not shrink when
+    /// `total_num_groups` is less than or equal to the current logical length.
     fn resize(&mut self, total_num_groups: usize, default_value: B::T);
 
     /// Return the number of active blocks.
+    ///
+    /// This counts blocks visible to the current phase. During blocked
+    /// emission, blocks already returned by [`Self::pop_block`] are excluded.
     fn num_blocks(&self) -> usize;
 
-    /// Return true if there are no active blocks.
-    fn is_empty(&self) -> bool;
+    /// Return true when the store has no active blocks.
+    ///
+    /// This is equivalent to `self.num_blocks() == 0`, but implementations may
+    /// provide a cheaper specialized check.
+    fn is_empty(&self) -> bool {
+        self.num_blocks() == 0
+    }
 
-    /// Clear all active blocks and release owned block storage.
+    /// Clear all active blocks and reset the store to accumulation mode.
+    ///
+    /// Any in-progress emission state is discarded. After `clear`, the store
+    /// behaves like a newly constructed empty store with the same configuration.
     fn clear(&mut self);
 }
 

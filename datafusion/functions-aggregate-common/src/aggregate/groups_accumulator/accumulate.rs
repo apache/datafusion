@@ -99,23 +99,20 @@ pub enum SeenValues<S>
 where
     S: BlockStore<BooleanBlock>,
 {
-    /// All groups seen so far have seen at least one non-null value
+    /// All groups seen so far have seen at least one non-null value.
+    ///
+    /// `pending_builder` carries the empty seen-values store supplied at
+    /// [`NullState`] construction time. It is wrapped in an [`Option`] so
+    /// that it can be taken out via [`Option::take`] when transitioning to
+    /// [`SeenValues::Some`]. While the variant is `All`, it is always
+    /// `Some(_)`; `None` is only observed transiently during that
+    /// transition.
     All {
         num_values: usize,
+        pending_builder: Option<SeenValueStore<S>>,
     },
-    // Some groups have not yet seen a non-null value
-    Some {
-        builder: SeenValueStore<S>,
-    },
-}
-
-impl<S> Default for SeenValues<S>
-where
-    S: BlockStore<BooleanBlock>,
-{
-    fn default() -> Self {
-        SeenValues::All { num_values: 0 }
-    }
+    /// Some groups have not yet seen a non-null value.
+    Some { builder: SeenValueStore<S> },
 }
 
 /// Wrapper around a [`BlockStore<BooleanBlock>`] that tracks per-group
@@ -224,21 +221,23 @@ where
     /// Return a mutable reference to the `BooleanBufferBuilder` in `SeenValues::Some`.
     ///
     /// If `self` is `SeenValues::All`, it is transitioned to `SeenValues::Some`
-    /// using `pending_builder` (taken out) and seeding the first `num_values`
-    /// entries to true.
+    /// by taking out its embedded `pending_builder` and seeding the first
+    /// `num_values` entries to true.
     ///
     /// The builder is then ensured to have at least `total_num_groups` length,
     /// with any new entries initialized to false.
     fn get_big_enough_builder(
         &mut self,
         total_num_groups: usize,
-        pending_builder: &mut Option<SeenValueStore<S>>,
     ) -> &mut SeenValueStore<S> {
         // If `self` is `SeenValues::All`, transition it to `SeenValues::Some` with `num_values trues` firstly,
         // then return mutable reference to the builder.
         // If `self` is `SeenValues::Some`, just directly return mutable reference to the builder.
         let builder = match self {
-            SeenValues::All { num_values } => {
+            SeenValues::All {
+                num_values,
+                pending_builder,
+            } => {
                 // Switch to `SeenValues::Some` with `num_values` trues, taking the
                 // empty builder that was provided at NullState construction time.
                 let mut builder = pending_builder
@@ -302,10 +301,6 @@ where
     /// If `seen_values` is `SeenValues::All`, all groups have seen at least one non null value
     seen_values: SeenValues<S>,
 
-    /// Empty seen-values builder, supplied at construction time and consumed
-    /// when transitioning `SeenValues::All` -> `SeenValues::Some`.
-    pending_builder: Option<SeenValueStore<S>>,
-
     /// Size of one seen values block, can be None if only desire single block
     block_size: Option<usize>,
 
@@ -332,8 +327,10 @@ where
             "NullState must be initialized with an empty seen-values builder"
         );
         Self {
-            seen_values: SeenValues::All { num_values: 0 },
-            pending_builder: Some(SeenValueStore::new(empty_builder)),
+            seen_values: SeenValues::All {
+                num_values: 0,
+                pending_builder: Some(SeenValueStore::new(empty_builder)),
+            },
             block_size,
             _phantom: PhantomData,
         }
@@ -375,7 +372,7 @@ where
         F: FnMut(u32, u64, T::Native) + Send,
     {
         // skip null handling if no nulls in input or accumulator
-        if let SeenValues::All { num_values } = &mut self.seen_values
+        if let SeenValues::All { num_values, .. } = &mut self.seen_values
             && opt_filter.is_none()
             && values.null_count() == 0
         {
@@ -390,9 +387,8 @@ where
         }
 
         // Get big enough `seen_values_builder`(start everything at "not seen" valid)
-        let seen_values_builder = self
-            .seen_values
-            .get_big_enough_builder(total_num_groups, &mut self.pending_builder);
+        let seen_values_builder =
+            self.seen_values.get_big_enough_builder(total_num_groups);
         accumulate(group_indices, values, opt_filter, |packed_index, value| {
             let packed_index = packed_index as u64;
             let block_id = O::get_block_id(packed_index);
@@ -426,7 +422,7 @@ where
         assert_eq!(data.len(), group_indices.len());
 
         // skip null handling if no nulls in input or accumulator
-        if let SeenValues::All { num_values } = &mut self.seen_values
+        if let SeenValues::All { num_values, .. } = &mut self.seen_values
             && opt_filter.is_none()
             && values.null_count() == 0
         {
@@ -444,9 +440,8 @@ where
         }
 
         // Get big enough `seen_values_builder`(start everything at "not seen" valid)
-        let seen_values_builder = self
-            .seen_values
-            .get_big_enough_builder(total_num_groups, &mut self.pending_builder);
+        let seen_values_builder =
+            self.seen_values.get_big_enough_builder(total_num_groups);
 
         // These could be made more performant by iterating in chunks of 64 bits at a time
         match (values.null_count() > 0, opt_filter) {
@@ -525,7 +520,7 @@ where
         // If `self` is `SeenValues::All`, just modify `num_values`.
         // If `self` is `SeenValues::Some`, perform the emit logic of `builder`.
         match &mut self.seen_values {
-            SeenValues::All { num_values } => match emit_to {
+            SeenValues::All { num_values, .. } => match emit_to {
                 EmitTo::All => {
                     assert!(
                         self.block_size.is_none(),
@@ -575,7 +570,7 @@ where
     /// only used for testing.
     fn build_cloned_seen_values(&self) -> TestSeenValuesResult {
         match &self.seen_values {
-            SeenValues::All { num_values } => TestSeenValuesResult::All(*num_values),
+            SeenValues::All { num_values, .. } => TestSeenValuesResult::All(*num_values),
             SeenValues::Some { builder } => {
                 let mut return_builder = BooleanBufferBuilder::new(0);
                 let num_blocks = builder.num_blocks();
@@ -671,7 +666,8 @@ pub type FlatNullState =
 ///
 /// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator::supports_blocked_groups
 ///
-pub type BlockedNullState = NullState<BlockedGroupIndexOperations, BlockedBlockStore<BooleanBlock>>;
+pub type BlockedNullState =
+    NullState<BlockedGroupIndexOperations, BlockedBlockStore<BooleanBlock>>;
 
 /// Invokes `value_fn(group_index, value)` for each non null, non
 /// filtered value of `value`,
@@ -1496,13 +1492,19 @@ mod test {
                     }
 
                     (
-                        TestNullState::Blocked(BlockedNullState::new(BlockedBlockStore::new(blk_size), Some(blk_size))),
+                        TestNullState::Blocked(BlockedNullState::new(
+                            BlockedBlockStore::new(blk_size),
+                            Some(blk_size),
+                        )),
                         blk_size,
                         acc_group_indices_chunks,
                     )
                 } else {
                     (
-                        TestNullState::Flat(FlatNullState::new(FlatBlockStore::new(), None)),
+                        TestNullState::Flat(FlatNullState::new(
+                            FlatBlockStore::new(),
+                            None,
+                        )),
                         0,
                         group_indices_chunks,
                     )
@@ -1714,13 +1716,19 @@ mod test {
                     }
 
                     (
-                        TestNullState::Blocked(BlockedNullState::new(BlockedBlockStore::new(blk_size), Some(blk_size))),
+                        TestNullState::Blocked(BlockedNullState::new(
+                            BlockedBlockStore::new(blk_size),
+                            Some(blk_size),
+                        )),
                         blk_size,
                         acc_group_indices_chunks,
                     )
                 } else {
                     (
-                        TestNullState::Flat(FlatNullState::new(FlatBlockStore::new(), None)),
+                        TestNullState::Flat(FlatNullState::new(
+                            FlatBlockStore::new(),
+                            None,
+                        )),
                         0,
                         group_indices_chunks,
                     )

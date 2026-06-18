@@ -62,8 +62,8 @@ where
     }
 
     // ---- BlockStore method delegation ----------------------------------
-    pub fn allocate_block(&mut self) {
-        self.inner.allocate_block();
+    pub fn reserve_blocks(&mut self) {
+        self.inner.reserve_blocks();
     }
 
     pub fn resize(&mut self, total_num_groups: usize, default_value: T) {
@@ -165,5 +165,133 @@ impl<T: Clone + Debug> Block for Vec<T> {
 
     fn len(&self) -> usize {
         Vec::len(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_expr_common::groups_accumulator::EmitTo;
+
+    use crate::aggregate::groups_accumulator::block_store::{
+        BlockStore, BlockedBlockStore, FlatBlockStore, VecBlockStore,
+    };
+
+    type FlatTestStore = VecBlockStore<u32, FlatBlockStore<Vec<u32>>>;
+    type BlockedTestStore = VecBlockStore<u32, BlockedBlockStore<Vec<u32>>>;
+
+    fn flat_store(values: Vec<u32>) -> FlatTestStore {
+        let mut store = FlatTestStore::new(FlatBlockStore::new());
+        store.resize(values.len(), 0);
+        store[0].clone_from(&values);
+        store
+    }
+
+    fn blocked_store(block_size: usize, blocks: &[&[u32]]) -> BlockedTestStore {
+        let mut inner = BlockedBlockStore::new(block_size);
+        for block in blocks {
+            inner.push_block(block.to_vec());
+        }
+        VecBlockStore::new(inner)
+    }
+
+    // Covers EmitTo::All returning the flat store's single backing block.
+    // Example: flat block [1, 2, 3] emits [1, 2, 3] and leaves the store empty.
+    #[test]
+    fn test_emit_all_returns_flat_block_values() {
+        let mut store = flat_store(vec![1, 2, 3]);
+
+        assert_eq!(store.emit(EmitTo::All).unwrap(), vec![1, 2, 3]);
+        assert!(!store.is_empty());
+        assert_eq!(store.num_blocks(), 1);
+    }
+
+    // Covers EmitTo::All returning the next blocked store block.
+    // Example: blocks [1, 2] and [3] emit [1, 2], leaving one block active.
+    #[test]
+    fn test_emit_all_returns_next_blocked_block() {
+        let mut store = blocked_store(2, &[&[1, 2], &[3]]);
+
+        assert_eq!(store.emit(EmitTo::All).unwrap(), vec![1, 2]);
+        assert_eq!(store.num_blocks(), 1);
+    }
+
+    // Covers EmitTo::All returning an error when blocked storage has no blocks.
+    // Example: emitting all from a new blocked store returns "cannot emit all".
+    #[test]
+    fn test_emit_all_returns_error_when_blocked_store_has_no_blocks() {
+        let mut store = BlockedTestStore::new(BlockedBlockStore::new(2));
+
+        let error = store.emit(EmitTo::All).unwrap_err().to_string();
+        assert!(error.contains("cannot emit all: block store is empty"));
+    }
+
+    // Covers EmitTo::First splitting a flat block and preserving the remainder.
+    // Example: first 2 from [1, 2, 3, 4] emits [1, 2], then all emits [3, 4].
+    #[test]
+    fn test_emit_first_splits_flat_block_and_keeps_remainder() {
+        let mut store = flat_store(vec![1, 2, 3, 4]);
+
+        assert_eq!(store.emit(EmitTo::First(2)).unwrap(), vec![1, 2]);
+        assert_eq!(store.num_blocks(), 1);
+        assert_eq!(store.emit(EmitTo::All).unwrap(), vec![3, 4]);
+        assert!(!store.is_empty());
+        assert_eq!(store.num_blocks(), 1);
+    }
+
+    // Covers EmitTo::First(0) pushing the entire flat block back as the remainder.
+    // Example: first 0 from [1, 2] emits [], then all emits [1, 2].
+    #[test]
+    fn test_emit_first_keeps_all_values_when_count_is_zero() {
+        let mut store = flat_store(vec![1, 2]);
+
+        assert_eq!(store.emit(EmitTo::First(0)).unwrap(), Vec::<u32>::new());
+        assert_eq!(store.num_blocks(), 1);
+        assert_eq!(store.emit(EmitTo::All).unwrap(), vec![1, 2]);
+    }
+
+    // Covers EmitTo::First returning an error when the requested count is too large.
+    // Example: first 3 from [1, 2] errors because the first block length is 2.
+    #[test]
+    fn test_emit_first_returns_error_when_count_exceeds_first_block_len() {
+        let mut store = flat_store(vec![1, 2]);
+
+        let error = store.emit(EmitTo::First(3)).unwrap_err().to_string();
+        assert!(error.contains("EmitTo::First(3) exceeds the first block length 2"));
+    }
+
+    // Covers EmitTo::First returning an error when blocked storage has no blocks.
+    // Example: first 1 from a new blocked store returns "cannot emit first 1".
+    #[test]
+    fn test_emit_first_returns_error_when_blocked_store_has_no_blocks() {
+        let mut store = BlockedTestStore::new(BlockedBlockStore::new(2));
+
+        let error = store.emit(EmitTo::First(1)).unwrap_err().to_string();
+        assert!(error.contains("cannot emit first 1: block store is empty"));
+    }
+
+    // Covers EmitTo::NextBlock draining blocked storage one block at a time.
+    // Example: blocks [1, 2] and [3, 4] emit [1, 2], then [3, 4], then error.
+    #[test]
+    fn test_emit_next_block_drains_blocked_blocks_in_order() {
+        let mut store = blocked_store(2, &[&[1, 2], &[3, 4]]);
+
+        assert_eq!(store.emit(EmitTo::NextBlock).unwrap(), vec![1, 2]);
+        assert_eq!(store.num_blocks(), 1);
+        assert_eq!(store.emit(EmitTo::NextBlock).unwrap(), vec![3, 4]);
+        assert!(store.is_empty());
+        let error = store.emit(EmitTo::NextBlock).unwrap_err().to_string();
+        assert!(error.contains("no more blocks to emit"));
+    }
+
+    // Covers EmitTo::NextBlock returning the current single flat block.
+    // Example: flat block [9] emits [9], then the next block request emits [].
+    #[test]
+    fn test_emit_next_block_returns_current_flat_block() {
+        let mut store = flat_store(vec![9]);
+
+        assert_eq!(store.emit(EmitTo::NextBlock).unwrap(), vec![9]);
+        assert!(!store.is_empty());
+        assert_eq!(store.num_blocks(), 1);
+        assert_eq!(store.emit(EmitTo::NextBlock).unwrap(), Vec::<u32>::new());
     }
 }

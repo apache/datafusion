@@ -200,7 +200,7 @@ where
     }
 
     fn push_new_group(&mut self, value: V) -> u64 {
-        self.values.allocate_block();
+        self.values.reserve_blocks();
 
         let block_id = self.values.num_blocks().saturating_sub(1);
         let current_block = &mut self.values[block_id];
@@ -374,12 +374,8 @@ impl<V: Clone + std::fmt::Debug + Send> GroupValuesPrimitiveStateAdapter<V> {
         V: Send,
     {
         match self {
-            Self::Flat(state) => {
-                state.emit::<T>(map, null_group, data_type, emit_to)
-            }
-            Self::Blocked(state) => {
-                state.emit::<T>(map, null_group, data_type, emit_to)
-            }
+            Self::Flat(state) => state.emit::<T>(map, null_group, data_type, emit_to),
+            Self::Blocked(state) => state.emit::<T>(map, null_group, data_type, emit_to),
         }
     }
 
@@ -398,22 +394,20 @@ where
 {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         match &mut self.state {
-            GroupValuesPrimitiveStateAdapter::Flat(state) => state
-                .intern::<T>(
-                    &mut self.map,
-                    &mut self.null_group,
-                    &self.random_state,
-                    cols,
-                    groups,
-                ),
-            GroupValuesPrimitiveStateAdapter::Blocked(state) => state
-                .intern::<T>(
-                    &mut self.map,
-                    &mut self.null_group,
-                    &self.random_state,
-                    cols,
-                    groups,
-                ),
+            GroupValuesPrimitiveStateAdapter::Flat(state) => state.intern::<T>(
+                &mut self.map,
+                &mut self.null_group,
+                &self.random_state,
+                cols,
+                groups,
+            ),
+            GroupValuesPrimitiveStateAdapter::Blocked(state) => state.intern::<T>(
+                &mut self.map,
+                &mut self.null_group,
+                &self.random_state,
+                cols,
+                groups,
+            ),
         }
     }
 

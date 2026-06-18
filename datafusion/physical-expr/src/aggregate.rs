@@ -21,8 +21,7 @@ pub(crate) mod groups_accumulator {
         pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::FlatNullState;
     }
     pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
-        GroupsAccumulatorAdapter, accumulate::FlatNullState,
-        block_store::FlatBlockStore,
+        GroupsAccumulatorAdapter, accumulate::FlatNullState, block_store::FlatBlockStore,
     };
 }
 pub(crate) mod stats {
