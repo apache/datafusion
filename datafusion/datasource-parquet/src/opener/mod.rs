@@ -560,13 +560,13 @@ impl ParquetOpenState {
                         .is_some()
                         && !prepared_row_groups.row_groups.is_empty()
                     {
-                        prepared_row_groups
-                            .prepared
-                            .loaded
-                            .prepared
-                            .file_metrics
-                            .page_index_load_skipped
-                            .add(1);
+                        let prepared = &prepared_row_groups.prepared.loaded.prepared;
+                        ParquetFileMetrics::add_page_index_load_skipped(
+                            &prepared.metrics,
+                            prepared.partition_index,
+                            &prepared.file_name,
+                            1,
+                        );
                     }
                     Ok(ParquetOpenState::LoadBloomFilters(
                         prepared_row_groups.load_bloom_filters().boxed(),
