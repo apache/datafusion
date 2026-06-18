@@ -19,7 +19,7 @@
 //! over `RangeRepartitionExec`-routed input.
 //!
 //! Each partition reads its *intended primary range* from
-//! `input.runtime_sort_extremes(partition)` — which `RangeRepartitionExec`
+//! `input.runtime_partition_extremes(partition)` — which `RangeRepartitionExec`
 //! exposes as a "useful lie" — and filters rows whose leading sort key
 //! falls outside that range. Halo rows (rows duplicated into this
 //! partition for the window's frame context at boundaries) sit *outside*
@@ -137,7 +137,7 @@ impl ExecutionPlan for HaloDropExec {
 
 /// Drains `input`, lazy-initializing the `[min, max]` filter range on
 /// the first batch by calling
-/// `extremes_provider.runtime_sort_extremes(partition)`. Subsequent
+/// `extremes_provider.runtime_partition_extremes(partition)`. Subsequent
 /// batches reuse the cached range.
 fn filter_stream(
     input: SendableRecordBatchStream,
@@ -170,7 +170,7 @@ fn filter_stream(
             if st.range.is_none() {
                 let extremes = st
                     .provider
-                    .runtime_sort_extremes(st.partition)?
+                    .runtime_partition_extremes(st.partition)?
                     .ok_or_else(|| {
                         internal_datafusion_err!(
                             "HaloDropExec: extremes unavailable on first batch \
@@ -212,9 +212,7 @@ fn filter_batch(
         .as_any()
         .downcast_ref::<Int64Array>()
         .ok_or_else(|| {
-            internal_datafusion_err!(
-                "HaloDropExec: leading sort column must be Int64"
-            )
+            internal_datafusion_err!("HaloDropExec: leading sort column must be Int64")
         })?;
     let mask: BooleanArray = (0..col.len())
         .map(|i| {

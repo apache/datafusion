@@ -22,9 +22,9 @@
 //! `execute()`'s first call spawns a coordinator that:
 //!  1. opens `child.execute(k)` for every input partition `k`,
 //!  2. drives each stream to its first batch (which makes the pipeline-
-//!     breaking sort child populate its `SortExtremes` slot),
-//!  3. reads `child.runtime_sort_extremes(k)` per input,
-//!  4. lex-reduces those into a single global [`SortExtremes`], derives
+//!     breaking sort child populate its `PartitionExtremes` slot),
+//!  3. reads `child.runtime_partition_extremes(k)` per input,
+//!  4. lex-reduces those into a single global [`PartitionExtremes`], derives
 //!     `N` equal-width Int64 bucket boundaries from `[global.min,
 //!     global.max]`, and computes per-bucket expanded ranges by
 //!     extending each primary [b_i, b_{i+1}) outward by
@@ -59,8 +59,8 @@ use datafusion_common::ScalarValue;
 use crate::sorts::sort::lex_compare;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    SendableRecordBatchStream, SortExtremes,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    PartitionExtremes, PlanProperties, SendableRecordBatchStream,
 };
 
 #[derive(Debug)]
@@ -80,7 +80,7 @@ pub struct RangeRepartitionExec {
     state: Arc<Mutex<State>>,
     /// Per-output-partition primary `[lo, hi_exclusive)` ranges, filled
     /// by the coordinator before any batch is routed. Surfaced through
-    /// `runtime_sort_extremes(partition)` so downstream operators
+    /// `runtime_partition_extremes(partition)` so downstream operators
     /// (e.g. HaloDropExec) can read each bucket's intended primary
     /// range without needing the global extremes.
     bucket_primary_ranges: Arc<Mutex<Option<Vec<(i64, i64)>>>>,
@@ -190,11 +190,11 @@ impl ExecutionPlan for RangeRepartitionExec {
     ///
     /// Returns `Ok(None)` if the coordinator hasn't computed boundaries
     /// yet — callers must drive the input stream to first batch before
-    /// reading, per the trait contract on `runtime_sort_extremes`.
-    fn runtime_sort_extremes(
+    /// reading, per the trait contract on `runtime_partition_extremes`.
+    fn runtime_partition_extremes(
         &self,
         partition: usize,
-    ) -> Result<Option<SortExtremes>> {
+    ) -> Result<Option<PartitionExtremes>> {
         let guard = self.bucket_primary_ranges.lock().map_err(|_| {
             internal_datafusion_err!(
                 "RangeRepartitionExec bucket_primary_ranges mutex poisoned"
@@ -206,7 +206,7 @@ impl ExecutionPlan for RangeRepartitionExec {
         let &(lo, hi_excl) = &ranges[partition];
         // Convert [lo, hi_exclusive) → inclusive [min, max].
         let max = hi_excl.saturating_sub(1);
-        Ok(Some(SortExtremes {
+        Ok(Some(PartitionExtremes {
             min: vec![ScalarValue::Int64(Some(lo))],
             max: vec![ScalarValue::Int64(Some(max))],
             row_count: 0, // not tracked; consumers shouldn't rely on it
@@ -323,8 +323,8 @@ async fn coordinator(
     }
 
     // Phase 2: collect per-input runtime extremes.
-    let per_input: Vec<Option<SortExtremes>> = (0..n)
-        .map(|k| child.runtime_sort_extremes(k).ok().flatten())
+    let per_input: Vec<Option<PartitionExtremes>> = (0..n)
+        .map(|k| child.runtime_partition_extremes(k).ok().flatten())
         .collect();
 
     // Phase 3: lex-reduce per-input → global, using the input's declared
@@ -365,7 +365,7 @@ async fn coordinator(
     };
     log_buckets(lo, hi, &boundaries, halo_preceding, halo_following);
 
-    // Stash per-bucket primary ranges where `runtime_sort_extremes` can
+    // Stash per-bucket primary ranges where `runtime_partition_extremes` can
     // see them. Done *before* any batch is routed so downstream operators
     // that gate on first batch will read populated state.
     if let Ok(mut guard) = bucket_primary_ranges.lock() {
@@ -568,10 +568,10 @@ fn log_buckets(
     }
 }
 
-/// Extract `(lo, hi)` from the leading slot of a global [`SortExtremes`].
+/// Extract `(lo, hi)` from the leading slot of a global [`PartitionExtremes`].
 /// Returns `None` if the extremes are missing, the leading key isn't
 /// Int64, or either endpoint is null.
-fn int64_range(global: Option<&SortExtremes>) -> Option<(i64, i64)> {
+fn int64_range(global: Option<&PartitionExtremes>) -> Option<(i64, i64)> {
     let global = global?;
     let (ScalarValue::Int64(Some(lo)), ScalarValue::Int64(Some(hi))) =
         (global.min.first()?, global.max.first()?)
@@ -595,10 +595,7 @@ pub fn primary_ranges_from_boundaries(
         .chain(std::iter::once(hi.saturating_add(1)))
         .collect();
     edges.dedup();
-    edges
-        .windows(2)
-        .map(|w| (w[0], w[1]))
-        .collect()
+    edges.windows(2).map(|w| (w[0], w[1])).collect()
 }
 
 /// Split the closed `Int64` interval `[lo, hi]` into `n` equal-width
@@ -616,14 +613,14 @@ pub fn equal_width_int64_boundaries(lo: i64, hi: i64, n: usize) -> Option<Vec<i6
     Some(cuts)
 }
 
-/// Lex-reduce per-input partition extremes into one global [`SortExtremes`]
+/// Lex-reduce per-input partition extremes into one global [`PartitionExtremes`]
 /// honoring `ordering`'s direction / nulls-first per key. Returns `None`
 /// when no input partition produced extremes (e.g. all inputs were empty,
 /// or no upstream supports the trait method).
 fn reduce_global_extremes(
-    per_input: &[Option<SortExtremes>],
+    per_input: &[Option<PartitionExtremes>],
     ordering: &LexOrdering,
-) -> Option<SortExtremes> {
+) -> Option<PartitionExtremes> {
     let mut iter = per_input.iter().filter_map(Option::clone);
     let mut global = iter.next()?;
     for next in iter {

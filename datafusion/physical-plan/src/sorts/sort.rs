@@ -70,7 +70,7 @@ use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
-use crate::SortExtremes;
+use crate::PartitionExtremes;
 use arrow::array::ArrayRef;
 use datafusion_common::ScalarValue;
 use futures::{StreamExt, TryStreamExt};
@@ -79,13 +79,13 @@ use std::sync::Mutex;
 
 /// One slot per SortExec output partition. Populated inside the sort code
 /// path each time `sort_batch_chunked` produces sorted batches, and
-/// surfaced via `ExecutionPlan::runtime_sort_extremes`. By the time
+/// surfaced via `ExecutionPlan::runtime_partition_extremes`. By the time
 /// downstream sees the first output batch the slot for that partition is
 /// already populated.
-type SortExtremesSlot = Arc<Mutex<Option<SortExtremes>>>;
-type SortExtremesSlots = Arc<Vec<SortExtremesSlot>>;
+type PartitionExtremesSlot = Arc<Mutex<Option<PartitionExtremes>>>;
+type PartitionExtremesSlots = Arc<Vec<PartitionExtremesSlot>>;
 
-fn make_sort_extremes_slots(n_partitions: usize) -> SortExtremesSlots {
+fn make_partition_extremes_slots(n_partitions: usize) -> PartitionExtremesSlots {
     Arc::new(
         (0..n_partitions)
             .map(|_| Arc::new(Mutex::new(None)))
@@ -158,9 +158,9 @@ pub fn lex_compare(
 }
 
 /// Fold the endpoints of one already-sorted chunk produced by
-/// `sort_batch_chunked` into the running [`SortExtremes`] for one partition.
+/// `sort_batch_chunked` into the running [`PartitionExtremes`] for one partition.
 fn merge_chunk_into_slot(
-    slot: &Mutex<Option<SortExtremes>>,
+    slot: &Mutex<Option<PartitionExtremes>>,
     expressions: &LexOrdering,
     sorted_chunks: &[RecordBatch],
 ) -> Result<()> {
@@ -179,7 +179,7 @@ fn merge_chunk_into_slot(
 
     let mut guard = slot.lock().unwrap();
     *guard = Some(match guard.take() {
-        None => SortExtremes {
+        None => PartitionExtremes {
             min: chunk_min,
             max: chunk_max,
             row_count: total_rows,
@@ -195,7 +195,7 @@ fn merge_chunk_into_slot(
             } else {
                 prev.max
             };
-            SortExtremes {
+            PartitionExtremes {
                 min,
                 max,
                 row_count: prev.row_count + total_rows,
@@ -397,8 +397,8 @@ struct ExternalSorter {
     /// Optional slot that `sort_batch_stream` updates after each
     /// `sort_batch_chunked` call with the leading-key endpoints of the
     /// sorted output. `SortExec` provides this so consumers can fetch the
-    /// runtime sort extremes via `ExecutionPlan::runtime_sort_extremes`.
-    extremes_slot: Option<Arc<Mutex<Option<SortExtremes>>>>,
+    /// observed extremes via `ExecutionPlan::runtime_partition_extremes`.
+    extremes_slot: Option<Arc<Mutex<Option<PartitionExtremes>>>>,
 }
 
 impl ExternalSorter {
@@ -452,9 +452,9 @@ impl ExternalSorter {
     }
 
     /// Provide a slot for `sort_batch_stream` to publish runtime endpoints
-    /// into. Used by `SortExec` so its `runtime_sort_extremes` override has
+    /// into. Used by `SortExec` so its `runtime_partition_extremes` override has
     /// a value to return.
-    fn with_extremes_slot(mut self, slot: Arc<Mutex<Option<SortExtremes>>>) -> Self {
+    fn with_extremes_slot(mut self, slot: Arc<Mutex<Option<PartitionExtremes>>>) -> Self {
         self.extremes_slot = Some(slot);
         self
     }
@@ -1022,9 +1022,9 @@ pub struct SortExec {
     /// If `fetch` is `None`, this will be `None`.
     filter: Option<Arc<RwLock<TopKDynamicFilters>>>,
     /// Per-output-partition slot populated by the sort code path. Surfaced
-    /// via `ExecutionPlan::runtime_sort_extremes` so range-partitioning
+    /// via `ExecutionPlan::runtime_partition_extremes` so range-partitioning
     /// callers can derive global boundaries from runtime data.
-    runtime_extremes: SortExtremesSlots,
+    runtime_extremes: PartitionExtremesSlots,
 }
 
 impl SortExec {
@@ -1036,7 +1036,7 @@ impl SortExec {
             Self::compute_properties(&input, expr.clone(), preserve_partitioning)
                 .unwrap();
         let runtime_extremes =
-            make_sort_extremes_slots(cache.partitioning.partition_count());
+            make_partition_extremes_slots(cache.partitioning.partition_count());
         Self {
             expr,
             input,
@@ -1067,7 +1067,7 @@ impl SortExec {
         Arc::make_mut(&mut self.cache).partitioning =
             Self::output_partitioning_helper(&self.input, self.preserve_partitioning);
         self.runtime_extremes =
-            make_sort_extremes_slots(self.cache.partitioning.partition_count());
+            make_partition_extremes_slots(self.cache.partitioning.partition_count());
         self
     }
 
@@ -1337,8 +1337,9 @@ impl ExecutionPlan for SortExec {
             )?;
             new_sort.cache = Arc::new(cache);
             new_sort.common_sort_prefix = sort_prefix;
-            new_sort.runtime_extremes =
-                make_sort_extremes_slots(new_sort.cache.partitioning.partition_count());
+            new_sort.runtime_extremes = make_partition_extremes_slots(
+                new_sort.cache.partitioning.partition_count(),
+            );
         }
 
         Ok(Arc::new(new_sort))
@@ -1463,11 +1464,14 @@ impl ExecutionPlan for SortExec {
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
-    /// Returns the runtime sort extremes for the requested output partition.
+    /// Returns observed lex-min/lex-max for the requested output partition.
     /// `None` while that partition's sort path has not yet folded any
     /// chunk into its slot — the caller is expected to have driven enough of
     /// `execute(partition)` to reach the first `sort_batch_chunked` call.
-    fn runtime_sort_extremes(&self, partition: usize) -> Result<Option<SortExtremes>> {
+    fn runtime_partition_extremes(
+        &self,
+        partition: usize,
+    ) -> Result<Option<PartitionExtremes>> {
         Ok(self
             .runtime_extremes
             .get(partition)

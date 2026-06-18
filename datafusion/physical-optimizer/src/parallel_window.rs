@@ -106,7 +106,7 @@ impl PhysicalOptimizerRule for ParallelWindow {
                 .with_parallel_aware(true),
             );
             // Drop halo rows above the per-partition window. HaloDropExec
-            // reads its primary range from `input.runtime_sort_extremes`,
+            // reads its primary range from `input.runtime_partition_extremes`,
             // which BWAG passes through and RangeRepartitionExec populates.
             let drop_halo: Arc<dyn ExecutionPlan> =
                 Arc::new(HaloDropExec::try_new(new_window, &lex)?);
