@@ -60,6 +60,26 @@ SELECT map_agg(k, v) FROM nullkey;
 ----
 {a: 1, c: 3}
 
+# Window usage: a cumulative frame calls evaluate() once per row, so the map
+# grows as the frame expands. Guards against optimizations that consume the
+# accumulator state between evaluate() calls.
+statement ok
+CREATE TABLE win (k VARCHAR, v INT, ts INT) AS VALUES
+  ('a', 1, 10),
+  ('b', 2, 20),
+  ('c', 3, 30);
+
+query ?
+SELECT map_agg(k, v) OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM win;
+----
+{a: 1}
+{a: 1, b: 2}
+{a: 1, b: 2, c: 3}
+
+statement ok
+DROP TABLE win;
+
 statement ok
 DROP TABLE kv;
 

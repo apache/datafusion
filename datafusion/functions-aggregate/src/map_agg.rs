@@ -445,11 +445,10 @@ impl Accumulator for OrderSensitiveMapAggAccumulator {
             vec![take(&mut self.keys).into()];
         let mut partition_orderings: Vec<VecDeque<Vec<ScalarValue>>> =
             vec![take(&mut self.ordering_values).into()];
-        // Values are carried inside the ordering merge by pairing them with keys
-        // through a side table; simpler to merge keys+values together below.
         let mut partition_values: Vec<VecDeque<ScalarValue>> =
             vec![take(&mut self.values).into()];
 
+        // Push keys and values from each partition's state into the merge buffers.
         for row in 0..map_array.len() {
             if map_array.is_null(row) {
                 continue;
@@ -485,7 +484,6 @@ impl Accumulator for OrderSensitiveMapAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        // Ship the de-duplicated map plus ordering values for re-sorting.
         let (keys, values) = self.sorted_deduped()?;
         let map_array = build_single_map(keys, values, &self.key_type, &self.value_type)?;
         Ok(vec![
