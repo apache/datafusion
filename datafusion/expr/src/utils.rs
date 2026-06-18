@@ -464,16 +464,17 @@ pub fn expand_wildcard(
     let exprs = get_exprs_except_skipped(schema, &columns_to_skip);
 
     // For RIGHT / FULL USING / NATURAL joins the surviving key column is the
-    // merged key; expose it as COALESCE(left, right) so a wildcard shows the
-    // value from whichever side is present rather than the NULL-padded side.
-    let outer_using_keys = plan.outer_using_key_pairs()?;
-    if outer_using_keys.is_empty() {
+    // merged key; resolve it to the never-NULL-padded side (the right key for
+    // RIGHT, COALESCE(left, right) for FULL) so a wildcard shows the value from
+    // whichever side is present rather than the NULL-padded one.
+    let merged_keys = plan.right_or_full_using_key_pairs()?;
+    if merged_keys.is_empty() {
         return Ok(exprs);
     }
     exprs
         .into_iter()
         .map(|expr| match expr {
-            Expr::Column(col) => merged_using_key_or_column(col, true, &outer_using_keys),
+            Expr::Column(col) => merged_using_key_or_column(col, true, &merged_keys),
             other => Ok(other),
         })
         .collect()

@@ -1108,7 +1108,7 @@ fn natural_right_join() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.l_item_id
+    Projection: b.l_item_id
       Right Join: Using a.l_orderkey = b.l_orderkey, a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.l_extendedprice = b.l_extendedprice, a.price = b.price
         SubqueryAlias: a
           TableScan: lineitem
@@ -5201,7 +5201,8 @@ fn test_using_join_wildcard_schema() {
         [
             "t1.a".to_string(),
             "t1.b".to_string(),
-            "t2.c".to_string(),
+            // RIGHT join: the merged key `c` is the never-NULL-padded right side
+            "t3.c".to_string(),
             "t3.d".to_string()
         ]
     );
