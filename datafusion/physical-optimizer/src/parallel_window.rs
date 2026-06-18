@@ -27,7 +27,7 @@ use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_expr::WindowFrameUnits;
+use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::windows::BoundedWindowAggExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -84,6 +84,15 @@ fn probe_candidate(
     if frame.units != WindowFrameUnits::Range {
         return Ok(());
     }
+    let Some((halo_preceding, halo_following)) =
+        i64_halo(&frame.start_bound, &frame.end_bound)
+    else {
+        info!(
+            "  frame bounds not finite Int64 (start={:?}, end={:?}); skip",
+            frame.start_bound, frame.end_bound
+        );
+        return Ok(());
+    };
 
     let child = window.input();
     let Some(col) = order_by[0].expr.downcast_ref::<Column>() else {
@@ -126,8 +135,53 @@ fn probe_candidate(
         return Ok(());
     };
     info!("  global min={min:?} max={max:?}; interior boundaries: {boundaries:?}");
+    info!("  halo: {halo_preceding} preceding, {halo_following} following");
+
+    // Each output partition's primary range is half-open [b_i, b_{i+1}); the
+    // expanded (routed) range adds halo on each side so the per-partition
+    // window can compute correct frame values at the seam.
+    // TODO: a future `HaloDropExec` (or equivalent) sits above the window per
+    // partition and drops rows outside its primary range so each input row
+    // surfaces in exactly one output partition.
+    let (ScalarValue::Int64(Some(lo)), ScalarValue::Int64(Some(hi))) = (min, max) else {
+        return Ok(());
+    };
+    let mut edges: Vec<i64> = std::iter::once(*lo)
+        .chain(boundaries.iter().filter_map(|b| match b {
+            ScalarValue::Int64(Some(v)) => Some(*v),
+            _ => None,
+        }))
+        .chain(std::iter::once(*hi + 1))
+        .collect();
+    edges.dedup();
+    for (i, win) in edges.windows(2).enumerate() {
+        let start = win[0] - halo_preceding;
+        let end = win[1] + halo_following;
+        info!(
+            "  bucket {i}: primary [{}, {})  expanded [{start}, {end})",
+            win[0], win[1]
+        );
+    }
 
     Ok(())
+}
+
+/// Extract `(halo_preceding, halo_following)` in order-key units from a RANGE
+/// window frame. Returns `None` for UNBOUNDED bounds or non-`Int64` distances.
+/// v1 scope: only `Preceding(Int64)` / `CurrentRow` for the start bound, and
+/// `CurrentRow` / `Following(Int64)` for the end bound.
+fn i64_halo(start: &WindowFrameBound, end: &WindowFrameBound) -> Option<(i64, i64)> {
+    let preceding = match start {
+        WindowFrameBound::Preceding(ScalarValue::Int64(Some(n))) => *n,
+        WindowFrameBound::CurrentRow => 0,
+        _ => return None,
+    };
+    let following = match end {
+        WindowFrameBound::Following(ScalarValue::Int64(Some(n))) => *n,
+        WindowFrameBound::CurrentRow => 0,
+        _ => return None,
+    };
+    Some((preceding, following))
 }
 
 /// Split the closed interval `[min, max]` into `n` equal-width buckets and
