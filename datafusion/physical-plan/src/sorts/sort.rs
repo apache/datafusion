@@ -120,7 +120,7 @@ fn evaluate_row(
 /// Compare two `ScalarValue` tuples using `SortOptions` per key
 /// (descending and nulls_first), so callers can pick the lex-smaller or
 /// lex-larger of two endpoint candidates without an arrow round-trip.
-fn lex_compare(
+pub fn lex_compare(
     a: &[ScalarValue],
     b: &[ScalarValue],
     expressions: &LexOrdering,
