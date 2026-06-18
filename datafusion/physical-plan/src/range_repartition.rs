@@ -19,42 +19,45 @@
 //! single order-key into N output partitions, with halo overlap for
 //! bounded RANGE-frame window functions sitting above it.
 //!
-//! This commit is the bare scaffold:
-//! - one instance, one cached `PlanProperties` inherited from the input
-//! - on the first call to `execute()`, spawn one tokio task per input
-//!   partition that awaits `child.runtime_statistics(i)` and logs the
-//!   result. This is the connective tissue that the eventual operator
-//!   will sit on top of.
-//! - `execute(i)` is a pass-through: it forwards to `child.execute(i)`
-//!   verbatim, so inserting this operator into a plan is a no-op for
-//!   correctness today.
+//! Today this is a pass-through that wraps each forwarded stream with a
+//! one-shot observer: when the first batch of partition `i` is yielded
+//! (which guarantees the upstream sort has folded at least one chunk
+//! into its `SortExtremes` slot), it calls
+//! `child.runtime_sort_extremes(i)` and logs the result. Plan integration
+//! is therefore a no-op for correctness today, but the log line confirms
+//! the runtime-stats plumbing reaches the downstream consumer.
+//
+// TODO: replace pass-through with real range routing — gather all K
+// per-input-partition `SortExtremes`, derive global boundaries, route
+// rows by binary search on the leading sort key, emit halo-expanded
+// per-output-partition streams.
 
-use std::sync::{Arc, Once};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use arrow::array::RecordBatch;
 use datafusion_common::Result;
-use datafusion_execution::TaskContext;
-use log::{info, warn};
+use datafusion_execution::{RecordBatchStream, TaskContext};
+use futures::Stream;
+use log::info;
 
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream,
 };
+use arrow::datatypes::SchemaRef;
 
 #[derive(Debug)]
 pub struct RangeRepartitionExec {
     input: Arc<dyn ExecutionPlan>,
     cache: Arc<PlanProperties>,
-    init: Arc<Once>,
 }
 
 impl RangeRepartitionExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         let cache = Arc::clone(input.properties());
-        Self {
-            input,
-            cache,
-            init: Arc::new(Once::new()),
-        }
+        Self { input, cache }
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -97,32 +100,61 @@ impl ExecutionPlan for RangeRepartitionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let n_in = self.input.output_partitioning().partition_count();
-        let input = Arc::clone(&self.input);
-        self.init.call_once(|| {
-            for i in 0..n_in {
-                let input_for_task = Arc::clone(&input);
-                tokio::spawn(async move {
-                    match input_for_task.runtime_statistics(i).await {
-                        Ok(stats) => {
-                            let col_stats = &stats.column_statistics;
-                            info!(
-                                "RangeRepartitionExec: input partition {i} runtime stats: \
-                                 rows={:?} cols={:?}",
-                                stats.num_rows,
-                                col_stats
-                                    .iter()
-                                    .map(|c| (c.min_value.clone(), c.max_value.clone()))
-                                    .collect::<Vec<_>>()
-                            );
-                        }
-                        Err(e) => warn!(
-                            "RangeRepartitionExec: input partition {i} runtime stats error: {e}"
-                        ),
-                    }
-                });
+        let inner = self.input.execute(partition, context)?;
+        Ok(Box::pin(LogOnFirstBatch {
+            inner,
+            partition,
+            input: Arc::clone(&self.input),
+            logged: false,
+        }))
+    }
+}
+
+/// Pass-through stream that, on the first batch it yields, asks the child
+/// operator for its `runtime_sort_extremes` and logs them. Confirms that
+/// the upstream sort has populated its slot by the time downstream sees
+/// data.
+struct LogOnFirstBatch {
+    inner: SendableRecordBatchStream,
+    partition: usize,
+    input: Arc<dyn ExecutionPlan>,
+    logged: bool,
+}
+
+impl Stream for LogOnFirstBatch {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let item = Pin::new(&mut self.inner).poll_next(cx);
+        if let Poll::Ready(Some(Ok(_))) = &item
+            && !self.logged
+        {
+            self.logged = true;
+            match self.input.runtime_sort_extremes(self.partition) {
+                Ok(Some(extremes)) => info!(
+                    "RangeRepartitionExec: input partition {} runtime_sort_extremes: \
+                     min={:?} max={:?} rows={}",
+                    self.partition, extremes.min, extremes.max, extremes.row_count
+                ),
+                Ok(None) => info!(
+                    "RangeRepartitionExec: input partition {} runtime_sort_extremes: None",
+                    self.partition
+                ),
+                Err(e) => info!(
+                    "RangeRepartitionExec: input partition {} runtime_sort_extremes error: {e}",
+                    self.partition
+                ),
             }
-        });
-        self.input.execute(partition, context)
+        }
+        item
+    }
+}
+
+impl RecordBatchStream for LogOnFirstBatch {
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
     }
 }

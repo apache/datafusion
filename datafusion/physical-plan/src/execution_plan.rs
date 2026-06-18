@@ -29,7 +29,7 @@ use arrow_schema::Schema;
 pub use datafusion_common::hash_utils;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
+pub use datafusion_common::{ColumnStatistics, ScalarValue, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
@@ -39,8 +39,6 @@ pub use datafusion_physical_expr::{
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::future::{Future, ready};
-use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
@@ -95,6 +93,26 @@ use futures::stream::{StreamExt, TryStreamExt};
 ///
 /// [`datafusion-examples`]: https://github.com/apache/datafusion/tree/main/datafusion-examples
 /// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_execution_plan.rs
+
+/// Runtime-derived endpoints of a single partition's output, expressed in the
+/// operator's declared output ordering (the `PhysicalSortExpr` list returned
+/// by `equivalence_properties().output_ordering()`).
+///
+/// `min` and `max` are tuples of values — one entry per sort key — taken at
+/// the lex-smallest and lex-largest output rows respectively. For the leading
+/// sort key these are exactly the natural min/max of that key (after honoring
+/// ASC/DESC). For trailing sort keys the entries hold the value of that key
+/// at the lex-extreme row, not that key's own natural extreme.
+#[derive(Debug, Clone)]
+pub struct SortExtremes {
+    /// Sort-key values at the lex-smallest row across the partition.
+    pub min: Vec<ScalarValue>,
+    /// Sort-key values at the lex-largest row across the partition.
+    pub max: Vec<ScalarValue>,
+    /// Total non-empty rows that contributed to `min`/`max`.
+    pub row_count: usize,
+}
+
 pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
@@ -515,25 +533,21 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
     }
 
-    /// Returns statistics for `partition` that are guaranteed to be accurate
-    /// only once that partition's input has been fully consumed.
+    /// Runtime-derived endpoints of `partition`'s output along the operator's
+    /// declared output ordering (i.e. each `PhysicalSortExpr` in
+    /// `equivalence_properties().output_ordering()`).
     ///
-    /// Default impl resolves immediately to [`Self::partition_statistics`]
-    /// (i.e. whatever plan-time stats are available). Pipeline-breaking
-    /// operators (e.g. `SortExec`) may override to expose runtime-derived
-    /// exact stats — for example, the min/max of the sorted buffer — by
-    /// completing the returned future only after the relevant work has run.
+    /// Returns `Ok(None)` by default. Operators that are pipeline-breaking
+    /// along their output ordering (e.g. `SortExec`) may override to expose
+    /// the lex-min / lex-max tuple once the partition's input has been fully
+    /// consumed. Callers are responsible for ensuring the upstream has made
+    /// enough progress (typically by polling `execute()`) before relying on
+    /// the result; until then this returns `Ok(None)`.
     ///
-    /// Callers are expected to drive the input by polling `execute()` (or to
-    /// arrange equivalent forward progress) so the override can signal
-    /// completion; the default impl is always immediately ready and does not
-    /// depend on execution.
-    fn runtime_statistics(
-        &self,
-        partition: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Arc<Statistics>>> + Send>> {
-        let stats = self.partition_statistics(Some(partition));
-        Box::pin(ready(stats))
+    /// See [`SortExtremes`] for the result shape.
+    fn runtime_sort_extremes(&self, partition: usize) -> Result<Option<SortExtremes>> {
+        let _ = partition;
+        Ok(None)
     }
 
     /// Returns `true` if a limit can be safely pushed down through this
