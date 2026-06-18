@@ -523,12 +523,12 @@ impl HashJoinStream {
         join_type: JoinType,
         left_data: &JoinLeftData,
     ) -> HashJoinStreamState {
-        let build_empty = left_data.batch().num_rows() == 0;
+        let build_empty = !left_data.has_build_rows();
         // The map can be empty even when the build side has rows: under
         // `NullEqualsNothing`, build rows with a NULL join key are omitted. For
         // join types whose every output row requires a build match, that still
         // guarantees an empty result, so we can skip scanning the probe side.
-        let map_empty = left_data.map().is_empty();
+        let map_empty = !left_data.has_matchable_build_rows();
 
         if (build_empty && join_type.empty_build_side_produces_empty_result())
             || (map_empty && join_type.empty_map_produces_empty_result())
