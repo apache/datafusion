@@ -52,13 +52,13 @@ async fn check_stats_precision_with_filter_pushdown() {
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
     let table_path = ListingTableUrl::parse(filename).unwrap();
 
-    let opt =
-        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
+    let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
     let table = get_listing_table(&table_path, None, &opt).await;
 
     let (_, _, state) = get_cache_runtime_state();
     let mut options: ConfigOptions = state.config().options().as_ref().clone();
     options.execution.parquet.pushdown_filters = true;
+    options.execution.collect_statistics = true;
 
     // Scan without filter, stats are exact
     let exec = table.scan(&state, None, &[], None).await.unwrap();
@@ -107,13 +107,16 @@ async fn load_table_stats_with_session_level_cache() {
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
     let table_path = ListingTableUrl::parse(filename).unwrap();
 
-    let (cache1, _, state1) = get_cache_runtime_state();
+    let (cache1, _, mut state1) = get_cache_runtime_state();
+    let cfg_1 = state1.config_mut();
+    cfg_1.options_mut().execution.collect_statistics = true;
 
     // Create a separate DefaultFileStatisticsCache
-    let (cache2, _, state2) = get_cache_runtime_state();
+    let (cache2, _, mut state2) = get_cache_runtime_state();
+    let cfg_2 = state2.config_mut();
+    cfg_2.options_mut().execution.collect_statistics = true;
 
-    let opt =
-        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
+    let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
 
     let table1 = get_listing_table(&table_path, Some(cache1), &opt).await;
     let table2 = get_listing_table(&table_path, Some(cache2), &opt).await;

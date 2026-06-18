@@ -23,7 +23,7 @@ mod struct_builder;
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::Write;
@@ -144,6 +144,30 @@ pub fn date_to_timestamp_multiplier(
             TimeUnit::Nanosecond => Some(NANOS_PER_MILLISECOND),
         },
 
+        _ => None,
+    }
+}
+
+/// Returns the multiplier that converts the input timestamp representation into
+/// the desired timestamp unit, if the conversion requires a multiplication that
+/// can overflow an `i64`.
+pub fn timestamp_to_timestamp_multiplier(
+    source_type: &DataType,
+    target_type: &DataType,
+) -> Option<i64> {
+    let (DataType::Timestamp(source_unit, _), DataType::Timestamp(target_unit, _)) =
+        (source_type, target_type)
+    else {
+        return None;
+    };
+
+    match (source_unit, target_unit) {
+        (TimeUnit::Second, TimeUnit::Millisecond) => Some(1_000),
+        (TimeUnit::Second, TimeUnit::Microsecond) => Some(1_000_000),
+        (TimeUnit::Second, TimeUnit::Nanosecond) => Some(1_000_000_000),
+        (TimeUnit::Millisecond, TimeUnit::Microsecond) => Some(1_000),
+        (TimeUnit::Millisecond, TimeUnit::Nanosecond) => Some(1_000_000),
+        (TimeUnit::Microsecond, TimeUnit::Nanosecond) => Some(1_000),
         _ => None,
     }
 }
@@ -4265,9 +4289,17 @@ impl ScalarValue {
         }
 
         if let Some(multiplier) = date_to_timestamp_multiplier(&source_type, target_type)
-            && let Some(value) = self.date_scalar_value_as_i64()
+            .or_else(|| timestamp_to_timestamp_multiplier(&source_type, target_type))
+            && let Some(value) = self.temporal_scalar_value_as_i64()
         {
-            ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)?;
+            match ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)
+            {
+                Ok(()) => {}
+                Err(_) if cast_options.safe => {
+                    return ScalarValue::try_new_null(target_type);
+                }
+                Err(e) => return Err(e),
+            }
         }
 
         let scalar_array = self.to_array()?;
@@ -4287,10 +4319,14 @@ impl ScalarValue {
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
-    fn date_scalar_value_as_i64(&self) -> Option<i64> {
+    fn temporal_scalar_value_as_i64(&self) -> Option<i64> {
         match self {
             ScalarValue::Date32(Some(value)) => Some(i64::from(*value)),
             ScalarValue::Date64(Some(value)) => Some(*value),
+            ScalarValue::TimestampSecond(Some(value), _)
+            | ScalarValue::TimestampMillisecond(Some(value), _)
+            | ScalarValue::TimestampMicrosecond(Some(value), _)
+            | ScalarValue::TimestampNanosecond(Some(value), _) => Some(*value),
             _ => None,
         }
     }
@@ -4751,6 +4787,18 @@ impl ScalarValue {
                 .iter()
                 .map(|sv| sv.size() - size_of_val(sv))
                 .sum::<usize>()
+    }
+
+    /// Estimates [size](Self::size) of [`HashMap`] keyed by [`ScalarValue`] in bytes.
+    ///
+    /// Includes the size of the [`HashMap`] container itself. Heap payload of
+    /// `V` is not accounted for; callers storing heap-backed values should
+    /// supplement this estimate.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
+    pub fn size_of_hashmap<V, S>(map: &HashMap<Self, V, S>) -> usize {
+        size_of_val(map)
+            + ((size_of::<ScalarValue>() + size_of::<V>()) * map.capacity())
+            + map.keys().map(|k| k.size() - size_of_val(k)).sum::<usize>()
     }
 
     /// Compacts the allocation referenced by `self` to the minimum, copying the data if
@@ -10147,6 +10195,55 @@ mod tests {
                 .contains("converted value exceeds the representable i64 range"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn safe_cast_date_to_timestamp_overflow_returns_null() {
+        let scalar = ScalarValue::Date32(Some(i32::MAX));
+        let safe_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let casted = scalar
+            .cast_to_with_options(
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                &safe_options,
+            )
+            .expect("expected safe cast to return null");
+
+        assert_eq!(casted, ScalarValue::TimestampNanosecond(None, None));
+    }
+
+    #[test]
+    fn cast_timestamp_to_timestamp_overflow_returns_error() {
+        let scalar = ScalarValue::TimestampSecond(Some(i64::MAX), None);
+        let err = scalar
+            .cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None))
+            .expect_err("expected cast to fail");
+        assert!(
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn safe_cast_timestamp_to_timestamp_overflow_returns_null() {
+        let scalar = ScalarValue::TimestampSecond(Some(i64::MAX), None);
+        let safe_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let casted = scalar
+            .cast_to_with_options(
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                &safe_options,
+            )
+            .expect("expected safe cast to return null");
+
+        assert_eq!(casted, ScalarValue::TimestampNanosecond(None, None));
     }
 
     #[test]

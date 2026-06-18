@@ -28,7 +28,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_schema::SchemaRef;
     use datafusion_catalog::TableProvider;
-    use datafusion_common::{DataFusionError, Result};
+    use datafusion_common::{Constraint, Constraints, DataFusionError, Result};
     use datafusion_expr::LogicalPlanBuilder;
     use datafusion_expr::dml::InsertOp;
     use futures::StreamExt;
@@ -99,6 +99,57 @@ mod tests {
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
         assert_eq!(3, batch1.num_columns());
+
+        Ok(())
+    }
+
+    /// Builds a single-batch [`MemTable`] over an `(a, b)` schema, optionally
+    /// attaching the given constraints.
+    fn source_table(constraints: Option<Constraints>) -> Result<MemTable> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+            ],
+        )?;
+        let table = MemTable::try_new(schema, vec![vec![batch]])?;
+        Ok(match constraints {
+            Some(constraints) => table.with_constraints(constraints),
+            None => table,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_load_preserves_constraints() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+
+        // Single partition
+        let source = Arc::new(source_table(Some(constraints.clone()))?);
+        let loaded = MemTable::load(source, None, &session_ctx.state()).await?;
+        assert_eq!(loaded.constraints(), Some(&constraints));
+
+        // Multiple partitions
+        let source = Arc::new(source_table(Some(constraints.clone()))?);
+        let loaded = MemTable::load(source, Some(2), &session_ctx.state()).await?;
+        assert_eq!(loaded.constraints(), Some(&constraints));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_without_constraints() -> Result<()> {
+        let session_ctx = SessionContext::new();
+
+        let source = Arc::new(source_table(None)?);
+        let loaded = MemTable::load(source, None, &session_ctx.state()).await?;
+        assert_eq!(loaded.constraints(), Some(&Constraints::default()));
 
         Ok(())
     }

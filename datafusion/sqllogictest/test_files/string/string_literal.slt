@@ -430,6 +430,26 @@ SELECT replace(arrow_cast('foobar', 'LargeUtf8'), arrow_cast('bar', 'LargeUtf8')
 ----
 foohello
 
+# PostgreSQL compatibility: empty search string is a no-op (issue #22253)
+query T
+SELECT replace('abc', '', 'x')
+----
+abc
+
+query T
+SELECT replace(arrow_cast('abc', 'Dictionary(Int32, Utf8)'), '', 'x')
+----
+abc
+
+query T
+SELECT replace(arrow_cast('abc', 'Utf8View'), arrow_cast('', 'Utf8View'), arrow_cast('x', 'Utf8View'))
+----
+abc
+
+query T
+SELECT replace(arrow_cast('abc', 'LargeUtf8'), arrow_cast('', 'LargeUtf8'), arrow_cast('x', 'LargeUtf8'))
+----
+abc
 
 query T
 SELECT reverse('abcde')

@@ -125,6 +125,14 @@ impl NthValue {
     }
 }
 
+fn validate_nth_value_n(n: i64) -> Result<i64> {
+    if n == i64::MIN {
+        return exec_err!("The second argument of nth_value must not be i64::MIN");
+    }
+
+    Ok(n)
+}
+
 static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_ANALYTICAL,
@@ -287,6 +295,7 @@ impl WindowUDFImpl for NthValue {
         .map(|v| get_signed_integer(&v))
         {
             Some(Ok(n)) => {
+                let n = validate_nth_value_n(n)?;
                 if partition_evaluator_args.is_reversed() {
                     -n
                 } else {
@@ -659,5 +668,25 @@ mod tests {
             ]),
         )?;
         Ok(())
+    }
+
+    #[test]
+    fn nth_value_i64_min_returns_error() {
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let n_value = Arc::new(Literal::new(ScalarValue::Int64(Some(i64::MIN))))
+            as Arc<dyn PhysicalExpr>;
+
+        let err = NthValue::nth()
+            .partition_evaluator(PartitionEvaluatorArgs::new(
+                &[expr, n_value],
+                &[Field::new("f", DataType::Int32, true).into()],
+                false,
+                false,
+            ))
+            .unwrap_err();
+
+        assert!(err.to_string().starts_with(
+            "Execution error: The second argument of nth_value must not be i64::MIN"
+        ));
     }
 }

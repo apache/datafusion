@@ -1100,6 +1100,31 @@ physical_plan
 24)-----------------------------│        format: csv        │
 25)-----------------------------└───────────────────────────┘
 
+# Query with null-aware anti join (NOT IN subquery).
+query TT
+explain select int_col from table1 where int_col not in (select int_col from table2);
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│        HashJoinExec       │
+03)│    --------------------   │
+04)│    join_type: LeftAnti    │
+05)│                           │
+06)│         null_aware        ├──────────────┐
+07)│                           │              │
+08)│            on:            │              │
+09)│    (int_col = int_col)    │              │
+10)└─────────────┬─────────────┘              │
+11)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+12)│       DataSourceExec      ││       DataSourceExec      │
+13)│    --------------------   ││    --------------------   │
+14)│          files: 1         ││          files: 1         │
+15)│        format: csv        ││      format: parquet      │
+16)│                           ││                           │
+17)│                           ││         predicate:        │
+18)│                           ││  DynamicFilter [ empty ]  │
+19)└───────────────────────────┘└───────────────────────────┘
+
 # Query with nested loop join.
 query TT
 explain select int_col from table1 where exists (select count(*) from table2);
@@ -1577,7 +1602,7 @@ physical_plan
 04)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 05)│       ProjectionExec      ││   CoalescePartitionsExec  │
 06)│    --------------------   ││                           │
-07)│           id: 1           ││                           │
+07)│    id: CAST(1 AS Int64)   ││                           │
 08)└─────────────┬─────────────┘└─────────────┬─────────────┘
 09)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 10)│     PlaceholderRowExec    ││       ProjectionExec      │

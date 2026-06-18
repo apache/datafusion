@@ -85,6 +85,7 @@ log = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
+serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true }
 
 [dev-dependencies]
@@ -122,7 +123,6 @@ required-features = ["test_utils"]
 [[bench]]
 harness = false
 name = "aggregate_vectorized"
-required-features = ["test_utils"]
 
 [[bench]]
 harness = false

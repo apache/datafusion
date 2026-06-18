@@ -305,15 +305,14 @@ mod tests {
     }
 
     #[test]
-    fn merge_batch_applies_filter() {
+    fn convert_to_state_applies_filter_before_merge() {
         let mut acc = make_acc();
         let input: Vec<ArrayRef> =
             vec![Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0]))];
-        let state = acc.convert_to_state(&input, None).unwrap();
         let filter = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let state = acc.convert_to_state(&input, Some(&filter)).unwrap();
 
-        acc.merge_batch(&state, &[0, 0, 0], Some(&filter), 1)
-            .unwrap();
+        acc.merge_batch(&state, &[0, 0, 0], 1).unwrap();
 
         let result = acc.evaluate(EmitTo::All).unwrap();
         let result = result.as_primitive::<Float64Type>();
@@ -331,7 +330,6 @@ mod tests {
         acc.merge_batch(
             &state,
             &[0, 0, 0],
-            None,
             1, // single group
         )
         .unwrap();
@@ -353,7 +351,7 @@ mod tests {
             Some(3.0),
         ]))];
         let state = acc.convert_to_state(&input, None).unwrap();
-        acc.merge_batch(&state, &[0, 0, 0], None, 1).unwrap();
+        acc.merge_batch(&state, &[0, 0, 0], 1).unwrap();
 
         let result = acc.evaluate(EmitTo::All).unwrap();
         let result = result.as_primitive::<Float64Type>();

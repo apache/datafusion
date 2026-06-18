@@ -21,22 +21,367 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT concat_ws(' ', 'Spark', 'SQL');
-## PySpark 3.5.5 Result: {'concat_ws( , Spark, SQL)': 'Spark SQL', 'typeof(concat_ws( , Spark, SQL))': 'string', 'typeof( )': 'string', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
-#query
-#SELECT concat_ws(' '::string, 'Spark'::string, 'SQL'::string);
+## ── Basic scalar usage ──────────────────────────────────────
 
-## Original Query: SELECT concat_ws('/', 'foo', null, 'bar');
-## PySpark 3.5.5 Result: {'concat_ws(/, foo, NULL, bar)': 'foo/bar', 'typeof(concat_ws(/, foo, NULL, bar))': 'string', 'typeof(/)': 'string', 'typeof(foo)': 'string', 'typeof(NULL)': 'void', 'typeof(bar)': 'string'}
-#query
-#SELECT concat_ws('/'::string, 'foo'::string, NULL::void, 'bar'::string);
+## Multiple string arguments
+query T
+SELECT concat_ws(',', 'a', 'b', 'c');
+----
+a,b,c
 
-## Original Query: SELECT concat_ws('s');
-## PySpark 3.5.5 Result: {'concat_ws(s)': '', 'typeof(concat_ws(s))': 'string', 'typeof(s)': 'string'}
-#query
-#SELECT concat_ws('s'::string);
+## Space separator
+query T
+SELECT concat_ws(' ', 'Spark', 'SQL');
+----
+Spark SQL
 
-## Original Query: SELECT concat_ws(null, 'Spark', 'SQL');
-## PySpark 3.5.5 Result: {'concat_ws(NULL, Spark, SQL)': None, 'typeof(concat_ws(NULL, Spark, SQL))': 'string', 'typeof(NULL)': 'void', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
-#query
-#SELECT concat_ws(NULL::void, 'Spark'::string, 'SQL'::string);
+## Slash separator with null skipped
+query T
+SELECT concat_ws('/', 'foo', NULL, 'bar');
+----
+foo/bar
+
+## Single argument after separator
+query T
+SELECT concat_ws(',', 'a');
+----
+a
+
+## No arguments after separator → empty string
+query T
+SELECT concat_ws(',');
+----
+(empty)
+
+## Null separator returns null
+query T
+SELECT concat_ws(NULL, 'a', 'b', 'c');
+----
+NULL
+
+## All null arguments → empty string
+query T
+SELECT concat_ws(',', CAST(NULL AS STRING), CAST(NULL AS STRING));
+----
+(empty)
+
+## ── Array arguments ─────────────────────────────────────────
+
+## Array argument
+query T
+SELECT concat_ws(',', array('a', 'b', 'c'));
+----
+a,b,c
+
+## Array with nulls skipped
+query T
+SELECT concat_ws(',', array('a', NULL, 'c'));
+----
+a,c
+
+## Multiple arrays
+query T
+SELECT concat_ws(',', array('a', 'b'), array('c', 'd'));
+----
+a,b,c,d
+
+## Mixed scalar and array arguments
+query T
+SELECT concat_ws(',', 'x', array('a', 'b'), 'y');
+----
+x,a,b,y
+
+## Null array is skipped
+query T
+SELECT concat_ws(',', 'x', CAST(NULL AS ARRAY<STRING>), 'y');
+----
+x,y
+
+## ── Edge cases ───────────────────────────────────────────────
+
+## Separator column with no value arguments
+query T
+SELECT concat_ws(sep) AS result FROM VALUES (','), ('-') AS t(sep);
+----
+(empty)
+(empty)
+
+## Null separator in column with no value arguments
+query T
+SELECT concat_ws(sep) AS result FROM VALUES (CAST(NULL AS STRING)), (',') AS t(sep);
+----
+NULL
+(empty)
+
+## ── Column expressions ──────────────────────────────────────
+
+## concat_ws on columns
+query T
+SELECT concat_ws('-', a, b) AS result FROM VALUES ('hello', 'world'), ('foo', 'bar') AS t(a, b);
+----
+hello-world
+foo-bar
+
+## concat_ws with null in columns
+query T
+SELECT concat_ws(',', a, b) AS result FROM VALUES ('a', 'b'), ('c', CAST(NULL AS STRING)), (CAST(NULL AS STRING), 'd') AS t(a, b);
+----
+a,b
+c
+d
+
+## Scalar-only arguments over multiple rows (broadcast test)
+query T
+SELECT concat_ws(',', 'a', 'b') AS result FROM VALUES (1), (2), (3) AS t(x);
+----
+a,b
+a,b
+a,b
+
+## ── Additional edge cases ───────────────────────────────────
+
+## Empty separator — values concatenated with nothing between
+query T
+SELECT concat_ws('', 'a', 'b', 'c');
+----
+abc
+
+## Empty-string values are NOT skipped (only NULLs are)
+query T
+SELECT concat_ws(',', '', 'a', '', 'b');
+----
+,a,,b
+
+## Multi-character separator
+query T
+SELECT concat_ws(' - ', 'a', 'b', 'c');
+----
+a - b - c
+
+## Utf8View separator
+query TT
+SELECT concat_ws(arrow_cast(',', 'Utf8View'), 'a', 'b'), arrow_typeof(concat_ws(arrow_cast(',', 'Utf8View'), 'a', 'b'));
+----
+a,b Utf8
+
+## LargeUtf8 separator
+query TT
+SELECT concat_ws(arrow_cast(',', 'LargeUtf8'), 'a', 'b'), arrow_typeof(concat_ws(arrow_cast(',', 'LargeUtf8'), 'a', 'b'));
+----
+a,b Utf8
+
+## Empty array → empty string
+query T
+SELECT concat_ws(',', array());
+----
+(empty)
+
+## Scalar + array + array mix
+query T
+SELECT concat_ws(',', array('a', 'b'), 'c', array('d', 'e'));
+----
+a,b,c,d,e
+
+## All-NULL row mixed with non-NULL rows
+query T
+SELECT concat_ws(',', a, b, c) AS result FROM VALUES
+  ('a', 'b', 'c'),
+  (CAST(NULL AS STRING), 'b', 'c'),
+  ('a', CAST(NULL AS STRING), CAST(NULL AS STRING)),
+  (CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING))
+  AS t(a, b, c);
+----
+a,b,c
+b,c
+a
+(empty)
+
+## Separator from column (per-row separator), with NULL rows
+query T
+SELECT concat_ws(sep, a, b) AS result FROM VALUES
+  (',', 'a', 'b'),
+  (CAST(NULL AS STRING), 'a', 'b'),
+  ('|', 'x', 'y')
+  AS t(sep, a, b);
+----
+a,b
+NULL
+x|y
+
+## ── Spark cross-checked extras ──────────────────────────────
+
+## Zero arguments → error (Spark: WRONG_NUM_ARGS)
+query error
+SELECT concat_ws();
+
+## Numeric separator coerced to string
+query T
+SELECT concat_ws(1, 'a', 'b');
+----
+a1b
+
+## Only numeric separator, no values → empty string
+query T
+SELECT concat_ws(123);
+----
+(empty)
+
+## Numeric values coerced to string
+query T
+SELECT concat_ws(',', 1, 2, 3);
+----
+1,2,3
+
+## Float values
+query T
+SELECT concat_ws(',', 1.5, 2.5);
+----
+1.5,2.5
+
+## Boolean values
+query T
+SELECT concat_ws(',', true, false);
+----
+true,false
+
+## Mixed numeric and string
+query T
+SELECT concat_ws(',', CAST(1 AS BIGINT), 'a');
+----
+1,a
+
+## Date values
+query T
+SELECT concat_ws(',', DATE '2024-01-01', 'x');
+----
+2024-01-01,x
+
+## Multi-byte UTF-8 separator
+query T
+SELECT concat_ws('é', 'a', 'b');
+----
+aéb
+
+## Nested concat_ws
+query T
+SELECT concat_ws('|', concat_ws(',', 'a', 'b'), concat_ws(',', 'c', 'd'));
+----
+a,b|c,d
+
+## All-NULL elements in array → empty string
+query T
+SELECT concat_ws(',', array(CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING)));
+----
+(empty)
+
+## Empty-string elements in arrays are NOT skipped
+query T
+SELECT concat_ws(',', array(''), array(''));
+----
+,
+
+## Multiple arrays interleaved with scalars and NULLs
+query T
+SELECT concat_ws(',', array('a', 'b'), 'c', CAST(NULL AS STRING), array('d'), '', 'e');
+----
+a,b,c,d,,e
+
+## Long argument list (variadic)
+query T
+SELECT concat_ws('-', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j');
+----
+a-b-c-d-e-f-g-h-i-j
+
+## Long array
+query T
+SELECT concat_ws(',', array('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'));
+----
+a,b,c,d,e,f,g,h,i,j
+
+## All-empty arguments
+query T
+SELECT concat_ws('', '', '', '');
+----
+(empty)
+
+## Empty separator with all NULLs
+query T
+SELECT concat_ws('', CAST(NULL AS STRING), CAST(NULL AS STRING));
+----
+(empty)
+
+## Long string preserved (length sanity)
+query I
+SELECT length(concat_ws(',', repeat('x', 1000), repeat('y', 1000)));
+----
+2001
+
+## ── List variants (FixedSizeList / ListView) ────────────────
+
+## FixedSizeList argument is expanded element-by-element
+query T
+SELECT concat_ws(',', arrow_cast(make_array('a', 'b', 'c'), 'FixedSizeList(3, Utf8)'));
+----
+a,b,c
+
+## ListView argument is expanded element-by-element
+query T
+SELECT concat_ws(',', arrow_cast(make_array('a', 'b'), 'ListView(Utf8)'));
+----
+a,b
+
+## LargeListView argument is expanded element-by-element
+query T
+SELECT concat_ws(',', arrow_cast(make_array('a', 'b'), 'LargeListView(Utf8)'));
+----
+a,b
+
+## ── Binary coercion (Spark casts binary to its UTF-8 view) ──
+
+## Binary argument is coerced to its string representation
+query T
+SELECT concat_ws(',', X'4869');
+----
+Hi
+
+## ── Null-separator-over-rows shape ──────────────────────────
+
+## Null separator on a multi-row column yields NULL on every row
+query T
+SELECT concat_ws(NULL, v) AS result FROM VALUES ('a'), ('b'), ('c') AS t(v) ORDER BY v;
+----
+NULL
+NULL
+NULL
+
+## ── Non-string list elements (planner-inserted element cast) ─
+
+## Array of integers — elements must be cast to STRING
+query T
+SELECT concat_ws(',', array(1, 2, 3));
+----
+1,2,3
+
+## Array of doubles
+query T
+SELECT concat_ws('-', array(1.5, 2.5, 3.5));
+----
+1.5-2.5-3.5
+
+## Array of booleans
+query T
+SELECT concat_ws(',', array(true, false, true));
+----
+true,false,true
+
+## Mixed: string scalar + int array + string scalar
+query T
+SELECT concat_ws(',', 'x', array(1, 2), 'y');
+----
+x,1,2,y
+
+## ── Struct rejection ────────────────────────────────────────
+
+## Struct argument is rejected (not coerced to string)
+query error
+SELECT concat_ws(',', named_struct('a', 1));

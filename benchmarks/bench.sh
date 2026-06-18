@@ -99,9 +99,14 @@ tpcds:                  TPCDS inspired benchmark on Scale Factor (SF) 1 (~1GB), 
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
 sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
 topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H dataset (SF=1)
+push_down_topk:         Benchmark of ORDER BY ... LIMIT over outer joins on TPC-H dataset (SF=1) — exercises pushing TopK through a join
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
 wide_schema:            Small-projection queries on a wide synthetic dataset (1024 cols × 256 files) — measures per-file metadata overhead
                           (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
+predicate_eval:         Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an
+                          adaptive predicate-ordering system behaves across them (see https://github.com/apache/datafusion/issues/11262)
+                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift)
+                          (toggle a system under test with its native DATAFUSION_* env var; size data with PRED_ROWS, string width with PRED_FILL)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
@@ -245,6 +250,10 @@ main() {
                 wide_schema)
                     data_wide_schema
                     ;;
+                predicate_eval)
+                    # Data is generated inline by the suite's load SQL.
+                    echo "predicate_eval: no external data to generate"
+                    ;;
                 tpcds)
                     data_tpcds
                     ;;
@@ -338,6 +347,10 @@ main() {
                     data_tpch "10" "parquet"
                     ;;
                 topk_tpch)
+                    # same data as for tpch
+                    data_tpch "1" "parquet"
+                    ;;
+                push_down_topk)
                     # same data as for tpch
                     data_tpch "1" "parquet"
                     ;;
@@ -458,6 +471,9 @@ main() {
                 wide_schema)
                     run_wide_schema
                     ;;
+                predicate_eval)
+                    run_predicate_eval
+                    ;;
                 tpcds)
                     run_tpcds
                     ;;
@@ -560,6 +576,9 @@ main() {
                     ;;
                 topk_tpch)
                     run_topk_tpch
+                    ;;
+                push_down_topk)
+                    run_push_down_topk
                     ;;
                 nlj)
                     run_nlj
@@ -767,13 +786,56 @@ data_wide_schema() {
 run_wide_schema() {
     echo "Running wide_schema benchmark (wide subgroup)..."
     debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=wide \
+      DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 
     echo "Running wide_schema benchmark (narrow baseline subgroup)..."
     debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=narrow \
+      DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the push_down_topk benchmark (ORDER BY ... LIMIT over outer joins).
+# Reuses the TPC-H parquet data, so it needs `./bench.sh data tpch` (or
+# `data push_down_topk`) first.
+run_push_down_topk() {
+    echo "Running push_down_topk benchmark..."
+
+    debug_run env BENCH_NAME=push_down_topk \
+      BENCH_SIZE="1" \
+      DATA_DIR="${DATA_DIR}" \
+      SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the predicate_eval benchmark suite: conjunctive (AND) filter-evaluation
+# micro-benchmarks where each subgroup is a different predicate pattern, used to
+# test how an adaptive predicate-ordering system behaves across them (see
+# https://github.com/apache/datafusion/issues/11262). Data is generated inline
+# by the suite's load SQL, so there is no data step.
+#
+# By default the suite measures DataFusion's built-in left-deep AND short-circuit
+# and sets no engine config of its own. To evaluate a system under test, export
+# its native DATAFUSION_* config before invoking bench.sh -- the harness reads
+# SessionConfig::from_env, and that environment is inherited here, e.g.
+#   DATAFUSION_EXECUTION_ADAPTIVE_FILTER_REORDERING=true ./bench.sh run predicate_eval
+# Suite-specific knobs (string-substituted into the load SQL, not engine config):
+#   BENCH_SUBGROUP   run one subgroup (costsel, cost, selectivity, cardinality,
+#                    width, scale, neutral, correlation, drift)
+#   PRED_ROWS        synthetic row count (default 1_000_000; the scale subgroup
+#                    overrides this per query)
+#   PRED_FILL        filler chars per marker = string-column width knob
+run_predicate_eval() {
+    echo "Running predicate_eval benchmark (subgroup=${BENCH_SUBGROUP:-all}, rows=${PRED_ROWS:-1000000})..."
+    debug_run env BENCH_NAME=predicate_eval \
+      ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
+      PRED_ROWS="${PRED_ROWS:-1000000}" \
+      ${PRED_FILL:+PRED_FILL="${PRED_FILL}"} \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 }

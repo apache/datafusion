@@ -37,6 +37,7 @@ use datafusion_cli::functions::{
 use datafusion_cli::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
 };
+use datafusion_cli::object_storage::{StdinCarriesCommands, is_stdin_location};
 use datafusion_cli::{
     DATAFUSION_CLI_VERSION, exec,
     pool_type::PoolType,
@@ -158,6 +159,23 @@ struct Args {
     object_store_profiling: InstrumentedObjectStoreMode,
 }
 
+impl Args {
+    /// Without -c/-f the CLI enters the REPL, which reads its SQL from
+    /// stdin — interactively or piped.
+    fn repl_mode(&self) -> bool {
+        self.command.is_empty() && self.file.is_empty()
+    }
+
+    /// Whether the CLI consumes stdin for its own SQL input. This covers the
+    /// REPL (no -c/-f, reading SQL interactively or piped) as well as an
+    /// explicit `-f /dev/stdin` (or the other stdin pseudo-paths), where the
+    /// SQL file *is* stdin. In either case stdin is already spoken for and
+    /// cannot also back a `LOCATION '/dev/stdin'` table.
+    fn reads_sql_from_stdin(&self) -> bool {
+        self.repl_mode() || self.file.iter().any(|f| is_stdin_location(f))
+    }
+}
+
 #[tokio::main]
 /// Calls [`main_inner`], then handles printing errors and returning the correct exit code
 pub async fn main() -> ExitCode {
@@ -268,6 +286,7 @@ async fn main_inner() -> Result<()> {
         instrumented_registry: Arc::clone(&instrumented_registry),
     };
 
+    let repl_mode = args.repl_mode();
     let commands = args.command;
     let files = args.file;
     let rc = match args.rc {
@@ -285,7 +304,7 @@ async fn main_inner() -> Result<()> {
         }
     };
 
-    if commands.is_empty() && files.is_empty() {
+    if repl_mode {
         if !rc.is_empty() {
             exec::exec_from_files(&ctx, rc, &print_options).await?;
         }
@@ -330,8 +349,16 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
         config_options.format.null = String::from("NULL");
     }
 
-    let session_config =
+    let mut session_config =
         SessionConfig::from(config_options).with_information_schema(true);
+
+    if args.reads_sql_from_stdin() {
+        // When stdin carries the session's SQL — the REPL (including any rc
+        // file run before it) or an explicit `-f /dev/stdin` — it cannot also
+        // serve as a data source for `LOCATION '/dev/stdin'`.
+        session_config = session_config.with_extension(Arc::new(StdinCarriesCommands));
+    }
+
     Ok(session_config)
 }
 
@@ -613,9 +640,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8882                | 2    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 269074              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1339                | 2    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8794                | 2    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 268970              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 2    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -644,9 +671,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8882                | 5    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 269074              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1339                | 3    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8794                | 5    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 268970              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 3    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 

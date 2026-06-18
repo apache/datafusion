@@ -55,6 +55,8 @@ use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
+const TEST_TARGET_PARTITIONS: usize = 8;
+
 /// Mock ExecutionPlan with configurable partition count and output ordering.
 #[derive(Debug)]
 struct MockMultiPartitionExec {
@@ -124,11 +126,18 @@ impl ExecutionPlan for MockMultiPartitionExec {
     }
 }
 
+fn test_config() -> ConfigOptions {
+    let mut config = ConfigOptions::default();
+    // Keep plan-shape tests deterministic across machines with different CPU counts.
+    config.execution.target_partitions = TEST_TARGET_PARTITIONS;
+    config
+}
+
 /// Helper: run EnsureRequirements and verify SanityCheckPlan passes
 fn optimize_and_sanity_check(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let config = ConfigOptions::default();
+    let config = test_config();
     let optimized = EnsureRequirements::new().optimize(plan, &config)?;
     // SanityCheckPlan must pass
     SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
@@ -137,7 +146,7 @@ fn optimize_and_sanity_check(
 
 /// Helper: verify idempotency — running twice produces the same plan
 fn assert_idempotent(plan: Arc<dyn ExecutionPlan>) {
-    let config = ConfigOptions::default();
+    let config = test_config();
     let p1 = EnsureRequirements::new()
         .optimize(plan, &config)
         .expect("first optimize failed");
@@ -195,7 +204,7 @@ fn plan_string(plan: &Arc<dyn ExecutionPlan>) -> String {
 /// updating an intentional plan change is a single `cargo insta accept`.
 macro_rules! assert_ensure_requirements_plan {
     ($plan:expr, @ $snapshot:literal $(,)?) => {{
-        let config = ConfigOptions::default();
+        let config = test_config();
         let p1 = EnsureRequirements::new()
             .optimize($plan, &config)
             .expect("EnsureRequirements::optimize failed (pass 1)");
@@ -655,7 +664,7 @@ fn test_issue_21973_idempotent_spm_sort_multi_partition() {
     // No-extra-SPM property: count SortPreservingMergeExec occurrences in
     // the first optimisation pass — must be ≤ 1 (the original SPM survives,
     // none are added).
-    let config = ConfigOptions::default();
+    let config = test_config();
     let optimized = EnsureRequirements::new()
         .optimize(Arc::clone(&limit), &config)
         .expect("optimize failed");
@@ -688,7 +697,7 @@ fn test_issue_21973_parallel_sort_survives_multiple_passes() {
     let sort: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(sort_expr, coalesce));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
-    let config = ConfigOptions::default();
+    let config = test_config();
 
     let p1 = EnsureRequirements::new()
         .optimize(Arc::clone(&limit), &config)
@@ -816,7 +825,7 @@ fn test_issue_14150_fetch_survives_multiple_passes() {
     let sort = Arc::new(SortExec::new(sort_expr, repartition as _).with_fetch(Some(5)));
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(5)));
 
-    let config = ConfigOptions::default();
+    let config = test_config();
 
     // Pass 1
     let p1 = EnsureRequirements::new()
@@ -885,7 +894,7 @@ fn test_issue_14150_fetch_survives_with_input_spm() {
 
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(spm, 0, Some(5)));
 
-    let config = ConfigOptions::default();
+    let config = test_config();
 
     let p1 = EnsureRequirements::new()
         .optimize(Arc::clone(&limit), &config)
@@ -1018,7 +1027,7 @@ fn test_idempotent_parallelize_sorts() {
     let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(10)));
 
     // First pass should parallelize the sort (Sort+SPM replaces Coalesce+Sort)
-    let config = ConfigOptions::default();
+    let config = test_config();
     let p1 = EnsureRequirements::new()
         .optimize(Arc::clone(&limit), &config)
         .expect("first optimize failed");
@@ -1194,7 +1203,7 @@ fn test_enforce_distribution_idempotent_hash_join() {
         .expect("HashJoinExec creation failed"),
     );
 
-    let config = ConfigOptions::default();
+    let config = test_config();
     let p1 = EnsureRequirements::new()
         .optimize(Arc::clone(&join), &config)
         .expect("first EnsureRequirements pass failed");

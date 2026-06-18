@@ -58,6 +58,7 @@ use datafusion_datasource_json::file_format::{
 };
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
     AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RecursiveQuery, SkipType,
     TableSource, Unnest, WriteOp,
@@ -646,8 +647,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let options = ListingOptions::new(file_format)
                     .with_file_extension(&scan.file_extension)
                     .with_table_partition_cols(partition_columns)
-                    .with_collect_stat(scan.collect_stat)
-                    .with_target_partitions(scan.target_partitions as usize)
                     .with_file_sort_order(all_sort_orders);
 
                 let config =
@@ -790,26 +789,30 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                    CreateExternalTable::builder(
-                        from_table_reference(
-                            create_extern_table.name.as_ref(),
-                            "CreateExternalTable",
-                        )?,
-                        create_extern_table.location.clone(),
-                        create_extern_table.file_type.clone(),
-                        pb_schema.try_into()?,
-                    )
-                    .with_partition_cols(create_extern_table.table_partition_cols.clone())
-                    .with_order_exprs(order_exprs)
-                    .with_if_not_exists(create_extern_table.if_not_exists)
-                    .with_or_replace(create_extern_table.or_replace)
-                    .with_temporary(create_extern_table.temporary)
-                    .with_definition(definition)
-                    .with_unbounded(create_extern_table.unbounded)
-                    .with_options(create_extern_table.options.clone())
-                    .with_constraints(constraints.into())
-                    .with_column_defaults(column_defaults)
-                    .build(),
+                    Box::new(
+                        CreateExternalTable::builder(
+                            from_table_reference(
+                                create_extern_table.name.as_ref(),
+                                "CreateExternalTable",
+                            )?,
+                            create_extern_table.location.clone(),
+                            create_extern_table.file_type.clone(),
+                            pb_schema.try_into()?,
+                        )
+                        .with_partition_cols(
+                            create_extern_table.table_partition_cols.clone(),
+                        )
+                        .with_order_exprs(order_exprs)
+                        .with_if_not_exists(create_extern_table.if_not_exists)
+                        .with_or_replace(create_extern_table.or_replace)
+                        .with_temporary(create_extern_table.temporary)
+                        .with_definition(definition)
+                        .with_unbounded(create_extern_table.unbounded)
+                        .with_options(create_extern_table.options.clone())
+                        .with_constraints(constraints.into())
+                        .with_column_defaults(column_defaults)
+                        .build(),
+                    ),
                 )))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -874,12 +877,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .as_ref()
                     .map(explain_analyze_categories_from_proto)
                     .transpose()?;
+                let pb_format = protobuf::ExplainFormat::try_from(analyze.format)
+                    .map_err(|_| {
+                        proto_error(format!(
+                            "Received an AnalyzeNode message with unknown ExplainFormat {}",
+                            analyze.format
+                        ))
+                    })?;
+                let analyze_format = match pb_format {
+                    protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
+                    protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
+                    protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
+                    protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
+                };
                 let explain_option =
                     datafusion_expr::logical_plan::ExplainOption::default()
                         .with_verbose(analyze.verbose)
                         .with_analyze(true)
                         .with_analyze_level(analyze_level)
-                        .with_analyze_categories(analyze_categories);
+                        .with_analyze_categories(analyze_categories)
+                        .with_format(analyze_format);
                 LogicalPlanBuilder::from(input)
                     .explain_option_format(explain_option)?
                     .build()
@@ -1179,12 +1196,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
 
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                    name: recursive_query_node.name.clone(),
-                    static_term: Arc::new(static_term),
-                    recursive_term: Arc::new(recursive_term),
-                    is_distinct: recursive_query_node.is_distinct,
-                }))
+                // The output schema is derived state, so decoding goes through
+                // the constructor after restoring the child terms.
+                RecursiveQuery::try_new(
+                    recursive_query_node.name.clone(),
+                    Arc::new(static_term),
+                    Arc::new(recursive_term),
+                    recursive_query_node.is_distinct,
+                )
+                .map(LogicalPlan::RecursiveQuery)
             }
             LogicalPlanType::CteWorkTableScan(cte_work_table_scan_node) => {
                 let CteWorkTableScanNode { name, schema } = cte_work_table_scan_node;
@@ -1227,10 +1247,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                 .build()
             }
             LogicalPlanType::Dml(dml_node) => {
+                let write_op =
+                    from_proto::parse_write_op(dml_node, ctx, extension_codec)?;
                 Ok(LogicalPlan::Dml(datafusion_expr::DmlStatement::new(
                     from_table_reference(dml_node.table_name.as_ref(), "DML ")?,
                     to_table_source(&dml_node.target, ctx, extension_codec)?,
-                    WriteOp::from_proto(dml_node.dml_type()),
+                    write_op,
                     Arc::new(into_logical_plan!(dml_node.input, ctx, extension_codec)?),
                 )))
             }
@@ -1388,7 +1410,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 table_name: Some(protobuf::TableReference::from_proto(
                                     table_name.clone(),
                                 )),
-                                collect_stat: options.collect_stat,
                                 file_extension: options.file_extension.clone(),
                                 table_partition_cols: partition_columns,
                                 paths: listing_table
@@ -1399,7 +1420,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 schema: Some(schema),
                                 projection,
                                 filters,
-                                target_partitions: options.target_partitions as u32,
                                 file_sort_order: exprs_vec,
                             },
                         )),
@@ -1734,6 +1754,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Partitioning::RoundRobinBatch(partition_count) => {
                         PartitionMethod::RoundRobin(*partition_count as u64)
                     }
+                    Partitioning::Range(_) => {
+                        // TODO: Support range repartition protobuf serialization.
+                        // Tracked by https://github.com/apache/datafusion/issues/22787
+                        return not_impl_err!("Range repartition");
+                    }
                     Partitioning::DistributeBy(_) => {
                         return not_impl_err!("DistributeBy");
                     }
@@ -1757,8 +1782,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                CreateExternalTable {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(ce)) => {
+                let CreateExternalTable {
                     name,
                     location,
                     file_type,
@@ -1773,8 +1798,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     constraints,
                     column_defaults,
                     temporary,
-                },
-            )) => {
+                } = ce.as_ref();
                 let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
                 for order in order_exprs {
                     let temp = SortExprNodeCollection {
@@ -1878,6 +1902,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 .analyze_categories
                                 .as_ref()
                                 .map(explain_analyze_categories_to_proto),
+                            format: match &a.format {
+                                ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
+                                ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
+                                ExplainFormat::PostgresJSON => {
+                                    protobuf::ExplainFormat::Pgjson
+                                }
+                                ExplainFormat::Graphviz => {
+                                    protobuf::ExplainFormat::Graphviz
+                                }
+                            } as i32,
                         },
                     ))),
                 })
@@ -2050,7 +2084,33 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => {
                 let input =
                     LogicalPlanNode::try_from_logical_plan(input, extension_codec)?;
-                let dml_type = dml_node::Type::from_proto(op);
+                let (dml_type, merge_into) = match op {
+                    WriteOp::Insert(InsertOp::Append) => {
+                        (dml_node::Type::InsertAppend, None)
+                    }
+                    WriteOp::Insert(InsertOp::Overwrite) => {
+                        (dml_node::Type::InsertOverwrite, None)
+                    }
+                    WriteOp::Insert(InsertOp::Replace) => {
+                        (dml_node::Type::InsertReplace, None)
+                    }
+                    WriteOp::Delete => (dml_node::Type::Delete, None),
+                    WriteOp::Update => (dml_node::Type::Update, None),
+                    WriteOp::Ctas => (dml_node::Type::Ctas, None),
+                    WriteOp::Truncate => (dml_node::Type::Truncate, None),
+                    WriteOp::MergeInto(merge_op) => (
+                        dml_node::Type::MergeInto,
+                        Some(Box::new(to_proto::serialize_merge_into_op(
+                            merge_op,
+                            extension_codec,
+                        )?)),
+                    ),
+                    other => {
+                        return Err(proto_error(format!(
+                            "WriteOp variant has no DmlNode encoding: {other}"
+                        )));
+                    }
+                };
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Dml(Box::new(DmlNode {
                         input: Some(Box::new(input)),
@@ -2063,6 +2123,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             table_name.clone(),
                         )),
                         dml_type: dml_type.into(),
+                        merge_into,
                     }))),
                 })
             }

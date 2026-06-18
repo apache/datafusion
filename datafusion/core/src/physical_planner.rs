@@ -98,7 +98,7 @@ use datafusion_physical_expr::aggregate::{
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
-    LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
+    LexOrdering, PhysicalSortExpr, RangePartitioning, create_physical_sort_exprs,
 };
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
@@ -437,7 +437,20 @@ impl DefaultPhysicalPlanner {
         session_state: &'a SessionState,
     ) -> futures::future::BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
-            let all_subqueries = Self::collect_scalar_subqueries(logical_plan);
+            // When `enable_physical_uncorrelated_scalar_subquery` is disabled, the
+            // `ScalarSubqueryToJoin` optimizer rule rewrites all uncorrelated
+            // scalar subqueries to joins, so none should reach this point.
+            // Skip collection in that case to avoid creating a no-op
+            // `ScalarSubqueryExec` wrapper.
+            let all_subqueries = if session_state
+                .config_options()
+                .optimizer
+                .enable_physical_uncorrelated_scalar_subquery
+            {
+                Self::collect_scalar_subqueries(logical_plan)
+            } else {
+                Vec::new()
+            };
             let (links, index_map) = self
                 .plan_scalar_subqueries(all_subqueries, session_state)
                 .await?;
@@ -1251,6 +1264,22 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<_>>>()?;
                         Partitioning::Hash(runtime_expr, *n)
                     }
+                    LogicalPartitioning::Range(range) => {
+                        let sort_exprs = create_physical_sort_exprs(
+                            range.ordering(),
+                            input_dfschema,
+                            execution_props,
+                        )?;
+                        let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "Range repartitioning requires non-empty ordering"
+                            )
+                        })?;
+                        Partitioning::Range(RangePartitioning::try_new(
+                            ordering,
+                            range.split_points().to_vec(),
+                        )?)
+                    }
                     LogicalPartitioning::DistributeBy(_) => {
                         return not_impl_err!(
                             "Physical plan does not support DistributeBy partitioning"
@@ -1785,11 +1814,15 @@ impl DefaultPhysicalPlanner {
                 }
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
-                name, is_distinct, ..
+                name,
+                is_distinct,
+                schema,
+                ..
             }) => {
                 let [static_term, recursive_term] = children.two()?;
                 Arc::new(RecursiveQueryExec::try_new(
                     name.clone(),
+                    Arc::clone(schema.inner()),
                     static_term,
                     recursive_term,
                     *is_distinct,
@@ -2801,14 +2834,13 @@ impl DefaultPhysicalPlanner {
             ExplainAnalyzeCategories::All => None,
             ExplainAnalyzeCategories::Only(cats) => Some(cats),
         };
-        Ok(Arc::new(AnalyzeExec::new(
-            a.verbose,
-            show_statistics,
-            metric_types,
-            metric_categories,
-            input,
-            schema,
-        )))
+        Ok(Arc::new(
+            AnalyzeExec::builder(a.verbose, show_statistics, input, schema)
+                .with_metric_types(metric_types)
+                .with_metric_categories(metric_categories)
+                .with_format(a.format.clone())
+                .build(),
+        ))
     }
 
     /// Optimize a physical plan by applying each physical optimizer,
@@ -3229,8 +3261,8 @@ mod tests {
     use arrow_schema::{FieldRef, SchemaRef};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
-        DFSchemaRef, ScalarValue, TableReference, ToDFSchema as _, assert_batches_eq,
-        assert_contains,
+        DFSchemaRef, ScalarValue, SplitPoint, TableReference, ToDFSchema as _,
+        assert_batches_eq, assert_contains,
     };
     use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnv;
@@ -3239,8 +3271,8 @@ mod tests {
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
     use datafusion_expr::{
         Accumulator, AggregateUDF, AggregateUDFImpl, ExprFunctionExt, LogicalPlanBuilder,
-        Signature, TableSource, UserDefinedLogicalNodeCore, Volatility,
-        WindowFunctionDefinition, col, lit,
+        RangePartitioning, Signature, TableSource, UserDefinedLogicalNodeCore,
+        Volatility, WindowFunctionDefinition, col, lit,
     };
     use datafusion_functions_aggregate::count::{count_all, count_udaf};
     use datafusion_functions_aggregate::expr_fn::sum;
@@ -3286,6 +3318,46 @@ mod tests {
 
     fn int64_field(name: &str, nullable: bool) -> Field {
         Field::new(name, DataType::Int64, nullable)
+    }
+
+    #[tokio::test]
+    async fn logical_range_repartition_plans_output_partitioning() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])?;
+        let table = Arc::new(MemTable::try_new(batch.schema(), vec![vec![batch]])?);
+        let source = Arc::new(DefaultTableSource::new(table));
+        let logical_plan = LogicalPlanBuilder::scan("test", source, None)?
+            .repartition(LogicalPartitioning::Range(RangePartitioning::try_new(
+                vec![col("a").sort(true, true)],
+                vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+            )?))?
+            .build()?;
+
+        let planner = DefaultPhysicalPlanner::default();
+        let physical_plan = planner
+            .create_initial_plan(&logical_plan, &make_session_state())
+            .await?;
+        let repartition = physical_plan
+            .as_ref()
+            .downcast_ref::<RepartitionExec>()
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "expected RepartitionExec, got {}",
+                    physical_plan.name()
+                )
+            })?;
+        let Partitioning::Range(range) = repartition.partitioning() else {
+            return internal_err!(
+                "expected Range target partitioning, got {:?}",
+                repartition.partitioning()
+            );
+        };
+        assert_eq!(range.partition_count(), 2);
+        assert_eq!(physical_plan.output_partitioning().partition_count(), 2);
+
+        Ok(())
     }
 
     #[test]
