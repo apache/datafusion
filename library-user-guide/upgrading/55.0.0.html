@@ -565,6 +565,71 @@ as a supertrait:</p>
 </pre></div>
 </div>
 </section>
+<section id="executionplan-partition-statistics-deprecated-in-favor-of-statistics-with-args">
+<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> deprecated in favor of <code class="docutils literal notranslate"><span class="pre">statistics_with_args</span></code><a class="headerlink" href="#executionplan-partition-statistics-deprecated-in-favor-of-statistics-with-args" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> is deprecated. A new method
+<code class="docutils literal notranslate"><span class="pre">statistics_with_args</span></code> accepts a <code class="docutils literal notranslate"><span class="pre">StatisticsArgs</span></code> parameter that carries
+the partition index and a shared cache for memoized child statistics lookups.</p>
+<p>Existing implementations of <code class="docutils literal notranslate"><span class="pre">partition_statistics</span></code> continue to work unchanged.
+The default <code class="docutils literal notranslate"><span class="pre">statistics_with_args</span></code> delegates to the deprecated method, so no
+migration is required until the deprecated method is removed.</p>
+<blockquote>
+<div><p><strong>Warning:</strong> The delegation is <strong>one-way</strong>: the default <code class="docutils literal notranslate"><span class="pre">statistics_with_args</span></code>
+calls <code class="docutils literal notranslate"><span class="pre">partition_statistics</span></code>, but the default <code class="docutils literal notranslate"><span class="pre">partition_statistics</span></code> does
+<strong>not</strong> call <code class="docutils literal notranslate"><span class="pre">statistics_with_args</span></code> — it returns <code class="docutils literal notranslate"><span class="pre">Statistics::new_unknown</span></code>.
+Nodes that override only <code class="docutils literal notranslate"><span class="pre">statistics_with_args</span></code> will silently return
+<code class="docutils literal notranslate"><span class="pre">Statistics::new_unknown</span></code> to any caller still using the deprecated
+<code class="docutils literal notranslate"><span class="pre">partition_statistics</span></code>.</p>
+</div></blockquote>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who implement custom <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> nodes (recommended to migrate)</p></li>
+<li><p>Users who call <code class="docutils literal notranslate"><span class="pre">partition_statistics</span></code> directly (recommended to switch to <code class="docutils literal notranslate"><span class="pre">statistics_with_args</span></code>)</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>For <strong>implementations</strong>, override <code class="docutils literal notranslate"><span class="pre">statistics_with_args</span></code> instead of
+<code class="docutils literal notranslate"><span class="pre">partition_statistics</span></code>. Leaf nodes that do not have children can ignore
+the args.</p>
+<p>Child statistics are looked up via <code class="docutils literal notranslate"><span class="pre">args.compute_child_statistics(child,</span> <span class="pre">partition)</span></code>.
+Use <code class="docutils literal notranslate"><span class="pre">args.partition()</span></code> for partition-preserving operators, or <code class="docutils literal notranslate"><span class="pre">None</span></code> for
+partition-merging operators that always need overall stats:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before:</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">partition_statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">partition</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">child_stats</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">input</span><span class="p">.</span><span class="n">partition_statistics</span><span class="p">(</span><span class="n">partition</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// ... transform child_stats ...</span>
+<span class="p">}</span>
+
+<span class="c1">// After (partition-preserving):</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">statistics_with_args</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">StatisticsArgs</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">child_stats</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">.</span><span class="n">compute_child_statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">input</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">.</span><span class="n">partition</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// ... transform child_stats ...</span>
+<span class="p">}</span>
+
+<span class="c1">// After (partition-merging):</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">statistics_with_args</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">StatisticsArgs</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">child_stats</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">.</span><span class="n">compute_child_statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">input</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// ... transform child_stats ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>For <strong>callers</strong>, create a <code class="docutils literal notranslate"><span class="pre">StatisticsArgs</span></code> and call <code class="docutils literal notranslate"><span class="pre">statistics_with_args</span></code>
+directly. The cache is created automatically:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_physical_plan</span><span class="p">::</span><span class="n">StatisticsArgs</span><span class="p">;</span>
+
+<span class="c1">// Before:</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">stats</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">partition_statistics</span><span class="p">(</span><span class="nb">None</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="c1">// After:</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">stats</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">statistics_with_args</span><span class="p">(</span><span class="o">&amp;</span><span class="n">StatisticsArgs</span><span class="p">::</span><span class="n">new</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="ddlstatement-createexternaltable-and-createfunction-are-now-boxed">
 <h3><code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateExternalTable</span></code> and <code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> are now boxed<a class="headerlink" href="#ddlstatement-createexternaltable-and-createfunction-are-now-boxed" title="Link to this heading">#</a></h3>
 <p>The two largest variants of <code class="docutils literal notranslate"><span class="pre">datafusion_expr::DdlStatement</span></code> are now
@@ -720,6 +785,27 @@ silently or raised a non-configurable error.</p></li>
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/21720">PR #21720</a> for details.</p>
 </section>
+<section id="unify-lru-memory-limiting-caches-into-one-generic-cache">
+<h3>Unify LRU memory-limiting caches into one generic cache<a class="headerlink" href="#unify-lru-memory-limiting-caches-into-one-generic-cache" title="Link to this heading">#</a></h3>
+<p>The caches <code class="docutils literal notranslate"><span class="pre">DefaultFileMetadataCache</span></code>, <code class="docutils literal notranslate"><span class="pre">DefaultListFilesCache</span></code> and <code class="docutils literal notranslate"><span class="pre">DefaultFileStatisticsCache</span></code>
+are merged into one generic implementation <code class="docutils literal notranslate"><span class="pre">DefaultCache</span></code>. The corresponding traits are now
+type aliases:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- pub trait FileStatisticsCache: CacheAccessor&lt;TableScopedPath, CachedFileMetadata&gt;</span>
+<span class="gd">- pub trait ListFilesCache: CacheAccessor&lt;TableScopedPath, CachedFileList&gt;</span>
+<span class="gd">- pub trait FileMetadataCache: CacheAccessor&lt;Path, CachedFileMetadataEntry&gt;</span>
+<span class="gi">+ pub type FileStatisticsCache = dyn Cache&lt;TableScopedPath, CachedFileMetadata&gt;;</span>
+<span class="gi">+ pub type ListFilesCache = dyn Cache&lt;TableScopedPath, CachedFileList&gt;;</span>
+<span class="gi">+ pub type FileMetadataCache = dyn Cache&lt;Path, CachedFileMetadataEntry&gt;;</span>
+</pre></div>
+</div>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who introduced their own implementation of <code class="docutils literal notranslate"><span class="pre">FileMetadataCache</span></code>, <code class="docutils literal notranslate"><span class="pre">ListFilesCache</span></code> or <code class="docutils literal notranslate"><span class="pre">FileStatisticsCache</span></code>.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Implement the newly introduced types for your custom cache implementation.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/22613">PR #22613</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -777,9 +863,11 @@ silently or raised a non-configurable error.</p></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-dynamic-physical-expr-is-deprecated"><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#queryplanner-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-partition-statistics-deprecated-in-favor-of-statistics-with-args"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> deprecated in favor of <code class="docutils literal notranslate"><span class="pre">statistics_with_args</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ddlstatement-createexternaltable-and-createfunction-are-now-boxed"><code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateExternalTable</span></code> and <code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> are now boxed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#listingoptions-target-partitions-and-collect-stat-removed"><code class="docutils literal notranslate"><span class="pre">ListingOptions::target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spark-map-functions-now-reject-duplicate-keys-by-default">Spark map functions now reject duplicate keys by default</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unify-lru-memory-limiting-caches-into-one-generic-cache">Unify LRU memory-limiting caches into one generic cache</a></li>
 </ul>
 </li>
 </ul>
