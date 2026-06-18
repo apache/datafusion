@@ -1888,9 +1888,7 @@ mod tests {
         }
 
         let coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
-            .with_encoding_preservation(
-                EncodingPreservation::default().with_dictionary(),
-            );
+            .with_encoding_preservation(EncodingPreservation::dictionary());
 
         assert_eq!(
             dictionary_input(DataType::LargeUtf8, coercion.clone())?,
@@ -1907,13 +1905,41 @@ mod tests {
                     vec![TypeSignatureClass::Native(logical_binary())],
                     NativeType::String,
                 )
-                .with_encoding_preservation(
-                    EncodingPreservation::default().with_dictionary(),
-                ),
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
             )?,
             vec![DataType::Dictionary(
                 Box::new(DataType::Int8),
                 Box::new(DataType::Utf8View),
+            )]
+        );
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_int64()),
+                    vec![TypeSignatureClass::Integer],
+                    NativeType::Int64,
+                )
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+            )?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Int64),
+            )]
+        );
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Integer,
+                    vec![],
+                    NativeType::Int64,
+                )
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+            )?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Int32),
             )]
         );
 
