@@ -29,6 +29,7 @@ use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
+use crate::parallel_window::ParallelWindow;
 use crate::projection_pushdown::ProjectionPushdown;
 use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
@@ -187,6 +188,13 @@ impl PhysicalOptimizer {
             // [`EnsureRequirements`](crate::ensure_requirements) for the per-phase
             // breakdown, and <https://github.com/apache/datafusion/issues/21973>
             // for the original failure mode.
+            // Re-shape no-PARTITION-BY RANGE-frame windows into a parallel
+            // form: SortExec(preserve_partitioning) + RangeRepartitionExec
+            // + parallel-aware BWAG. Runs *before* EnsureRequirements so
+            // we own the distribution decision — otherwise EnsureRequirements
+            // would satisfy BWAG's SinglePartition requirement by inserting
+            // an SPM that collapses the parallelism we're trying to create.
+            Arc::new(ParallelWindow::new()),
             Arc::new(EnsureRequirements::new()),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),

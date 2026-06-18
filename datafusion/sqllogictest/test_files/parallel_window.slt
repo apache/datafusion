@@ -1,0 +1,141 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Goal: parallelize window functions that have ORDER BY but no PARTITION BY,
+# over a bounded RANGE frame. Today this collapses to a single partition via
+# BoundedWindowAggExec::required_input_distribution -> Distribution::SinglePartition
+# (datafusion/physical-plan/src/windows/bounded_window_agg_exec.rs:333-340).
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.explain.show_statistics = true;
+
+# Build four parquet files with OVERLAPPING seq ranges so range-repartitioning
+# actually has to move rows around. Each file has seq congruent to its index
+# mod 4 in [0, 100); a deterministic scramble (seq * 37 mod 100) defeats the
+# natural generate_series ordering so DataFusion does not claim output_ordering
+# on seq. Per-file min/max still come back Exact from the parquet footer.
+query I
+COPY (SELECT seq, seq % 7 AS amount FROM (
+        SELECT value AS seq FROM generate_series(0, 99, 4)
+      ) ORDER BY (seq * 37) % 100)
+TO 'test_files/scratch/parallel_window/events/0.parquet'
+STORED AS PARQUET;
+----
+25
+
+query I
+COPY (SELECT seq, seq % 7 AS amount FROM (
+        SELECT value AS seq FROM generate_series(1, 99, 4)
+      ) ORDER BY (seq * 37) % 100)
+TO 'test_files/scratch/parallel_window/events/1.parquet'
+STORED AS PARQUET;
+----
+25
+
+query I
+COPY (SELECT seq, seq % 7 AS amount FROM (
+        SELECT value AS seq FROM generate_series(2, 99, 4)
+      ) ORDER BY (seq * 37) % 100)
+TO 'test_files/scratch/parallel_window/events/2.parquet'
+STORED AS PARQUET;
+----
+25
+
+query I
+COPY (SELECT seq, seq % 7 AS amount FROM (
+        SELECT value AS seq FROM generate_series(3, 99, 4)
+      ) ORDER BY (seq * 37) % 100)
+TO 'test_files/scratch/parallel_window/events/3.parquet'
+STORED AS PARQUET;
+----
+25
+
+statement ok
+CREATE EXTERNAL TABLE events
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parallel_window/events';
+
+# Bounded RANGE frame, ORDER BY only (no PARTITION BY). Canonical shape.
+# Each input partition should report Exact min/max on seq from its parquet footer.
+query TT
+EXPLAIN SELECT
+    seq,
+    SUM(amount) OVER (
+        ORDER BY seq
+        RANGE BETWEEN 5 PRECEDING AND CURRENT ROW
+    ) AS rolling_sum
+FROM events
+ORDER BY seq
+LIMIT 5;
+----
+logical_plan
+01)Sort: events.seq ASC NULLS LAST, fetch=5
+02)--Projection: events.seq, sum(events.amount) ORDER BY [events.seq ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND CURRENT ROW AS rolling_sum
+03)----WindowAggr: windowExpr=[[sum(events.amount) ORDER BY [events.seq ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND CURRENT ROW]]
+04)------TableScan: events projection=[seq, amount]
+physical_plan
+01)SortPreservingMergeExec: [seq@0 ASC NULLS LAST], fetch=5, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+02)--ProjectionExec: expr=[seq@0 as seq, sum(events.amount) ORDER BY [events.seq ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND CURRENT ROW@2 as rolling_sum], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+03)----HaloDropExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+04)------BoundedWindowAggExec: wdw=[sum(events.amount) ORDER BY [events.seq ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND CURRENT ROW: Field { "sum(events.amount) ORDER BY [events.seq ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN 5 PRECEDING AND CURRENT ROW], mode=[Sorted], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+05)--------RangeRepartitionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+06)----------SortExec: expr=[seq@0 ASC NULLS LAST], preserve_partitioning=[true], statistics=[Rows=Exact(100), Bytes=Exact(1600), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(99)) Null=Exact(0) ScanBytes=Exact(800)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(6)) Null=Exact(0) ScanBytes=Exact(800))]]
+07)------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/3.parquet]]}, projection=[seq, amount], file_type=parquet, sort_order_for_reorder=[seq@0 ASC NULLS LAST], statistics=[Rows=Exact(100), Bytes=Exact(1600), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(99)) Null=Exact(0) ScanBytes=Exact(800)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(6)) Null=Exact(0) ScanBytes=Exact(800))]]
+
+# Actually execute the query — this drives the SortExec down the (false, None)
+# external-sort branch in each input partition and lets the runtime min/max
+# observer fire. Sorted-output truncated to 5 for a small reproducible row set.
+query II
+SELECT
+    seq,
+    SUM(amount) OVER (
+        ORDER BY seq
+        RANGE BETWEEN 5 PRECEDING AND CURRENT ROW
+    ) AS rolling_sum
+FROM events
+ORDER BY seq
+LIMIT 5;
+----
+0 0
+1 1
+2 3
+3 6
+4 10
+
+# With `HaloDropExec` planted above the per-partition window, halo rows
+# (rows duplicated into a neighbor's bucket so its window frame sees the
+# boundary context) are filtered out before the merge — so the row count
+# is exactly the input cardinality, 100. `count(rolling_sum)` forces the
+# window to actually execute (a plain count(*) gets statistics-pruned
+# from the parquet row count, never instantiates the window operator).
+query I
+SELECT count(rolling_sum) AS n FROM (
+    SELECT seq, SUM(amount) OVER (
+        ORDER BY seq
+        RANGE BETWEEN 5 PRECEDING AND CURRENT ROW
+    ) AS rolling_sum
+    FROM events
+) t;
+----
+100
+
+# Reset session settings so this file doesn't leak config into the rest of the run.
+statement ok
+set datafusion.explain.show_statistics = false;

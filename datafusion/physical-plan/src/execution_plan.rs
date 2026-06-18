@@ -29,7 +29,7 @@ use arrow_schema::Schema;
 pub use datafusion_common::hash_utils;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
+pub use datafusion_common::{ColumnStatistics, ScalarValue, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
@@ -93,6 +93,38 @@ use futures::stream::{StreamExt, TryStreamExt};
 ///
 /// [`datafusion-examples`]: https://github.com/apache/datafusion/tree/main/datafusion-examples
 /// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_execution_plan.rs
+
+/// Endpoints of a single partition's output expressed in the operator's
+/// declared output ordering (the `PhysicalSortExpr` list returned by
+/// `equivalence_properties().output_ordering()`).
+///
+/// `min` and `max` are tuples of values — one entry per sort key — taken at
+/// the lex-smallest and lex-largest output rows. For the leading sort key
+/// these are exactly the natural min/max of that key (after honoring
+/// ASC/DESC). For trailing sort keys the entries hold the value of that key
+/// at the lex-extreme row, not that key's own natural extreme.
+///
+/// Default semantics — *observed*: these are the actual min/max of data this
+/// partition has produced (or will produce, by the time the upstream is fully
+/// consumed). `SortExec` is the canonical observer-style override.
+///
+/// Exception — *intended*: `RangeRepartitionExec` returns each output
+/// partition's *intended primary range* (the range a downstream `HaloDropExec`
+/// should keep, with halo rows excluded), which is **narrower** than the data
+/// the partition actually carries when halo is non-zero. The "useful lie"
+/// is what lets the operator above the window strip halo without threading a
+/// boundaries side-channel. Consumers that need observed extremes must not
+/// read through a `RangeRepartitionExec` boundary when halo > 0.
+#[derive(Debug, Clone)]
+pub struct PartitionExtremes {
+    /// Sort-key values at the lex-smallest row across the partition.
+    pub min: Vec<ScalarValue>,
+    /// Sort-key values at the lex-largest row across the partition.
+    pub max: Vec<ScalarValue>,
+    /// Total non-empty rows that contributed to `min`/`max`.
+    pub row_count: usize,
+}
+
 pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
@@ -511,6 +543,29 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
             );
         }
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
+    }
+
+    /// Runtime-derived endpoints of `partition`'s output along the operator's
+    /// declared output ordering (i.e. each `PhysicalSortExpr` in
+    /// `equivalence_properties().output_ordering()`).
+    ///
+    /// Returns `Ok(None)` by default. Operators that are pipeline-breaking
+    /// along their output ordering (e.g. `SortExec`) may override to expose
+    /// the lex-min / lex-max tuple once the partition's input has been fully
+    /// consumed. Callers are responsible for ensuring the upstream has made
+    /// enough progress (typically by polling `execute()`) before relying on
+    /// the result; until then this returns `Ok(None)`.
+    ///
+    /// See [`PartitionExtremes`] for the result shape — and read the type doc
+    /// before assuming "observed" semantics: a few operators (notably
+    /// `RangeRepartitionExec`) intentionally return the *intended* range, not
+    /// the data they will actually carry.
+    fn runtime_partition_extremes(
+        &self,
+        partition: usize,
+    ) -> Result<Option<PartitionExtremes>> {
+        let _ = partition;
+        Ok(None)
     }
 
     /// Returns `true` if a limit can be safely pushed down through this

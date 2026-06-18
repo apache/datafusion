@@ -40,6 +40,7 @@ pub mod limit_pushdown_past_window;
 pub mod limited_distinct_aggregation;
 pub mod optimizer;
 pub mod output_requirements;
+pub mod parallel_window;
 pub mod projection_pushdown;
 pub use datafusion_pruning as pruning;
 pub mod hash_join_buffering;

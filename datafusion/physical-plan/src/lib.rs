@@ -42,9 +42,9 @@ pub use datafusion_physical_expr::{
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::execution_plan::{
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties, collect, collect_partitioned,
-    displayable, execute_input_stream, execute_stream, execute_stream_partitioned,
-    get_plan_string, with_new_children_if_necessary,
+    ExecutionPlan, ExecutionPlanProperties, PartitionExtremes, PlanProperties, collect,
+    collect_partitioned, displayable, execute_input_stream, execute_stream,
+    execute_stream_partitioned, get_plan_string, with_new_children_if_necessary,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -76,6 +76,7 @@ pub mod execution_plan;
 pub mod explain;
 pub mod filter;
 pub mod filter_pushdown;
+pub mod halo_drop;
 pub mod joins;
 pub mod limit;
 pub mod memory;
@@ -83,6 +84,7 @@ pub mod metrics;
 pub mod operator_statistics;
 pub mod placeholder_row;
 pub mod projection;
+pub mod range_repartition;
 pub mod recursive_query;
 pub mod repartition;
 pub mod scalar_subquery;
