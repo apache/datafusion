@@ -39,11 +39,12 @@
 use crate::PhysicalOptimizerRule;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::halo_drop::HaloDropExec;
 use datafusion_physical_plan::range_repartition::RangeRepartitionExec;
 use datafusion_physical_plan::windows::BoundedWindowAggExec;
 use log::info;
@@ -87,7 +88,7 @@ impl PhysicalOptimizerRule for ParallelWindow {
             // produce a redundant SortExec that the optimizer collapses.
             let range = Arc::new(RangeRepartitionExec::new(
                 original_input,
-                lex,
+                lex.clone(),
                 halo_preceding,
                 halo_following,
             ));
@@ -95,7 +96,7 @@ impl PhysicalOptimizerRule for ParallelWindow {
             // to UnspecifiedDistribution, so EnsureRequirements won't wrap
             // us in an SPM. `can_repartition` is vacuous because
             // candidate_halo already required partition_keys empty.
-            let new_window = Arc::new(
+            let new_window: Arc<dyn ExecutionPlan> = Arc::new(
                 BoundedWindowAggExec::try_new(
                     window.window_expr().to_vec(),
                     range,
@@ -103,8 +104,16 @@ impl PhysicalOptimizerRule for ParallelWindow {
                     true,
                 )?
                 .with_parallel_aware(true),
-            ) as Arc<dyn ExecutionPlan>;
-            Ok(Transformed::yes(new_window))
+            );
+            // Drop halo rows above the per-partition window. HaloDropExec
+            // reads its primary range from `input.runtime_sort_extremes`,
+            // which BWAG passes through and RangeRepartitionExec populates.
+            let drop_halo: Arc<dyn ExecutionPlan> =
+                Arc::new(HaloDropExec::try_new(new_window, &lex)?);
+            // Jump past the result's children: the BWAG we just emitted is
+            // still a candidate by shape (RANGE frame, no PARTITION BY) and
+            // `transform_down` would otherwise re-wrap it forever.
+            Ok(Transformed::new(drop_halo, true, TreeNodeRecursion::Jump))
         })?;
         Ok(out.data)
     }

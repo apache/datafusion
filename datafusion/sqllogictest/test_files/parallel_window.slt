@@ -93,10 +93,11 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [seq@0 ASC NULLS LAST], fetch=5, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
 02)--ProjectionExec: expr=[seq@0 as seq, sum(events.amount) ORDER BY [events.seq ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND CURRENT ROW@2 as rolling_sum], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-03)----BoundedWindowAggExec: wdw=[sum(events.amount) ORDER BY [events.seq ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND CURRENT ROW: Field { "sum(events.amount) ORDER BY [events.seq ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN 5 PRECEDING AND CURRENT ROW], mode=[Sorted], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
-04)------RangeRepartitionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-05)--------SortExec: expr=[seq@0 ASC NULLS LAST], preserve_partitioning=[true], statistics=[Rows=Exact(100), Bytes=Exact(1600), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(99)) Null=Exact(0) ScanBytes=Exact(800)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(6)) Null=Exact(0) ScanBytes=Exact(800))]]
-06)----------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/3.parquet]]}, projection=[seq, amount], file_type=parquet, sort_order_for_reorder=[seq@0 ASC NULLS LAST], statistics=[Rows=Exact(100), Bytes=Exact(1600), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(99)) Null=Exact(0) ScanBytes=Exact(800)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(6)) Null=Exact(0) ScanBytes=Exact(800))]]
+03)----HaloDropExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+04)------BoundedWindowAggExec: wdw=[sum(events.amount) ORDER BY [events.seq ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND CURRENT ROW: Field { "sum(events.amount) ORDER BY [events.seq ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN 5 PRECEDING AND CURRENT ROW], mode=[Sorted], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+05)--------RangeRepartitionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+06)----------SortExec: expr=[seq@0 ASC NULLS LAST], preserve_partitioning=[true], statistics=[Rows=Exact(100), Bytes=Exact(1600), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(99)) Null=Exact(0) ScanBytes=Exact(800)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(6)) Null=Exact(0) ScanBytes=Exact(800))]]
+07)------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/3.parquet]]}, projection=[seq, amount], file_type=parquet, sort_order_for_reorder=[seq@0 ASC NULLS LAST], statistics=[Rows=Exact(100), Bytes=Exact(1600), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(99)) Null=Exact(0) ScanBytes=Exact(800)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(6)) Null=Exact(0) ScanBytes=Exact(800))]]
 
 # Actually execute the query — this drives the SortExec down the (false, None)
 # external-sort branch in each input partition and lets the runtime min/max
@@ -118,16 +119,12 @@ LIMIT 5;
 3 6
 4 10
 
-# Halo duplication is observable as an inflated row count: each row whose
-# seq is within `halo_preceding` of a bucket boundary appears in both its
-# primary bucket and the neighbor that needs it as halo. For this fixture
-# (100 rows, halo_preceding=5, 3 interior boundaries) that's 15 extra
-# rows, so the merged output has 115. The eventual `HaloDropExec` will
-# drop halo rows post-window and bring this back to 100.
-#
-# `count(rolling_sum)` forces the window to actually execute (a plain
-# count(*) gets statistics-pruned from the parquet row count, never
-# instantiates the window operator, and so wouldn't notice the bug).
+# With `HaloDropExec` planted above the per-partition window, halo rows
+# (rows duplicated into a neighbor's bucket so its window frame sees the
+# boundary context) are filtered out before the merge — so the row count
+# is exactly the input cardinality, 100. `count(rolling_sum)` forces the
+# window to actually execute (a plain count(*) gets statistics-pruned
+# from the parquet row count, never instantiates the window operator).
 query I
 SELECT count(rolling_sum) AS n FROM (
     SELECT seq, SUM(amount) OVER (
@@ -137,7 +134,7 @@ SELECT count(rolling_sum) AS n FROM (
     FROM events
 ) t;
 ----
-115
+100
 
 # Reset session settings so this file doesn't leak config into the rest of the run.
 statement ok

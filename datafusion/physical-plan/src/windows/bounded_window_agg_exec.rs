@@ -36,7 +36,8 @@ use crate::windows::{
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr, check_if_same_properties,
+    SendableRecordBatchStream, SortExtremes, Statistics, WindowExpr,
+    check_if_same_properties,
 };
 
 use arrow::compute::take_record_batch;
@@ -356,6 +357,16 @@ impl ExecutionPlan for BoundedWindowAggExec {
 
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
+    }
+
+    /// Passthrough: the window operator doesn't alter the leading sort
+    /// key's value range, so its `partition`-th output partition's
+    /// extremes are exactly its input partition's extremes.
+    fn runtime_sort_extremes(
+        &self,
+        partition: usize,
+    ) -> Result<Option<SortExtremes>> {
+        self.input.runtime_sort_extremes(partition)
     }
 
     fn with_new_children(

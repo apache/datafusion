@@ -78,6 +78,12 @@ pub struct RangeRepartitionExec {
     /// Halo distance following each bucket's primary range.
     halo_following: i64,
     state: Arc<Mutex<State>>,
+    /// Per-output-partition primary `[lo, hi_exclusive)` ranges, filled
+    /// by the coordinator before any batch is routed. Surfaced through
+    /// `runtime_sort_extremes(partition)` so downstream operators
+    /// (e.g. HaloDropExec) can read each bucket's intended primary
+    /// range without needing the global extremes.
+    bucket_primary_ranges: Arc<Mutex<Option<Vec<(i64, i64)>>>>,
 }
 
 struct State {
@@ -124,6 +130,7 @@ impl RangeRepartitionExec {
                 initialized: false,
                 handoffs: (0..n).map(|_| None).collect(),
             })),
+            bucket_primary_ranges: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -175,6 +182,37 @@ impl ExecutionPlan for RangeRepartitionExec {
         vec![true]
     }
 
+    /// Returns each output partition's *intended primary range* as
+    /// inclusive `[min, max]` — not the actual range of routed data
+    /// (which is wider, by `halo_preceding`/`halo_following`). This is a
+    /// "useful lie" the downstream `HaloDropExec` consumes to filter
+    /// halo rows back out.
+    ///
+    /// Returns `Ok(None)` if the coordinator hasn't computed boundaries
+    /// yet — callers must drive the input stream to first batch before
+    /// reading, per the trait contract on `runtime_sort_extremes`.
+    fn runtime_sort_extremes(
+        &self,
+        partition: usize,
+    ) -> Result<Option<SortExtremes>> {
+        let guard = self.bucket_primary_ranges.lock().map_err(|_| {
+            internal_datafusion_err!(
+                "RangeRepartitionExec bucket_primary_ranges mutex poisoned"
+            )
+        })?;
+        let Some(ranges) = guard.as_ref() else {
+            return Ok(None);
+        };
+        let &(lo, hi_excl) = &ranges[partition];
+        // Convert [lo, hi_exclusive) → inclusive [min, max].
+        let max = hi_excl.saturating_sub(1);
+        Ok(Some(SortExtremes {
+            min: vec![ScalarValue::Int64(Some(lo))],
+            max: vec![ScalarValue::Int64(Some(max))],
+            row_count: 0, // not tracked; consumers shouldn't rely on it
+        }))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -196,12 +234,14 @@ impl ExecutionPlan for RangeRepartitionExec {
             let ctx = Arc::clone(&context);
             let halo_preceding = self.halo_preceding;
             let halo_following = self.halo_following;
+            let primaries = Arc::clone(&self.bucket_primary_ranges);
             tokio::spawn(coordinator(
                 child,
                 ctx,
                 senders,
                 halo_preceding,
                 halo_following,
+                primaries,
             ));
         }
         let rx = state
@@ -250,6 +290,7 @@ async fn coordinator(
     mut senders: Vec<oneshot::Sender<Result<PartitionData>>>,
     halo_preceding: i64,
     halo_following: i64,
+    bucket_primary_ranges: Arc<Mutex<Option<Vec<(i64, i64)>>>>,
 ) {
     let n = senders.len();
 
@@ -323,6 +364,13 @@ async fn coordinator(
         return;
     };
     log_buckets(lo, hi, &boundaries, halo_preceding, halo_following);
+
+    // Stash per-bucket primary ranges where `runtime_sort_extremes` can
+    // see them. Done *before* any batch is routed so downstream operators
+    // that gate on first batch will read populated state.
+    if let Ok(mut guard) = bucket_primary_ranges.lock() {
+        *guard = Some(primary_ranges_from_boundaries(lo, hi, &boundaries));
+    }
 
     // Phase 5: figure out which column carries the leading sort key.
     let col_idx = match ordering
@@ -533,9 +581,29 @@ fn int64_range(global: Option<&SortExtremes>) -> Option<(i64, i64)> {
     Some((*lo, *hi))
 }
 
+/// Per-bucket primary ranges as `[start, end_exclusive)` derived from
+/// the global `[lo, hi]` (inclusive) and the interior cut points. Same
+/// edge convention as `log_buckets`: edges = `[lo] ++ boundaries ++ [hi+1]`,
+/// each bucket spans `[edges[i], edges[i+1])`.
+pub fn primary_ranges_from_boundaries(
+    lo: i64,
+    hi: i64,
+    boundaries: &[i64],
+) -> Vec<(i64, i64)> {
+    let mut edges: Vec<i64> = std::iter::once(lo)
+        .chain(boundaries.iter().copied())
+        .chain(std::iter::once(hi.saturating_add(1)))
+        .collect();
+    edges.dedup();
+    edges
+        .windows(2)
+        .map(|w| (w[0], w[1]))
+        .collect()
+}
+
 /// Split the closed `Int64` interval `[lo, hi]` into `n` equal-width
 /// buckets, returning the `n - 1` interior cut points.
-fn equal_width_int64_boundaries(lo: i64, hi: i64, n: usize) -> Option<Vec<i64>> {
+pub fn equal_width_int64_boundaries(lo: i64, hi: i64, n: usize) -> Option<Vec<i64>> {
     if n <= 1 {
         return Some(vec![]);
     }

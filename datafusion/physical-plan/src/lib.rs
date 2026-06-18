@@ -76,6 +76,7 @@ pub mod execution_plan;
 pub mod explain;
 pub mod filter;
 pub mod filter_pushdown;
+pub mod halo_drop;
 pub mod joins;
 pub mod limit;
 pub mod memory;
