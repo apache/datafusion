@@ -580,6 +580,31 @@ fn test_eq_null_projection_has_no_warning() -> Result<()> {
 }
 
 #[test]
+fn test_eq_null_projection_in_exists_has_no_warning() -> Result<()> {
+    let warnings = do_query_warnings(
+        "SELECT * FROM person WHERE EXISTS (SELECT first_name = NULL FROM person)",
+    );
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    Ok(())
+}
+
+#[test]
+fn test_eq_null_warning_in_exists_subquery_where() -> Result<()> {
+    let query = "SELECT * FROM person WHERE EXISTS (SELECT 1 FROM person WHERE /*cmp*/first_name = /*null*/NULL/*null+cmp*/)";
+    let spans = get_spans(query);
+    let warnings = do_query_warnings(query);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
+    assert_snapshot!(
+        warnings[0].message,
+        @"comparison with NULL using `=` always evaluates to NULL"
+    );
+    assert_eq!(warnings[0].span, Some(spans["cmp"]));
+    assert_eq!(warnings[0].helps[0].span, Some(spans["null"]));
+    Ok(())
+}
+
+#[test]
 fn test_multiple_null_comparison_warnings() -> Result<()> {
     let warnings = do_query_warnings(
         "SELECT * FROM person WHERE first_name = NULL OR last_name <> NULL",
