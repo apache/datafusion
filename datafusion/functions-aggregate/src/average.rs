@@ -791,6 +791,7 @@ where
 }
 
 /// Maps AVG grouped-accumulator state arrays to and from a concrete field order.
+#[doc(hidden)]
 pub trait AvgStateLayout: Debug + Send + 'static {
     fn state_arrays<T, CountType>(
         sums: PrimitiveArray<T>,
@@ -809,6 +810,7 @@ pub trait AvgStateLayout: Debug + Send + 'static {
 }
 
 /// AVG state layout ordered as `[count, sum]`.
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct CountSumAvgStateLayout;
 
@@ -839,6 +841,7 @@ impl AvgStateLayout for CountSumAvgStateLayout {
 }
 
 /// AVG state layout ordered as `[sum, count]`.
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct SumCountAvgStateLayout;
 
@@ -928,6 +931,28 @@ where
         return_data_type,
         avg_fn,
     ))
+}
+
+#[cfg(debug_assertions)]
+fn debug_assert_same_validity(left: &dyn Array, right: &dyn Array) {
+    debug_assert_eq!(left.len(), right.len(), "AVG partial-state length mismatch");
+    debug_assert_eq!(
+        left.null_count(),
+        right.null_count(),
+        "AVG partial-state null-count mismatch"
+    );
+
+    if left.null_count() == 0 {
+        return;
+    }
+
+    for idx in 0..left.len() {
+        debug_assert_eq!(
+            left.is_valid(idx),
+            right.is_valid(idx),
+            "AVG partial-state validity mismatch at row {idx}"
+        );
+    }
 }
 
 impl<T, CountType, Layout, F> GroupsAccumulator
@@ -1034,6 +1059,8 @@ where
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
         let (partial_counts, partial_sums) =
             Layout::decode_partial_state::<T, CountType>(values);
+        #[cfg(debug_assertions)]
+        debug_assert_same_validity(partial_counts, partial_sums);
 
         // update counts with partial counts
         self.counts
