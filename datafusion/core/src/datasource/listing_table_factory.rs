@@ -81,9 +81,8 @@ impl TableProviderFactory for ListingTableFactory {
             true => "",
             false => &get_extension(cmd.location.as_str()),
         };
-        let mut options = ListingOptions::new(file_format)
-            .with_session_config_options(session_state.config())
-            .with_file_extension(file_extension);
+        let mut options =
+            ListingOptions::new(file_format).with_file_extension(file_extension);
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
             let infer_parts = session_state

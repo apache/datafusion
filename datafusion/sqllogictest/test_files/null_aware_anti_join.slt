@@ -53,12 +53,12 @@ query TT
 EXPLAIN SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null);
 ----
 logical_plan
-01)LeftAnti Join: outer_table.id = __correlated_sq_1.id
+01)LeftAnti Join: outer_table.id = __correlated_sq_1.id null_aware
 02)--TableScan: outer_table projection=[id, value]
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: inner_table_no_null projection=[id]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -193,12 +193,12 @@ query TT
 EXPLAIN SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
 ----
 logical_plan
-01)LeftAnti Join: outer_table.id = __correlated_sq_1.id
+01)LeftAnti Join: outer_table.id = __correlated_sq_1.id null_aware
 02)--TableScan: outer_table projection=[id, value]
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: inner_table_with_null projection=[id]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
