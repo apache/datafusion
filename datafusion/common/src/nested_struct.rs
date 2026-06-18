@@ -18,7 +18,7 @@
 use crate::error::{_plan_err, Result};
 use arrow::{
     array::{
-        Array, ArrayRef, DictionaryArray, FixedSizeListArray, GenericListArray,
+        Array, ArrayRef, AsArray, DictionaryArray, FixedSizeListArray, GenericListArray,
         GenericListViewArray, StructArray, downcast_integer, make_array, new_null_array,
     },
     buffer::NullBuffer,
@@ -26,19 +26,6 @@ use arrow::{
     datatypes::{DataType, DataType::Struct, Field, FieldRef},
 };
 use std::{collections::HashSet, sync::Arc};
-
-/// Helper macro to downcast an array and convert to Result with appropriate error.
-macro_rules! downcast_array {
-    ($col:expr, $ty:ty, $type_name:expr) => {
-        $col.as_any().downcast_ref::<$ty>().ok_or_else(|| {
-            crate::error::DataFusionError::Plan(format!(
-                "Expected {} but got {}",
-                $type_name,
-                $col.data_type()
-            ))
-        })
-    };
-}
 
 /// Cast a struct column to match target struct fields, handling nested structs recursively.
 ///
@@ -231,7 +218,7 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
     target_inner_field: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    let source_list = downcast_array!(source_col, GenericListArray<O>, "list array")?;
+    let source_list = source_col.as_list::<O>();
 
     let cast_values = cast_column(
         source_list.values(),
@@ -253,8 +240,7 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
     target_inner_field: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    let source_list =
-        downcast_array!(source_col, GenericListViewArray<O>, "list view array")?;
+    let source_list = source_col.as_list_view::<O>();
 
     let cast_values = cast_column(
         source_list.values(),
@@ -278,8 +264,7 @@ fn cast_fixed_size_list_column(
     target_list_size: i32,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
-    let source_list =
-        downcast_array!(source_col, FixedSizeListArray, "fixed-size list array")?;
+    let source_list = source_col.as_fixed_size_list();
 
     let source_values = source_list.values();
     let target_type = target_inner_field.data_type();
