@@ -48,6 +48,8 @@ use futures::StreamExt;
 use log::info;
 use tokio::sync::oneshot;
 
+use datafusion_common::ScalarValue;
+
 use crate::sorts::sort::lex_compare;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
@@ -59,6 +61,12 @@ use crate::{
 pub struct RangeRepartitionExec {
     input: Arc<dyn ExecutionPlan>,
     cache: Arc<PlanProperties>,
+    /// Halo distance preceding each bucket's primary range, in
+    /// leading-sort-key units. Carried over from the window frame at plan
+    /// time so the coordinator can derive per-bucket expanded ranges.
+    halo_preceding: i64,
+    /// Halo distance following each bucket's primary range.
+    halo_following: i64,
     state: Arc<Mutex<State>>,
 }
 
@@ -89,12 +97,18 @@ impl std::fmt::Debug for State {
 }
 
 impl RangeRepartitionExec {
-    pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        halo_preceding: i64,
+        halo_following: i64,
+    ) -> Self {
         let n = input.output_partitioning().partition_count();
         let cache = Arc::clone(input.properties());
         Self {
             input,
             cache,
+            halo_preceding,
+            halo_following,
             state: Arc::new(Mutex::new(State {
                 initialized: false,
                 handoffs: (0..n).map(|_| None).collect(),
@@ -134,7 +148,11 @@ impl ExecutionPlan for RangeRepartitionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self::new(children.swap_remove(0))))
+        Ok(Arc::new(Self::new(
+            children.swap_remove(0),
+            self.halo_preceding,
+            self.halo_following,
+        )))
     }
 
     fn execute(
@@ -156,7 +174,15 @@ impl ExecutionPlan for RangeRepartitionExec {
             }
             let child = Arc::clone(&self.input);
             let ctx = Arc::clone(&context);
-            tokio::spawn(coordinator(child, ctx, senders));
+            let halo_preceding = self.halo_preceding;
+            let halo_following = self.halo_following;
+            tokio::spawn(coordinator(
+                child,
+                ctx,
+                senders,
+                halo_preceding,
+                halo_following,
+            ));
         }
         let rx = state
             .handoffs
@@ -203,6 +229,8 @@ async fn coordinator(
     child: Arc<dyn ExecutionPlan>,
     ctx: Arc<TaskContext>,
     mut senders: Vec<oneshot::Sender<Result<PartitionData>>>,
+    halo_preceding: i64,
+    halo_following: i64,
 ) {
     let n = senders.len();
 
@@ -252,11 +280,83 @@ async fn coordinator(
         n, global
     );
 
+    // Derive boundaries and per-bucket primary/expanded ranges from the
+    // global extremes + the halo we were constructed with. Log only — the
+    // routing impl in a future commit will consume the same values.
+    log_buckets(global.as_ref(), n, halo_preceding, halo_following);
+
     // Phase 4: hand off each input's payload to its corresponding output
     // partition. (Today: pass-through; future: per-output route streams.)
     for (sender, (first_batch, rest)) in senders.into_iter().zip(firsts.into_iter()) {
         let _ = sender.send(Ok(PartitionData { first_batch, rest }));
     }
+}
+
+/// Compute and log this RangeRepartitionExec's bucket layout for a single
+/// run: `n` output partitions split into equal-width buckets over the
+/// global leading-sort-key range, each bucket's primary range and its
+/// halo-expanded range.
+///
+/// v1 boundary math only supports `Int64` leading sort keys (matches the
+/// optimizer rule's eligibility gate). Logs a skip line for other types
+/// or when the global extremes were unavailable.
+fn log_buckets(
+    global: Option<&SortExtremes>,
+    n: usize,
+    halo_preceding: i64,
+    halo_following: i64,
+) {
+    let Some(global) = global else {
+        info!("RangeRepartitionExec: no runtime extremes; skip bucket layout");
+        return;
+    };
+    let (Some(ScalarValue::Int64(Some(lo))), Some(ScalarValue::Int64(Some(hi)))) =
+        (global.min.first(), global.max.first())
+    else {
+        info!(
+            "RangeRepartitionExec: leading sort key is not Int64 (min={:?}, max={:?}); \
+             skip bucket layout",
+            global.min, global.max
+        );
+        return;
+    };
+    let Some(boundaries) = equal_width_int64_boundaries(*lo, *hi, n) else {
+        info!("RangeRepartitionExec: cannot split [{lo}, {hi}] into {n} buckets");
+        return;
+    };
+    info!(
+        "RangeRepartitionExec: global leading [{lo}, {hi}] split into {n} buckets; \
+         interior boundaries: {boundaries:?}; halo: {halo_preceding} preceding, \
+         {halo_following} following"
+    );
+    let mut edges: Vec<i64> = std::iter::once(*lo)
+        .chain(boundaries.iter().copied())
+        .chain(std::iter::once(*hi + 1))
+        .collect();
+    edges.dedup();
+    for (i, win) in edges.windows(2).enumerate() {
+        let start = win[0] - halo_preceding;
+        let end = win[1] + halo_following;
+        info!(
+            "RangeRepartitionExec:   bucket {i}: primary [{}, {})  expanded [{start}, {end})",
+            win[0], win[1]
+        );
+    }
+}
+
+/// Split the closed `Int64` interval `[lo, hi]` into `n` equal-width
+/// buckets, returning the `n - 1` interior cut points.
+fn equal_width_int64_boundaries(lo: i64, hi: i64, n: usize) -> Option<Vec<i64>> {
+    if n <= 1 {
+        return Some(vec![]);
+    }
+    let span = hi.checked_sub(lo)?;
+    let n_i = i64::try_from(n).ok()?;
+    let mut cuts = Vec::with_capacity(n - 1);
+    for i in 1..n_i {
+        cuts.push(lo + span * i / n_i);
+    }
+    Some(cuts)
 }
 
 /// Lex-reduce per-input partition extremes into one global [`SortExtremes`]

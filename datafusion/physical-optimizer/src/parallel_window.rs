@@ -15,24 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Parallelize bounded RANGE-frame window functions that have an ORDER BY but
-//! no PARTITION BY by range-partitioning their input.
+//! Parallelize bounded RANGE-frame window functions that have an ORDER BY
+//! but no PARTITION BY by inserting a `RangeRepartitionExec` between the
+//! window's `SortPreservingMergeExec`/`SortExec` chain and its child sort.
 //!
-//! Skeleton: this pass finds candidate `BoundedWindowAggExec` nodes and probes
-//! the child's `partition_statistics(Some(i))` for per-partition min/max on the
-//! single ORDER BY column. It does not transform the plan yet.
+//! This rule's responsibilities are now narrow: detect the eligible
+//! window shape, pull the halo distances out of the window frame, and
+//! wrap the per-partition `SortExec` with a `RangeRepartitionExec`
+//! carrying those halo values. All boundary / global-extremes logic
+//! lives in `RangeRepartitionExec`'s coordinator and runs against
+//! runtime stats rather than plan-time `Statistics`.
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::range_repartition::RangeRepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::BoundedWindowAggExec;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use log::info;
 use std::sync::Arc;
 
@@ -49,21 +52,28 @@ impl PhysicalOptimizerRule for ParallelWindow {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        _config: &ConfigOptions,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.execution.target_partitions;
         let out = plan.transform_down(|node| {
             let Some(window) = node.downcast_ref::<BoundedWindowAggExec>() else {
                 return Ok(Transformed::no(node));
             };
-            probe_candidate(window, target_partitions)?;
-            if !is_eligible(window) {
+            let Some((halo_preceding, halo_following)) = candidate_halo(window)
+            else {
                 return Ok(Transformed::no(node));
-            }
-            // Descend through whatever EnsureRequirements stacked on top of the
-            // sort (typically SortPreservingMergeExec) until we find the
-            // SortExec and wrap it with RangeRepartitionExec.
-            let new_child = wrap_first_sort_descendant(Arc::clone(&node.children()[0]))?;
+            };
+            info!(
+                "ParallelWindow: candidate BoundedWindowAggExec (RANGE frame, no PARTITION BY); \
+                 halo: {halo_preceding} preceding, {halo_following} following"
+            );
+            // Descend through whatever EnsureRequirements stacked on top of
+            // the sort (typically SortPreservingMergeExec) until we find the
+            // SortExec, and wrap it with RangeRepartitionExec(halo…).
+            let new_child = wrap_first_sort_descendant(
+                Arc::clone(&node.children()[0]),
+                halo_preceding,
+                halo_following,
+            )?;
             let new_window = Arc::clone(&node).with_new_children(vec![new_child])?;
             Ok(Transformed::yes(new_window))
         })?;
@@ -79,145 +89,60 @@ impl PhysicalOptimizerRule for ParallelWindow {
     }
 }
 
-/// Same shape gate that `probe_candidate` enforces, returned as a bool so
-/// the rule can decide whether to do the plan rewrite.
-fn is_eligible(window: &BoundedWindowAggExec) -> bool {
+/// Returns `(halo_preceding, halo_following)` if the window matches the
+/// v1 shape we know how to parallelize: no PARTITION BY, a single
+/// `Column` sort key, RANGE frame, finite Int64 bounds (or CurrentRow).
+/// Returns `None` otherwise so the rule leaves the plan alone.
+fn candidate_halo(window: &BoundedWindowAggExec) -> Option<(i64, i64)> {
     if !window.partition_keys().is_empty() {
-        return false;
+        return None;
     }
     let order_by = window.window_expr()[0].order_by();
     if order_by.len() != 1 {
-        return false;
+        return None;
     }
     if order_by[0].expr.downcast_ref::<Column>().is_none() {
-        return false;
+        return None;
     }
     let frame = window.window_expr()[0].get_window_frame();
     if frame.units != WindowFrameUnits::Range {
-        return false;
+        return None;
     }
-    i64_halo(&frame.start_bound, &frame.end_bound).is_some()
+    i64_halo(&frame.start_bound, &frame.end_bound)
 }
 
 /// Walk down through single-child operators until we hit a `SortExec`;
-/// replace it in-place with `RangeRepartitionExec(SortExec)` and rebuild
-/// the chain back up. If no `SortExec` is found, leave the subtree alone.
+/// replace it in place with `RangeRepartitionExec` wrapping the same
+/// `SortExec`, and rebuild the chain back up. If no `SortExec` is found,
+/// leave the subtree alone.
 fn wrap_first_sort_descendant(
     node: Arc<dyn ExecutionPlan>,
+    halo_preceding: i64,
+    halo_following: i64,
 ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
     if node.downcast_ref::<SortExec>().is_some() {
-        return Ok(Arc::new(RangeRepartitionExec::new(node)));
+        return Ok(Arc::new(RangeRepartitionExec::new(
+            node,
+            halo_preceding,
+            halo_following,
+        )));
     }
     let children = node.children();
     if children.len() != 1 {
         return Ok(node);
     }
-    let new_child = wrap_first_sort_descendant(Arc::clone(children[0]))?;
+    let new_child = wrap_first_sort_descendant(
+        Arc::clone(children[0]),
+        halo_preceding,
+        halo_following,
+    )?;
     node.with_new_children(vec![new_child])
 }
 
-fn probe_candidate(
-    window: &BoundedWindowAggExec,
-    target_partitions: usize,
-) -> datafusion_common::Result<()> {
-    // v1 scope: single ORDER BY column, no PARTITION BY, RANGE frame.
-    if !window.partition_keys().is_empty() {
-        return Ok(());
-    }
-    let order_by = window.window_expr()[0].order_by();
-    if order_by.len() != 1 {
-        return Ok(());
-    }
-    let frame = window.window_expr()[0].get_window_frame();
-    if frame.units != WindowFrameUnits::Range {
-        return Ok(());
-    }
-    let Some((halo_preceding, halo_following)) =
-        i64_halo(&frame.start_bound, &frame.end_bound)
-    else {
-        info!(
-            "  frame bounds not finite Int64 (start={:?}, end={:?}); skip",
-            frame.start_bound, frame.end_bound
-        );
-        return Ok(());
-    };
-
-    let child = window.input();
-    let Some(col) = order_by[0].expr.downcast_ref::<Column>() else {
-        return Ok(());
-    };
-    let col_idx = col.index();
-    let col_name = col.name().to_string();
-    let n_in = child.output_partitioning().partition_count();
-
-    info!(
-        "ParallelWindow: candidate BoundedWindowAggExec on `{col_name}` (RANGE frame, no PARTITION BY); \
-         child has {n_in} partitions, target_partitions={target_partitions}"
-    );
-
-    let mut global_min: Precision<ScalarValue> = Precision::Absent;
-    let mut global_max: Precision<ScalarValue> = Precision::Absent;
-    for i in 0..n_in {
-        let stats = child.partition_statistics(Some(i))?;
-        let col_stats = &stats.column_statistics[col_idx];
-        global_min = match global_min {
-            Precision::Absent => col_stats.min_value.clone(),
-            other => other.min(&col_stats.min_value),
-        };
-        global_max = match global_max {
-            Precision::Absent => col_stats.max_value.clone(),
-            other => other.max(&col_stats.max_value),
-        };
-    }
-
-    let (Precision::Exact(min), Precision::Exact(max)) = (&global_min, &global_max)
-    else {
-        info!("  global bounds not Exact (min={global_min:?}, max={global_max:?}); skip");
-        return Ok(());
-    };
-
-    let Some(boundaries) = equal_width_boundaries(min, max, target_partitions) else {
-        info!(
-            "  cannot split [{min:?}, {max:?}] into {target_partitions} buckets (type not yet supported)"
-        );
-        return Ok(());
-    };
-    info!("  global min={min:?} max={max:?}; interior boundaries: {boundaries:?}");
-    info!("  halo: {halo_preceding} preceding, {halo_following} following");
-
-    // Each output partition's primary range is half-open [b_i, b_{i+1}); the
-    // expanded (routed) range adds halo on each side so the per-partition
-    // window can compute correct frame values at the seam.
-    // TODO: a future `HaloDropExec` (or equivalent) sits above the window per
-    // partition and drops rows outside its primary range so each input row
-    // surfaces in exactly one output partition.
-    let (ScalarValue::Int64(Some(lo)), ScalarValue::Int64(Some(hi))) = (min, max) else {
-        return Ok(());
-    };
-    let mut edges: Vec<i64> = std::iter::once(*lo)
-        .chain(boundaries.iter().filter_map(|b| match b {
-            ScalarValue::Int64(Some(v)) => Some(*v),
-            _ => None,
-        }))
-        .chain(std::iter::once(*hi + 1))
-        .collect();
-    edges.dedup();
-    for (i, win) in edges.windows(2).enumerate() {
-        let start = win[0] - halo_preceding;
-        let end = win[1] + halo_following;
-        info!(
-            "  bucket {i}: primary [{}, {})  expanded [{start}, {end})",
-            win[0], win[1]
-        );
-    }
-
-    Ok(())
-}
-
-/// Extract `(halo_preceding, halo_following)` in order-key units from a RANGE
-/// window frame. Returns `None` for UNBOUNDED bounds or non-`Int64` distances.
-/// v1 scope: only `Preceding(Int64)` / `CurrentRow` for the start bound, and
-/// `CurrentRow` / `Following(Int64)` for the end bound.
+/// Extract `(halo_preceding, halo_following)` in order-key units from a
+/// RANGE window frame. Returns `None` for UNBOUNDED bounds or non-`Int64`
+/// distances. v1 scope: only `Preceding(Int64)` / `CurrentRow` for the
+/// start bound, and `CurrentRow` / `Following(Int64)` for the end bound.
 fn i64_halo(start: &WindowFrameBound, end: &WindowFrameBound) -> Option<(i64, i64)> {
     let preceding = match start {
         WindowFrameBound::Preceding(ScalarValue::Int64(Some(n))) => *n,
@@ -230,27 +155,4 @@ fn i64_halo(start: &WindowFrameBound, end: &WindowFrameBound) -> Option<(i64, i6
         _ => return None,
     };
     Some((preceding, following))
-}
-
-/// Split the closed interval `[min, max]` into `n` equal-width buckets and
-/// return the `n - 1` interior cut points.
-/// v1: Int64 only — keeps the API small while we settle the optimizer shape.
-fn equal_width_boundaries(
-    min: &ScalarValue,
-    max: &ScalarValue,
-    n: usize,
-) -> Option<Vec<ScalarValue>> {
-    if n <= 1 {
-        return Some(vec![]);
-    }
-    let (ScalarValue::Int64(Some(lo)), ScalarValue::Int64(Some(hi))) = (min, max) else {
-        return None;
-    };
-    let span = hi.checked_sub(*lo)?;
-    let n_i = i64::try_from(n).ok()?;
-    let mut cuts = Vec::with_capacity(n - 1);
-    for i in 1..n_i {
-        cuts.push(ScalarValue::Int64(Some(lo + span * i / n_i)));
-    }
-    Some(cuts)
 }
