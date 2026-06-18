@@ -21,7 +21,8 @@ use crate::error::_exec_datafusion_err;
 use crate::{HashSet, Result};
 use arrow::array::ArrayData;
 use arrow::record_batch::RecordBatch;
-use std::{mem::size_of, ptr::NonNull};
+use std::mem::size_of;
+use std::num::NonZero;
 
 /// Estimates the memory size required for a hash table prior to allocation.
 ///
@@ -131,34 +132,74 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
 /// `Buffer`. This method provides temporary fix until the issue is resolved:
 /// <https://github.com/apache/arrow-rs/issues/6439>
 pub fn get_record_batch_memory_size(batch: &RecordBatch) -> usize {
-    // Store pointers to `Buffer`'s start memory address (instead of actual
-    // used data region's pointer represented by current `Array`)
-    let mut counted_buffers: HashSet<NonNull<u8>> = HashSet::new();
-    let mut total_size = 0;
+    RecordBatchMemoryCounter::new().count_batch(batch)
+}
 
-    for array in batch.columns() {
-        let array_data = array.to_data();
-        count_array_data_memory_size(&array_data, &mut counted_buffers, &mut total_size);
+/// Tracks the memory used by a sequence of [`RecordBatch`]es that may share
+/// underlying buffers, counting each buffer exactly once.
+///
+/// Use this instead of [`get_record_batch_memory_size`] to account for the
+/// total memory of a sequence of batches, e.g. when buffering the batches of
+/// an input stream. Such batches can share buffers (for example, operators
+/// like aggregates emit one large batch as multiple zero-copy slices), and
+/// calling [`get_record_batch_memory_size`] per batch counts the shared
+/// buffers once per batch, while this counter counts them exactly once. A
+/// batch's buffers are kept alive by the batch even when only a sub-range is
+/// referenced, so counting unique buffers in full reflects the memory the
+/// batches actually retain.
+#[derive(Debug, Default)]
+pub struct RecordBatchMemoryCounter {
+    /// Start addresses of `Buffer`s that have already been counted (instead of
+    /// actual used data region's pointer represented by current `Array`)
+    counted_buffers: HashSet<NonZero<usize>>,
+    /// Total memory of all unique buffers counted so far
+    memory_usage: usize,
+}
+
+impl RecordBatchMemoryCounter {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    total_size
+    /// Count `batch`, returning the memory used by its buffers that have not
+    /// been counted before.
+    pub fn count_batch(&mut self, batch: &RecordBatch) -> usize {
+        let mut total_size = 0;
+
+        for array in batch.columns() {
+            let array_data = array.to_data();
+            count_array_data_memory_size(
+                &array_data,
+                &mut self.counted_buffers,
+                &mut total_size,
+            );
+        }
+
+        self.memory_usage += total_size;
+        total_size
+    }
+
+    /// Total memory of the unique buffers of all batches counted so far.
+    pub fn memory_usage(&self) -> usize {
+        self.memory_usage
+    }
 }
 
 /// Count the memory usage of `array_data` and its children recursively.
 fn count_array_data_memory_size(
     array_data: &ArrayData,
-    counted_buffers: &mut HashSet<NonNull<u8>>,
+    counted_buffers: &mut HashSet<NonZero<usize>>,
     total_size: &mut usize,
 ) {
     // Count memory usage for `array_data`
     for buffer in array_data.buffers() {
-        if counted_buffers.insert(buffer.data_ptr()) {
+        if counted_buffers.insert(buffer.data_ptr().addr()) {
             *total_size += buffer.capacity();
         } // Otherwise the buffer's memory is already counted
     }
 
     if let Some(null_buffer) = array_data.nulls()
-        && counted_buffers.insert(null_buffer.inner().inner().data_ptr())
+        && counted_buffers.insert(null_buffer.inner().inner().data_ptr().addr())
     {
         *total_size += null_buffer.inner().inner().capacity();
     }
@@ -293,6 +334,29 @@ mod record_batch_tests {
         let size_sliced = get_record_batch_memory_size(&batch_sliced);
 
         assert_eq!(size_origin, size_sliced);
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_buffer_shared_across_batches() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ints",
+            DataType::Int32,
+            false,
+        )]));
+
+        let int_array = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(int_array)]).unwrap();
+        let slices = [batch.slice(0, 2), batch.slice(2, 2), batch.slice(4, 2)];
+
+        // Counting each slice individually counts the shared buffer once per slice
+        let summed: usize = slices.iter().map(get_record_batch_memory_size).sum();
+        assert_eq!(summed, 3 * get_record_batch_memory_size(&batch));
+
+        // A counter shared across the batches counts it exactly once
+        let mut counter = RecordBatchMemoryCounter::new();
+        let deduped: usize = slices.iter().map(|slice| counter.count_batch(slice)).sum();
+        assert_eq!(deduped, get_record_batch_memory_size(&batch));
+        assert_eq!(counter.memory_usage(), get_record_batch_memory_size(&batch));
     }
 
     #[test]

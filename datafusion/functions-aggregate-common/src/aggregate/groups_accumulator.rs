@@ -375,13 +375,12 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         self.invoke_per_accumulator(
             values,
             group_indices,
-            opt_filter,
+            None,
             total_num_groups,
             |accumulator, values_to_accumulate| {
                 accumulator.merge_batch(values_to_accumulate)?;
