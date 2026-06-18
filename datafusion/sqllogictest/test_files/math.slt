@@ -924,17 +924,34 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 query RT
 SELECT log(2.5, arrow_cast(10.9, 'Float16')), arrow_typeof(log(2.5, arrow_cast(10.9, 'Float16')));
 ----
-2.6074219 Float16
+2.606835742462 Float64
 
 query RT
 SELECT log(2.5, 10.9::float), arrow_typeof(log(2.5, 10.9::float));
 ----
-2.606992 Float32
+2.606992159958 Float64
 
 query RT
 SELECT log(2.5, 10.9::double), arrow_typeof(log(2.5, 10.9::double));
 ----
 2.606992198152 Float64
+
+# A Float64 (or integer) base must not narrow a Float32 value to Float32; the
+# value is widened to Float64 and a Float64 result is returned (issue #22581).
+query RT
+SELECT log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float32')), arrow_typeof(log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float32')));
+----
+0.041666666517 Float64
+
+query RT
+SELECT log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float16')), arrow_typeof(log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float16')));
+----
+0.041666666517 Float64
+
+query RT
+SELECT log(2, arrow_cast(2.0, 'Float32')), arrow_typeof(log(2, arrow_cast(2.0, 'Float32')));
+----
+1 Float64
 
 # lcm with array and scalar
 
