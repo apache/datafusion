@@ -1078,6 +1078,13 @@ pub struct EncodingPreservation {
 
 impl EncodingPreservation {
     /// Preserve dictionary encoding and coerce only the dictionary values.
+    pub const fn dictionary() -> Self {
+        Self {
+            preserve_dictionary: true,
+        }
+    }
+
+    /// Preserve dictionary encoding and coerce only the dictionary values.
     pub const fn with_dictionary(mut self) -> Self {
         self.preserve_dictionary = true;
         self
@@ -2246,7 +2253,7 @@ mod tests {
     #[test]
     fn test_coercion_encoding_preservation_affects_equality() {
         assert!(!EncodingPreservation::default().preserve_dictionary());
-        let preserve_dictionary = EncodingPreservation::default().with_dictionary();
+        let preserve_dictionary = EncodingPreservation::dictionary();
         assert!(preserve_dictionary.preserve_dictionary());
 
         let default = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
