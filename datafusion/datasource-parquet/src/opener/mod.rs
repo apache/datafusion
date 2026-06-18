@@ -1531,12 +1531,10 @@ fn create_initial_plan(
         extensions.get::<ParquetAccessPlan>(),
         extensions.get::<ParquetRowSelection>(),
     ) {
-        (Some(_), Some(_)) => {
-            return exec_err!(
-                "Invalid parquet access extensions for {file_name}. \
-                Specify either ParquetAccessPlan or ParquetRowSelection, not both"
-            );
-        }
+        (Some(_), Some(_)) => exec_err!(
+            "Invalid parquet access extensions for {file_name}. \
+            Specify either ParquetAccessPlan or ParquetRowSelection, not both"
+        ),
         (Some(access_plan), None) => {
             let plan_len = access_plan.len();
             if plan_len != row_group_count {
@@ -1544,19 +1542,17 @@ fn create_initial_plan(
                     "Invalid ParquetAccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
                 );
             }
-            return Ok(access_plan.clone());
+            Ok(access_plan.clone())
         }
         (None, Some(row_selection)) => {
-            return ParquetAccessPlan::try_new_from_overall_row_selection(
+            ParquetAccessPlan::try_new_from_overall_row_selection(
                 row_selection.selection().clone(),
                 rg_metadata,
-            );
+            )
         }
-        (None, None) => {}
+        // default to scanning all row groups
+        (None, None) => Ok(ParquetAccessPlan::new_all(row_group_count)),
     }
-
-    // default to scanning all row groups
-    Ok(ParquetAccessPlan::new_all(row_group_count))
 }
 
 /// Build a page pruning predicate from an optional predicate expression.

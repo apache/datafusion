@@ -30,7 +30,9 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchema, assert_contains};
-use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
+use datafusion_datasource_parquet::{
+    ParquetAccessPlan, ParquetRowSelection, RowGroupAccess,
+};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_plan::ExecutionPlan;
@@ -153,6 +155,77 @@ async fn skip_scan() {
 }
 
 #[tokio::test]
+async fn row_selection_extension() {
+    // The file has 2 row groups of 5 rows each (10 rows total). Attach a
+    // file-level `ParquetRowSelection` to the `PartitionedFile` and verify it
+    // survives the path from `PartitionedFile` into the parquet opener/reader.
+
+    // select a single row in the first row group
+    let parquet_metrics = TestFull {
+        access_plan: None,
+        row_selection: Some(ParquetRowSelection::new(RowSelection::from(vec![
+            RowSelector::skip(2),
+            RowSelector::select(1),
+            RowSelector::skip(7),
+        ]))),
+        expected_rows: 1,
+        predicate: None,
+    }
+    .run()
+    .await
+    .unwrap();
+
+    // only the first row group is read, so some bytes are scanned
+    let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
+    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+}
+
+#[tokio::test]
+async fn row_selection_extension_spanning_row_groups() {
+    // A selection whose selectors straddle the row group boundary (row 4 is the
+    // last row of group 0, rows 5-6 are the first rows of group 1).
+    let parquet_metrics = TestFull {
+        access_plan: None,
+        row_selection: Some(ParquetRowSelection::new(RowSelection::from(vec![
+            RowSelector::skip(4),
+            RowSelector::select(3),
+            RowSelector::skip(3),
+        ]))),
+        expected_rows: 3,
+        predicate: None,
+    }
+    .run()
+    .await
+    .unwrap();
+
+    let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
+    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+}
+
+#[tokio::test]
+async fn bad_row_selection_extension() {
+    // selection specifies fewer rows than the file actually contains
+    let err = TestFull {
+        access_plan: None,
+        row_selection: Some(ParquetRowSelection::new(RowSelection::from(vec![
+            RowSelector::skip(2),
+            RowSelector::select(1),
+        ]))),
+        expected_rows: 10000,
+        predicate: None,
+    }
+    .run()
+    .await
+    .unwrap_err();
+    let err_string = err.to_string();
+    assert_contains!(&err_string, "Invalid Parquet RowSelection");
+    assert_contains!(
+        &err_string,
+        "File has 10 rows, but selection specifies 3 rows."
+    );
+}
+
+#[tokio::test]
 async fn plan_and_filter() {
     // show that row group pruning is applied even when an initial plan is supplied
 
@@ -170,6 +243,7 @@ async fn plan_and_filter() {
     // initial
     let parquet_metrics = TestFull {
         access_plan,
+        row_selection: None,
         expected_rows: 0,
         predicate: Some(predicate),
     }
@@ -227,6 +301,7 @@ async fn bad_row_groups() {
             RowGroupAccess::Skip,
             RowGroupAccess::Scan,
         ])),
+        row_selection: None,
         expected_rows: 0,
         predicate: None,
     }
@@ -249,6 +324,7 @@ async fn bad_selection() {
             ])),
             RowGroupAccess::Skip,
         ])),
+        row_selection: None,
         // expects that we hit an error, this should not be run
         expected_rows: 10000,
         predicate: None,
@@ -300,6 +376,7 @@ impl Test {
         } = self;
         TestFull {
             access_plan,
+            row_selection: None,
             expected_rows,
             predicate: None,
         }
@@ -317,6 +394,7 @@ impl Test {
 /// 4. Returns the statistics from running the plan
 struct TestFull {
     access_plan: Option<ParquetAccessPlan>,
+    row_selection: Option<ParquetRowSelection>,
     expected_rows: usize,
     predicate: Option<Expr>,
 }
@@ -327,6 +405,7 @@ impl TestFull {
 
         let Self {
             access_plan,
+            row_selection,
             expected_rows,
             predicate,
         } = self;
@@ -350,6 +429,11 @@ impl TestFull {
         // add the access plan, if any, as an extension
         if let Some(access_plan) = access_plan {
             partitioned_file = partitioned_file.with_extension(access_plan);
+        }
+
+        // add the file-level row selection, if any, as an extension
+        if let Some(row_selection) = row_selection {
+            partitioned_file = partitioned_file.with_extension(row_selection);
         }
 
         // Create a DataSourceExec to read the file
