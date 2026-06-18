@@ -39,6 +39,8 @@ pub use datafusion_physical_expr::{
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::future::{Future, ready};
+use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
@@ -511,6 +513,27 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
             );
         }
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
+    }
+
+    /// Returns statistics for `partition` that are guaranteed to be accurate
+    /// only once that partition's input has been fully consumed.
+    ///
+    /// Default impl resolves immediately to [`Self::partition_statistics`]
+    /// (i.e. whatever plan-time stats are available). Pipeline-breaking
+    /// operators (e.g. `SortExec`) may override to expose runtime-derived
+    /// exact stats — for example, the min/max of the sorted buffer — by
+    /// completing the returned future only after the relevant work has run.
+    ///
+    /// Callers are expected to drive the input by polling `execute()` (or to
+    /// arrange equivalent forward progress) so the override can signal
+    /// completion; the default impl is always immediately ready and does not
+    /// depend on execution.
+    fn runtime_statistics(
+        &self,
+        partition: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<Statistics>>> + Send>> {
+        let stats = self.partition_statistics(Some(partition));
+        Box::pin(ready(stats))
     }
 
     /// Returns `true` if a limit can be safely pushed down through this

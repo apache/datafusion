@@ -70,8 +70,79 @@ use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
-use futures::{StreamExt, TryStreamExt};
-use log::{debug, trace};
+use crate::expressions::Column;
+use datafusion_common::ScalarValue;
+use datafusion_execution::RecordBatchStream;
+use futures::{Stream, StreamExt, TryStreamExt};
+use log::{debug, info, trace};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+/// Stream adapter that observes the first and last value of one column as
+/// batches flow through, logging the resulting min/max once the upstream
+/// stream ends. Intended to wrap a sorted stream so the observed values are
+/// the exact partition-local extrema on the sort key.
+struct ObserveSortedMinMax {
+    inner: SendableRecordBatchStream,
+    state: Option<ObserveState>,
+}
+
+struct ObserveState {
+    partition: usize,
+    col_idx: usize,
+    col_name: String,
+    descending: bool,
+    first: Option<ScalarValue>,
+    last: Option<ScalarValue>,
+    rows_seen: usize,
+}
+
+impl Stream for ObserveSortedMinMax {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(batch))) => {
+                if let Some(state) = self.state.as_mut()
+                    && batch.num_rows() > 0
+                {
+                    let col = batch.column(state.col_idx);
+                    let last_idx = col.len() - 1;
+                    if state.first.is_none() {
+                        state.first = ScalarValue::try_from_array(col, 0).ok();
+                    }
+                    state.last = ScalarValue::try_from_array(col, last_idx).ok();
+                    state.rows_seen += col.len();
+                }
+                Poll::Ready(Some(Ok(batch)))
+            }
+            Poll::Ready(None) => {
+                if let Some(state) = self.state.take() {
+                    let (min, max) = if state.descending {
+                        (state.last, state.first)
+                    } else {
+                        (state.first, state.last)
+                    };
+                    info!(
+                        "SortExec runtime min/max partition {} `{}`: min={:?} max={:?} rows={}",
+                        state.partition, state.col_name, min, max, state.rows_seen
+                    );
+                }
+                Poll::Ready(None)
+            }
+            other => other,
+        }
+    }
+}
+
+impl RecordBatchStream for ObserveSortedMinMax {
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+}
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -1263,18 +1334,40 @@ impl ExecutionPlan for SortExec {
                     &self.metrics_set,
                     context.runtime_env(),
                 )?;
-                Ok(Box::pin(RecordBatchStreamAdapter::new(
-                    self.schema(),
-                    futures::stream::once(async move {
-                        while let Some(batch) = input.next().await {
-                            let batch = batch?;
-                            sorter.insert_batch(batch).await?;
-                        }
-                        drop(input);
-                        sorter.sort().await
-                    })
-                    .try_flatten(),
-                )))
+                let sort_expr = self.expr.first();
+                let observe_state =
+                    sort_expr
+                        .expr
+                        .downcast_ref::<Column>()
+                        .map(|col| ObserveState {
+                            partition,
+                            col_idx: col.index(),
+                            col_name: col.name().to_string(),
+                            descending: sort_expr.options.descending,
+                            first: None,
+                            last: None,
+                            rows_seen: 0,
+                        });
+                let sorted: SendableRecordBatchStream =
+                    Box::pin(RecordBatchStreamAdapter::new(
+                        self.schema(),
+                        futures::stream::once(async move {
+                            while let Some(batch) = input.next().await {
+                                let batch = batch?;
+                                sorter.insert_batch(batch).await?;
+                            }
+                            drop(input);
+                            sorter.sort().await
+                        })
+                        .try_flatten(),
+                    ));
+                match observe_state {
+                    Some(state) => Ok(Box::pin(ObserveSortedMinMax {
+                        inner: sorted,
+                        state: Some(state),
+                    })),
+                    None => Ok(sorted),
+                }
             }
         }
     }

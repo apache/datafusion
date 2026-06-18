@@ -98,6 +98,26 @@ physical_plan
 05)--------SortExec: expr=[seq@0 ASC NULLS LAST], preserve_partitioning=[true], statistics=[Rows=Exact(100), Bytes=Exact(1600), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(99)) Null=Exact(0) ScanBytes=Exact(800)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(6)) Null=Exact(0) ScanBytes=Exact(800))]]
 06)----------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parallel_window/events/3.parquet]]}, projection=[seq, amount], file_type=parquet, sort_order_for_reorder=[seq@0 ASC NULLS LAST], statistics=[Rows=Exact(100), Bytes=Exact(1600), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(99)) Null=Exact(0) ScanBytes=Exact(800)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(6)) Null=Exact(0) ScanBytes=Exact(800))]]
 
+# Actually execute the query — this drives the SortExec down the (false, None)
+# external-sort branch in each input partition and lets the runtime min/max
+# observer fire. Sorted-output truncated to 5 for a small reproducible row set.
+query II
+SELECT
+    seq,
+    SUM(amount) OVER (
+        ORDER BY seq
+        RANGE BETWEEN 5 PRECEDING AND CURRENT ROW
+    ) AS rolling_sum
+FROM events
+ORDER BY seq
+LIMIT 5;
+----
+0 0
+1 1
+2 3
+3 6
+4 10
+
 # Reset session settings so this file doesn't leak config into the rest of the run.
 statement ok
 set datafusion.explain.show_statistics = false;
