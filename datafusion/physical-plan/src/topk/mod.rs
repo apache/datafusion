@@ -1219,10 +1219,9 @@ mod tests {
         ]))
     }
 
+    // Local TopK tests use one emitter; shared-filter cases pass the partition count explicitly.
     fn make_topk_filter() -> Arc<RwLock<TopKDynamicFilters>> {
-        Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
-            DynamicFilterPhysicalExpr::new(vec![], lit(true)),
-        ))))
+        make_shared_topk_filter(1)
     }
 
     fn make_shared_topk_filter(
