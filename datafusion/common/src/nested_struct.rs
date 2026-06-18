@@ -269,6 +269,10 @@ fn cast_fixed_size_list_column(
     let source_values = source_list.values();
     let target_type = target_inner_field.data_type();
 
+    // Guard schema compatibility before masking null-parent child values below.
+    // The retry path is only for value-level cast failures in child slots hidden
+    // by a null parent list, and must not make runtime accept schemas that
+    // planning rejects.
     validate_data_type_compatibility(
         target_inner_field.name(),
         source_values.data_type(),
@@ -277,14 +281,15 @@ fn cast_fixed_size_list_column(
 
     let cast_values = match cast_column(source_values, target_type, cast_options) {
         Ok(cast_values) => cast_values,
-        Err(error) => match source_list.nulls() {
-            Some(parent_nulls) if parent_nulls.null_count() > 0 => {
-                let hidden_child_nulls = parent_nulls.expand(target_list_size as usize);
-                let masked_values =
-                    mask_array_values(source_values, &hidden_child_nulls)?;
-                cast_column(&masked_values, target_type, cast_options)?
-            }
-            _ => return Err(error),
+        Err(error) => match cast_fixed_size_list_values_with_parent_nulls(
+            source_values,
+            target_type,
+            cast_options,
+            source_list.nulls(),
+            target_list_size,
+        ) {
+            Some(masked_cast) => masked_cast?,
+            None => return Err(error),
         },
     };
 
@@ -294,6 +299,20 @@ fn cast_fixed_size_list_column(
         cast_values,
         source_list.nulls().cloned(),
     )))
+}
+
+fn cast_fixed_size_list_values_with_parent_nulls(
+    source_values: &ArrayRef,
+    target_type: &DataType,
+    cast_options: &CastOptions,
+    parent_nulls: Option<&NullBuffer>,
+    list_size: i32,
+) -> Option<Result<ArrayRef>> {
+    let parent_nulls = parent_nulls.filter(|nulls| nulls.null_count() > 0)?;
+
+    let hidden_child_nulls = parent_nulls.expand(list_size as usize);
+    let masked_values = mask_array_values(source_values, &hidden_child_nulls);
+    Some(masked_values.and_then(|values| cast_column(&values, target_type, cast_options)))
 }
 
 fn mask_array_values(
