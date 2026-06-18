@@ -119,6 +119,27 @@ LIMIT 5;
 3 6
 4 10
 
+# Halo duplication is observable as an inflated row count: each row whose
+# seq is within `halo_preceding` of a bucket boundary appears in both its
+# primary bucket and the neighbor that needs it as halo. For this fixture
+# (100 rows, halo_preceding=5, 3 interior boundaries) that's 15 extra
+# rows, so the merged output has 115. The eventual `HaloDropExec` will
+# drop halo rows post-window and bring this back to 100.
+#
+# `count(rolling_sum)` forces the window to actually execute (a plain
+# count(*) gets statistics-pruned from the parquet row count, never
+# instantiates the window operator, and so wouldn't notice the bug).
+query I
+SELECT count(rolling_sum) AS n FROM (
+    SELECT seq, SUM(amount) OVER (
+        ORDER BY seq
+        RANGE BETWEEN 5 PRECEDING AND CURRENT ROW
+    ) AS rolling_sum
+    FROM events
+) t;
+----
+115
+
 # Reset session settings so this file doesn't leak config into the rest of the run.
 statement ok
 set datafusion.explain.show_statistics = false;
