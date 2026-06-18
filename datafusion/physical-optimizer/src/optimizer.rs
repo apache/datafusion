@@ -29,6 +29,7 @@ use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
+use crate::parallel_window::ParallelWindow;
 use crate::projection_pushdown::ProjectionPushdown;
 use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
@@ -187,6 +188,11 @@ impl PhysicalOptimizer {
             // [`EnsureRequirements`](crate::ensure_requirements) for the per-phase
             // breakdown, and <https://github.com/apache/datafusion/issues/21973>
             // for the original failure mode.
+            // Probe candidate BoundedWindowAggExec nodes for per-partition stats
+            // on their ORDER BY column. Skeleton step toward range-repartitioning
+            // unpartitioned RANGE-frame windows. Must run before EnsureRequirements
+            // so the window's child is still the raw source (no inserted Sort/SPM).
+            Arc::new(ParallelWindow::new()),
             Arc::new(EnsureRequirements::new()),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),
