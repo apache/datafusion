@@ -163,4 +163,38 @@ from arrays_values_without_nulls;
 [[31, 32, 33, 34, 35, 26, 37, 38, 39, 40]] [[31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [8, 9]] [[31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [50, 51, 52]]
 
 
+# make_array over structs built from a literal (non-nullable fields) and a
+# column (nullable fields). The element types differ only in nested-field
+# nullability; make_array must widen them to a common type rather than fail.
+# See https://github.com/apache/datafusion/issues/22366
+statement ok
+create table struct_values(i int) as values (1), (NULL), (3);
+
+query ?
+select make_array(named_struct('i', 10), named_struct('i', i)) from struct_values order by 1;
+----
+[{i: 10}, {i: 1}]
+[{i: 10}, {i: 3}]
+[{i: 10}, {i: NULL}]
+
+query T
+select arrow_typeof(make_array(named_struct('i', 10), named_struct('i', i))) from struct_values limit 1;
+----
+List(Struct("i": Int64))
+
+# nested struct case
+query ?
+select make_array(
+         named_struct('a', 1, 'b', named_struct('c', 2)),
+         named_struct('a', i, 'b', named_struct('c', i))
+       )
+from struct_values order by 1;
+----
+[{a: 1, b: {c: 2}}, {a: 1, b: {c: 1}}]
+[{a: 1, b: {c: 2}}, {a: 3, b: {c: 3}}]
+[{a: 1, b: {c: 2}}, {a: NULL, b: {c: NULL}}]
+
+statement ok
+drop table struct_values;
+
 include ./cleanup.slt.part
