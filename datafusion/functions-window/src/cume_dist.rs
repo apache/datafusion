@@ -31,7 +31,6 @@ use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::fmt::Debug;
-use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -123,18 +122,23 @@ impl PartitionEvaluator for CumeDistEvaluator {
         ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
         let scalar = num_rows as f64;
-        let result = Float64Array::from_iter_values(
-            ranks_in_partition
-                .iter()
-                .scan(0_u64, |acc, range| {
-                    let len = range.end - range.start;
-                    *acc += len as u64;
-                    let value: f64 = (*acc as f64) / scalar;
-                    let result = iter::repeat_n(value, len);
-                    Some(result)
-                })
-                .flatten(),
-        );
+        let result = if ranks_in_partition.len() == num_rows {
+            let values: Vec<_> =
+                (1..=num_rows).map(|rank| rank as f64 / scalar).collect();
+            values.into()
+        } else {
+            let mut values = Vec::with_capacity(num_rows);
+            let mut rank = 0_u64;
+
+            for range in ranks_in_partition {
+                let len = range.end - range.start;
+                rank += len as u64;
+                let value = (rank as f64) / scalar;
+                values.resize(values.len() + len, value);
+            }
+
+            Float64Array::from(values)
+        };
         Ok(Arc::new(result))
     }
 
@@ -171,6 +175,12 @@ mod tests {
         test_f64_result(2, vec![0..2], vec![1.0, 1.0])?;
 
         test_f64_result(4, vec![0..2, 2..4], vec![0.5, 0.5, 1.0, 1.0])?;
+
+        test_f64_result(
+            4,
+            (0..4).map(|idx| idx..idx + 1).collect(),
+            vec![0.25, 0.5, 0.75, 1.0],
+        )?;
 
         Ok(())
     }
