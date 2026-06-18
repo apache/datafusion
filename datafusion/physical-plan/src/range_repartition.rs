@@ -49,6 +49,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use futures::StreamExt;
 use log::info;
 use tokio::sync::{mpsc, oneshot};
@@ -66,6 +67,10 @@ use crate::{
 pub struct RangeRepartitionExec {
     input: Arc<dyn ExecutionPlan>,
     cache: Arc<PlanProperties>,
+    /// Required input ordering — passed down from the consumer (window
+    /// operator) so EnsureRequirements inserts the pipeline-breaking sort
+    /// *below* us, not above. Same key feeds the routing decision.
+    ordering: LexOrdering,
     /// Halo distance preceding each bucket's primary range, in
     /// leading-sort-key units. Carried over from the window frame at plan
     /// time so the coordinator can derive per-bucket expanded ranges.
@@ -103,6 +108,7 @@ impl std::fmt::Debug for State {
 impl RangeRepartitionExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
+        ordering: LexOrdering,
         halo_preceding: i64,
         halo_following: i64,
     ) -> Self {
@@ -111,6 +117,7 @@ impl RangeRepartitionExec {
         Self {
             input,
             cache,
+            ordering,
             halo_preceding,
             halo_following,
             state: Arc::new(Mutex::new(State {
@@ -154,9 +161,18 @@ impl ExecutionPlan for RangeRepartitionExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             children.swap_remove(0),
+            self.ordering.clone(),
             self.halo_preceding,
             self.halo_following,
         )))
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![Some(OrderingRequirements::from(self.ordering.clone()))]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
     }
 
     fn execute(

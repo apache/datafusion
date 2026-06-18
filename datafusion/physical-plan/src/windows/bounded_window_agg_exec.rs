@@ -97,6 +97,11 @@ pub struct BoundedWindowAggExec {
     cache: Arc<PlanProperties>,
     /// If `can_rerepartition` is false, partition_keys is always empty.
     can_repartition: bool,
+    /// When true, `required_input_distribution()` returns
+    /// `UnspecifiedDistribution` instead of `SinglePartition`, so the operator
+    /// can run per-partition over a range-partitioned input (with halo).
+    /// Set by `ParallelWindow` optimizer rule; never round-trips through proto.
+    parallel_aware: bool,
 }
 
 impl BoundedWindowAggExec {
@@ -137,7 +142,14 @@ impl BoundedWindowAggExec {
             ordered_partition_by_indices,
             cache: Arc::new(cache),
             can_repartition,
+            parallel_aware: false,
         })
+    }
+
+    /// Opt this BWAG into parallel-aware mode. See `parallel_aware` field.
+    pub fn with_parallel_aware(mut self, value: bool) -> Self {
+        self.parallel_aware = value;
+        self
     }
 
     /// Window expressions
@@ -331,6 +343,9 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        if self.parallel_aware {
+            return vec![Distribution::UnspecifiedDistribution];
+        }
         if self.partition_keys().is_empty() {
             debug!("No partition defined for BoundedWindowAggExec!!!");
             vec![Distribution::SinglePartition]
@@ -348,12 +363,15 @@ impl ExecutionPlan for BoundedWindowAggExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         check_if_same_properties!(self, children);
-        Ok(Arc::new(BoundedWindowAggExec::try_new(
-            self.window_expr.clone(),
-            Arc::clone(&children[0]),
-            self.input_order_mode.clone(),
-            self.can_repartition,
-        )?))
+        Ok(Arc::new(
+            BoundedWindowAggExec::try_new(
+                self.window_expr.clone(),
+                Arc::clone(&children[0]),
+                self.input_order_mode.clone(),
+                self.can_repartition,
+            )?
+            .with_parallel_aware(self.parallel_aware),
+        ))
     }
 
     fn execute(

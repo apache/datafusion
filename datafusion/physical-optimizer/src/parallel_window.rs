@@ -16,25 +16,35 @@
 // under the License.
 
 //! Parallelize bounded RANGE-frame window functions that have an ORDER BY
-//! but no PARTITION BY by inserting a `RangeRepartitionExec` between the
-//! window's `SortPreservingMergeExec`/`SortExec` chain and its child sort.
+//! but no PARTITION BY by re-shaping the plan above the window's input.
 //!
-//! This rule's responsibilities are now narrow: detect the eligible
-//! window shape, pull the halo distances out of the window frame, and
-//! wrap the per-partition `SortExec` with a `RangeRepartitionExec`
-//! carrying those halo values. All boundary / global-extremes logic
-//! lives in `RangeRepartitionExec`'s coordinator and runs against
-//! runtime stats rather than plan-time `Statistics`.
+//! Runs *before* `EnsureRequirements`. For each eligible
+//! `BoundedWindowAggExec`, this rule:
+//!  - inserts a `SortExec(preserve_partitioning=true)` on the ORDER BY
+//!    key above the window's existing input;
+//!  - inserts a `RangeRepartitionExec` carrying the halo distances above
+//!    that sort;
+//!  - rebuilds the `BoundedWindowAggExec` on top of the result with
+//!    `parallel_aware = true`, so its `required_input_distribution()`
+//!    returns `UnspecifiedDistribution` instead of `SinglePartition` —
+//!    which is what would otherwise force `EnsureRequirements` to insert
+//!    a `SortPreservingMergeExec` and collapse our parallelism.
+//!
+//! By owning the structural decisions before `EnsureRequirements` runs,
+//! this rule avoids the post-hoc surgery of stripping an inserted
+//! `SortPreservingMergeExec`. All boundary / global-extremes logic lives
+//! in `RangeRepartitionExec`'s coordinator and runs against runtime
+//! stats rather than plan-time `Statistics`.
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
+use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::range_repartition::RangeRepartitionExec;
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::BoundedWindowAggExec;
 use log::info;
 use std::sync::Arc;
@@ -66,15 +76,34 @@ impl PhysicalOptimizerRule for ParallelWindow {
                 "ParallelWindow: candidate BoundedWindowAggExec (RANGE frame, no PARTITION BY); \
                  halo: {halo_preceding} preceding, {halo_following} following"
             );
-            // Descend through whatever EnsureRequirements stacked on top of
-            // the sort (typically SortPreservingMergeExec) until we find the
-            // SortExec, and wrap it with RangeRepartitionExec(halo…).
-            let new_child = wrap_first_sort_descendant(
-                Arc::clone(&node.children()[0]),
+            // `candidate_halo` already verified order_by.len()==1.
+            let sort_key = window.window_expr()[0].order_by()[0].clone();
+            let lex = LexOrdering::new(vec![sort_key])
+                .expect("candidate_halo guarantees one sort key");
+            let original_input = Arc::clone(&node.children()[0]);
+            // Don't pre-insert a SortExec; RangeRepartitionExec now declares
+            // its required input ordering, so EnsureRequirements will plant
+            // the pipeline-breaking sort beneath us. Doing both would just
+            // produce a redundant SortExec that the optimizer collapses.
+            let range = Arc::new(RangeRepartitionExec::new(
+                original_input,
+                lex,
                 halo_preceding,
                 halo_following,
-            )?;
-            let new_window = Arc::clone(&node).with_new_children(vec![new_child])?;
+            ));
+            // `parallel_aware = true` flips BWAG's required_input_distribution
+            // to UnspecifiedDistribution, so EnsureRequirements won't wrap
+            // us in an SPM. `can_repartition` is vacuous because
+            // candidate_halo already required partition_keys empty.
+            let new_window = Arc::new(
+                BoundedWindowAggExec::try_new(
+                    window.window_expr().to_vec(),
+                    range,
+                    window.input_order_mode.clone(),
+                    true,
+                )?
+                .with_parallel_aware(true),
+            ) as Arc<dyn ExecutionPlan>;
             Ok(Transformed::yes(new_window))
         })?;
         Ok(out.data)
@@ -109,34 +138,6 @@ fn candidate_halo(window: &BoundedWindowAggExec) -> Option<(i64, i64)> {
         return None;
     }
     i64_halo(&frame.start_bound, &frame.end_bound)
-}
-
-/// Walk down through single-child operators until we hit a `SortExec`;
-/// replace it in place with `RangeRepartitionExec` wrapping the same
-/// `SortExec`, and rebuild the chain back up. If no `SortExec` is found,
-/// leave the subtree alone.
-fn wrap_first_sort_descendant(
-    node: Arc<dyn ExecutionPlan>,
-    halo_preceding: i64,
-    halo_following: i64,
-) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-    if node.downcast_ref::<SortExec>().is_some() {
-        return Ok(Arc::new(RangeRepartitionExec::new(
-            node,
-            halo_preceding,
-            halo_following,
-        )));
-    }
-    let children = node.children();
-    if children.len() != 1 {
-        return Ok(node);
-    }
-    let new_child = wrap_first_sort_descendant(
-        Arc::clone(children[0]),
-        halo_preceding,
-        halo_following,
-    )?;
-    node.with_new_children(vec![new_child])
 }
 
 /// Extract `(halo_preceding, halo_following)` in order-key units from a
