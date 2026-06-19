@@ -29,38 +29,86 @@ use std::hash::{Hash, Hasher};
 use super::result::build_in_list_result;
 use super::static_filter::{StaticFilter, handle_dictionary};
 
+pub(super) trait BitmapStorage: Send + Sync {
+    fn new_zeroed() -> Self;
+    fn set_bit(&mut self, index: usize);
+    fn get_bit(&self, index: usize) -> bool;
+}
+
+impl BitmapStorage for [u64; 4] {
+    #[inline]
+    fn new_zeroed() -> Self {
+        [0u64; 4]
+    }
+    #[inline]
+    fn set_bit(&mut self, index: usize) {
+        self[index / 64] |= 1u64 << (index % 64);
+    }
+    #[inline(always)]
+    fn get_bit(&self, index: usize) -> bool {
+        (self[index / 64] >> (index % 64)) & 1 != 0
+    }
+}
+
+impl BitmapStorage for Box<[u64; 1024]> {
+    #[inline]
+    fn new_zeroed() -> Self {
+        Box::new([0u64; 1024])
+    }
+    #[inline]
+    fn set_bit(&mut self, index: usize) {
+        self[index / 64] |= 1u64 << (index % 64);
+    }
+    #[inline(always)]
+    fn get_bit(&self, index: usize) -> bool {
+        (self[index / 64] >> (index % 64)) & 1 != 0
+    }
+}
+
+pub(super) trait BitmapFilterType:
+    ArrowPrimitiveType + Send + Sync + 'static
+{
+    type Storage: BitmapStorage;
+}
+
+impl BitmapFilterType for UInt8Type {
+    type Storage = [u64; 4];
+}
+
+impl BitmapFilterType for UInt16Type {
+    type Storage = Box<[u64; 1024]>;
+}
+
 /// Bitmap filter for O(1) set membership via single bit test.
 ///
-/// `UInt8` has only 256 possible values, so the filter stores membership in a
-/// 256-bit bitmap instead of using a hash table.
-pub(super) struct UInt8BitmapFilter {
+/// Small integer domains can store membership in a fixed-size bitmap instead
+/// of using a hash table.
+pub(super) struct BitmapFilter<T: BitmapFilterType> {
     null_count: usize,
-    bits: [u64; 4],
+    bits: T::Storage,
 }
 
-impl UInt8BitmapFilter {
+impl<T> BitmapFilter<T>
+where
+    T: BitmapFilterType,
+{
     pub(super) fn try_new(in_array: &ArrayRef) -> Result<Self> {
-        let prim_array = in_array.as_primitive_opt::<UInt8Type>().ok_or_else(|| {
-            exec_datafusion_err!("UInt8BitmapFilter: expected UInt8 array")
+        let prim_array = in_array.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!("BitmapFilter: expected {} array", T::DATA_TYPE)
         })?;
-        let mut bits = [0u64; 4];
-        let mut set_bit = |v: u8| {
-            let index = usize::from(v);
-            bits[index / 64] |= 1u64 << (index % 64);
-        };
-
+        let mut bits = T::Storage::new_zeroed();
         let values = prim_array.values();
         match prim_array.nulls() {
             None => {
                 for &v in values {
-                    set_bit(v);
+                    bits.set_bit(v.as_usize());
                 }
             }
             Some(nulls) => {
                 for i in
                     BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
                 {
-                    set_bit(values[i]);
+                    bits.set_bit(values[i].as_usize());
                 }
             }
         }
@@ -71,96 +119,23 @@ impl UInt8BitmapFilter {
     }
 
     #[inline(always)]
-    fn check(&self, needle: u8) -> bool {
-        let index = needle as usize;
-        (self.bits[index / 64] >> (index % 64)) & 1 != 0
+    fn check(&self, needle: T::Native) -> bool {
+        self.bits.get_bit(needle.as_usize())
     }
 }
 
-impl StaticFilter for UInt8BitmapFilter {
+impl<T> StaticFilter for BitmapFilter<T>
+where
+    T: BitmapFilterType,
+{
     fn null_count(&self) -> usize {
         self.null_count
     }
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
         handle_dictionary!(self, v, negated);
-        let v = v.as_primitive_opt::<UInt8Type>().ok_or_else(|| {
-            exec_datafusion_err!("UInt8BitmapFilter: expected UInt8 array")
-        })?;
-        let input_values = v.values();
-        Ok(build_in_list_result(
-            v.len(),
-            v.nulls(),
-            self.null_count > 0,
-            negated,
-            #[inline(always)]
-            |i| {
-                // SAFETY: `build_in_list_result` invokes this closure for
-                // indices in `0..v.len()`, which matches `input_values.len()`.
-                let needle = unsafe { *input_values.get_unchecked(i) };
-                self.check(needle)
-            },
-        ))
-    }
-}
-
-/// Bitmap filter for O(1) `UInt16` set membership via single bit test.
-///
-/// `UInt16` has 65,536 possible values, so the filter stores membership in an
-/// 8 KiB heap-allocated bitmap instead of using a hash table.
-pub(super) struct UInt16BitmapFilter {
-    null_count: usize,
-    bits: Box<[u64; 1024]>,
-}
-
-impl UInt16BitmapFilter {
-    pub(super) fn try_new(in_array: &ArrayRef) -> Result<Self> {
-        let prim_array = in_array.as_primitive_opt::<UInt16Type>().ok_or_else(|| {
-            exec_datafusion_err!("UInt16BitmapFilter: expected UInt16 array")
-        })?;
-        let mut bits = Box::new([0u64; 1024]);
-        let mut set_bit = |v: u16| {
-            let index = usize::from(v);
-            bits[index / 64] |= 1u64 << (index % 64);
-        };
-
-        let values = prim_array.values();
-        match prim_array.nulls() {
-            None => {
-                for &v in values {
-                    set_bit(v);
-                }
-            }
-            Some(nulls) => {
-                for i in
-                    BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
-                {
-                    set_bit(values[i]);
-                }
-            }
-        }
-        Ok(Self {
-            null_count: prim_array.null_count(),
-            bits,
-        })
-    }
-
-    #[inline(always)]
-    fn check(&self, needle: u16) -> bool {
-        let index = needle as usize;
-        (self.bits[index / 64] >> (index % 64)) & 1 != 0
-    }
-}
-
-impl StaticFilter for UInt16BitmapFilter {
-    fn null_count(&self) -> usize {
-        self.null_count
-    }
-
-    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        handle_dictionary!(self, v, negated);
-        let v = v.as_primitive_opt::<UInt16Type>().ok_or_else(|| {
-            exec_datafusion_err!("UInt16BitmapFilter: expected UInt16 array")
+        let v = v.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!("BitmapFilter: expected {} array", T::DATA_TYPE)
         })?;
         let input_values = v.values();
         Ok(build_in_list_result(
@@ -406,7 +381,7 @@ mod tests {
     #[test]
     fn bitmap_filter_u8_handles_nulls() -> Result<()> {
         let haystack: ArrayRef = Arc::new(UInt8Array::from(vec![Some(1), None, Some(3)]));
-        let filter = UInt8BitmapFilter::try_new(&haystack)?;
+        let filter = BitmapFilter::<UInt8Type>::try_new(&haystack)?;
         let needles = UInt8Array::from(vec![Some(1), Some(2), None, Some(3)]);
 
         assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])?;
@@ -421,7 +396,7 @@ mod tests {
     #[test]
     fn bitmap_filter_u8_handles_dictionary_needles() -> Result<()> {
         let haystack: ArrayRef = Arc::new(UInt8Array::from(vec![Some(1), None, Some(3)]));
-        let filter = UInt8BitmapFilter::try_new(&haystack)?;
+        let filter = BitmapFilter::<UInt8Type>::try_new(&haystack)?;
 
         let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
         let values = Arc::new(UInt8Array::from(vec![Some(1), Some(2), Some(3)]));
@@ -438,7 +413,7 @@ mod tests {
             Some(1024),
             Some(u16::MAX),
         ]));
-        let filter = UInt16BitmapFilter::try_new(&haystack)?;
+        let filter = BitmapFilter::<UInt16Type>::try_new(&haystack)?;
         let needles =
             UInt16Array::from(vec![Some(0), Some(1), Some(1024), Some(u16::MAX), None]);
 
