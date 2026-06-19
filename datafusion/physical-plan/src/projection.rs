@@ -33,6 +33,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, FilterRemapper, PushedDownPredicate,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
+use crate::statistics::StatisticsArgs;
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr, check_if_same_properties};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -348,9 +349,10 @@ impl ExecutionPlan for ProjectionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let input_stats =
-            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let input_stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.input, args.partition())?,
+        );
         let output_schema = self.schema();
         Ok(Arc::new(
             self.projector
@@ -1184,6 +1186,7 @@ mod tests {
     use crate::common::collect;
 
     use crate::filter_pushdown::PushedDown;
+    use crate::statistics::StatisticsArgs;
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
@@ -1374,7 +1377,9 @@ mod tests {
 
         let projection = ProjectionExec::try_new(exprs, input).unwrap();
 
-        let stats = projection.partition_statistics(None).unwrap();
+        let stats = projection
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap();
 
         assert_eq!(stats.num_rows, Precision::Exact(10));
         assert_eq!(

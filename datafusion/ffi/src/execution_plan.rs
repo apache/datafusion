@@ -24,7 +24,7 @@ use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::MetricsSet;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
 };
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
@@ -210,7 +210,7 @@ unsafe extern "C" fn partition_statistics_fn_wrapper(
 ) -> FFI_Result<SVec<u8>> {
     let partition: Option<usize> = partition.into();
     plan.inner()
-        .partition_statistics(partition)
+        .statistics_with_args(&StatisticsArgs::new().with_partition(partition))
         .map(|stats| SVec::from(serialize_statistics(stats.as_ref()).as_slice()))
         .into()
 }
@@ -556,9 +556,9 @@ pub mod tests {
             self.metrics.clone()
         }
 
-        fn partition_statistics(
+        fn statistics_with_args(
             &self,
-            _partition: Option<usize>,
+            _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             Ok(Arc::new(self.statistics.clone().unwrap_or_else(|| {
                 Statistics::new_unknown(self.props.eq_properties.schema())
@@ -672,27 +672,34 @@ pub mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_ffi_execution_plan_partition_statistics_round_trip() -> Result<()> {
+    /// Build an `EmptyExec` carrying `statistics`, then export it across the
+    /// (mock) FFI boundary and return the resulting foreign plan.
+    #[cfg(test)]
+    fn export_empty_exec_over_ffi(
+        schema: &arrow::datatypes::SchemaRef,
+        statistics: Option<Statistics>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut plan = EmptyExec::new(Arc::clone(schema));
+        if let Some(statistics) = statistics {
+            plan = plan.with_statistics(statistics);
+        }
+        let mut local = FFI_ExecutionPlan::new(Arc::new(plan), None);
+        local.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign: Arc<dyn ExecutionPlan> = (&local).try_into()?;
+        Ok(foreign)
+    }
+
+    /// Schema and a fully-populated `Statistics` (including `ScalarValue`-typed
+    /// min/max) shared by the FFI statistics round-trip tests.
+    #[cfg(test)]
+    fn stats_round_trip_fixture() -> (arrow::datatypes::SchemaRef, Statistics) {
         use datafusion_common::stats::Precision;
         use datafusion_common::{ColumnStatistics, ScalarValue};
 
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Int32, true),
         ]));
-
-        // Plans without explicit statistics return Statistics::new_unknown across
-        // the boundary.
-        let bare_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let mut bare_local = FFI_ExecutionPlan::new(bare_plan, None);
-        bare_local.library_marker_id = crate::mock_foreign_marker_id;
-        let bare_foreign: Arc<dyn ExecutionPlan> = (&bare_local).try_into()?;
-        let bare_stats = bare_foreign.partition_statistics(None)?;
-        assert_eq!(bare_stats.as_ref(), &Statistics::new_unknown(&schema));
-
-        // Plans with statistics round-trip them faithfully, including
-        // ScalarValue-typed min/max.
-        let original_stats = Statistics {
+        let statistics = Statistics {
             num_rows: Precision::Exact(7),
             total_byte_size: Precision::Inexact(128),
             column_statistics: vec![ColumnStatistics {
@@ -704,18 +711,67 @@ pub mod tests {
                 byte_size: Precision::Exact(28),
             }],
         };
-        let stats_plan = Arc::new(
-            EmptyExec::new(Arc::clone(&schema)).with_statistics(original_stats.clone()),
+        (schema, statistics)
+    }
+
+    /// Statistics survive an FFI round trip when queried through the
+    /// **deprecated** `partition_statistics` entry point on the foreign plan.
+    #[test]
+    #[expect(deprecated)]
+    fn test_ffi_execution_plan_partition_statistics_round_trip() -> Result<()> {
+        let (schema, original_stats) = stats_round_trip_fixture();
+
+        // A plan without explicit statistics reports new_unknown.
+        let bare = export_empty_exec_over_ffi(&schema, None)?;
+        assert_eq!(
+            bare.partition_statistics(None)?.as_ref(),
+            &Statistics::new_unknown(&schema)
         );
-        let mut stats_local = FFI_ExecutionPlan::new(stats_plan, None);
-        stats_local.library_marker_id = crate::mock_foreign_marker_id;
-        let stats_foreign: Arc<dyn ExecutionPlan> = (&stats_local).try_into()?;
 
-        let observed = stats_foreign.partition_statistics(None)?;
-        assert_eq!(observed.as_ref(), &original_stats);
+        // A plan with statistics round-trips them for overall and per-partition queries.
+        let with_stats =
+            export_empty_exec_over_ffi(&schema, Some(original_stats.clone()))?;
+        assert_eq!(
+            with_stats.partition_statistics(None)?.as_ref(),
+            &original_stats
+        );
+        assert_eq!(
+            with_stats.partition_statistics(Some(1))?.as_ref(),
+            &original_stats
+        );
 
-        let observed_partition = stats_foreign.partition_statistics(Some(1))?;
-        assert_eq!(observed_partition.as_ref(), &original_stats);
+        Ok(())
+    }
+
+    /// Same round trip as
+    /// [`test_ffi_execution_plan_partition_statistics_round_trip`], but queried
+    /// through the **new** `statistics_with_args` entry point.
+    #[test]
+    fn test_ffi_execution_plan_statistics_with_args_round_trip() -> Result<()> {
+        let (schema, original_stats) = stats_round_trip_fixture();
+
+        // A plan without explicit statistics reports new_unknown.
+        let bare = export_empty_exec_over_ffi(&schema, None)?;
+        assert_eq!(
+            bare.statistics_with_args(&StatisticsArgs::new())?.as_ref(),
+            &Statistics::new_unknown(&schema)
+        );
+
+        // A plan with statistics round-trips them for overall and per-partition queries.
+        let with_stats =
+            export_empty_exec_over_ffi(&schema, Some(original_stats.clone()))?;
+        assert_eq!(
+            with_stats
+                .statistics_with_args(&StatisticsArgs::new())?
+                .as_ref(),
+            &original_stats
+        );
+        assert_eq!(
+            with_stats
+                .statistics_with_args(&StatisticsArgs::new().with_partition(Some(1)))?
+                .as_ref(),
+            &original_stats
+        );
 
         Ok(())
     }
