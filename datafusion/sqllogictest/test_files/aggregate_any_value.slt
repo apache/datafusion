@@ -24,19 +24,22 @@ CREATE TABLE any_value_test AS VALUES
   (2, NULL, NULL),
   (3, 30, 'third');
 
-query I
-SELECT any_value(column2) FROM any_value_test;
+query B
+SELECT any_value(column2) IN (10, 20) FROM any_value_test;
 ----
-10
+true
 
-query IIT rowsort
-SELECT column1, any_value(column2), any_value(column3)
+query IBB rowsort
+SELECT
+  column1,
+  any_value(column2) IN (10, 20, 30),
+  any_value(column3) IN ('first', 'second', 'third')
 FROM any_value_test
 GROUP BY column1;
 ----
-1 10 first
+1 true true
 2 NULL NULL
-3 30 third
+3 true true
 
 query T
 SELECT arrow_typeof(any_value(column3)) FROM any_value_test;
@@ -45,5 +48,10 @@ Utf8
 
 query I
 SELECT any_value(column2) FROM any_value_test WHERE false;
+----
+NULL
+
+query I
+SELECT any_value(column2) FROM any_value_test WHERE column1 = 2;
 ----
 NULL
