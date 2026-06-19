@@ -585,11 +585,10 @@ impl NullaryAccumulator {
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(|_| Ok(Box::<Self>::default()));
 
-        let udaf = AggregateUDF::from(SimpleAggregateUDF::new(
+        let udaf = AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
             name,
-            vec![],
+            Signature::nullary(Volatility::Immutable),
             DataType::Int64,
-            Volatility::Immutable,
             accumulator,
             vec![Field::new("value", DataType::Int64, true).into()],
         ));

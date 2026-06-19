@@ -28,10 +28,11 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
-    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
-    LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    ValueOrLambda, Volatility, col, create_udaf,
+    AggregateUDF, ColumnarValue, CreateIndex, DdlStatement, Expr,
+    HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, ValueOrLambda, Volatility,
+    col,
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
     lambda,
     logical_plan::LogicalPlan,
@@ -5137,14 +5138,15 @@ fn test_error_message_invalid_aggregate_function_signature() {
 
 #[test]
 fn plan_zero_argument_aggregate_udf() {
-    let state = mock_session_state().with_aggregate_function(Arc::new(create_udaf(
-        "window_start",
-        vec![],
-        Arc::new(DataType::Utf8),
-        Volatility::Immutable,
-        Arc::new(|_| panic!("dummy - not implemented")),
-        Arc::new(vec![DataType::Utf8]),
-    )));
+    let state = mock_session_state().with_aggregate_function(Arc::new(
+        AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
+            "window_start",
+            Signature::nullary(Volatility::Immutable),
+            DataType::Utf8,
+            Arc::new(|_| panic!("dummy - not implemented")),
+            vec![Field::new("value", DataType::Utf8, true).into()],
+        )),
+    ));
     let plan = logical_plan_from_state(
         "SELECT window_start()",
         &GenericDialect {},
