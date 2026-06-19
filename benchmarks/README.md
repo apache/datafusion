@@ -558,7 +558,15 @@ Test performance of end-to-end sort SQL queries. (While the `Sort` benchmark foc
 
 Sort integration benchmark runs whole table sort queries on TPCH `lineitem` table, with different characteristics. For example, different number of sort keys, different sort key cardinality, different number of payload columns, etc.
 
-If the TPCH tables have been converted as sorted on their first column (see [Sorted Conversion](#sorted-conversion)), you can use the `--sorted` flag to indicate that the input data is pre-sorted, allowing DataFusion to leverage that order during query execution.
+The `--sorted` flag does not sort or rewrite the input files. It declares that the `lineitem` Parquet input is already sorted ascending by its first column (`l_orderkey`). DataFusion can then leverage that ordering during query execution.
+
+To generate the expected TPC-H SF=1 Parquet input for this benchmark, run:
+
+```bash
+./bench.sh data tpch
+```
+
+For the `lineitem` table used by `sort-tpch`, this uses `tpchgen-cli` to generate Parquet data that is already ordered by `l_orderkey`. If you use a different input directory, only pass `--sorted` when the `lineitem` files already have that ordering.
 
 Additionally, an optional `--limit` flag is available for the sort benchmark. When specified, this flag appends a `LIMIT n` clause to the SQL query, effectively converting the query into a TopK query. Combining the `--sorted` and `--limit` options enables benchmarking of TopK queries on pre-sorted inputs.
 
@@ -578,7 +586,7 @@ See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
  cargo run --release --bin dfbench -- sort-tpch -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json' --query 2
 ```
 
-3. Run all queries as TopK queries on presorted data:
+3. Run all queries as TopK queries on already sorted data:
 
 ```bash
  cargo run --release --bin dfbench -- sort-tpch --sorted --limit 10 -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json'
@@ -598,13 +606,13 @@ In addition, topk_tpch is available from the bench.sh script:
 ./bench.sh run topk_tpch
 ```
 
-To benchmark TopK queries on pre-sorted TPC-H input, use:
+To benchmark TopK queries on TPC-H `lineitem` input ordered by `l_orderkey`, use:
 
 ```bash
 ./bench.sh run topk_sorted_tpch
 ```
 
-This runs `dfbench sort-tpch --sorted --limit 100` through the benchmark script.
+This runs `dfbench sort-tpch --sorted --limit 100` through the benchmark script, using `--sorted` to declare the existing `l_orderkey` ordering.
 
 ## IMDB
 
