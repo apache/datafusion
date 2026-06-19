@@ -31,7 +31,7 @@ use datafusion_expr::{
     ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
     HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
     LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    ValueOrLambda, Volatility, col,
+    ValueOrLambda, Volatility, col, create_udaf,
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
     lambda,
     logical_plan::LogicalPlan,
@@ -5133,6 +5133,34 @@ fn test_error_message_invalid_scalar_function_signature() {
 fn test_error_message_invalid_aggregate_function_signature() {
     assert!(error_message("select sum()").starts_with(r"Error during planning: Execution error: Function 'sum' user-defined coercion failed with: Execution error: sum function requires 1 argument, got 0"));
     assert!(error_message("select max(9, 3)").starts_with(r"Error during planning: Execution error: Function 'max' user-defined coercion failed with: Execution error: min/max was called with 2 arguments. It requires only 1"));
+}
+
+#[test]
+fn plan_zero_argument_aggregate_udf() {
+    let state = mock_session_state().with_aggregate_function(Arc::new(create_udaf(
+        "window_start",
+        vec![],
+        Arc::new(DataType::Utf8),
+        Volatility::Immutable,
+        Arc::new(|_| panic!("dummy - not implemented")),
+        Arc::new(vec![DataType::Utf8]),
+    )));
+    let plan = logical_plan_from_state(
+        "SELECT window_start()",
+        &GenericDialect {},
+        ParserOptions::default(),
+        state,
+    )
+    .unwrap();
+
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: window_start()
+      Aggregate: groupBy=[[]], aggr=[[window_start()]]
+        EmptyRelation: rows=1
+    "#
+    );
 }
 
 #[test]
