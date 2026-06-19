@@ -27,7 +27,7 @@ use std::mem::{size_of, size_of_val};
 
 use arrow::array::new_empty_array;
 use arrow::{
-    array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
+    array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
     compute::take_arrays,
     datatypes::UInt32Type,
@@ -100,6 +100,12 @@ pub struct GroupsAccumulatorAdapter {
     /// bottleneck in earlier implementations when there were many
     /// distinct groups.
     allocation_bytes: usize,
+
+    /// Whether this adapter can convert raw input rows directly to aggregate
+    /// state. Nullary aggregates do not carry a value array with the input row
+    /// cardinality, so this optimization cannot safely reconstruct one state
+    /// per input row for them.
+    supports_convert_to_state: bool,
 }
 
 struct AccumulatorState {
@@ -137,6 +143,24 @@ impl GroupsAccumulatorAdapter {
             factory: Box::new(factory),
             states: vec![],
             allocation_bytes: 0,
+            supports_convert_to_state: true,
+        }
+    }
+
+    /// Create a new adapter with explicit control over whether row-to-state
+    /// conversion is supported.
+    pub fn new_with_convert_to_state<F>(
+        factory: F,
+        supports_convert_to_state: bool,
+    ) -> Self
+    where
+        F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
+    {
+        Self {
+            factory: Box::new(factory),
+            states: vec![],
+            allocation_bytes: 0,
+            supports_convert_to_state,
         }
     }
 
@@ -196,13 +220,24 @@ impl GroupsAccumulatorAdapter {
     {
         self.make_accumulators_if_needed(total_num_groups)?;
 
-        assert_eq!(values[0].len(), group_indices.len());
+        if values.is_empty() {
+            for (idx, group_index) in group_indices.iter().enumerate() {
+                if opt_filter
+                    .is_some_and(|filter| !filter.is_valid(idx) || !filter.value(idx))
+                {
+                    continue;
+                }
+                self.states[*group_index].indices.push(idx as u32);
+            }
+        } else {
+            assert_eq!(values[0].len(), group_indices.len());
 
-        // figure out which input rows correspond to which groups.
-        // Note that self.state.indices starts empty for all groups
-        // (it is cleared out below)
-        for (idx, group_index) in group_indices.iter().enumerate() {
-            self.states[*group_index].indices.push(idx as u32);
+            // figure out which input rows correspond to which groups.
+            // Note that self.state.indices starts empty for all groups
+            // (it is cleared out below)
+            for (idx, group_index) in group_indices.iter().enumerate() {
+                self.states[*group_index].indices.push(idx as u32);
+            }
         }
 
         // groups_with_rows holds a list of group indexes that have
@@ -230,13 +265,18 @@ impl GroupsAccumulatorAdapter {
             offset_so_far += indices.len();
             offsets.push(offset_so_far);
         }
-        let batch_indices = batch_indices.into();
+        let values_and_filter = if values.is_empty() {
+            None
+        } else {
+            let batch_indices = batch_indices.into();
 
-        // reorder the values and opt_filter by batch_indices so that
-        // all values for each group are contiguous, then invoke the
-        // accumulator once per group with values
-        let values = take_arrays(values, &batch_indices, None)?;
-        let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
+            // reorder the values and opt_filter by batch_indices so that
+            // all values for each group are contiguous, then invoke the
+            // accumulator once per group with values
+            let values = take_arrays(values, &batch_indices, None)?;
+            let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
+            Some((values, opt_filter))
+        };
 
         // invoke each accumulator with the appropriate rows, first
         // pulling the input arguments for this group into their own
@@ -249,11 +289,14 @@ impl GroupsAccumulatorAdapter {
             let state = &mut self.states[group_idx];
             sizes_pre += state.size();
 
-            let values_to_accumulate = slice_and_maybe_filter(
-                &values,
-                opt_filter.as_ref().map(|f| f.as_boolean()),
-                offsets,
-            )?;
+            let values_to_accumulate = match &values_and_filter {
+                Some((values, opt_filter)) => slice_and_maybe_filter(
+                    values,
+                    opt_filter.as_ref().map(|f| f.as_boolean()),
+                    offsets,
+                )?,
+                None => vec![],
+            };
             f(state.accumulator.as_mut(), &values_to_accumulate)?;
 
             // clear out the state so they are empty for next
@@ -443,7 +486,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     }
 
     fn supports_convert_to_state(&self) -> bool {
-        true
+        self.supports_convert_to_state
     }
 }
 

@@ -621,8 +621,14 @@ pub(crate) fn create_group_accumulator(
             agg_expr.name()
         );
         let agg_expr_captured = Arc::clone(agg_expr);
+        let supports_convert_to_state = !agg_expr.all_expressions().args.is_empty();
         let factory = move || agg_expr_captured.create_accumulator();
-        Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
+        Ok(Box::new(
+            GroupsAccumulatorAdapter::new_with_convert_to_state(
+                factory,
+                supports_convert_to_state,
+            ),
+        ))
     }
 }
 

@@ -117,6 +117,24 @@ async fn test_zero_argument_udaf() {
     | 7              |
     +----------------+
     ");
+
+    let actual = execute(
+        &ctx,
+        "SELECT value, window_start() FROM t GROUP BY value ORDER BY value",
+    )
+    .await
+    .unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +-------+----------------+
+    | value | window_start() |
+    +-------+----------------+
+    | 1.0   | 7              |
+    | 2.0   | 7              |
+    | 3.0   | 7              |
+    | 5.0   | 7              |
+    +-------+----------------+
+    ");
 }
 
 /// User defined aggregate used as a window function
