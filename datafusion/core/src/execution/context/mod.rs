@@ -76,8 +76,8 @@ use datafusion_common::{
 };
 pub use datafusion_execution::TaskContext;
 use datafusion_execution::cache::cache_manager::{
-    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
-    DEFAULT_METADATA_CACHE_LIMIT,
+    DEFAULT_FILE_STATISTICS_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
+    DEFAULT_LIST_FILES_CACHE_TTL, DEFAULT_METADATA_CACHE_LIMIT,
 };
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{
@@ -103,7 +103,6 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_execution::cache::file_statistics_cache::DEFAULT_FILE_STATISTICS_MEMORY_LIMIT;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
@@ -1449,7 +1448,7 @@ impl SessionContext {
             && table_provider.table_type() == table_type
         {
             schema.deregister_table(&table)?;
-            self.invalidate_caches(&Some(table_ref.clone()), table_type)?;
+            self.invalidate_caches(&table_ref, table_type)?;
             return Ok(true);
         }
         Ok(false)
@@ -1457,7 +1456,7 @@ impl SessionContext {
 
     fn invalidate_caches(
         &self,
-        table_ref: &Option<TableReference>,
+        table_ref: &TableReference,
         table_type: TableType,
     ) -> Result<()> {
         if table_type == TableType::Base {
@@ -1943,7 +1942,7 @@ impl SessionContext {
             .deregister_table(&table);
 
         if let Ok(Some(ref table_provider)) = result {
-            self.invalidate_caches(&Some(table_ref), table_provider.table_type())?;
+            self.invalidate_caches(&table_ref, table_provider.table_type())?;
         }
 
         result

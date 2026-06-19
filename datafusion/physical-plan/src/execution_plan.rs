@@ -47,6 +47,7 @@ use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
@@ -496,9 +497,11 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     }
 
     /// Returns statistics for a specific partition of this `ExecutionPlan` node.
-    /// If statistics are not available, should return [`Statistics::new_unknown`]
-    /// (the default), not an error.
-    /// If `partition` is `None`, it returns statistics for the entire plan.
+    ///
+    /// Deprecated: use [`Self::statistics_with_args`] instead,
+    /// which accepts a [`StatisticsArgs`] carrying pre-computed child
+    /// statistics.
+    #[deprecated(since = "55.0.0", note = "Use statistics_with_args instead")]
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(idx) = partition {
             // Validate partition index
@@ -511,6 +514,21 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
             );
         }
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
+    }
+
+    /// Returns statistics for a specific partition of this `ExecutionPlan` node.
+    /// If statistics are not available, should return [`Statistics::new_unknown`]
+    /// (the default), not an error.
+    /// If `partition` is `None`, it returns statistics for all partitions.
+    ///
+    /// [`StatisticsArgs`] carries the partition index and a shared cache.
+    /// Create one with [`StatisticsArgs::new`] and pass it to this method.
+    ///
+    /// [`StatisticsArgs`]: crate::statistics::StatisticsArgs
+    /// [`StatisticsArgs::new`]: crate::statistics::StatisticsArgs::new
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        #[expect(deprecated)]
+        self.partition_statistics(args.partition())
     }
 
     /// Returns `true` if a limit can be safely pushed down through this
@@ -1639,9 +1657,9 @@ mod tests {
             unimplemented!()
         }
 
-        fn partition_statistics(
+        fn statistics_with_args(
             &self,
-            _partition: Option<usize>,
+            _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }
@@ -1701,9 +1719,9 @@ mod tests {
             unimplemented!()
         }
 
-        fn partition_statistics(
+        fn statistics_with_args(
             &self,
-            _partition: Option<usize>,
+            _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }

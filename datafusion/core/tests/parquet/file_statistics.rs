@@ -29,11 +29,11 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_common::DFSchema;
 use datafusion_common::stats::Precision;
-use datafusion_execution::cache::DefaultListFilesCache;
 use datafusion_execution::cache::cache_manager::{
-    CacheManagerConfig, FileStatisticsCache,
+    CacheManagerConfig, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, FileStatisticsCache, ListFilesCache,
 };
-use datafusion_execution::cache::file_statistics_cache::DefaultFileStatisticsCache;
+use datafusion_execution::cache::default_cache::DefaultCache;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{Expr, col, lit};
@@ -44,6 +44,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -63,7 +64,9 @@ async fn check_stats_precision_with_filter_pushdown() {
     // Scan without filter, stats are exact
     let exec = table.scan(&state, None, &[], None).await.unwrap();
     assert_eq!(
-        exec.partition_statistics(None).unwrap().num_rows,
+        exec.statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
         Precision::Exact(8),
         "Stats without filter should be exact"
     );
@@ -95,7 +98,10 @@ async fn check_stats_precision_with_filter_pushdown() {
     );
     // Scan with filter pushdown, stats are inexact
     assert_eq!(
-        optimized_exec.partition_statistics(None).unwrap().num_rows,
+        optimized_exec
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
         Precision::Inexact(8),
         "Stats after filter pushdown should be inexact"
     );
@@ -126,11 +132,17 @@ async fn load_table_stats_with_session_level_cache() {
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
 
     assert_eq!(
-        exec1.partition_statistics(None).unwrap().num_rows,
+        exec1
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
         Precision::Exact(8)
     );
     assert_eq!(
-        exec1.partition_statistics(None).unwrap().total_byte_size,
+        exec1
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .total_byte_size,
         // Byte size is absent because we cannot estimate the output size
         // of the Arrow data since there are variable length columns.
         Precision::Absent,
@@ -142,11 +154,17 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(get_static_cache_size(&state2), 0);
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
     assert_eq!(
-        exec2.partition_statistics(None).unwrap().num_rows,
+        exec2
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
         Precision::Exact(8)
     );
     assert_eq!(
-        exec2.partition_statistics(None).unwrap().total_byte_size,
+        exec2
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .total_byte_size,
         // Absent because the data contains variable length columns
         Precision::Absent,
     );
@@ -157,11 +175,17 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(get_static_cache_size(&state1), 1);
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
     assert_eq!(
-        exec3.partition_statistics(None).unwrap().num_rows,
+        exec3
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
         Precision::Exact(8)
     );
     assert_eq!(
-        exec3.partition_statistics(None).unwrap().total_byte_size,
+        exec3
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap()
+            .total_byte_size,
         // Absent because the data contains variable length columns
         Precision::Absent,
     );
@@ -241,7 +265,7 @@ async fn list_files_with_session_level_cache() {
 
 async fn get_listing_table(
     table_path: &ListingTableUrl,
-    static_cache: Option<Arc<dyn FileStatisticsCache>>,
+    static_cache: Option<Arc<FileStatisticsCache>>,
     opt: &ListingOptions,
 ) -> ListingTable {
     let schema = opt
@@ -259,14 +283,13 @@ async fn get_listing_table(
         .with_cache(static_cache)
 }
 
-fn get_cache_runtime_state() -> (
-    Arc<DefaultFileStatisticsCache>,
-    Arc<DefaultListFilesCache>,
-    SessionState,
-) {
+fn get_cache_runtime_state()
+-> (Arc<FileStatisticsCache>, Arc<ListFilesCache>, SessionState) {
     let cache_config = CacheManagerConfig::default();
-    let file_static_cache = Arc::new(DefaultFileStatisticsCache::default());
-    let list_file_cache = Arc::new(DefaultListFilesCache::default());
+    let file_static_cache =
+        Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
+    let list_file_cache =
+        Arc::new(DefaultCache::new(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT));
 
     let cache_config = cache_config
         .with_file_statistics_cache(Some(file_static_cache.clone()))

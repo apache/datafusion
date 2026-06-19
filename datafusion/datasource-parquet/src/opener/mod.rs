@@ -31,7 +31,7 @@ use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
 use crate::{
     Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
-    ParquetVirtualColumn, apply_file_schema_type_coercions,
+    ParquetRowSelection, ParquetVirtualColumn, apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
@@ -76,7 +76,7 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
 
 /// Morselizer-level state for virtual columns, precomputed once per scan
 /// partition so each file skips the validator walks, `null_replacements`
@@ -1082,7 +1082,7 @@ impl FiltersPreparedParquetOpen {
         let mut row_groups = RowGroupAccessPlanFilter::new(create_initial_plan(
             &prepared.file_name,
             &prepared.extensions,
-            rg_metadata.len(),
+            rg_metadata,
         )?);
 
         // If there is a range restricting what parts of the file to read
@@ -1533,29 +1533,44 @@ fn constant_value_from_stats(
 
 /// Return the initial [`ParquetAccessPlan`]
 ///
-/// If the user has supplied one as an extension, use that
-/// otherwise return a plan that scans all row groups
+/// If the user has supplied a parquet access extension, use that; otherwise
+/// return a plan that scans all row groups.
 ///
-/// Returns an error if an invalid `ParquetAccessPlan` is provided
+/// Returns an error if an invalid parquet access extension is provided.
 ///
 /// Note: file_name is only used for error messages
 fn create_initial_plan(
     file_name: &str,
     extensions: &datafusion_datasource::FileExtensions,
-    row_group_count: usize,
+    rg_metadata: &[RowGroupMetaData],
 ) -> Result<ParquetAccessPlan> {
-    if let Some(access_plan) = extensions.get::<ParquetAccessPlan>() {
-        let plan_len = access_plan.len();
-        if plan_len != row_group_count {
-            return exec_err!(
-                "Invalid ParquetAccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
-            );
+    let row_group_count = rg_metadata.len();
+    match (
+        extensions.get::<ParquetAccessPlan>(),
+        extensions.get::<ParquetRowSelection>(),
+    ) {
+        (Some(_), Some(_)) => exec_err!(
+            "Invalid parquet access extensions for {file_name}. \
+            Specify either ParquetAccessPlan or ParquetRowSelection, not both"
+        ),
+        (Some(access_plan), None) => {
+            let plan_len = access_plan.len();
+            if plan_len != row_group_count {
+                return exec_err!(
+                    "Invalid ParquetAccessPlan for {file_name}. Specified {plan_len} row groups, but file has {row_group_count}"
+                );
+            }
+            Ok(access_plan.clone())
         }
-        return Ok(access_plan.clone());
+        (None, Some(row_selection)) => {
+            ParquetAccessPlan::try_new_from_overall_row_selection(
+                row_selection.selection().clone(),
+                rg_metadata,
+            )
+        }
+        // default to scanning all row groups
+        (None, None) => Ok(ParquetAccessPlan::new_all(row_group_count)),
     }
-
-    // default to scanning all row groups
-    Ok(ParquetAccessPlan::new_all(row_group_count))
 }
 
 /// Build a page pruning predicate from an optional predicate expression.
@@ -1637,19 +1652,21 @@ mod test {
     use super::{ConstantColumns, ParquetMorselizer, constant_columns_from_stats};
     use crate::{
         CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
-        ParquetFileReaderFactory, RowGroupAccess,
+        ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
     };
     use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
-        ColumnStatistics, ScalarValue, Statistics, internal_err, record_batch,
-        stats::Precision,
+        ColumnStatistics, ScalarValue, Statistics, assert_contains, internal_err,
+        record_batch, stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};
-    use datafusion_execution::cache::DefaultFilesMetadataCache;
-    use datafusion_execution::cache::cache_manager::FileMetadataCache;
+    use datafusion_execution::cache::cache_manager::{
+        CachedFileMetadataEntry, FileMetadataCache,
+    };
+    use datafusion_execution::cache::default_cache::DefaultCache;
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
@@ -1665,7 +1682,9 @@ mod test {
     use futures::stream::BoxStream;
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
+    use parquet::file::metadata::ColumnChunkMetaData;
     use parquet::file::properties::WriterProperties;
+    use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
     use std::collections::VecDeque;
     use std::sync::Arc;
 
@@ -1693,6 +1712,87 @@ mod test {
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
         preserve_order: bool,
+    }
+
+    #[test]
+    fn create_initial_plan_from_parquet_row_selection_extension() {
+        use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+
+        let mut extensions = datafusion_datasource::FileExtensions::new();
+        extensions.insert(ParquetRowSelection::new(RowSelection::from(vec![
+            RowSelector::select(10),
+            RowSelector::skip(20),
+            RowSelector::select(30),
+        ])));
+        let rg_metadata = row_group_metadata(&[10, 20, 30]);
+
+        let access_plan =
+            create_initial_plan("test.parquet", &extensions, &rg_metadata).unwrap();
+
+        assert_eq!(
+            access_plan,
+            ParquetAccessPlan::new(vec![
+                RowGroupAccess::Scan,
+                RowGroupAccess::Skip,
+                RowGroupAccess::Scan,
+            ])
+        );
+    }
+
+    #[test]
+    fn create_initial_plan_rejects_multiple_access_extensions() {
+        use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+
+        let mut extensions = datafusion_datasource::FileExtensions::new();
+        extensions.insert(ParquetAccessPlan::new_all(3));
+        extensions.insert(ParquetRowSelection::new(RowSelection::from(vec![
+            RowSelector::select(60),
+        ])));
+        let rg_metadata = row_group_metadata(&[10, 20, 30]);
+
+        let err = create_initial_plan("test.parquet", &extensions, &rg_metadata)
+            .unwrap_err()
+            .to_string();
+
+        assert_contains!(
+            err,
+            "Specify either ParquetAccessPlan or ParquetRowSelection, not both"
+        );
+    }
+
+    fn row_group_metadata(row_counts: &[i64]) -> Vec<RowGroupMetaData> {
+        let schema_descr = test_schema_descr();
+
+        row_counts
+            .iter()
+            .map(|num_rows| {
+                let column = ColumnChunkMetaData::builder(schema_descr.column(0))
+                    .set_num_values(*num_rows)
+                    .build()
+                    .unwrap();
+
+                RowGroupMetaData::builder(Arc::clone(&schema_descr))
+                    .set_num_rows(*num_rows)
+                    .set_column_metadata(vec![column])
+                    .build()
+                    .unwrap()
+            })
+            .collect()
+    }
+
+    fn test_schema_descr() -> SchemaDescPtr {
+        use parquet::basic::{LogicalType, Type as PhysicalType};
+        use parquet::schema::types::Type as SchemaType;
+
+        let field = SchemaType::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
+            .with_logical_type(Some(LogicalType::String))
+            .build()
+            .unwrap();
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![Arc::new(field)])
+            .build()
+            .unwrap();
+        Arc::new(SchemaDescriptor::new(Arc::new(schema)))
     }
 
     impl ParquetMorselizerBuilder {
@@ -2957,8 +3057,9 @@ mod test {
         use parquet::file::properties::WriterProperties;
 
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        let metadata_cache = Arc::new(DefaultFilesMetadataCache::new(64 * 1024 * 1024))
-            as Arc<dyn FileMetadataCache>;
+        let metadata_cache: Arc<FileMetadataCache> = Arc::new(
+            DefaultCache::<Path, CachedFileMetadataEntry>::new(64 * 1024 * 1024),
+        );
         let values: Vec<i32> = (1..=100).collect();
         let batch = record_batch!((
             "a",

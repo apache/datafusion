@@ -21,6 +21,7 @@
 use crate::ParquetFileMetrics;
 use crate::metadata::DFParquetMetadata;
 use bytes::Bytes;
+use datafusion_common::HashMap;
 use datafusion_datasource::PartitionedFile;
 use datafusion_execution::cache::cache_manager::FileMetadata;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
@@ -32,7 +33,6 @@ use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::file::metadata::ParquetMetaData;
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -183,13 +183,13 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 #[derive(Debug)]
 pub struct CachedParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
-    metadata_cache: Arc<dyn FileMetadataCache>,
+    metadata_cache: Arc<FileMetadataCache>,
 }
 
 impl CachedParquetFileReaderFactory {
     pub fn new(
         store: Arc<dyn ObjectStore>,
-        metadata_cache: Arc<dyn FileMetadataCache>,
+        metadata_cache: Arc<FileMetadataCache>,
     ) -> Self {
         Self {
             store,
@@ -242,7 +242,7 @@ pub struct CachedParquetFileReader {
     store: Arc<dyn ObjectStore>,
     pub inner: ParquetObjectReader,
     partitioned_file: PartitionedFile,
-    metadata_cache: Arc<dyn FileMetadataCache>,
+    metadata_cache: Arc<FileMetadataCache>,
     metadata_size_hint: Option<usize>,
 }
 
@@ -252,7 +252,7 @@ impl CachedParquetFileReader {
         store: Arc<dyn ObjectStore>,
         inner: ParquetObjectReader,
         partitioned_file: PartitionedFile,
-        metadata_cache: Arc<dyn FileMetadataCache>,
+        metadata_cache: Arc<FileMetadataCache>,
         metadata_size_hint: Option<usize>,
     ) -> Self {
         Self {
