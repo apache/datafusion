@@ -120,6 +120,21 @@ async fn test_zero_argument_udaf() {
 
     let actual = execute(
         &ctx,
+        "SELECT window_start() FILTER (WHERE value < 0.0) FROM t",
+    )
+    .await
+    .unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +----------------------------------------------------+
+    | window_start() FILTER (WHERE t.value < Float64(0)) |
+    +----------------------------------------------------+
+    |                                                    |
+    +----------------------------------------------------+
+    ");
+
+    let actual = execute(
+        &ctx,
         "SELECT value, window_start() FROM t GROUP BY value ORDER BY value",
     )
     .await

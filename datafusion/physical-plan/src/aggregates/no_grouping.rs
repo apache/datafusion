@@ -463,6 +463,13 @@ fn aggregate_batch(
             // 1.3
             let values = evaluate_expressions_to_arrays(expr, batch.as_ref())?;
 
+            if values.is_empty()
+                && batch.num_rows() == 0
+                && mode.input_mode() == AggregateInputMode::Raw
+            {
+                return Ok(());
+            }
+
             // 1.4
             let size_pre = accum.size();
             let res = match mode.input_mode() {
