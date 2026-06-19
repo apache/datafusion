@@ -1710,7 +1710,6 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-functions",
  "datafusion-functions-aggregate",
- "datafusion-functions-json",
  "datafusion-functions-nested",
  "datafusion-functions-table",
  "datafusion-functions-window",
@@ -2262,9 +2261,10 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-json"
-version = "53.0.0"
+version = "54.0.0"
 dependencies = [
  "arrow",
+ "datafusion",
  "datafusion-common",
  "datafusion-doc",
  "datafusion-execution",
@@ -2272,6 +2272,7 @@ dependencies = [
  "datafusion-macros",
  "log",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -2648,6 +2649,7 @@ dependencies = [
  "clap",
  "datafusion",
  "datafusion-datasource",
+ "datafusion-functions-json",
  "datafusion-spark",
  "datafusion-substrait",
  "env_logger",

@@ -464,7 +464,8 @@ mod tests {
     fn test_empty_path_returns_string_value() -> Result<()> {
         // jq `.` semantics: with no path keys, return the JSON value itself
         // if it is a string; otherwise null.
-        let json = ColumnarValue::Scalar(ScalarValue::Utf8(Some(r#""hello""#.to_string())));
+        let json =
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(r#""hello""#.to_string())));
         let result = invoke_json_get_str(json, vec![], 1)?;
         match result {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => assert_eq!(s, "hello"),

@@ -67,6 +67,6 @@ let state = SessionStateBuilder::new()
     .build();
 ```
 
-[`FunctionRegistry`]: https://docs.rs/datafusion-execution/latest/datafusion_execution/registry/trait.FunctionRegistry.html
-[`SessionStateBuilder`]: https://docs.rs/datafusion/latest/datafusion/execution/struct.SessionStateBuilder.html
-[`SessionStateBuilderJson`]: https://docs.rs/datafusion-functions-json/latest/datafusion_functions_json/trait.SessionStateBuilderJson.html
+[`functionregistry`]: https://docs.rs/datafusion-execution/latest/datafusion_execution/registry/trait.FunctionRegistry.html
+[`sessionstatebuilder`]: https://docs.rs/datafusion/latest/datafusion/execution/struct.SessionStateBuilder.html
+[`sessionstatebuilderjson`]: https://docs.rs/datafusion-functions-json/latest/datafusion_functions_json/trait.SessionStateBuilderJson.html
