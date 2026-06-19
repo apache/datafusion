@@ -73,8 +73,8 @@ use datafusion_common::format::{
 };
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
-    internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
+    TableReference, internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
@@ -88,8 +88,9 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::{
     Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable,
     LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder, Operator, PartitionEvaluator,
-    ScalarUDF, Signature, TryCast, Volatility, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
+    RangePartitioning, Repartition, ScalarUDF, Signature, TryCast, Volatility,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
@@ -111,7 +112,7 @@ use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec, from_proto,
 };
-use datafusion_proto::protobuf;
+use datafusion_proto::protobuf::{self};
 
 use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
 
@@ -3328,5 +3329,35 @@ async fn roundtrip_join_null_equality() -> Result<()> {
     let rt = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{join:?}"), format!("{rt:?}"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_range_partitioning() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Decimal128(15, 2), true),
+    ]);
+
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+
+    let scan_plan = ctx.sql("SELECT * FROM t1").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+            vec![col("a").sort(true, true)],
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(2))])],
+        )?),
+    });
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }
