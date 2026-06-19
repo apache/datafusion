@@ -3057,9 +3057,10 @@ mod test {
         use parquet::file::properties::WriterProperties;
 
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        let metadata_cache: Arc<FileMetadataCache> = Arc::new(
-            DefaultCache::<Path, CachedFileMetadataEntry>::new(64 * 1024 * 1024),
-        );
+        let metadata_cache: Arc<FileMetadataCache> =
+            Arc::new(DefaultCache::<Path, CachedFileMetadataEntry>::new(
+                64 * 1024 * 1024,
+            ));
         let values: Vec<i32> = (1..=100).collect();
         let batch = record_batch!((
             "a",
