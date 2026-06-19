@@ -538,12 +538,24 @@ impl Accumulator for OrderSensitiveMapAggAccumulator {
         let mut total = size_of_val(self) + ScalarValue::size_of_vec(&self.keys)
             - size_of_val(&self.keys)
             + ScalarValue::size_of_vec(&self.values)
-            - size_of_val(&self.values);
+            - size_of_val(&self.values)
+            + self.key_type.size()
+            - size_of_val(&self.key_type)
+            + self.value_type.size()
+            - size_of_val(&self.value_type);
+
+        // ordering_values: Vec spine plus the heap owned by each row's scalars.
         total += size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
         for row in &self.ordering_values {
             total += ScalarValue::size_of_vec(row) - size_of_val(row);
         }
+
+        // ordering_dtypes: Vec spine plus the heap owned by each DataType.
         total += size_of::<DataType>() * self.ordering_dtypes.capacity();
+        for dtype in &self.ordering_dtypes {
+            total += dtype.size() - size_of_val(dtype);
+        }
+
         total
     }
 }
