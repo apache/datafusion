@@ -343,7 +343,7 @@ pub enum CharacterLengthStyle {
 pub enum DistinctFromStyle {
     /// DBMS supports `IS (NOT) DISTINCT FROM`
     FullText,
-    /// DMBS supports equivalent operations via `<=>` and `NOT <=>`
+    /// DBMS supports equivalent operations via `<=>` and `NOT <=>`
     Spaceship,
 }
 
