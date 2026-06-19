@@ -274,6 +274,23 @@ SELECT round(arrow_cast(42, 'UInt32'), 2::int);
 ----
 42
 
+# round(uint64, non-negative scale) preserves values above i64::MAX
+query I
+SELECT round(arrow_cast(18446744073709551615, 'UInt64'));
+----
+18446744073709551615
+
+query I
+SELECT round(arrow_cast(18446744073709551615, 'UInt64'), 2::int);
+----
+18446744073709551615
+
+# round(uint64, negative scale) operates without narrowing through i64
+query I
+SELECT round(arrow_cast(10000000000000000001, 'UInt64'), -1::int);
+----
+10000000000000000000
+
 # -------------------------------------------------------------------
 # Decimal tests (HALF_UP rounding)
 # -------------------------------------------------------------------
