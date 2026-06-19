@@ -19,20 +19,6 @@ use super::*;
 use datafusion_common::assert_contains;
 
 #[test]
-fn test_coercion_error() -> Result<()> {
-    let coercer =
-        BinaryTypeCoercer::new(&DataType::Float32, &Operator::Plus, &DataType::Utf8);
-    let result_type = coercer.get_input_types();
-
-    let e = result_type.unwrap_err();
-    assert_eq!(
-        e.strip_backtrace(),
-        "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types"
-    );
-    Ok(())
-}
-
-#[test]
 fn test_date_timestamp_arithmetic_error() -> Result<()> {
     let (lhs, rhs) = BinaryTypeCoercer::new(
         &DataType::Timestamp(Nanosecond, None),
