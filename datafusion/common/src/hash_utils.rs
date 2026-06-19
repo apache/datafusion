@@ -1852,6 +1852,8 @@ mod tests {
         assert_eq!(hashes1, hashes2);
     }
 
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
     #[test]
     fn test_create_hashes_with_quality_hash_state() {
         let int_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
