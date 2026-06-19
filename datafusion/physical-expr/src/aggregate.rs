@@ -44,7 +44,9 @@ use crate::planner::{create_physical_expr, create_physical_exprs};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::metadata::FieldMetadata;
-use datafusion_common::{DFSchema, Result, ScalarValue, internal_err, not_impl_err};
+use datafusion_common::{
+    DFSchema, Result, ScalarValue, internal_err, not_impl_err, plan_err,
+};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
@@ -270,6 +272,12 @@ impl AggregateExprBuilder {
             .iter()
             .map(|arg| arg.return_field(&schema))
             .collect::<Result<Vec<_>>>()?;
+
+        if args.is_empty() && fun.name() == "count" {
+            return plan_err!(
+                "Physical count aggregate requires an argument; use COUNT_STAR_EXPANSION for count(*)"
+            );
+        }
 
         check_arg_count(
             fun.name(),
