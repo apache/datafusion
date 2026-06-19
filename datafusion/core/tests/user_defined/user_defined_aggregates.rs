@@ -108,9 +108,7 @@ async fn test_zero_argument_udaf() {
     let TestContext { mut ctx, .. } = TestContext::new();
     NullaryAccumulator::register(&mut ctx, "window_start");
 
-    let actual = execute(&ctx, "SELECT window_start() from t")
-        .await
-        .unwrap();
+    let actual = execute(&ctx, "SELECT window_start() from t").await.unwrap();
 
     insta::assert_snapshot!(batches_to_string(&actual), @r"
     +----------------+
