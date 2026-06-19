@@ -225,6 +225,39 @@ fn test_type_coercion_arithmetic() -> Result<()> {
     // (Int8, _) | (_, Int8) => Some(Int8)
     test_coercion_binary_rule!(Int8, Int8, Operator::Plus, Int8);
 
+    test_coercion_binary_rule_multiple!(
+        Utf8,
+        [
+            Float64,
+            Decimal32(10, 2),
+            Decimal64(10, 2),
+            Decimal128(10, 2),
+            Decimal256(10, 2),
+        ],
+        Operator::Plus,
+        Float64
+    );
+    test_coercion_binary_rule!(Utf8, Float32, Operator::Plus, Float32);
+    test_coercion_binary_rule!(Utf8, Float16, Operator::Plus, Float16);
+    test_coercion_binary_rule!(Utf8, Int64, Operator::Plus, Int64);
+    test_coercion_binary_rule!(Utf8, Int32, Operator::Plus, Int32);
+    test_coercion_binary_rule!(Utf8, Int16, Operator::Plus, Int16);
+    test_coercion_binary_rule!(Utf8, Int8, Operator::Plus, Int8);
+    test_coercion_binary_rule!(Utf8, UInt64, Operator::Plus, UInt64);
+    test_coercion_binary_rule!(Utf8, UInt32, Operator::Plus, UInt32);
+    test_coercion_binary_rule!(Utf8, UInt16, Operator::Plus, UInt16);
+    test_coercion_binary_rule!(Utf8, UInt8, Operator::Plus, UInt8);
+    test_coercion_binary_rule!(Float32, Utf8, Operator::Plus, Float32);
+    test_coercion_binary_rule!(Float16, Utf8, Operator::Plus, Float16);
+    test_coercion_binary_rule!(Int64, Utf8, Operator::Plus, Int64);
+    test_coercion_binary_rule!(Int32, Utf8, Operator::Plus, Int32);
+    test_coercion_binary_rule!(Int16, Utf8, Operator::Plus, Int16);
+    test_coercion_binary_rule!(Int8, Utf8, Operator::Plus, Int8);
+    test_coercion_binary_rule!(UInt64, Utf8, Operator::Plus, UInt64);
+    test_coercion_binary_rule!(UInt32, Utf8, Operator::Plus, UInt32);
+    test_coercion_binary_rule!(UInt16, Utf8, Operator::Plus, UInt16);
+    test_coercion_binary_rule!(UInt8, Utf8, Operator::Plus, UInt8);
+
     Ok(())
 }
 
