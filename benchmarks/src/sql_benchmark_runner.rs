@@ -104,7 +104,7 @@ pub struct Cli {
 /// Parses CLI arguments, runs the selected action, and prints any list output.
 pub async fn run_cli() -> Result<()> {
     let matches = Cli::command().get_matches();
-    let action = cli_action_from_matches(matches)?;
+    let action = cli_action_from_matches(&matches)?;
     let output = run_cli_action(action, &default_sql_benchmark_directory()).await?;
 
     if !output.is_empty() {
@@ -410,8 +410,8 @@ fn run_criterion_benchmarks(
 }
 
 /// Converts parsed arguments into an executable action and validates mode options.
-fn cli_action_from_matches(matches: ArgMatches) -> Result<CliAction> {
-    let cli = Cli::from_arg_matches(&matches)
+fn cli_action_from_matches(matches: &ArgMatches) -> Result<CliAction> {
+    let cli = Cli::from_arg_matches(matches)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     if cli.benchmark.is_none() {
@@ -851,7 +851,7 @@ mod tests {
             .try_get_matches_from(args)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        cli_action_from_matches(matches)
+        cli_action_from_matches(&matches)
     }
 
     async fn run_cli_with_dir<I, T>(args: I, benchmark_dir: &Path) -> Result<String>
