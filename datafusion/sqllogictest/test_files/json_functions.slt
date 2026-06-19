@@ -63,9 +63,33 @@ SELECT json_get_str(NULL, 'key');
 ----
 NULL
 
-# Too few arguments — should fail at planning time
+# Zero arguments — should fail at planning time
 statement error
+SELECT json_get_str();
+
+# Empty path (jq `.` semantics): no keys → return the JSON value if it is a string
+query T
+SELECT json_get_str('"hello"');
+----
+hello
+
+# Empty path on non-string JSON → NULL
+query T
+SELECT json_get_str('42');
+----
+NULL
+
+# Empty path on object → NULL (object is not a string)
+query T
 SELECT json_get_str('{"a": 1}');
+----
+NULL
+
+# Empty path on invalid JSON → NULL (silent)
+query T
+SELECT json_get_str('not json');
+----
+NULL
 
 # Clean up
 statement ok

@@ -33,11 +33,40 @@ community crate.
 
 ## Usage
 
-These functions are registered automatically when the `json_expressions` feature
-is enabled on the `datafusion` crate. They can also be registered manually:
+This crate is **not** auto-wired into the `datafusion` core. Following the same
+pattern as [`datafusion-functions-spark`](../spark), downstream users register
+the functions explicitly to keep the core small and compile times fast.
+
+### With a [`FunctionRegistry`]
 
 ```rust
 use datafusion_functions_json;
-// registry is a FunctionRegistry, e.g. SessionState
+// registry is any FunctionRegistry, e.g. SessionState
 datafusion_functions_json::register_all(&mut registry)?;
 ```
+
+### With a [`SessionStateBuilder`] (requires `core` feature)
+
+Enable the optional `core` feature in `Cargo.toml`:
+
+```toml
+datafusion-functions-json = { version = "...", features = ["core"] }
+```
+
+Then use the [`SessionStateBuilderJson`] extension trait:
+
+```rust
+use datafusion::execution::SessionStateBuilder;
+use datafusion_functions_json::SessionStateBuilderJson;
+
+// `with_json_features` should be called after `with_default_features`
+// so it overwrites any colliding names.
+let state = SessionStateBuilder::new()
+    .with_default_features()
+    .with_json_features()
+    .build();
+```
+
+[`FunctionRegistry`]: https://docs.rs/datafusion-execution/latest/datafusion_execution/registry/trait.FunctionRegistry.html
+[`SessionStateBuilder`]: https://docs.rs/datafusion/latest/datafusion/execution/struct.SessionStateBuilder.html
+[`SessionStateBuilderJson`]: https://docs.rs/datafusion-functions-json/latest/datafusion_functions_json/trait.SessionStateBuilderJson.html

@@ -44,10 +44,12 @@ workspace = true
 name = "datafusion_functions_json"
 
 [features]
-default = []
+core = ["datafusion"]
 
 [dependencies]
 arrow = { workspace = true }
+# Optional dependency for SessionStateBuilderJson extension trait
+datafusion = { workspace = true, optional = true, default-features = false }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -58,3 +60,6 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
+# for SessionStateBuilderJson tests
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
+tokio = { workspace = true, features = ["rt"] }

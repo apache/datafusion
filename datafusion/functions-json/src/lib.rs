@@ -39,7 +39,7 @@
 //! |----------|-------------|
 //! | [`json_get_str`] | Extract a string value from a JSON string at the given path |
 //!
-//! # Usage
+//! # Usage with a [`FunctionRegistry`]
 //!
 //! You can register all functions using the [`register_all`] function.
 //!
@@ -52,8 +52,30 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Usage with a `SessionStateBuilder` (requires `core` feature)
+//!
+//! When the optional `core` feature is enabled, this crate also exposes the
+//! [`SessionStateBuilderJson`] extension trait for ergonomic registration on a
+//! [`datafusion::execution::SessionStateBuilder`].
+//!
+//! ```ignore
+//! use datafusion::execution::SessionStateBuilder;
+//! use datafusion_functions_json::SessionStateBuilderJson;
+//!
+//! let state = SessionStateBuilder::new()
+//!     .with_default_features()
+//!     .with_json_features()
+//!     .build();
+//! ```
 
 pub mod json_get_str;
+
+#[cfg(feature = "core")]
+mod session_state;
+
+#[cfg(feature = "core")]
+pub use session_state::SessionStateBuilderJson;
 
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;

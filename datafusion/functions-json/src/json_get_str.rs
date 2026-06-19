@@ -17,7 +17,7 @@
 
 //! [`JsonGetStr`] UDF implementation for extracting string values from JSON.
 
-use arrow::array::{Array, ArrayRef, AsArray, StringArray, StringBuilder};
+use arrow::array::{Array, AsArray, StringArray, StringBuilder};
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
@@ -31,10 +31,16 @@ use std::sync::Arc;
     doc_section(label = "JSON Functions"),
     description = r#"Extract a string value from a JSON string at the given path.
 
-The path is specified as one or more keys (strings for object access) or
-indices (integers for array access). Returns NULL if the path does not exist
-or the value at the path is not a string."#,
-    syntax_example = "json_get_str(json_string, key1[, key2, ...])",
+The path is specified as zero or more keys (strings for object access) or
+indices (integers for array access). With no path keys, the function returns
+the JSON value itself if it is a string (jq `.` semantics). Otherwise, the
+function navigates into the JSON document and returns the value at the path.
+
+Returns NULL if the input JSON is not a valid JSON string, the path does not
+exist, the value at the path is not a string, or any argument (input JSON or
+path key) is NULL. Invalid JSON is silently treated as NULL — no error is
+returned."#,
+    syntax_example = "json_get_str(json_string [, key1, key2, ...])",
     sql_example = r#"```sql
 > select json_get_str('{"a": {"b": "hello"}}', 'a', 'b');
 +-----------------------------------------------------------+
@@ -49,7 +55,7 @@ or the value at the path is not a string."#,
     ),
     argument(
         name = "keys",
-        description = "One or more path keys (string for object key, integer for array index)."
+        description = "Zero or more path keys (string for object key, integer for array index)."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -85,10 +91,9 @@ impl ScalarUDFImpl for JsonGetStr {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() < 2 {
+        if arg_types.is_empty() {
             return plan_err!(
-                "json_get_str requires at least 2 arguments (json_string, key), got {}",
-                arg_types.len()
+                "json_get_str requires at least 1 argument (json_string), got 0"
             );
         }
         // First arg must be a string type; remaining are path keys (string or integer)
@@ -132,39 +137,36 @@ impl ScalarUDFImpl for JsonGetStr {
         let json_arg = &args.args[0];
         let path_args = &args.args[1..];
 
-        // Extract path keys from the scalar arguments
-        let path_keys = path_args
-            .iter()
-            .map(|arg| match arg {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Ok(PathKey::Key(s.clone())),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => {
-                    Ok(PathKey::Key(s.clone()))
+        // Build path keys. If any path argument is NULL, the result is NULL —
+        // return early on the first NULL encountered without scanning the rest.
+        let mut path_keys: Vec<PathKey<'_>> = Vec::with_capacity(path_args.len());
+        for arg in path_args {
+            let key = match arg {
+                ColumnarValue::Scalar(
+                    ScalarValue::Utf8(Some(s))
+                    | ScalarValue::LargeUtf8(Some(s))
+                    | ScalarValue::Utf8View(Some(s)),
+                ) => PathKey::Key(s.as_str()),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(i))) => {
+                    PathKey::Index(*i as usize)
                 }
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => {
-                    Ok(PathKey::Key(s.clone()))
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(i))) => {
+                    PathKey::Index(*i as usize)
                 }
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(i))) => Ok(PathKey::Index(*i as usize)),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(i))) => Ok(PathKey::Index(*i as usize)),
-                ColumnarValue::Scalar(ScalarValue::UInt64(Some(i))) => Ok(PathKey::Index(*i as usize)),
-                ColumnarValue::Scalar(s) if s.is_null() => Ok(PathKey::Null),
-                _ => exec_err!(
-                    "json_get_str path arguments must be scalar strings or integers, got {:?}",
-                    arg.data_type()
-                ),
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // If any path key is null, the result is null
-        if path_keys.iter().any(|k| matches!(k, PathKey::Null)) {
-            return match json_arg {
-                ColumnarValue::Array(arr) => {
-                    let null_array: ArrayRef = Arc::new(StringArray::new_null(arr.len()));
-                    Ok(ColumnarValue::Array(null_array))
+                ColumnarValue::Scalar(ScalarValue::UInt64(Some(i))) => {
+                    PathKey::Index(*i as usize)
                 }
-                ColumnarValue::Scalar(_) => {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+                ColumnarValue::Scalar(s) if s.is_null() => {
+                    return Ok(null_result(json_arg));
+                }
+                _ => {
+                    return exec_err!(
+                        "json_get_str path arguments must be scalar strings or integers, got {:?}",
+                        arg.data_type()
+                    );
                 }
             };
+            path_keys.push(key);
         }
 
         match json_arg {
@@ -180,7 +182,7 @@ impl ScalarUDFImpl for JsonGetStr {
                                 builder.append_null();
                             } else {
                                 match extract_str_at_path(arr.value(i), &path_keys) {
-                                    Some(s) => builder.append_value(&s),
+                                    Some(s) => builder.append_value(s),
                                     None => builder.append_null(),
                                 }
                             }
@@ -193,7 +195,7 @@ impl ScalarUDFImpl for JsonGetStr {
                                 builder.append_null();
                             } else {
                                 match extract_str_at_path(arr.value(i), &path_keys) {
-                                    Some(s) => builder.append_value(&s),
+                                    Some(s) => builder.append_value(s),
                                     None => builder.append_null(),
                                 }
                             }
@@ -206,7 +208,7 @@ impl ScalarUDFImpl for JsonGetStr {
                                 builder.append_null();
                             } else {
                                 match extract_str_at_path(arr.value(i), &path_keys) {
-                                    Some(s) => builder.append_value(&s),
+                                    Some(s) => builder.append_value(s),
                                     None => builder.append_null(),
                                 }
                             }
@@ -240,35 +242,42 @@ impl ScalarUDFImpl for JsonGetStr {
     }
 }
 
-/// Represents a path element for navigating JSON.
-#[derive(Debug, Clone)]
-enum PathKey {
-    Key(String),
+/// Represents a path element for navigating JSON. Borrows from the input
+/// arguments to avoid per-call clones of path strings.
+#[derive(Debug, Clone, Copy)]
+enum PathKey<'a> {
+    Key(&'a str),
     Index(usize),
-    Null,
+}
+
+/// Helper: build the NULL-typed result matching the input shape.
+fn null_result(json_arg: &ColumnarValue) -> ColumnarValue {
+    match json_arg {
+        ColumnarValue::Array(arr) => {
+            ColumnarValue::Array(Arc::new(StringArray::new_null(arr.len())))
+        }
+        ColumnarValue::Scalar(_) => ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+    }
 }
 
 /// Navigate a JSON string using the given path and extract a string value.
 ///
-/// Returns `None` if:
-/// - The JSON is invalid
-/// - The path does not exist
+/// Returns `None` (silently) if:
+/// - The input is not valid JSON
+/// - The path does not exist in the JSON document
 /// - The value at the path is not a JSON string
-fn extract_str_at_path(json_str: &str, path: &[PathKey]) -> Option<String> {
-    let mut value: serde_json::Value = serde_json::from_str(json_str).ok()?;
-
-    for key in path {
-        value = match key {
-            PathKey::Key(k) => value.get(k)?.clone(),
-            PathKey::Index(i) => value.get(*i)?.clone(),
-            PathKey::Null => return None,
-        };
-    }
-
-    match value {
-        serde_json::Value::String(s) => Some(s),
-        _ => None,
-    }
+///
+/// With an empty `path`, returns the JSON value itself if it is a string
+/// (jq `.` semantics).
+fn extract_str_at_path(json_str: &str, path: &[PathKey<'_>]) -> Option<String> {
+    let root: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    path.iter()
+        .try_fold(&root, |value, key| match key {
+            PathKey::Key(k) => value.get(*k),
+            PathKey::Index(i) => value.get(*i),
+        })?
+        .as_str()
+        .map(ToOwned::to_owned)
 }
 
 /// Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of `json_get_str`
@@ -430,6 +439,44 @@ mod tests {
         let key = ColumnarValue::Scalar(ScalarValue::Utf8(Some("a".to_string())));
 
         let result = invoke_json_get_str(json, vec![key], 1)?;
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {}
+            other => panic!("expected null Utf8 scalar, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_null_path_arg_returns_null() -> Result<()> {
+        let json =
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(r#"{"a": "hi"}"#.to_string())));
+        let key = ColumnarValue::Scalar(ScalarValue::Utf8(None));
+
+        let result = invoke_json_get_str(json, vec![key], 1)?;
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {}
+            other => panic!("expected null Utf8 scalar, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_path_returns_string_value() -> Result<()> {
+        // jq `.` semantics: with no path keys, return the JSON value itself
+        // if it is a string; otherwise null.
+        let json = ColumnarValue::Scalar(ScalarValue::Utf8(Some(r#""hello""#.to_string())));
+        let result = invoke_json_get_str(json, vec![], 1)?;
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => assert_eq!(s, "hello"),
+            other => panic!("expected Utf8 scalar 'hello', got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_path_non_string_returns_null() -> Result<()> {
+        let json = ColumnarValue::Scalar(ScalarValue::Utf8(Some("42".to_string())));
+        let result = invoke_json_get_str(json, vec![], 1)?;
         match result {
             ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {}
             other => panic!("expected null Utf8 scalar, got {other:?}"),
