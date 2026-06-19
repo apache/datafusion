@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, AsArray, ListArray, StringArray, StructArray};
-use arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use arrow::array::{Array, StringArray};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::as_list_array;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
@@ -97,9 +97,8 @@ impl ScalarUDFImpl for SparkArraysZip {
                     .collect();
                 (names, types)
             };
-        let inner_dt = ArraysZip::new().return_type(&array_arg_types)?;
-        let new_dt = rename_return_type(&inner_dt, &names)?;
-        Ok(Arc::new(Field::new(self.name(), new_dt, true)))
+        let dt = ArraysZip::with_field_names(names).return_type(&array_arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -145,20 +144,7 @@ impl ScalarUDFImpl for SparkArraysZip {
             return_field: Arc::clone(&return_field),
             config_options,
         };
-        let result = ArraysZip::new().invoke_with_args(inner_args)?;
-
-        match result {
-            ColumnarValue::Array(arr) => {
-                let renamed = rename_list_struct_fields(&arr, &names)?;
-                Ok(ColumnarValue::Array(renamed))
-            }
-            ColumnarValue::Scalar(scalar) => {
-                let arr = scalar.to_array_of_size(number_rows.max(1))?;
-                let renamed = rename_list_struct_fields(&arr, &names)?;
-                let new_scalar = ScalarValue::try_from_array(&renamed, 0)?;
-                Ok(ColumnarValue::Scalar(new_scalar))
-            }
-        }
+        ArraysZip::with_field_names(names).invoke_with_args(inner_args)
     }
 }
 
@@ -237,64 +223,10 @@ fn names_from_array(arr: &dyn Array) -> Result<Vec<String>> {
         .collect()
 }
 
-/// Rename struct fields inside a `List<Struct<..>>` data type using the given names.
-fn rename_return_type(data_type: &DataType, names: &[String]) -> Result<DataType> {
-    let DataType::List(list_field) = data_type else {
-        return exec_err!("arrays_zip expected List return type, got {data_type}");
-    };
-    let DataType::Struct(fields) = list_field.data_type() else {
-        return exec_err!(
-            "arrays_zip expected List<Struct<..>> return type, got {data_type}"
-        );
-    };
-    let new_struct = DataType::Struct(rename_fields(fields, names));
-    Ok(DataType::List(Arc::new(Field::new(
-        list_field.name(),
-        new_struct,
-        list_field.is_nullable(),
-    ))))
-}
-
-fn rename_list_struct_fields(array: &dyn Array, names: &[String]) -> Result<ArrayRef> {
-    let list = as_list_array(array)?;
-    let struct_array = list.values().as_struct();
-    let new_fields = rename_fields(struct_array.fields(), names);
-
-    let new_struct = StructArray::try_new(
-        new_fields,
-        struct_array.columns().to_vec(),
-        struct_array.nulls().cloned(),
-    )?;
-
-    let new_list_field =
-        Arc::new(Field::new_list_field(new_struct.data_type().clone(), true));
-    let new_list = ListArray::try_new(
-        new_list_field,
-        list.offsets().clone(),
-        Arc::new(new_struct),
-        list.nulls().cloned(),
-    )?;
-    Ok(Arc::new(new_list))
-}
-
-fn rename_fields(fields: &Fields, names: &[String]) -> Fields {
-    fields
-        .iter()
-        .zip(names.iter())
-        .map(|(f, n)| {
-            Arc::new(Field::new(
-                n.clone(),
-                f.data_type().clone(),
-                f.is_nullable(),
-            ))
-        })
-        .collect::<Vec<_>>()
-        .into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::ListArray;
     use arrow::buffer::OffsetBuffer;
 
     #[test]
