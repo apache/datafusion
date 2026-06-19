@@ -68,12 +68,16 @@ make_udaf_expr_and_func!(
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MapAgg {
     signature: Signature,
+    /// Whether the optimizer guarantees the input is already ordered by the
+    /// `ORDER BY` clause, letting the accumulator skip its internal sort.
+    is_input_pre_ordered: bool,
 }
 
 impl Default for MapAgg {
     fn default() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
+            is_input_pre_ordered: false,
         }
     }
 }
@@ -116,11 +120,17 @@ impl AggregateUDFImpl for MapAgg {
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        // Order decides which value wins on a duplicate key, so the optimizer
-        // must satisfy it (inserts a SortExec).
-        // TODO: handle pre-sorted input like `array_agg` to skip the
-        // redundant sort.
-        AggregateOrderSensitivity::HardRequirement
+        AggregateOrderSensitivity::SoftRequirement
+    }
+
+    fn with_beneficial_ordering(
+        self: Arc<Self>,
+        beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        Ok(Some(Arc::new(Self {
+            signature: self.signature.clone(),
+            is_input_pre_ordered: beneficial_ordering,
+        })))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -141,6 +151,7 @@ impl AggregateUDFImpl for MapAgg {
             value_type,
             ordering_dtypes,
             ordering,
+            self.is_input_pre_ordered,
         )))
     }
 
@@ -322,6 +333,7 @@ pub struct OrderSensitiveMapAggAccumulator {
     ordering_values: Vec<Vec<ScalarValue>>,
     ordering_dtypes: Vec<DataType>,
     ordering_req: LexOrdering,
+    is_input_pre_ordered: bool,
 }
 
 impl OrderSensitiveMapAggAccumulator {
@@ -330,6 +342,7 @@ impl OrderSensitiveMapAggAccumulator {
         value_type: DataType,
         ordering_dtypes: Vec<DataType>,
         ordering_req: LexOrdering,
+        is_input_pre_ordered: bool,
     ) -> Self {
         Self {
             key_type,
@@ -339,6 +352,7 @@ impl OrderSensitiveMapAggAccumulator {
             ordering_values: Vec::new(),
             ordering_dtypes,
             ordering_req,
+            is_input_pre_ordered,
         }
     }
 
@@ -350,21 +364,24 @@ impl OrderSensitiveMapAggAccumulator {
     /// first-wins de-duplication. Returns the surviving keys, values, and
     /// ordering values, all aligned so they describe the same rows.
     fn sorted_deduped(&self) -> Result<OrderSensitiveMapAggRows> {
-        let sort_options = self.sort_options();
         let mut rows: Vec<usize> = (0..self.keys.len()).collect();
-        let mut cmp_err = Ok(());
-        rows.sort_by(|&a, &b| {
-            compare_rows(
-                &self.ordering_values[a],
-                &self.ordering_values[b],
-                &sort_options,
-            )
-            .unwrap_or_else(|e| {
-                cmp_err = Err(e);
-                std::cmp::Ordering::Equal
-            })
-        });
-        cmp_err?;
+
+        if !self.is_input_pre_ordered {
+            let sort_options = self.sort_options();
+            let mut cmp_err = Ok(());
+            rows.sort_by(|&a, &b| {
+                compare_rows(
+                    &self.ordering_values[a],
+                    &self.ordering_values[b],
+                    &sort_options,
+                )
+                .unwrap_or_else(|e| {
+                    cmp_err = Err(e);
+                    std::cmp::Ordering::Equal
+                })
+            });
+            cmp_err?;
+        }
 
         // Keep the first occurrence of each key in sorted order, and project the
         // keys, values, and ordering values through the same surviving indices
@@ -691,6 +708,7 @@ mod tests {
             DataType::Int32,
             vec![DataType::Int32],
             ordering,
+            false,
         )
     }
 
