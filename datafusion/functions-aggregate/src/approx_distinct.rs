@@ -850,6 +850,12 @@ mod tests {
         hll.count() as u64
     }
 
+    fn array_hashes(array: &ArrayRef) -> Vec<u64> {
+        let mut hashes = vec![0; array.len()];
+        create_hashes([array.as_ref()], &HLL_HASH_STATE, &mut hashes).unwrap();
+        hashes
+    }
+
     fn serialize(g: &mut GroupHll) -> Vec<u8> {
         let mut buf = Vec::new();
         g.serialize(&mut buf);
@@ -992,17 +998,20 @@ mod tests {
             BooleanArray::from(vec![Some(true), None, Some(false), None, Some(true)]);
 
         let mut acc = HllGroupsAccumulator::new();
-        // put all rows in group 0
-        let group_indices = vec![0usize; 5];
-        acc.update_batch(&[values], &group_indices, Some(&filter), 1)
+        // Put true rows in group 0, and the null/false filter rows in group 1.
+        // The collision CI job forces every hash to 0, so group 1 is what proves
+        // filtered-out rows are not counted there.
+        let group_indices = vec![0usize, 1, 1, 1, 0];
+        let hashes = array_hashes(&values);
+        acc.update_batch(&[values], &group_indices, Some(&filter), 2)
             .unwrap();
 
         // Only rows 0 and 4 (values 1 and 5) should be counted.
         let result = acc.evaluate(EmitTo::All).unwrap();
         let counts = result.as_any().downcast_ref::<UInt64Array>().unwrap();
-        // reference: hash 1 and 5 into a dense sketch
-        let expected = reference_count(&[h(1), h(5)]);
+        let expected = reference_count(&[hashes[0], hashes[4]]);
         assert_eq!(counts.value(0), expected);
+        assert_eq!(counts.value(1), 0);
     }
 
     /// Regression: a short (≤ 12-byte) Utf8View string must hash identically
@@ -1020,16 +1029,21 @@ mod tests {
         assert!(!batch2.as_string_view().data_buffers().is_empty());
 
         let group_indices = vec![0usize, 0];
+        let batch1_hashes = array_hashes(&batch1);
+        let batch2_hashes = array_hashes(&batch2);
+        let expected =
+            reference_count(&[batch1_hashes[0], batch1_hashes[1], batch2_hashes[1]]);
         let mut acc = HllGroupsAccumulator::new();
         acc.update_batch(&[batch1], &group_indices, None, 1)
             .unwrap();
         acc.update_batch(&[batch2], &group_indices, None, 1)
             .unwrap();
 
-        // True distinct values: {"aaa", "bbb", LONG} == 3.
+        // Under normal hashing the true distinct values are {"aaa", "bbb", LONG};
+        // under collision testing they intentionally collapse to fewer hashes.
         let result = acc.evaluate(EmitTo::All).unwrap();
         let counts = result.as_any().downcast_ref::<UInt64Array>().unwrap();
-        assert_eq!(counts.value(0), 3);
+        assert_eq!(counts.value(0), expected);
     }
 
     /// Regression: a short (≤ 12-byte) Utf8View string must hash identically
@@ -1039,6 +1053,7 @@ mod tests {
         // Multiset: {"aaa" x2, "bbb", LONG}, so 3 distinct values.
         let mixed: ArrayRef =
             Arc::new(StringViewArray::from(vec!["aaa", "bbb", LONG, "aaa"]));
+        let expected = reference_count(&array_hashes(&mixed)[0..3]);
         let mut acc_single = HLLAccumulator::new();
         acc_single.update_batch(&[mixed]).unwrap();
 
@@ -1057,6 +1072,6 @@ mod tests {
             distinct_count(&mut acc_single),
             distinct_count(&mut acc_split)
         );
-        assert_eq!(distinct_count(&mut acc_single), 3);
+        assert_eq!(distinct_count(&mut acc_single), expected);
     }
 }
