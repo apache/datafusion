@@ -112,7 +112,7 @@ use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec, from_proto,
 };
-use datafusion_proto::protobuf::{self};
+use datafusion_proto::protobuf;
 
 use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
 
