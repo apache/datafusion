@@ -44,9 +44,7 @@ use crate::planner::{create_physical_expr, create_physical_exprs};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::metadata::FieldMetadata;
-use datafusion_common::{
-    DFSchema, Result, ScalarValue, assert_or_internal_err, internal_err, not_impl_err,
-};
+use datafusion_common::{DFSchema, Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
@@ -261,8 +259,6 @@ impl AggregateExprBuilder {
             is_distinct,
             is_reversed,
         } = self;
-        assert_or_internal_err!(!args.is_empty(), "args should not be empty");
-
         let ordering_types = order_bys
             .iter()
             .map(|e| e.expr.data_type(&schema))

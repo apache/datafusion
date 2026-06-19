@@ -75,6 +75,14 @@ pub fn check_arg_count(
                 );
             }
         }
+        TypeSignature::Nullary => {
+            if !input_fields.is_empty() {
+                return plan_err!(
+                    "The function {func_name} expects zero arguments, but {} were provided",
+                    input_fields.len()
+                );
+            }
+        }
         TypeSignature::OneOf(variants) => {
             let ok = variants
                 .iter()
