@@ -103,6 +103,24 @@ async fn test_udaf() {
     assert!(!test_state.retract_batch());
 }
 
+#[tokio::test]
+async fn test_zero_argument_udaf() {
+    let TestContext { mut ctx, .. } = TestContext::new();
+    NullaryAccumulator::register(&mut ctx, "window_start");
+
+    let actual = execute(&ctx, "SELECT window_start() from t")
+        .await
+        .unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +----------------+
+    | window_start() |
+    +----------------+
+    | 7              |
+    +----------------+
+    ");
+}
+
 /// User defined aggregate used as a window function
 #[tokio::test]
 async fn test_udaf_as_window() {
@@ -556,6 +574,55 @@ impl TestState {
     fn with_error_on_retract_batch(mut self) -> Self {
         self.error_on_retract_batch = true;
         self
+    }
+}
+
+#[derive(Debug, Default)]
+struct NullaryAccumulator {
+    value: Option<i64>,
+}
+
+impl NullaryAccumulator {
+    fn register(ctx: &mut SessionContext, name: &str) {
+        let accumulator: AccumulatorFactoryFunction =
+            Arc::new(|_| Ok(Box::<Self>::default()));
+
+        let udaf = AggregateUDF::from(SimpleAggregateUDF::new(
+            name,
+            vec![],
+            DataType::Int64,
+            Volatility::Immutable,
+            accumulator,
+            vec![Field::new("value", DataType::Int64, true).into()],
+        ));
+
+        ctx.register_udaf(udaf)
+    }
+}
+
+impl Accumulator for NullaryAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        assert!(values.is_empty());
+        self.value = Some(7);
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        assert_eq!(states.len(), 1);
+        self.value = Some(7);
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int64(self.value))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
     }
 }
 
