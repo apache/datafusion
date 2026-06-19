@@ -200,28 +200,6 @@ fn build_single_map(
     )?))
 }
 
-fn dedup_first_wins(
-    keys: Vec<ScalarValue>,
-    values: Vec<ScalarValue>,
-) -> (Vec<ScalarValue>, Vec<ScalarValue>) {
-    // First pass: mark each position that is the first occurrence of its key.
-    let mut seen = HashSet::with_capacity(keys.len());
-    let keep: Vec<bool> = keys.iter().map(|k| seen.insert(k)).collect();
-
-    // Second pass: keep only the first-occurrence positions.
-    let out_keys = keys
-        .into_iter()
-        .zip(&keep)
-        .filter_map(|(k, &keep)| keep.then_some(k))
-        .collect();
-    let out_values = values
-        .into_iter()
-        .zip(&keep)
-        .filter_map(|(v, &keep)| keep.then_some(v))
-        .collect();
-    (out_keys, out_values)
-}
-
 /// Plain accumulator used when there is no `ORDER BY`.
 #[derive(Debug)]
 pub struct MapAggAccumulator {
@@ -239,6 +217,30 @@ impl MapAggAccumulator {
             keys: Vec::new(),
             values: Vec::new(),
         }
+    }
+
+    /// De-duplicates parallel key/value vectors, keeping the first value seen
+    /// for each key. Surviving keys retain their first-seen order.
+    fn dedup_first_wins(
+        keys: Vec<ScalarValue>,
+        values: Vec<ScalarValue>,
+    ) -> (Vec<ScalarValue>, Vec<ScalarValue>) {
+        // First pass: mark each position that is the first occurrence of its key.
+        let mut seen = HashSet::with_capacity(keys.len());
+        let keep: Vec<bool> = keys.iter().map(|k| seen.insert(k)).collect();
+
+        // Second pass: keep only the first-occurrence positions.
+        let out_keys = keys
+            .into_iter()
+            .zip(&keep)
+            .filter_map(|(k, &keep)| keep.then_some(k))
+            .collect();
+        let out_values = values
+            .into_iter()
+            .zip(&keep)
+            .filter_map(|(v, &keep)| keep.then_some(v))
+            .collect();
+        (out_keys, out_values)
     }
 }
 
@@ -284,7 +286,8 @@ impl Accumulator for MapAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let (keys, values) = dedup_first_wins(self.keys.clone(), self.values.clone());
+        let (keys, values) =
+            Self::dedup_first_wins(self.keys.clone(), self.values.clone());
         let map_array = build_single_map(keys, values, &self.key_type, &self.value_type)?;
         ScalarValue::try_from_array(&map_array, 0)
     }
@@ -298,6 +301,12 @@ impl Accumulator for MapAggAccumulator {
             + self.value_type.size()
             - size_of_val(&self.value_type)
     }
+}
+
+struct OrderSensitiveMapAggRows {
+    keys: Vec<ScalarValue>,
+    values: Vec<ScalarValue>,
+    ordering_values: Vec<Vec<ScalarValue>>,
 }
 
 /// Accumulator used when `map_agg` has an `ORDER BY`. Stores the ordering column
@@ -338,8 +347,9 @@ impl OrderSensitiveMapAggAccumulator {
     }
 
     /// Sorts the accumulated pairs by their ordering values, then applies
-    /// first-wins de-duplication.
-    fn sorted_deduped(&self) -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
+    /// first-wins de-duplication. Returns the surviving keys, values, and
+    /// ordering values, all aligned so they describe the same rows.
+    fn sorted_deduped(&self) -> Result<OrderSensitiveMapAggRows> {
         let sort_options = self.sort_options();
         let mut rows: Vec<usize> = (0..self.keys.len()).collect();
         let mut cmp_err = Ok(());
@@ -356,25 +366,44 @@ impl OrderSensitiveMapAggAccumulator {
         });
         cmp_err?;
 
-        let keys = rows.iter().map(|&i| self.keys[i].clone()).collect();
-        let values = rows.iter().map(|&i| self.values[i].clone()).collect();
-        Ok(dedup_first_wins(keys, values))
+        // Keep the first occurrence of each key in sorted order, and project the
+        // keys, values, and ordering values through the same surviving indices
+        // so all three stay aligned.
+        let mut seen = HashSet::with_capacity(rows.len());
+        let mut keys = Vec::new();
+        let mut values = Vec::new();
+        let mut ordering_values = Vec::new();
+        for &i in &rows {
+            if seen.insert(&self.keys[i]) {
+                keys.push(self.keys[i].clone());
+                values.push(self.values[i].clone());
+                ordering_values.push(self.ordering_values[i].clone());
+            }
+        }
+
+        Ok(OrderSensitiveMapAggRows {
+            keys,
+            values,
+            ordering_values,
+        })
     }
 
-    /// Builds the `List<Struct<ordering...>>` state column carrying ordering
-    /// values for every accumulated pair.
-    fn evaluate_orderings(&self) -> Result<ScalarValue> {
+    /// Builds the `List<Struct<ordering...>>` state column from the given
+    /// ordering values. These must be the de-duplicated ordering values that
+    /// align with the map state, so both pieces of state describe the same rows.
+    fn evaluate_orderings(
+        &self,
+        ordering_values: &[Vec<ScalarValue>],
+    ) -> Result<ScalarValue> {
         let fields = ordering_fields(&self.ordering_req, &self.ordering_dtypes);
-        let num_rows = self.ordering_values.len();
         let struct_field = Fields::from(fields.clone());
 
         let mut column_wise: Vec<ArrayRef> = Vec::with_capacity(fields.len());
         for (col_idx, field) in fields.iter().enumerate() {
-            if num_rows == 0 {
+            if ordering_values.is_empty() {
                 column_wise.push(arrow::array::new_empty_array(field.data_type()));
             } else {
-                let col_vals =
-                    self.ordering_values.iter().map(|row| row[col_idx].clone());
+                let col_vals = ordering_values.iter().map(|row| row[col_idx].clone());
                 column_wise.push(ScalarValue::iter_to_array(col_vals)?);
             }
         }
@@ -471,17 +500,17 @@ impl Accumulator for OrderSensitiveMapAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let (keys, values) = self.sorted_deduped()?;
-        let map_array = build_single_map(keys, values, &self.key_type, &self.value_type)?;
-        Ok(vec![
-            ScalarValue::try_from_array(&map_array, 0)?,
-            self.evaluate_orderings()?,
-        ])
+        let rows = self.sorted_deduped()?;
+        let orderings = self.evaluate_orderings(&rows.ordering_values)?;
+        let map_array =
+            build_single_map(rows.keys, rows.values, &self.key_type, &self.value_type)?;
+        Ok(vec![ScalarValue::try_from_array(&map_array, 0)?, orderings])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let (keys, values) = self.sorted_deduped()?;
-        let map_array = build_single_map(keys, values, &self.key_type, &self.value_type)?;
+        let rows = self.sorted_deduped()?;
+        let map_array =
+            build_single_map(rows.keys, rows.values, &self.key_type, &self.value_type)?;
         ScalarValue::try_from_array(&map_array, 0)
     }
 
@@ -705,6 +734,45 @@ mod tests {
 
         let pairs = extract_map(acc1.evaluate()?);
         assert_eq!(pairs, vec![("a".into(), Some(1))]);
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_merge_with_intra_partition_duplicates() -> Result<()> {
+        let mut acc1 = make_ordered_acc(false);
+        let mut acc2 = make_ordered_acc(false);
+
+        // P1: a -> {1@10, 3@30}, b -> {2@20}  => after dedup: a=1, b=2
+        acc1.update_batch(&[
+            str_arr(&["a", "b", "a"]),
+            int_arr(&[1, 2, 3]),
+            int_arr(&[10, 20, 30]),
+        ])?;
+        // P2: a -> {4@40, 5@50}, c -> {6@60}  => after dedup: a=4, c=6
+        acc2.update_batch(&[
+            str_arr(&["a", "a", "c"]),
+            int_arr(&[4, 5, 6]),
+            int_arr(&[40, 50, 60]),
+        ])?;
+
+        let state2 = acc2
+            .state()?
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<Result<Vec<_>>>()?;
+        acc1.merge_batch(&state2)?;
+
+        let mut pairs = extract_map(acc1.evaluate()?);
+        pairs.sort();
+        // Global first-wins by ord: a@10=1, b@20=2, c@60=6.
+        assert_eq!(
+            pairs,
+            vec![
+                ("a".into(), Some(1)),
+                ("b".into(), Some(2)),
+                ("c".into(), Some(6)),
+            ]
+        );
         Ok(())
     }
 }

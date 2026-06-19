@@ -29,8 +29,8 @@ SELECT g, map_agg(k, v) FROM kv GROUP BY g ORDER BY g;
 1 {a: 1, b: 2}
 2 {c: 3, a: 4}
 
-# Duplicate key within a group: first-wins (matches Trino map_agg). ORDER BY
-# decides which row is first, hence which value survives.
+# Duplicate key within a group: first value wins. ORDER BY decides which row is
+# first, hence which value survives.
 statement ok
 CREATE TABLE dup (k VARCHAR, v INT, ts INT) AS VALUES
   ('a', 1, 10),
@@ -48,7 +48,24 @@ SELECT map_agg(k, v ORDER BY ts DESC) FROM dup;
 ----
 {a: 2}
 
-# Pair with a NULL key is skipped (matches Trino map_agg)
+# Grouped duplicate keys with ORDER BY: each group de-duplicates its map, so the
+# partial ordering state must stay aligned with the de-duplicated map across the
+# partial -> final merge. ASC keeps the lowest-ts value per key.
+statement ok
+CREATE TABLE dup_grouped (g INT, k VARCHAR, v INT, ts INT) AS VALUES
+  (1, 'a', 1, 10),
+  (1, 'a', 2, 20),
+  (1, 'b', 3, 30),
+  (2, 'c', 4, 40),
+  (2, 'c', 5, 50);
+
+query I?
+SELECT g, map_agg(k, v ORDER BY ts ASC) FROM dup_grouped GROUP BY g ORDER BY g;
+----
+1 {a: 1, b: 3}
+2 {c: 4}
+
+# Pair with a NULL key is skipped
 statement ok
 CREATE TABLE nullkey (k VARCHAR, v INT) AS VALUES
   ('a', 1),
@@ -85,6 +102,9 @@ DROP TABLE kv;
 
 statement ok
 DROP TABLE dup;
+
+statement ok
+DROP TABLE dup_grouped;
 
 statement ok
 DROP TABLE nullkey;
