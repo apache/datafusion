@@ -26,7 +26,7 @@ use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
+    ColumnStatistics, DataFusionError, HashMap, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
@@ -48,7 +48,6 @@ use parquet::file::metadata::{
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Minimum fraction of row groups that must report NDV statistics for the
@@ -69,7 +68,7 @@ pub struct DFParquetMetadata<'a> {
     object_meta: &'a ObjectMeta,
     metadata_size_hint: Option<usize>,
     decryption_properties: Option<Arc<FileDecryptionProperties>>,
-    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+    file_metadata_cache: Option<Arc<FileMetadataCache>>,
     /// timeunit to coerce INT96 timestamps to
     pub coerce_int96: Option<TimeUnit>,
     /// Optional timezone applied to INT96-coerced timestamps.
@@ -107,7 +106,7 @@ impl<'a> DFParquetMetadata<'a> {
     /// set file metadata cache
     pub fn with_file_metadata_cache(
         mut self,
-        file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+        file_metadata_cache: Option<Arc<FileMetadataCache>>,
     ) -> Self {
         self.file_metadata_cache = file_metadata_cache;
         self

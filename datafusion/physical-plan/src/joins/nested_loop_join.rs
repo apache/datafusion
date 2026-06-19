@@ -42,6 +42,7 @@ use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
 };
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -689,7 +690,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         // NestedLoopJoinExec is designed for joins without equijoin keys in the
         // ON clause (e.g., `t1 JOIN t2 ON (t1.v1 + t2.v1) % 2 = 0`). Any join
         // predicates are stored in `self.filter`, but `estimate_join_statistics`
@@ -699,15 +700,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // unknown row counts.
         let join_columns = Vec::new();
 
-        // Left side is always a single partition (Distribution::SinglePartition),
-        // so we always request overall stats with `None`. Right side can have
-        // multiple partitions, so we forward the partition parameter to get
-        // partition-specific statistics when requested.
-        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
-        let right_stats = Arc::unwrap_or_clone(match partition {
-            Some(partition) => self.right.partition_statistics(Some(partition))?,
-            None => self.right.partition_statistics(None)?,
-        });
+        // Left side is always broadcast, so it always needs overall stats
+        let left_stats =
+            Arc::unwrap_or_clone(args.compute_child_statistics(&self.left, None)?);
+        // Right side is partitioned, so it needs per-partition stats
+        let right_stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.right, args.partition())?,
+        );
 
         let stats = estimate_join_statistics(
             left_stats,
@@ -733,20 +732,23 @@ impl ExecutionPlan for NestedLoopJoinExec {
             return Ok(None);
         }
 
+        // TODO: split by `col`/`JoinSide` instead so mark joins can also push down to children.
         let schema = self.schema();
-        if let Some(JoinData {
-            projected_left_child,
-            projected_right_child,
-            join_filter,
-            ..
-        }) = try_pushdown_through_join(
-            projection,
-            self.left(),
-            self.right(),
-            &[],
-            &schema,
-            self.filter(),
-        )? {
+        if !matches!(self.join_type(), JoinType::LeftMark | JoinType::RightMark)
+            && let Some(JoinData {
+                projected_left_child,
+                projected_right_child,
+                join_filter,
+                ..
+            }) = try_pushdown_through_join(
+                projection,
+                self.left(),
+                self.right(),
+                &[],
+                &schema,
+                self.filter(),
+            )?
+        {
             Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
                 Arc::new(projected_left_child),
                 Arc::new(projected_right_child),
@@ -3060,6 +3062,7 @@ fn build_unmatched_batch(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::statistics::StatisticsArgs;
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
@@ -3439,7 +3442,7 @@ pub(crate) mod tests {
             &JoinType::Left,
             Some(vec![1, 2]),
         )?;
-        let stats = nested_loop_join.partition_statistics(None)?;
+        let stats = nested_loop_join.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(
             nested_loop_join.schema().fields().len(),
             stats.column_statistics.len(),
