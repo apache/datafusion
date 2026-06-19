@@ -77,6 +77,12 @@ SELECT map_agg(k, v) FROM nullkey;
 ----
 {a: 1, c: 3}
 
+# Empty input: a global aggregate over zero rows returns a single NULL map.
+query ?
+SELECT map_agg(k, v) FROM nullkey WHERE false;
+----
+NULL
+
 # Window usage: a cumulative frame calls evaluate() once per row, so the map
 # grows as the frame expands. Guards against optimizations that consume the
 # accumulator state between evaluate() calls.

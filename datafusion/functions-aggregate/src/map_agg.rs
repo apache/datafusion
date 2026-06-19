@@ -22,7 +22,7 @@ use std::mem::{size_of, size_of_val, take};
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, MapArray, StructArray};
-use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
@@ -201,12 +201,15 @@ fn build_single_map(
 
     let entries = StructArray::try_new(fields, vec![key_array, value_array], None)?;
 
+    // With no entries, emit a single NULL map
+    let nulls = (len == 0).then(|| NullBuffer::new_null(1));
+
     let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0i32, len as i32]));
     Ok(Arc::new(MapArray::try_new(
         entries_field,
         offsets,
         entries,
-        None,
+        nulls,
         false,
     )?))
 }
@@ -641,10 +644,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_produces_empty_map() -> Result<()> {
+    fn empty_produces_null_map() -> Result<()> {
         let mut acc = make_acc();
-        let pairs = extract_map(acc.evaluate()?);
-        assert!(pairs.is_empty());
+        let ScalarValue::Map(arr) = acc.evaluate()? else {
+            panic!("expected ScalarValue::Map");
+        };
+        assert_eq!(arr.len(), 1);
+        assert!(arr.is_null(0));
         Ok(())
     }
 
