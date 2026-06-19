@@ -20,15 +20,63 @@ use datafusion_common::assert_contains;
 
 #[test]
 fn test_coercion_error() -> Result<()> {
+    // Boolean is neither numeric nor string, so it cannot be coerced for arithmetic.
     let coercer =
-        BinaryTypeCoercer::new(&DataType::Float32, &Operator::Plus, &DataType::Utf8);
+        BinaryTypeCoercer::new(&DataType::Boolean, &Operator::Plus, &DataType::Boolean);
     let result_type = coercer.get_input_types();
 
     let e = result_type.unwrap_err();
     assert_eq!(
         e.strip_backtrace(),
-        "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types"
+        "Error during planning: Cannot coerce arithmetic expression Boolean + Boolean to valid types"
     );
+    Ok(())
+}
+
+/// Tests that arithmetic operators coerce a string operand to the numeric type
+/// of the other operand (string to numeric coercion).
+#[test]
+fn test_type_coercion_arithmetic_string_numeric() -> Result<()> {
+    use DataType::*;
+
+    let arithmetic_ops = [
+        Operator::Plus,
+        Operator::Minus,
+        Operator::Multiply,
+        Operator::Divide,
+        Operator::Modulo,
+    ];
+
+    for op in arithmetic_ops {
+        // numeric `op` string -> both coerced to the numeric type
+        for string_type in [Utf8, LargeUtf8, Utf8View] {
+            let (lhs, rhs) =
+                BinaryTypeCoercer::new(&Int64, &op, &string_type).get_input_types()?;
+            assert_eq!(lhs, Int64, "Op {op}: Int64 vs {string_type} -> lhs");
+            assert_eq!(rhs, Int64, "Op {op}: Int64 vs {string_type} -> rhs");
+
+            // string `op` numeric -> both coerced to the numeric type
+            let (lhs, rhs) =
+                BinaryTypeCoercer::new(&string_type, &op, &Float64).get_input_types()?;
+            assert_eq!(lhs, Float64, "Op {op}: {string_type} vs Float64 -> lhs");
+            assert_eq!(rhs, Float64, "Op {op}: {string_type} vs Float64 -> rhs");
+        }
+    }
+
+    // The result type matches same-type numeric arithmetic
+    test_coercion_binary_rule!(Int64, Utf8, Operator::Plus, Int64);
+    test_coercion_binary_rule!(Utf8, Float64, Operator::Multiply, Float64);
+
+    // string `op` string remains unsupported as the target type is ambiguous
+    let err = BinaryTypeCoercer::new(&Utf8, &Operator::Plus, &Utf8)
+        .get_input_types()
+        .unwrap_err()
+        .to_string();
+    assert_contains!(
+        &err,
+        "Cannot coerce arithmetic expression Utf8 + Utf8 to valid types"
+    );
+
     Ok(())
 }
 

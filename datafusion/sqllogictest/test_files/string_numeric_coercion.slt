@@ -554,6 +554,109 @@ SELECT arrow_cast('hello', 'RunEndEncoded("run_ends": non-null Int32, "values": 
 true
 
 # -------------------------------------------------
+# Arithmetic operators use string-to-numeric coercion.
+# A string operand is coerced to the numeric type of the other operand.
+# See: https://github.com/apache/datafusion/issues/23041
+# -------------------------------------------------
+
+# Literal numeric + string literal
+query I
+SELECT 1 + '1';
+----
+2
+
+query T
+SELECT arrow_typeof(1 + '1');
+----
+Int64
+
+# String literal on the left-hand side
+query I
+SELECT '1' + 1;
+----
+2
+
+# All arithmetic operators against an integer column
+query I rowsort
+SELECT column1 + '10' FROM t_int;
+----
+1010
+11
+15
+335
+509
+
+query I rowsort
+SELECT column1 - '1' FROM t_int;
+----
+0
+324
+4
+498
+999
+
+query I rowsort
+SELECT column1 * '2' FROM t_int;
+----
+10
+2
+2000
+650
+998
+
+query I rowsort
+SELECT column1 / '5' FROM t_int;
+----
+0
+1
+200
+65
+99
+
+query I rowsort
+SELECT column1 % '2' FROM t_int;
+----
+0
+1
+1
+1
+1
+
+# String operand against a float column coerces to Float64
+query R rowsort
+SELECT column1 + '0.5' FROM t_float;
+----
+1000.6
+2
+326.2
+5.5
+500.4
+
+query T
+SELECT arrow_typeof(column1 + '0.5') FROM t_float LIMIT 1;
+----
+Float64
+
+# Plan shows the string literal is cast to the numeric type, not the reverse
+query TT
+EXPLAIN SELECT column1 + '10' FROM t_int;
+----
+logical_plan
+01)Projection: t_int.column1 + Int64(10) AS t_int.column1 + Utf8("10")
+02)--TableScan: t_int projection=[column1]
+physical_plan
+01)ProjectionExec: expr=[column1@0 + 10 as t_int.column1 + Utf8("10")]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Non-numeric string operand errors at runtime when cast to the numeric type
+statement error Arrow error: Cast error: Cannot cast string 'hello' to value of Int64 type
+SELECT column1 + 'hello' FROM t_int;
+
+# Two string operands remain ambiguous and are not coerced
+query error Cannot coerce arithmetic expression Utf8 \+ Utf8 to valid types
+SELECT '1' + '2';
+
+# -------------------------------------------------
 # Cleanup
 # -------------------------------------------------
 

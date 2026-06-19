@@ -317,6 +317,11 @@ impl<'a> BinaryTypeCoercer<'a> {
             } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
+            } else if let Some(numeric) = string_numeric_coercion(lhs, rhs) {
+                // String to numeric arithmetic, e.g. Int64 + Utf8 or Utf8 + Float64.
+                // The string operand is coerced to the numeric type of the other
+                // operand, mirroring the behavior of comparison coercion.
+                Ok(Signature::uniform(numeric))
             } else {
                 plan_err!(
                     "Cannot coerce arithmetic expression {} {} {} to valid types", self.lhs, self.op, self.rhs
