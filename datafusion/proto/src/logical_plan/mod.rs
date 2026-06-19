@@ -58,6 +58,7 @@ use datafusion_datasource_json::file_format::{
 };
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
     AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RangePartitioning,
     RecursiveQuery, SkipType, TableSource, Unnest, WriteOp,
@@ -647,8 +648,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let options = ListingOptions::new(file_format)
                     .with_file_extension(&scan.file_extension)
                     .with_table_partition_cols(partition_columns)
-                    .with_collect_stat(scan.collect_stat)
-                    .with_target_partitions(scan.target_partitions as usize)
                     .with_file_sort_order(all_sort_orders);
 
                 let config =
@@ -1259,10 +1258,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                 .build()
             }
             LogicalPlanType::Dml(dml_node) => {
+                let write_op =
+                    from_proto::parse_write_op(dml_node, ctx, extension_codec)?;
                 Ok(LogicalPlan::Dml(datafusion_expr::DmlStatement::new(
                     from_table_reference(dml_node.table_name.as_ref(), "DML ")?,
                     to_table_source(&dml_node.target, ctx, extension_codec)?,
-                    WriteOp::from_proto(dml_node.dml_type()),
+                    write_op,
                     Arc::new(into_logical_plan!(dml_node.input, ctx, extension_codec)?),
                 )))
             }
@@ -1420,7 +1421,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 table_name: Some(protobuf::TableReference::from_proto(
                                     table_name.clone(),
                                 )),
-                                collect_stat: options.collect_stat,
                                 file_extension: options.file_extension.clone(),
                                 table_partition_cols: partition_columns,
                                 paths: listing_table
@@ -1431,7 +1431,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 schema: Some(schema),
                                 projection,
                                 filters,
-                                target_partitions: options.target_partitions as u32,
                                 file_sort_order: exprs_vec,
                             },
                         )),
@@ -2104,7 +2103,33 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => {
                 let input =
                     LogicalPlanNode::try_from_logical_plan(input, extension_codec)?;
-                let dml_type = dml_node::Type::from_proto(op);
+                let (dml_type, merge_into) = match op {
+                    WriteOp::Insert(InsertOp::Append) => {
+                        (dml_node::Type::InsertAppend, None)
+                    }
+                    WriteOp::Insert(InsertOp::Overwrite) => {
+                        (dml_node::Type::InsertOverwrite, None)
+                    }
+                    WriteOp::Insert(InsertOp::Replace) => {
+                        (dml_node::Type::InsertReplace, None)
+                    }
+                    WriteOp::Delete => (dml_node::Type::Delete, None),
+                    WriteOp::Update => (dml_node::Type::Update, None),
+                    WriteOp::Ctas => (dml_node::Type::Ctas, None),
+                    WriteOp::Truncate => (dml_node::Type::Truncate, None),
+                    WriteOp::MergeInto(merge_op) => (
+                        dml_node::Type::MergeInto,
+                        Some(Box::new(to_proto::serialize_merge_into_op(
+                            merge_op,
+                            extension_codec,
+                        )?)),
+                    ),
+                    other => {
+                        return Err(proto_error(format!(
+                            "WriteOp variant has no DmlNode encoding: {other}"
+                        )));
+                    }
+                };
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Dml(Box::new(DmlNode {
                         input: Some(Box::new(input)),
@@ -2117,6 +2142,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             table_name.clone(),
                         )),
                         dml_type: dml_type.into(),
+                        merge_into,
                     }))),
                 })
             }

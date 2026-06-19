@@ -52,6 +52,7 @@ use crate::projection::{
     try_pushdown_through_join,
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
@@ -844,6 +845,14 @@ impl HashJoinExec {
             return false;
         }
 
+        // Bounds and membership filters derived from the build side do not
+        // account for null-equal matching: a probe-side NULL key evaluates
+        // such predicates to NULL and would be pruned, even though it can
+        // match a build-side NULL when nulls compare equal.
+        if self.null_equality == NullEquality::NullEqualsNull {
+            return false;
+        }
+
         // `preserve_file_partitions` can report Hash partitioning for Hive-style
         // file groups, but those partitions are not actually hash-distributed.
         // Partitioned dynamic filters rely on hash routing, so disable them in
@@ -1140,6 +1149,8 @@ impl DisplayAs for HashJoinExec {
                 let display_fetch = self
                     .fetch
                     .map_or_else(String::new, |f| format!(", fetch={f}"));
+                let display_null_aware =
+                    if self.null_aware { ", null_aware" } else { "" };
                 let on = self
                     .on
                     .iter()
@@ -1148,7 +1159,7 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}",
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}{}",
                     self.mode,
                     self.join_type,
                     on,
@@ -1156,6 +1167,7 @@ impl DisplayAs for HashJoinExec {
                     display_projections,
                     display_null_equality,
                     display_fetch,
+                    display_null_aware,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -1176,6 +1188,10 @@ impl DisplayAs for HashJoinExec {
 
                 if self.null_equality() == NullEquality::NullEqualsNull {
                     writeln!(f, "NullsEqual: true")?;
+                }
+
+                if self.null_aware {
+                    writeln!(f, "null_aware")?;
                 }
 
                 if let Some(filter) = self.filter.as_ref() {
@@ -1434,14 +1450,14 @@ impl ExecutionPlan for HashJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = match (partition, self.mode) {
-            // For CollectLeft mode, the left side is collected into a single partition,
-            // so all left partitions are available to each output partition.
-            // For the right side, we need the specific partition statistics.
-            (Some(partition), PartitionMode::CollectLeft) => {
-                let left_stats = self.left.partition_statistics(None)?;
-                let right_stats = self.right.partition_statistics(Some(partition))?;
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let stats = match (args.partition(), self.mode) {
+            // Left side is broadcast, so it always needs overall stats
+            // Right side is partitioned, so it needs per-partition stats
+            (Some(_), PartitionMode::CollectLeft) => {
+                let left_stats = args.compute_child_statistics(&self.left, None)?;
+                let right_stats =
+                    args.compute_child_statistics(&self.right, args.partition())?;
 
                 estimate_join_statistics(
                     Arc::unwrap_or_clone(left_stats),
@@ -1453,11 +1469,13 @@ impl ExecutionPlan for HashJoinExec {
                 )?
             }
 
-            // For Partitioned mode, both sides are partitioned, so each output partition
-            // only has access to the corresponding partition from both sides.
-            (Some(partition), PartitionMode::Partitioned) => {
-                let left_stats = self.left.partition_statistics(Some(partition))?;
-                let right_stats = self.right.partition_statistics(Some(partition))?;
+            // For Partitioned mode, both sides are hash-partitioned symmetrically,
+            // so each output partition uses the matching partition from both sides.
+            (Some(_), PartitionMode::Partitioned) => {
+                let left_stats =
+                    args.compute_child_statistics(&self.left, args.partition())?;
+                let right_stats =
+                    args.compute_child_statistics(&self.right, args.partition())?;
 
                 estimate_join_statistics(
                     Arc::unwrap_or_clone(left_stats),
@@ -1469,14 +1487,25 @@ impl ExecutionPlan for HashJoinExec {
                 )?
             }
 
-            // For Auto mode or when no specific partition is requested, fall back to
-            // the current behavior of getting all partition statistics.
-            (None, _) | (Some(_), PartitionMode::Auto) => {
-                // TODO stats: it is not possible in general to know the output size of joins
-                // There are some special cases though, for example:
-                // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-                let left_stats = self.left.partition_statistics(None)?;
-                let right_stats = self.right.partition_statistics(None)?;
+            // Overall stats requested, look up overall child stats.
+            (None, _) => {
+                let left_stats = args.compute_child_statistics(&self.left, None)?;
+                let right_stats = args.compute_child_statistics(&self.right, None)?;
+                estimate_join_statistics(
+                    Arc::unwrap_or_clone(left_stats),
+                    Arc::unwrap_or_clone(right_stats),
+                    &self.on,
+                    self.null_equality,
+                    &self.join_type,
+                    &self.join_schema,
+                )?
+            }
+
+            // Auto mode hasn't decided partitioning yet, so it needs
+            // overall stats from both sides.
+            (Some(_), PartitionMode::Auto) => {
+                let left_stats = args.compute_child_statistics(&self.left, None)?;
+                let right_stats = args.compute_child_statistics(&self.right, None)?;
                 estimate_join_statistics(
                     Arc::unwrap_or_clone(left_stats),
                     Arc::unwrap_or_clone(right_stats),
@@ -1505,20 +1534,23 @@ impl ExecutionPlan for HashJoinExec {
             return Ok(None);
         }
 
+        // TODO: split by `col`/`JoinSide` instead so mark joins can also push down to children.
         let schema = self.schema();
-        if let Some(JoinData {
-            projected_left_child,
-            projected_right_child,
-            join_filter,
-            join_on,
-        }) = try_pushdown_through_join(
-            projection,
-            self.left(),
-            self.right(),
-            self.on(),
-            &schema,
-            self.filter(),
-        )? {
+        if !matches!(self.join_type(), JoinType::LeftMark | JoinType::RightMark)
+            && let Some(JoinData {
+                projected_left_child,
+                projected_right_child,
+                join_filter,
+                join_on,
+            }) = try_pushdown_through_join(
+                projection,
+                self.left(),
+                self.right(),
+                self.on(),
+                &schema,
+                self.filter(),
+            )?
+        {
             self.builder()
                 .with_new_children(vec![
                     Arc::new(projected_left_child),
@@ -2020,6 +2052,7 @@ async fn collect_left_input(
                     &mut hashes_buffer,
                     0,
                     true,
+                    null_equality,
                 )?;
                 offset += batch.num_rows();
             }
@@ -3334,6 +3367,171 @@ mod tests {
         Ok(())
     }
 
+    /// Under NullEqualsNothing, NULL join keys are not inserted into the hash
+    /// map, so a build side whose keys are all NULL produces an empty map even
+    /// though it contains rows. Join types that emit unmatched build rows must
+    /// still produce them from the visited bitmap.
+    #[rstest]
+    #[tokio::test]
+    async fn join_all_null_build_keys(
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        partition_mode: PartitionMode,
+    ) -> Result<()> {
+        let left = build_table_two_cols(
+            ("a1", &vec![Some(1), Some(2)]),
+            ("b1", &vec![None, None]), // all build-side join keys are NULL
+        );
+        let right = build_table_two_cols(
+            ("a2", &vec![Some(10), Some(20), Some(30)]),
+            ("b1", &vec![Some(4), None, Some(6)]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        for join_type in [
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::LeftMark,
+            JoinType::RightMark,
+        ] {
+            let (_, batches, metrics) = join_collect_with_partition_mode(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                on.clone(),
+                &join_type,
+                partition_mode,
+                NullEquality::NullEqualsNothing,
+                Arc::new(TaskContext::default()),
+            )
+            .await?;
+
+            // For join types whose output requires a build-side match, an
+            // empty map guarantees an empty result, so `state_after_build_ready`
+            // completes the stream without ever fetching a probe batch (probe
+            // `input_rows` stays 0). All other join types must still scan the
+            // probe side. `input_rows` is summed across every partition.
+            let probe_rows = metrics
+                .sum_by_name("input_rows")
+                .map(|v| v.as_usize())
+                .unwrap_or(0);
+            if join_type.empty_map_produces_empty_result() {
+                assert_eq!(
+                    probe_rows, 0,
+                    "{join_type} should skip the probe side for an all-NULL build"
+                );
+            } else {
+                assert!(probe_rows > 0, "{join_type} must scan the probe side");
+            }
+
+            match join_type {
+                JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
+                    let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                    assert_eq!(num_rows, 0, "unexpected rows for {join_type}");
+                }
+                JoinType::Left => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+----+----+
+                        | a1 | b1 | a2 | b1 |
+                        +----+----+----+----+
+                        | 1  |    |    |    |
+                        | 2  |    |    |    |
+                        +----+----+----+----+
+                        ");
+                    }
+                }
+                JoinType::Right => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+----+----+
+                        | a1 | b1 | a2 | b1 |
+                        +----+----+----+----+
+                        |    |    | 10 | 4  |
+                        |    |    | 20 |    |
+                        |    |    | 30 | 6  |
+                        +----+----+----+----+
+                        ");
+                    }
+                }
+                JoinType::Full => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+----+----+
+                        | a1 | b1 | a2 | b1 |
+                        +----+----+----+----+
+                        |    |    | 10 | 4  |
+                        |    |    | 20 |    |
+                        |    |    | 30 | 6  |
+                        | 1  |    |    |    |
+                        | 2  |    |    |    |
+                        +----+----+----+----+
+                        ");
+                    }
+                }
+                JoinType::LeftAnti => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+
+                        | a1 | b1 |
+                        +----+----+
+                        | 1  |    |
+                        | 2  |    |
+                        +----+----+
+                        ");
+                    }
+                }
+                JoinType::RightAnti => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+
+                        | a2 | b1 |
+                        +----+----+
+                        | 10 | 4  |
+                        | 20 |    |
+                        | 30 | 6  |
+                        +----+----+
+                        ");
+                    }
+                }
+                JoinType::LeftMark => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+-------+
+                        | a1 | b1 | mark  |
+                        +----+----+-------+
+                        | 1  |    | false |
+                        | 2  |    | false |
+                        +----+----+-------+
+                        ");
+                    }
+                }
+                JoinType::RightMark => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+-------+
+                        | a2 | b1 | mark  |
+                        +----+----+-------+
+                        | 10 | 4  | false |
+                        | 20 |    | false |
+                        | 30 | 6  | false |
+                        +----+----+-------+
+                        ");
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn partitioned_join_left_one(
@@ -4464,6 +4662,7 @@ mod tests {
             &[right_keys_values],
             NullEquality::NullEqualsNothing,
             &hashes_buffer,
+            None,
             8192,
             (0, None),
             &mut probe_indices_buffer,
@@ -4525,6 +4724,7 @@ mod tests {
             &[right_keys_values],
             NullEquality::NullEqualsNothing,
             &hashes_buffer,
+            None,
             8192,
             (0, None),
             &mut probe_indices_buffer,
@@ -6407,6 +6607,35 @@ mod tests {
             df.expression_id()
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_filter_pushdown_rejects_null_equal_join() -> Result<()> {
+        let (_, _, on) = build_schema_and_on()?;
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightSemi,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+            false,
+        )?;
+
+        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
         Ok(())
     }
 
