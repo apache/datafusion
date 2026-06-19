@@ -34,13 +34,18 @@ use parquet::data_type::Decimal;
 /// Parquet row groups and data pages based on the query predicate.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BloomFilterStatistics {
-    /// Per-column Bloom filters
-    /// Key: predicate column name
-    /// Value:
-    /// * [`Sbbf`] (Bloom filter),
-    /// * Parquet physical [`Type`] needed to evaluate  literals against the filter
-    /// * Type length from the Parquet column descriptor
-    column_sbbf: HashMap<String, (Sbbf, Type, i32)>,
+    /// Per-column Bloom filters keyed by predicate column name.
+    column_sbbf: HashMap<String, ColumnBloomFilter>,
+}
+
+#[derive(Debug, Clone)]
+struct ColumnBloomFilter {
+    /// [`Sbbf`] (Bloom filter).
+    sbbf: Sbbf,
+    /// Parquet physical [`Type`] needed to evaluate literals against the filter.
+    physical_type: Type,
+    /// Type length from the Parquet column descriptor.
+    type_length: i32,
 }
 
 impl BloomFilterStatistics {
@@ -64,8 +69,14 @@ impl BloomFilterStatistics {
         ty: Type,
         type_length: i32,
     ) {
-        self.column_sbbf
-            .insert(column.into(), (sbbf, ty, type_length));
+        self.column_sbbf.insert(
+            column.into(),
+            ColumnBloomFilter {
+                sbbf,
+                physical_type: ty,
+                type_length,
+            },
+        );
     }
 
     /// Helper function for checking if [`Sbbf`] filter contains [`ScalarValue`].
@@ -186,8 +197,7 @@ impl PruningStatistics for BloomFilterStatistics {
         column: &Column,
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
-        let (sbbf, parquet_type, type_length) =
-            self.column_sbbf.get(column.name.as_str())?;
+        let column_bloom_filter = self.column_sbbf.get(column.name.as_str())?;
 
         // Bloom filters are probabilistic data structures that can return false
         // positives (i.e. it might return true even if the value is not
@@ -198,10 +208,10 @@ impl PruningStatistics for BloomFilterStatistics {
             .iter()
             .map(|value| {
                 BloomFilterStatistics::check_scalar(
-                    sbbf,
+                    &column_bloom_filter.sbbf,
                     value,
-                    parquet_type,
-                    *type_length,
+                    &column_bloom_filter.physical_type,
+                    column_bloom_filter.type_length,
                 )
             })
             // The row group doesn't contain any of the values if
@@ -413,7 +423,11 @@ mod tests {
     async fn test_row_group_bloom_filter_pruning_predicate_decimal128() {
         for precision in [19, 20, 21, 28, 38] {
             let scale = 2;
-            let data = parquet_decimal128_with_bloom_filter(precision, scale);
+            let data = parquet_decimal128_with_bloom_filter(
+                precision,
+                scale,
+                vec![100, 200, 300, 400, 500, 600],
+            );
             let schema = Schema::new(vec![Field::new(
                 "decimal_col",
                 DataType::Decimal128(precision, scale),
@@ -429,6 +443,44 @@ mod tests {
 
             let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
                 &format!("decimal128-{precision}.parquet"),
+                data,
+                &pruning_predicate,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                pruned_row_groups.access_plan().row_group_indexes(),
+                vec![2],
+                "precision {precision}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_negative_decimal128() {
+        for precision in [19, 20, 21, 28, 38] {
+            let scale = 2;
+            let data = parquet_decimal128_with_bloom_filter(
+                precision,
+                scale,
+                vec![-100, -200, -300, -400, -500, -600],
+            );
+            let schema = Schema::new(vec![Field::new(
+                "decimal_col",
+                DataType::Decimal128(precision, scale),
+                true,
+            )]);
+            let expr = col("decimal_col").eq(Expr::Literal(
+                ScalarValue::Decimal128(Some(-500), precision, scale),
+                None,
+            ));
+            let expr = logical2physical(&expr, &schema);
+            let pruning_predicate =
+                PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+            let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+                &format!("negative-decimal128-{precision}.parquet"),
                 data,
                 &pruning_predicate,
             )
@@ -535,14 +587,18 @@ mod tests {
         }
     }
 
-    fn parquet_decimal128_with_bloom_filter(precision: u8, scale: i8) -> bytes::Bytes {
+    fn parquet_decimal128_with_bloom_filter(
+        precision: u8,
+        scale: i8,
+        values: Vec<i128>,
+    ) -> bytes::Bytes {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "decimal_col",
             DataType::Decimal128(precision, scale),
             true,
         )]));
         let array = Arc::new(
-            Decimal128Array::from(vec![100, 200, 300, 400, 500, 600])
+            Decimal128Array::from(values)
                 .with_precision_and_scale(precision, scale)
                 .unwrap(),
         ) as ArrayRef;
