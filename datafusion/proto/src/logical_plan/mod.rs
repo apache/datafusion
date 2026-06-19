@@ -72,7 +72,7 @@ use datafusion_expr::{
         builder::project,
     },
 };
-use datafusion_proto_common::{FromProtoError, protobuf_common};
+use datafusion_proto_common::protobuf_common;
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_range_split_point;
@@ -755,7 +755,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         split_points
                             .iter()
                             .map(from_proto::parse_protobuf_range_split_point)
-                            .collect::<Result<Vec<_>, FromProtoError>>()?,
+                            .collect::<Result<Vec<_>, _>>()?,
                     )?),
                 };
 
@@ -1772,7 +1772,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .split_points()
                             .iter()
                             .map(serialize_range_split_point)
-                            .collect::<Result<Vec<_>, ToProtoError>>()?;
+                            .collect::<Result<Vec<_>, _>>()?;
 
                         PartitionMethod::Range(protobuf::RangeRepartition {
                             expr: serialize_sorts(ordering, extension_codec)?,

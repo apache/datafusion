@@ -3353,7 +3353,7 @@ async fn roundtrip_range_partitioning() -> Result<()> {
         input: Arc::new(scan_plan),
         partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
             vec![col("a").sort(true, true)],
-            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(2))])],
+            vec![SplitPoint::new(vec![ScalarValue::Int64(Some(2))])],
         )?),
     });
     let bytes = logical_plan_to_bytes(&plan)?;
