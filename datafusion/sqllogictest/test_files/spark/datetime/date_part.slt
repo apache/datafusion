@@ -192,30 +192,40 @@ SELECT date_part('MINUTES'::string, '2000-01-01 12:30:45'::timestamp);
 30
 
 # SECOND
-query I
+query R
 SELECT date_part('SECOND'::string, '2000-01-01 12:30:45'::timestamp);
 ----
 45
 
-query I
+query R
 SELECT date_part('S'::string, '2000-01-01 12:30:45'::timestamp);
 ----
 45
 
-query I
+query R
 SELECT date_part('SEC'::string, '2000-01-01 12:30:45'::timestamp);
 ----
 45
 
-query I
+query R
 SELECT date_part('SECONDS'::string, '2000-01-01 12:30:45'::timestamp);
 ----
 45
 
-query I
+query R
 SELECT date_part('SECS'::string, '2000-01-01 12:30:45'::timestamp);
 ----
 45
+
+query R
+SELECT date_part('MILLISECOND'::string, '2020-01-01T00:00:00.123456789'::timestamp);
+----
+123.456789
+
+query R
+SELECT date_part('ms'::string, '2020-01-01T00:00:00.123456789'::timestamp);
+----
+123.456789
 
 # NULL input
 query I
