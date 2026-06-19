@@ -1368,19 +1368,27 @@ impl Unparser<'_> {
             ScalarValue::Utf8(None)
             | ScalarValue::Utf8View(None)
             | ScalarValue::LargeUtf8(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Binary(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::BinaryView(Some(_)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::Binary(Some(bin))
+            | ScalarValue::BinaryView(Some(bin))
+            | ScalarValue::LargeBinary(Some(bin))
+            | ScalarValue::FixedSizeBinary(_, Some(bin)) => {
+                let hex = bin
+                    .iter()
+                    .flat_map(|x| {
+                        const HEX: [char; 16] = [
+                            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b',
+                            'c', 'd', 'e', 'f',
+                        ];
+                        let (hi, lo) = (((*x >> 4) & 0xfu8), (*x & 0xfu8));
+                        [HEX[hi as usize], HEX[lo as usize]]
+                    })
+                    .collect::<String>();
+                Ok(ast::Expr::value(ast::Value::HexStringLiteral(hex)))
             }
-            ScalarValue::BinaryView(None) => Ok(ast::Expr::value(ast::Value::Null)),
-            ScalarValue::FixedSizeBinary(..) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::LargeBinary(Some(_)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::LargeBinary(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Binary(None)
+            | ScalarValue::BinaryView(None)
+            | ScalarValue::FixedSizeBinary(_, None)
+            | ScalarValue::LargeBinary(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
@@ -3723,5 +3731,73 @@ mod tests {
 
         let sql = expr_to_sql(&expr).unwrap().to_string();
         assert_eq!(sql, "(c1 IS NOT DISTINCT FROM true)");
+    }
+
+    #[test]
+    fn test_binary_literal() {
+        let value = vec![0xDEu8, 0xAD, 0xBE, 0xEF];
+        let expected_hex = "X'deadbeef'";
+
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::Binary(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::BinaryView(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::FixedSizeBinary(4, Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(
+                ScalarValue::LargeBinary(Some(value.clone())),
+                None
+            ))
+            .unwrap()
+            .to_string(),
+            expected_hex
+        );
+
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::Binary(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::BinaryView(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::FixedSizeBinary(1, None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(ScalarValue::LargeBinary(None), None))
+                .unwrap()
+                .to_string(),
+            "NULL"
+        );
     }
 }
