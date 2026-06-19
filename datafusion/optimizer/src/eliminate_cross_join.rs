@@ -371,8 +371,8 @@ fn find_inner_join(
             all_join_keys.insert_all(join_keys.iter());
             let right_input = rights.remove(i);
             let join_schema = Arc::new(build_join_schema(
-                left_input.schema(),
-                right_input.schema(),
+                &left_input,
+                &right_input,
                 &JoinType::Inner,
             )?);
 
@@ -393,11 +393,7 @@ fn find_inner_join(
     // no matching right plan had any join keys, cross join with the first right
     // plan
     let right = rights.remove(0);
-    let join_schema = Arc::new(build_join_schema(
-        left_input.schema(),
-        right.schema(),
-        &JoinType::Inner,
-    )?);
+    let join_schema = Arc::new(build_join_schema(&left_input, &right, &JoinType::Inner)?);
 
     Ok(LogicalPlan::Join(Join {
         left: Arc::new(left_input),
@@ -1398,11 +1394,7 @@ mod tests {
         let t2 = test_table_scan_with_name("t2")?;
 
         // Create an inner join with NullEquality::NullEqualsNull
-        let join_schema = Arc::new(build_join_schema(
-            t1.schema(),
-            t2.schema(),
-            &JoinType::Inner,
-        )?);
+        let join_schema = Arc::new(build_join_schema(&t1, &t2, &JoinType::Inner)?);
 
         let inner_join = LogicalPlan::Join(Join {
             left: Arc::new(t1),
