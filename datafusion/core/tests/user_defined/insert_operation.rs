@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
@@ -25,7 +25,6 @@ use datafusion::{
 };
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::config::Dialect;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_expr::{Expr, TableType, dml::InsertOp};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_plan::execution_plan::SchedulingType;
@@ -88,10 +87,6 @@ impl TestInsertTableProvider {
 
 #[async_trait]
 impl TableProvider for TestInsertTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -180,22 +175,6 @@ impl ExecutionPlan for TestInsertExec {
         _context: Arc<datafusion_execution::TaskContext>,
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
         unimplemented!("TestInsertExec is a stub for testing.")
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion_physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.plan_properties.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 }
 

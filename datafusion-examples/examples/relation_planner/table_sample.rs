@@ -108,7 +108,7 @@ use datafusion::{
     },
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput},
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
@@ -116,7 +116,7 @@ use datafusion::{
 };
 use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err, tree_node::TreeNodeRecursion,
+    plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
@@ -722,8 +722,10 @@ impl ExecutionPlan for SampleExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let mut stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.input, args.partition())?,
+        );
         let ratio = self.upper_bound - self.lower_bound;
 
         // Scale statistics by sampling ratio (inexact due to randomness)
@@ -737,22 +739,6 @@ impl ExecutionPlan for SampleExec {
             .to_inexact();
 
         Ok(Arc::new(stats))
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion::physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 }
 

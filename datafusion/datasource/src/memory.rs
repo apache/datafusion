@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
@@ -29,7 +28,6 @@ use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, ScalarValue, assert_or_internal_err, plan_err, project_schema,
 };
@@ -90,10 +88,6 @@ impl DataSource for MemorySourceConfig {
             )?
             .with_fetch(self.fetch),
         )))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
@@ -261,20 +255,6 @@ impl DataSource for MemorySourceConfig {
                 })
             })
             .transpose()
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in sort_information
-        let mut tnr = TreeNodeRecursion::Continue;
-        for ordering in &self.sort_information {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
     }
 }
 
@@ -772,10 +752,6 @@ impl MemSink {
 
 #[async_trait]
 impl DataSink for MemSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
@@ -799,7 +775,7 @@ impl DataSink for MemSink {
         }
 
         // write the outputs into the batches
-        for (target, mut batches) in self.batches.iter().zip(new_batches.into_iter()) {
+        for (target, mut batches) in self.batches.iter().zip(new_batches) {
             // Append all the new batches in one go to minimize locking overhead
             target.write().await.append(&mut batches);
         }
@@ -877,6 +853,7 @@ mod tests {
     use datafusion_common::stats::{ColumnStatistics, Precision};
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::expressions::lit;
+    use datafusion_physical_plan::statistics::StatisticsArgs;
 
     use datafusion_physical_plan::ExecutionPlan;
 
@@ -930,10 +907,7 @@ mod tests {
             .try_swapping_with_projection(&projection)
             .unwrap()
             .unwrap();
-        let new_source = swapped
-            .as_any()
-            .downcast_ref::<MemorySourceConfig>()
-            .unwrap();
+        let new_source = swapped.downcast_ref::<MemorySourceConfig>().unwrap();
 
         assert_eq!(
             new_source.fetch,
@@ -1012,7 +986,7 @@ mod tests {
         let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
-            *values.partition_statistics(None)?,
+            *values.statistics_with_args(&StatisticsArgs::new())?,
             Statistics {
                 num_rows: Precision::Exact(rows),
                 total_byte_size: Precision::Exact(8), // not important
@@ -1261,9 +1235,8 @@ mod tests {
         // Starting = batch(100_000), batch(10_000), batch(100), batch(1).
         // It should have split as p1=batch(100_000), p2=[batch(10_000), batch(100), batch(1)]
         let partitioned_datasrc = partitioned_datasrc.unwrap();
-        let Some(mem_src_config) = partitioned_datasrc
-            .as_any()
-            .downcast_ref::<MemorySourceConfig>()
+        let Some(mem_src_config) =
+            partitioned_datasrc.downcast_ref::<MemorySourceConfig>()
         else {
             unreachable!()
         };
@@ -1460,9 +1433,8 @@ mod tests {
         // Starting = batch(100_000), batch(1), batch(100), batch(10_000).
         // It should have split as p1=batch(100_000), p2=[batch(1), batch(100), batch(10_000)]
         let partitioned_datasrc = partitioned_datasrc.unwrap();
-        let Some(mem_src_config) = partitioned_datasrc
-            .as_any()
-            .downcast_ref::<MemorySourceConfig>()
+        let Some(mem_src_config) =
+            partitioned_datasrc.downcast_ref::<MemorySourceConfig>()
         else {
             unreachable!()
         };

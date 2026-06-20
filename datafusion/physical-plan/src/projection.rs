@@ -33,6 +33,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, FilterRemapper, PushedDownPredicate,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
+use crate::statistics::StatisticsArgs;
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr, check_if_same_properties};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -312,17 +313,6 @@ impl ExecutionPlan for ProjectionExec {
         vec![&self.input]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for proj_expr in self.projector.projection().as_ref().iter() {
-            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -359,9 +349,10 @@ impl ExecutionPlan for ProjectionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let input_stats =
-            Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let input_stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.input, args.partition())?,
+        );
         let output_schema = self.schema();
         Ok(Arc::new(
             self.projector
@@ -382,12 +373,9 @@ impl ExecutionPlan for ProjectionExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let maybe_unified = try_unifying_projections(projection, self)?;
-        if let Some(new_plan) = maybe_unified {
-            // To unify 3 or more sequential projections:
-            remove_unnecessary_projections(new_plan).data().map(Some)
-        } else {
-            Ok(Some(Arc::new(projection.clone())))
+        match try_collapse_projection_chain(projection)? {
+            Some(plan) => Ok(Some(plan)),
+            None => Ok(Some(Arc::new(projection.clone()))),
         }
     }
 
@@ -442,7 +430,7 @@ impl ExecutionPlan for ProjectionExec {
             // Recursively transform the expression
             let mut can_pushdown = true;
             let transformed = Arc::clone(&sort_expr.expr).transform(|expr| {
-                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                if let Some(col) = expr.downcast_ref::<Column>() {
                     // Check if column index is valid.
                     // This should always be true but fail gracefully if it's not.
                     if col.index() >= self.expr().len() {
@@ -455,9 +443,7 @@ impl ExecutionPlan for ProjectionExec {
                     // Check if projection expression is a simple column
                     // We cannot push down order by clauses that depend on
                     // projected computations as they would have nothing to reference.
-                    if let Some(child_col) =
-                        proj_expr.expr.as_any().downcast_ref::<Column>()
-                    {
+                    if let Some(child_col) = proj_expr.expr.downcast_ref::<Column>() {
                         // Replace with the child column
                         Ok(Transformed::yes(Arc::new(child_col.clone()) as _))
                     } else {
@@ -750,7 +736,7 @@ pub fn remove_unnecessary_projections(
 fn is_projection_removable(projection: &ProjectionExec) -> bool {
     let exprs = projection.expr();
     exprs.iter().enumerate().all(|(idx, proj_expr)| {
-        let Some(col) = proj_expr.expr.as_any().downcast_ref::<Column>() else {
+        let Some(col) = proj_expr.expr.downcast_ref::<Column>() else {
             return false;
         };
         col.name() == proj_expr.alias && col.index() == idx
@@ -763,7 +749,6 @@ pub fn all_alias_free_columns(exprs: &[ProjectionExpr]) -> bool {
     exprs.iter().all(|proj_expr| {
         proj_expr
             .expr
-            .as_any()
             .downcast_ref::<Column>()
             .map(|column| column.name() == proj_expr.alias)
             .unwrap_or(false)
@@ -782,7 +767,6 @@ pub fn new_projections_for_columns(
         .filter_map(|proj_expr| {
             proj_expr
                 .expr
-                .as_any()
                 .downcast_ref::<Column>()
                 .map(|expr| source[expr.index()])
         })
@@ -801,9 +785,7 @@ pub fn make_with_child(
 
 /// Returns `true` if all the expressions in the argument are `Column`s.
 pub fn all_columns(exprs: &[ProjectionExpr]) -> bool {
-    exprs
-        .iter()
-        .all(|proj_expr| proj_expr.expr.as_any().is::<Column>())
+    exprs.iter().all(|proj_expr| proj_expr.expr.is::<Column>())
 }
 
 /// Updates the given lexicographic ordering according to given projected
@@ -852,7 +834,6 @@ pub fn physical_to_column_exprs(
         .map(|proj_expr| {
             proj_expr
                 .expr
-                .as_any()
                 .downcast_ref::<Column>()
                 .map(|col| (col.clone(), proj_expr.alias.clone()))
         })
@@ -1021,55 +1002,69 @@ pub fn update_join_filter(
     })
 }
 
-/// Unifies `projection` with its input (which is also a [`ProjectionExec`]).
-fn try_unifying_projections(
-    projection: &ProjectionExec,
-    child: &ProjectionExec,
+/// Collapse a chain of consecutive [`ProjectionExec`]s into one. Returns
+/// `None` if nothing could be merged.
+fn try_collapse_projection_chain(
+    outer: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    let mut projected_exprs = vec![];
+    let mut current_exprs: Vec<ProjectionExpr> = outer.expr().to_vec();
+    let mut current_input: Arc<dyn ExecutionPlan> = Arc::clone(outer.input());
     let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
+    let mut collapsed_any = false;
 
-    // Collect the column references usage in the outer projection.
-    projection.expr().iter().for_each(|proj_expr| {
-        proj_expr
-            .expr
-            .apply(|expr| {
-                Ok({
-                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                        *column_ref_map.entry(column.clone()).or_default() += 1;
-                    }
-                    TreeNodeRecursion::Continue
-                })
-            })
-            .unwrap();
-    });
-    // Merging these projections is not beneficial, e.g
-    // If an expression is not trivial (KeepInPlace) and it is referred more than 1, unifies projections will be
-    // beneficial as caching mechanism for non-trivial computations.
-    // See discussion in: https://github.com/apache/datafusion/issues/8296
-    if column_ref_map.iter().any(|(column, count)| {
-        *count > 1
-            && !child.expr()[column.index()]
-                .expr
-                .placement()
-                .should_push_to_leaves()
-    }) {
+    'outer: while let Some(inner_proj) = current_input.downcast_ref::<ProjectionExec>() {
+        // Collect the column references usage in the outer projection.
+        column_ref_map.clear();
+        for proj_expr in &current_exprs {
+            proj_expr.expr.apply(|expr| {
+                if let Some(column) = expr.downcast_ref::<Column>() {
+                    *column_ref_map.entry(column.clone()).or_default() += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        let inner_exprs = inner_proj.expr();
+        // Merging these projections is not beneficial, e.g
+        // If an expression is not trivial (KeepInPlace) and it is referred more than 1, unifies projections will be
+        // beneficial as caching mechanism for non-trivial computations.
+        // See discussion in: https://github.com/apache/datafusion/issues/8296
+        let blocked = column_ref_map.iter().any(|(column, count)| {
+            *count > 1
+                && !inner_exprs[column.index()]
+                    .expr
+                    .placement()
+                    .should_push_to_leaves()
+        });
+        if blocked {
+            break;
+        }
+
+        let mut new_phys: Vec<Arc<dyn PhysicalExpr>> =
+            Vec::with_capacity(current_exprs.len());
+        for proj_expr in &current_exprs {
+            // If there is no match in the input projection, we cannot unify these
+            // projections. This case will arise if the projection expression contains
+            // a `PhysicalExpr` variant `update_expr` doesn't support.
+            let Some(expr) = update_expr(&proj_expr.expr, inner_exprs, true)? else {
+                break 'outer;
+            };
+            new_phys.push(expr);
+        }
+        for (proj_expr, expr) in current_exprs.iter_mut().zip(new_phys) {
+            proj_expr.expr = expr;
+        }
+        current_input = Arc::clone(inner_proj.input());
+        collapsed_any = true;
+    }
+
+    if !collapsed_any {
         return Ok(None);
     }
-    for proj_expr in projection.expr() {
-        // If there is no match in the input projection, we cannot unify these
-        // projections. This case will arise if the projection expression contains
-        // a `PhysicalExpr` variant `update_expr` doesn't support.
-        let Some(expr) = update_expr(&proj_expr.expr, child.expr(), true)? else {
-            return Ok(None);
-        };
-        projected_exprs.push(ProjectionExpr {
-            expr,
-            alias: proj_expr.alias.clone(),
-        });
-    }
-    ProjectionExec::try_new(projected_exprs, Arc::clone(child.input()))
-        .map(|e| Some(Arc::new(e) as _))
+
+    // To unify 3 or more sequential projections:
+    let unified: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(current_exprs, current_input)?);
+    remove_unnecessary_projections(unified).data().map(Some)
 }
 
 /// Collect all column indices from the given projection expressions.
@@ -1083,7 +1078,7 @@ fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
     let mut seen = std::collections::HashSet::new();
     let mut indices = Vec::new();
     for proj_expr in exprs {
-        if let Some(col) = proj_expr.expr.as_any().downcast_ref::<Column>() {
+        if let Some(col) = proj_expr.expr.downcast_ref::<Column>() {
             // Simple column reference: preserve projection order.
             if seen.insert(col.index()) {
                 indices.push(col.index());
@@ -1095,7 +1090,7 @@ fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
             proj_expr
                 .expr
                 .apply(|expr| {
-                    if let Some(col) = expr.as_any().downcast_ref::<Column>()
+                    if let Some(col) = expr.downcast_ref::<Column>()
                         && seen.insert(col.index())
                     {
                         indices.push(col.index());
@@ -1151,7 +1146,7 @@ fn new_columns_for_join_on(
             // Rewrite all columns in `on`
             Arc::clone(*on)
                 .transform(|expr| {
-                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                    if let Some(column) = expr.downcast_ref::<Column>() {
                         // Find the column in the projection expressions
                         let new_column = projection_exprs
                             .iter()
@@ -1191,6 +1186,7 @@ mod tests {
     use crate::common::collect;
 
     use crate::filter_pushdown::PushedDown;
+    use crate::statistics::StatisticsArgs;
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
@@ -1381,7 +1377,9 @@ mod tests {
 
         let projection = ProjectionExec::try_new(exprs, input).unwrap();
 
-        let stats = projection.partition_statistics(None).unwrap();
+        let stats = projection
+            .statistics_with_args(&StatisticsArgs::new())
+            .unwrap();
 
         assert_eq!(stats.num_rows, Precision::Exact(10));
         assert_eq!(

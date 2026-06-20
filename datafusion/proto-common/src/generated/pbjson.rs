@@ -264,6 +264,12 @@ impl serde::Serialize for ArrowType {
                 arrow_type::ArrowTypeEnum::FixedSizeList(v) => {
                     struct_ser.serialize_field("FIXEDSIZELIST", v)?;
                 }
+                arrow_type::ArrowTypeEnum::ListView(v) => {
+                    struct_ser.serialize_field("LISTVIEW", v)?;
+                }
+                arrow_type::ArrowTypeEnum::LargeListView(v) => {
+                    struct_ser.serialize_field("LARGELISTVIEW", v)?;
+                }
                 arrow_type::ArrowTypeEnum::Struct(v) => {
                     struct_ser.serialize_field("STRUCT", v)?;
                 }
@@ -332,6 +338,10 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             "LARGELIST",
             "FIXED_SIZE_LIST",
             "FIXEDSIZELIST",
+            "LIST_VIEW",
+            "LISTVIEW",
+            "LARGE_LIST_VIEW",
+            "LARGELISTVIEW",
             "STRUCT",
             "UNION",
             "DICTIONARY",
@@ -376,6 +386,8 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             List,
             LargeList,
             FixedSizeList,
+            ListView,
+            LargeListView,
             Struct,
             Union,
             Dictionary,
@@ -436,6 +448,8 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             "LIST" => Ok(GeneratedField::List),
                             "LARGELIST" | "LARGE_LIST" => Ok(GeneratedField::LargeList),
                             "FIXEDSIZELIST" | "FIXED_SIZE_LIST" => Ok(GeneratedField::FixedSizeList),
+                            "LISTVIEW" | "LIST_VIEW" => Ok(GeneratedField::ListView),
+                            "LARGELISTVIEW" | "LARGE_LIST_VIEW" => Ok(GeneratedField::LargeListView),
                             "STRUCT" => Ok(GeneratedField::Struct),
                             "UNION" => Ok(GeneratedField::Union),
                             "DICTIONARY" => Ok(GeneratedField::Dictionary),
@@ -696,6 +710,20 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::FixedSizeList)
 ;
                         }
+                        GeneratedField::ListView => {
+                            if arrow_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("LISTVIEW"));
+                            }
+                            arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::ListView)
+;
+                        }
+                        GeneratedField::LargeListView => {
+                            if arrow_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("LARGELISTVIEW"));
+                            }
+                            arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::LargeListView)
+;
+                        }
                         GeneratedField::Struct => {
                             if arrow_type_enum__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("STRUCT"));
@@ -881,144 +909,6 @@ impl<'de> serde::Deserialize<'de> for AvroOptions {
             }
         }
         deserializer.deserialize_struct("datafusion_common.AvroOptions", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for CdcOptions {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.min_chunk_size != 0 {
-            len += 1;
-        }
-        if self.max_chunk_size != 0 {
-            len += 1;
-        }
-        if self.norm_level != 0 {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion_common.CdcOptions", len)?;
-        if self.min_chunk_size != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("minChunkSize", ToString::to_string(&self.min_chunk_size).as_str())?;
-        }
-        if self.max_chunk_size != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("maxChunkSize", ToString::to_string(&self.max_chunk_size).as_str())?;
-        }
-        if self.norm_level != 0 {
-            struct_ser.serialize_field("normLevel", &self.norm_level)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for CdcOptions {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "min_chunk_size",
-            "minChunkSize",
-            "max_chunk_size",
-            "maxChunkSize",
-            "norm_level",
-            "normLevel",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            MinChunkSize,
-            MaxChunkSize,
-            NormLevel,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl serde::de::Visitor<'_> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "minChunkSize" | "min_chunk_size" => Ok(GeneratedField::MinChunkSize),
-                            "maxChunkSize" | "max_chunk_size" => Ok(GeneratedField::MaxChunkSize),
-                            "normLevel" | "norm_level" => Ok(GeneratedField::NormLevel),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = CdcOptions;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion_common.CdcOptions")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<CdcOptions, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut min_chunk_size__ = None;
-                let mut max_chunk_size__ = None;
-                let mut norm_level__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::MinChunkSize => {
-                            if min_chunk_size__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("minChunkSize"));
-                            }
-                            min_chunk_size__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::MaxChunkSize => {
-                            if max_chunk_size__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("maxChunkSize"));
-                            }
-                            max_chunk_size__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                        GeneratedField::NormLevel => {
-                            if norm_level__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("normLevel"));
-                            }
-                            norm_level__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                    }
-                }
-                Ok(CdcOptions {
-                    min_chunk_size: min_chunk_size__.unwrap_or_default(),
-                    max_chunk_size: max_chunk_size__.unwrap_or_default(),
-                    norm_level: norm_level__.unwrap_or_default(),
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion_common.CdcOptions", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for Column {
@@ -1839,6 +1729,15 @@ impl serde::Serialize for CsvOptions {
         if self.compression_level.is_some() {
             len += 1;
         }
+        if self.quote_style != 0 {
+            len += 1;
+        }
+        if !self.ignore_leading_whitespace.is_empty() {
+            len += 1;
+        }
+        if !self.ignore_trailing_whitespace.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1919,6 +1818,21 @@ impl serde::Serialize for CsvOptions {
         if let Some(v) = self.compression_level.as_ref() {
             struct_ser.serialize_field("compressionLevel", v)?;
         }
+        if self.quote_style != 0 {
+            let v = CsvQuoteStyle::try_from(self.quote_style)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.quote_style)))?;
+            struct_ser.serialize_field("quoteStyle", &v)?;
+        }
+        if !self.ignore_leading_whitespace.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("ignoreLeadingWhitespace", pbjson::private::base64::encode(&self.ignore_leading_whitespace).as_str())?;
+        }
+        if !self.ignore_trailing_whitespace.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("ignoreTrailingWhitespace", pbjson::private::base64::encode(&self.ignore_trailing_whitespace).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1961,6 +1875,12 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "truncatedRows",
             "compression_level",
             "compressionLevel",
+            "quote_style",
+            "quoteStyle",
+            "ignore_leading_whitespace",
+            "ignoreLeadingWhitespace",
+            "ignore_trailing_whitespace",
+            "ignoreTrailingWhitespace",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1984,6 +1904,9 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             Terminator,
             TruncatedRows,
             CompressionLevel,
+            QuoteStyle,
+            IgnoreLeadingWhitespace,
+            IgnoreTrailingWhitespace,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2024,6 +1947,9 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "terminator" => Ok(GeneratedField::Terminator),
                             "truncatedRows" | "truncated_rows" => Ok(GeneratedField::TruncatedRows),
                             "compressionLevel" | "compression_level" => Ok(GeneratedField::CompressionLevel),
+                            "quoteStyle" | "quote_style" => Ok(GeneratedField::QuoteStyle),
+                            "ignoreLeadingWhitespace" | "ignore_leading_whitespace" => Ok(GeneratedField::IgnoreLeadingWhitespace),
+                            "ignoreTrailingWhitespace" | "ignore_trailing_whitespace" => Ok(GeneratedField::IgnoreTrailingWhitespace),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2062,6 +1988,9 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut terminator__ = None;
                 let mut truncated_rows__ = None;
                 let mut compression_level__ = None;
+                let mut quote_style__ = None;
+                let mut ignore_leading_whitespace__ = None;
+                let mut ignore_trailing_whitespace__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -2200,6 +2129,28 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::QuoteStyle => {
+                            if quote_style__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("quoteStyle"));
+                            }
+                            quote_style__ = Some(map_.next_value::<CsvQuoteStyle>()? as i32);
+                        }
+                        GeneratedField::IgnoreLeadingWhitespace => {
+                            if ignore_leading_whitespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreLeadingWhitespace"));
+                            }
+                            ignore_leading_whitespace__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::IgnoreTrailingWhitespace => {
+                            if ignore_trailing_whitespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreTrailingWhitespace"));
+                            }
+                            ignore_trailing_whitespace__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvOptions {
@@ -2222,10 +2173,90 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     terminator: terminator__.unwrap_or_default(),
                     truncated_rows: truncated_rows__.unwrap_or_default(),
                     compression_level: compression_level__,
+                    quote_style: quote_style__.unwrap_or_default(),
+                    ignore_leading_whitespace: ignore_leading_whitespace__.unwrap_or_default(),
+                    ignore_trailing_whitespace: ignore_trailing_whitespace__.unwrap_or_default(),
                 })
             }
         }
         deserializer.deserialize_struct("datafusion_common.CsvOptions", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for CsvQuoteStyle {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Necessary => "NECESSARY",
+            Self::Always => "ALWAYS",
+            Self::NonNumeric => "NON_NUMERIC",
+            Self::Never => "NEVER",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for CsvQuoteStyle {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "NECESSARY",
+            "ALWAYS",
+            "NON_NUMERIC",
+            "NEVER",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = CsvQuoteStyle;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "NECESSARY" => Ok(CsvQuoteStyle::Necessary),
+                    "ALWAYS" => Ok(CsvQuoteStyle::Always),
+                    "NON_NUMERIC" => Ok(CsvQuoteStyle::NonNumeric),
+                    "NEVER" => Ok(CsvQuoteStyle::Never),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for CsvWriterOptions {
@@ -2269,6 +2300,15 @@ impl serde::Serialize for CsvWriterOptions {
         if self.double_quote {
             len += 1;
         }
+        if self.quote_style != 0 {
+            len += 1;
+        }
+        if self.ignore_leading_whitespace {
+            len += 1;
+        }
+        if self.ignore_trailing_whitespace {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvWriterOptions", len)?;
         if self.compression != 0 {
             let v = CompressionTypeVariant::try_from(self.compression)
@@ -2305,6 +2345,17 @@ impl serde::Serialize for CsvWriterOptions {
         if self.double_quote {
             struct_ser.serialize_field("doubleQuote", &self.double_quote)?;
         }
+        if self.quote_style != 0 {
+            let v = CsvQuoteStyle::try_from(self.quote_style)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.quote_style)))?;
+            struct_ser.serialize_field("quoteStyle", &v)?;
+        }
+        if self.ignore_leading_whitespace {
+            struct_ser.serialize_field("ignoreLeadingWhitespace", &self.ignore_leading_whitespace)?;
+        }
+        if self.ignore_trailing_whitespace {
+            struct_ser.serialize_field("ignoreTrailingWhitespace", &self.ignore_trailing_whitespace)?;
+        }
         struct_ser.end()
     }
 }
@@ -2333,6 +2384,12 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             "escape",
             "double_quote",
             "doubleQuote",
+            "quote_style",
+            "quoteStyle",
+            "ignore_leading_whitespace",
+            "ignoreLeadingWhitespace",
+            "ignore_trailing_whitespace",
+            "ignoreTrailingWhitespace",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2348,6 +2405,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
             Quote,
             Escape,
             DoubleQuote,
+            QuoteStyle,
+            IgnoreLeadingWhitespace,
+            IgnoreTrailingWhitespace,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2380,6 +2440,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             "quote" => Ok(GeneratedField::Quote),
                             "escape" => Ok(GeneratedField::Escape),
                             "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
+                            "quoteStyle" | "quote_style" => Ok(GeneratedField::QuoteStyle),
+                            "ignoreLeadingWhitespace" | "ignore_leading_whitespace" => Ok(GeneratedField::IgnoreLeadingWhitespace),
+                            "ignoreTrailingWhitespace" | "ignore_trailing_whitespace" => Ok(GeneratedField::IgnoreTrailingWhitespace),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2410,6 +2473,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                 let mut quote__ = None;
                 let mut escape__ = None;
                 let mut double_quote__ = None;
+                let mut quote_style__ = None;
+                let mut ignore_leading_whitespace__ = None;
+                let mut ignore_trailing_whitespace__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Compression => {
@@ -2478,6 +2544,24 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             }
                             double_quote__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::QuoteStyle => {
+                            if quote_style__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("quoteStyle"));
+                            }
+                            quote_style__ = Some(map_.next_value::<CsvQuoteStyle>()? as i32);
+                        }
+                        GeneratedField::IgnoreLeadingWhitespace => {
+                            if ignore_leading_whitespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreLeadingWhitespace"));
+                            }
+                            ignore_leading_whitespace__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::IgnoreTrailingWhitespace => {
+                            if ignore_trailing_whitespace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreTrailingWhitespace"));
+                            }
+                            ignore_trailing_whitespace__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(CsvWriterOptions {
@@ -2492,6 +2576,9 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                     quote: quote__.unwrap_or_default(),
                     escape: escape__.unwrap_or_default(),
                     double_quote: double_quote__.unwrap_or_default(),
+                    quote_style: quote_style__.unwrap_or_default(),
+                    ignore_leading_whitespace: ignore_leading_whitespace__.unwrap_or_default(),
+                    ignore_trailing_whitespace: ignore_trailing_whitespace__.unwrap_or_default(),
                 })
             }
         }
@@ -3891,6 +3978,195 @@ impl<'de> serde::Deserialize<'de> for EmptyMessage {
         deserializer.deserialize_struct("datafusion_common.EmptyMessage", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ExplainAnalyzeCategoriesNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.all {
+            len += 1;
+        }
+        if !self.only.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion_common.ExplainAnalyzeCategoriesNode", len)?;
+        if self.all {
+            struct_ser.serialize_field("all", &self.all)?;
+        }
+        if !self.only.is_empty() {
+            let v = self.only.iter().cloned().map(|v| {
+                MetricCategory::try_from(v)
+                    .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", v)))
+                }).collect::<std::result::Result<Vec<_>, _>>()?;
+            struct_ser.serialize_field("only", &v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ExplainAnalyzeCategoriesNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "all",
+            "only",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            All,
+            Only,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "all" => Ok(GeneratedField::All),
+                            "only" => Ok(GeneratedField::Only),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ExplainAnalyzeCategoriesNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion_common.ExplainAnalyzeCategoriesNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ExplainAnalyzeCategoriesNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut all__ = None;
+                let mut only__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::All => {
+                            if all__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("all"));
+                            }
+                            all__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Only => {
+                            if only__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("only"));
+                            }
+                            only__ = Some(map_.next_value::<Vec<MetricCategory>>()?.into_iter().map(|x| x as i32).collect());
+                        }
+                    }
+                }
+                Ok(ExplainAnalyzeCategoriesNode {
+                    all: all__.unwrap_or_default(),
+                    only: only__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion_common.ExplainAnalyzeCategoriesNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ExplainFormat {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Indent => "EXPLAIN_FORMAT_INDENT",
+            Self::Tree => "EXPLAIN_FORMAT_TREE",
+            Self::Pgjson => "EXPLAIN_FORMAT_PGJSON",
+            Self::Graphviz => "EXPLAIN_FORMAT_GRAPHVIZ",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for ExplainFormat {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "EXPLAIN_FORMAT_INDENT",
+            "EXPLAIN_FORMAT_TREE",
+            "EXPLAIN_FORMAT_PGJSON",
+            "EXPLAIN_FORMAT_GRAPHVIZ",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = ExplainFormat;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "EXPLAIN_FORMAT_INDENT" => Ok(ExplainFormat::Indent),
+                    "EXPLAIN_FORMAT_TREE" => Ok(ExplainFormat::Tree),
+                    "EXPLAIN_FORMAT_PGJSON" => Ok(ExplainFormat::Pgjson),
+                    "EXPLAIN_FORMAT_GRAPHVIZ" => Ok(ExplainFormat::Graphviz),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for Field {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -5172,6 +5448,154 @@ impl<'de> serde::Deserialize<'de> for Map {
         deserializer.deserialize_struct("datafusion_common.Map", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for MetricCategory {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Rows => "METRIC_CATEGORY_ROWS",
+            Self::Bytes => "METRIC_CATEGORY_BYTES",
+            Self::Timing => "METRIC_CATEGORY_TIMING",
+            Self::Uncategorized => "METRIC_CATEGORY_UNCATEGORIZED",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for MetricCategory {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "METRIC_CATEGORY_ROWS",
+            "METRIC_CATEGORY_BYTES",
+            "METRIC_CATEGORY_TIMING",
+            "METRIC_CATEGORY_UNCATEGORIZED",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = MetricCategory;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "METRIC_CATEGORY_ROWS" => Ok(MetricCategory::Rows),
+                    "METRIC_CATEGORY_BYTES" => Ok(MetricCategory::Bytes),
+                    "METRIC_CATEGORY_TIMING" => Ok(MetricCategory::Timing),
+                    "METRIC_CATEGORY_UNCATEGORIZED" => Ok(MetricCategory::Uncategorized),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for MetricType {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Summary => "METRIC_TYPE_SUMMARY",
+            Self::Dev => "METRIC_TYPE_DEV",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for MetricType {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "METRIC_TYPE_SUMMARY",
+            "METRIC_TYPE_DEV",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = MetricType;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "METRIC_TYPE_SUMMARY" => Ok(MetricType::Summary),
+                    "METRIC_TYPE_DEV" => Ok(MetricType::Dev),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for NdJsonFormat {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -5332,6 +5756,161 @@ impl<'de> serde::Deserialize<'de> for NullEquality {
             }
         }
         deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ParquetCdcOptions {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.enabled {
+            len += 1;
+        }
+        if self.min_chunk_size != 0 {
+            len += 1;
+        }
+        if self.max_chunk_size != 0 {
+            len += 1;
+        }
+        if self.norm_level != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetCdcOptions", len)?;
+        if self.enabled {
+            struct_ser.serialize_field("enabled", &self.enabled)?;
+        }
+        if self.min_chunk_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("minChunkSize", ToString::to_string(&self.min_chunk_size).as_str())?;
+        }
+        if self.max_chunk_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("maxChunkSize", ToString::to_string(&self.max_chunk_size).as_str())?;
+        }
+        if self.norm_level != 0 {
+            struct_ser.serialize_field("normLevel", &self.norm_level)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ParquetCdcOptions {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "enabled",
+            "min_chunk_size",
+            "minChunkSize",
+            "max_chunk_size",
+            "maxChunkSize",
+            "norm_level",
+            "normLevel",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Enabled,
+            MinChunkSize,
+            MaxChunkSize,
+            NormLevel,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "enabled" => Ok(GeneratedField::Enabled),
+                            "minChunkSize" | "min_chunk_size" => Ok(GeneratedField::MinChunkSize),
+                            "maxChunkSize" | "max_chunk_size" => Ok(GeneratedField::MaxChunkSize),
+                            "normLevel" | "norm_level" => Ok(GeneratedField::NormLevel),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ParquetCdcOptions;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion_common.ParquetCdcOptions")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ParquetCdcOptions, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut enabled__ = None;
+                let mut min_chunk_size__ = None;
+                let mut max_chunk_size__ = None;
+                let mut norm_level__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Enabled => {
+                            if enabled__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("enabled"));
+                            }
+                            enabled__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::MinChunkSize => {
+                            if min_chunk_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("minChunkSize"));
+                            }
+                            min_chunk_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::MaxChunkSize => {
+                            if max_chunk_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxChunkSize"));
+                            }
+                            max_chunk_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NormLevel => {
+                            if norm_level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("normLevel"));
+                            }
+                            norm_level__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(ParquetCdcOptions {
+                    enabled: enabled__.unwrap_or_default(),
+                    min_chunk_size: min_chunk_size__.unwrap_or_default(),
+                    max_chunk_size: max_chunk_size__.unwrap_or_default(),
+                    norm_level: norm_level__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion_common.ParquetCdcOptions", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ParquetColumnOptions {
@@ -5869,6 +6448,12 @@ impl serde::Serialize for ParquetOptions {
         if self.max_predicate_cache_size_opt.is_some() {
             len += 1;
         }
+        if self.max_row_group_bytes_opt.is_some() {
+            len += 1;
+        }
+        if self.coerce_int96_tz_opt.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetOptions", len)?;
         if self.enable_page_index {
             struct_ser.serialize_field("enablePageIndex", &self.enable_page_index)?;
@@ -6037,6 +6622,22 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.max_row_group_bytes_opt.as_ref() {
+            match v {
+                parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("maxRowGroupBytes", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        if let Some(v) = self.coerce_int96_tz_opt.as_ref() {
+            match v {
+                parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => {
+                    struct_ser.serialize_field("coerceInt96Tz", v)?;
+                }
+            }
+        }
         struct_ser.end()
     }
 }
@@ -6110,6 +6711,10 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "coerceInt96",
             "max_predicate_cache_size",
             "maxPredicateCacheSize",
+            "max_row_group_bytes",
+            "maxRowGroupBytes",
+            "coerce_int96_tz",
+            "coerceInt96Tz",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6147,6 +6752,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             BloomFilterNdv,
             CoerceInt96,
             MaxPredicateCacheSize,
+            MaxRowGroupBytes,
+            CoerceInt96Tz,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6201,6 +6808,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
                             "coerceInt96" | "coerce_int96" => Ok(GeneratedField::CoerceInt96),
                             "maxPredicateCacheSize" | "max_predicate_cache_size" => Ok(GeneratedField::MaxPredicateCacheSize),
+                            "maxRowGroupBytes" | "max_row_group_bytes" => Ok(GeneratedField::MaxRowGroupBytes),
+                            "coerceInt96Tz" | "coerce_int96_tz" => Ok(GeneratedField::CoerceInt96Tz),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6253,6 +6862,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut bloom_filter_ndv_opt__ = None;
                 let mut coerce_int96_opt__ = None;
                 let mut max_predicate_cache_size_opt__ = None;
+                let mut max_row_group_bytes_opt__ = None;
+                let mut coerce_int96_tz_opt__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EnablePageIndex => {
@@ -6467,6 +7078,18 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             max_predicate_cache_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(x.0));
                         }
+                        GeneratedField::MaxRowGroupBytes => {
+                            if max_row_group_bytes_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxRowGroupBytes"));
+                            }
+                            max_row_group_bytes_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(x.0));
+                        }
+                        GeneratedField::CoerceInt96Tz => {
+                            if coerce_int96_tz_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("coerceInt96Tz"));
+                            }
+                            coerce_int96_tz_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz);
+                        }
                     }
                 }
                 Ok(ParquetOptions {
@@ -6503,6 +7126,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
                     coerce_int96_opt: coerce_int96_opt__,
                     max_predicate_cache_size_opt: max_predicate_cache_size_opt__,
+                    max_row_group_bytes_opt: max_row_group_bytes_opt__,
+                    coerce_int96_tz_opt: coerce_int96_tz_opt__,
                 })
             }
         }
@@ -7978,6 +8603,12 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::FixedSizeListValue(v) => {
                     struct_ser.serialize_field("fixedSizeListValue", v)?;
                 }
+                scalar_value::Value::ListViewValue(v) => {
+                    struct_ser.serialize_field("listViewValue", v)?;
+                }
+                scalar_value::Value::LargeListViewValue(v) => {
+                    struct_ser.serialize_field("largeListViewValue", v)?;
+                }
                 scalar_value::Value::StructValue(v) => {
                     struct_ser.serialize_field("structValue", v)?;
                 }
@@ -8115,6 +8746,10 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "listValue",
             "fixed_size_list_value",
             "fixedSizeListValue",
+            "list_view_value",
+            "listViewValue",
+            "large_list_view_value",
+            "largeListViewValue",
             "struct_value",
             "structValue",
             "map_value",
@@ -8185,6 +8820,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             LargeListValue,
             ListValue,
             FixedSizeListValue,
+            ListViewValue,
+            LargeListViewValue,
             StructValue,
             MapValue,
             Decimal32Value,
@@ -8249,6 +8886,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "largeListValue" | "large_list_value" => Ok(GeneratedField::LargeListValue),
                             "listValue" | "list_value" => Ok(GeneratedField::ListValue),
                             "fixedSizeListValue" | "fixed_size_list_value" => Ok(GeneratedField::FixedSizeListValue),
+                            "listViewValue" | "list_view_value" => Ok(GeneratedField::ListViewValue),
+                            "largeListViewValue" | "large_list_view_value" => Ok(GeneratedField::LargeListViewValue),
                             "structValue" | "struct_value" => Ok(GeneratedField::StructValue),
                             "mapValue" | "map_value" => Ok(GeneratedField::MapValue),
                             "decimal32Value" | "decimal32_value" => Ok(GeneratedField::Decimal32Value),
@@ -8417,6 +9056,20 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                                 return Err(serde::de::Error::duplicate_field("fixedSizeListValue"));
                             }
                             value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::FixedSizeListValue)
+;
+                        }
+                        GeneratedField::ListViewValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("listViewValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::ListViewValue)
+;
+                        }
+                        GeneratedField::LargeListViewValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("largeListViewValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::LargeListViewValue)
 ;
                         }
                         GeneratedField::StructValue => {

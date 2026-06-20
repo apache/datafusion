@@ -35,8 +35,9 @@ use datafusion_common::{
     plan_err,
 };
 use datafusion_expr::expr::{
-    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
-    InSubquery, Like, ScalarFunction, SetComparison, Sort, WindowFunction,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists,
+    HigherOrderFunction, InList, InSubquery, Like, ScalarFunction, SetComparison, Sort,
+    WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -44,7 +45,9 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, like_coercion, type_union_coercion,
 };
-use datafusion_expr::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use datafusion_expr::type_coercion::functions::{
+    UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
+};
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_case_when,
     get_coerce_type_for_list,
@@ -55,8 +58,8 @@ use datafusion_expr::type_coercion::{
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, is_false, is_not_false, is_not_true,
-    is_not_unknown, is_true, is_unknown, lit, not,
+    ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, is_false,
+    is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -712,6 +715,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }) => {
                 let new_expr =
                     coerce_arguments_for_signature(args, self.schema, func.as_ref())?;
+
+                let filter = filter
+                    .map(|filter| filter.cast_to(&DataType::Boolean, self.schema))
+                    .transpose()?
+                    .map(Box::new);
+
                 Ok(Transformed::yes(Expr::AggregateFunction(
                     expr::AggregateFunction::new_udf(
                         func,
@@ -749,6 +758,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     }
                 };
 
+                let filter = filter
+                    .map(|filter| filter.cast_to(&DataType::Boolean, self.schema))
+                    .transpose()?
+                    .map(Box::new);
+
                 let new_expr = Expr::from(WindowFunction {
                     fun,
                     params: expr::WindowFunctionParams {
@@ -762,6 +776,35 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     },
                 });
                 Ok(Transformed::yes(new_expr))
+            }
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+                let current_fields = args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Lambda(lambda) => Ok(ValueOrLambda::Lambda(
+                            lambda.body.to_field(self.schema)?.1,
+                        )),
+                        _ => Ok(ValueOrLambda::Value(arg.to_field(self.schema)?.1)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let new_fields = value_fields_with_higher_order_udf_and_lambdas(
+                    &current_fields,
+                    func.as_ref(),
+                )?;
+
+                let new_args = std::iter::zip(args, new_fields)
+                    .map(|(arg, new_field)| match (&arg, new_field) {
+                        (Expr::Lambda(_lambda), ValueOrLambda::Lambda(_)) => Ok(arg),
+                        (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => internal_err!("value_fields_with_higher_order_udf returned a value for a lambda argument"),
+                        (_, ValueOrLambda::Value(new_field)) => arg.cast_to(new_field.data_type(), self.schema),
+                        (_, ValueOrLambda::Lambda(_)) => internal_err!("value_fields_with_higher_order_udf returned a lambda for a value argument"),
+                    })
+                    .collect::<Result<_>>()?;
+
+                Ok(Transformed::yes(Expr::HigherOrderFunction(
+                    HigherOrderFunction::new(func, new_args),
+                )))
             }
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
@@ -777,7 +820,9 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::OuterReferenceColumn(_, _) => Ok(Transformed::no(expr)),
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::Lambda(_)
+            | Expr::LambdaVariable(_) => Ok(Transformed::no(expr)),
         }
     }
 }
@@ -1738,6 +1783,31 @@ mod test {
         }
     }
 
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct TestArrayElementUDF;
+
+    impl ScalarUDFImpl for TestArrayElementUDF {
+        fn name(&self) -> &str {
+            "TestArrayElementUDF"
+        }
+
+        fn signature(&self) -> &Signature {
+            static SIGNATURE: std::sync::LazyLock<Signature> =
+                std::sync::LazyLock::new(|| {
+                    Signature::array_and_index(Volatility::Immutable)
+                });
+            &SIGNATURE
+        }
+
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(Utf8)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+        }
+    }
+
     #[test]
     fn scalar_udf() -> Result<()> {
         let empty = empty();
@@ -1912,7 +1982,10 @@ mod test {
             .err()
             .unwrap()
             .strip_backtrace();
-        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'avg' function: coercion from Utf8 to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64]) failed"));
+        assert!(
+            err.contains("Function 'avg' failed to match any signature"),
+            "Err: {err:?}"
+        );
         Ok(())
     }
 
@@ -2627,6 +2700,33 @@ mod test {
             plan,
             @r#"
         Projection: a = CAST(CAST(a AS Map("key_value": non-null Struct("key": non-null Utf8, "value": Float64), unsorted)) AS Map("entries": non-null Struct("key": non-null Utf8, "value": Float64), unsorted))
+          EmptyRelation: rows=0
+        "#
+        )
+    }
+
+    #[test]
+    fn array_element_preserves_parquet_list_field_name() -> Result<()> {
+        let list_type = DataType::List(Arc::new(Field::new(
+            "element",
+            DataType::Struct(
+                vec![
+                    Field::new("id", Utf8, true),
+                    Field::new("prim", DataType::Boolean, true),
+                ]
+                .into(),
+            ),
+            true,
+        )));
+
+        let expr = ScalarUDF::from(TestArrayElementUDF).call(vec![col("a"), lit(1_i64)]);
+        let empty = empty_with_type(list_type);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: TestArrayElementUDF(a, Int64(1))
           EmptyRelation: rows=0
         "#
         )

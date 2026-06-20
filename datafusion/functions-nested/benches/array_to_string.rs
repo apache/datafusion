@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Float64Array, Int64Array, ListArray, StringArray};
+use arrow::array::{Array, ArrayRef, ListArray, StringArray};
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Float64Type, Int64Type};
+use arrow::util::bench_util::create_primitive_list_array_with_seed;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
@@ -89,29 +90,13 @@ fn bench_array_to_string(
 }
 
 fn create_int64_list_array(array_size: usize) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..NUM_ROWS * array_size)
-        .map(|_| {
-            if rng.random::<f64>() < NULL_DENSITY {
-                None
-            } else {
-                Some(rng.random_range(0..1000))
-            }
-        })
-        .collect::<Int64Array>();
-    let offsets = (0..=NUM_ROWS)
-        .map(|i| (i * array_size) as i32)
-        .collect::<Vec<i32>>();
-
-    Arc::new(
-        ListArray::try_new(
-            Arc::new(Field::new("item", DataType::Int64, true)),
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )
-        .unwrap(),
-    )
+    Arc::new(create_primitive_list_array_with_seed::<i32, Int64Type>(
+        NUM_ROWS,
+        0.0,
+        NULL_DENSITY as f32,
+        array_size,
+        SEED,
+    ))
 }
 
 fn create_nested_int64_list_array(array_size: usize) -> ArrayRef {
@@ -133,29 +118,13 @@ fn create_nested_int64_list_array(array_size: usize) -> ArrayRef {
 }
 
 fn create_float64_list_array(array_size: usize) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..NUM_ROWS * array_size)
-        .map(|_| {
-            if rng.random::<f64>() < NULL_DENSITY {
-                None
-            } else {
-                Some(rng.random_range(-1000.0..1000.0))
-            }
-        })
-        .collect::<Float64Array>();
-    let offsets = (0..=NUM_ROWS)
-        .map(|i| (i * array_size) as i32)
-        .collect::<Vec<i32>>();
-
-    Arc::new(
-        ListArray::try_new(
-            Arc::new(Field::new("item", DataType::Float64, true)),
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )
-        .unwrap(),
-    )
+    Arc::new(create_primitive_list_array_with_seed::<i32, Float64Type>(
+        NUM_ROWS,
+        0.0,
+        NULL_DENSITY as f32,
+        array_size,
+        SEED,
+    ))
 }
 
 fn create_string_list_array(array_size: usize) -> ArrayRef {

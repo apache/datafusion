@@ -29,6 +29,41 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    #[expect(deprecated)]
+    fn test_ffi_execution_plan_partition_statistics_cross_library()
+    -> Result<(), DataFusionError> {
+        let module = get_module()?;
+
+        // Producer: plan with no explicit statistics → expects Statistics::new_unknown.
+        let bare = (module.create_empty_exec)();
+        let bare: Arc<dyn ExecutionPlan> = (&bare).try_into()?;
+        assert!(bare.is::<ForeignExecutionPlan>());
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+        let bare_stats = bare.partition_statistics(None)?;
+        assert_eq!(
+            bare_stats.as_ref(),
+            &datafusion_common::Statistics::new_unknown(&schema),
+        );
+
+        // Producer: plan with known statistics — round-trip through the cdylib boundary.
+        let expected = datafusion_ffi::tests::make_test_statistics();
+        let with_stats = (module.create_exec_with_statistics)();
+        let with_stats: Arc<dyn ExecutionPlan> = (&with_stats).try_into()?;
+        assert!(with_stats.is::<ForeignExecutionPlan>());
+
+        // Both None (all-partition aggregate) and Some(idx) must return the
+        // same statistics because EmptyExec ignores the partition argument.
+        let observed_all = with_stats.partition_statistics(None)?;
+        assert_eq!(observed_all.as_ref(), &expected);
+
+        let observed_part = with_stats.partition_statistics(Some(0))?;
+        assert_eq!(observed_part.as_ref(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_ffi_execution_plan_new_sets_runtimes_on_children()
     -> Result<(), DataFusionError> {
         // We want to test the case where we have two libraries.
@@ -49,12 +84,7 @@ mod tests {
             Arc::new(EmptyExec::new(schema))
         }
 
-        let child_plan =
-            module
-                .create_empty_exec()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External module failed to implement create_empty_exec".to_string(),
-                ))?();
+        let child_plan = (module.create_empty_exec)();
         let child_plan: Arc<dyn ExecutionPlan> = (&child_plan)
             .try_into()
             .expect("should be able create plan");

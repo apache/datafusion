@@ -30,7 +30,7 @@ use rand::rngs::ThreadRng;
 
 fn years(rng: &mut ThreadRng) -> Int32Array {
     let mut years = vec![];
-    for _ in 0..1000 {
+    for _ in 0..8192 {
         years.push(rng.random_range(1900..2050));
     }
 
@@ -39,7 +39,7 @@ fn years(rng: &mut ThreadRng) -> Int32Array {
 
 fn months(rng: &mut ThreadRng) -> Int32Array {
     let mut months = vec![];
-    for _ in 0..1000 {
+    for _ in 0..8192 {
         months.push(rng.random_range(1..13));
     }
 
@@ -48,14 +48,14 @@ fn months(rng: &mut ThreadRng) -> Int32Array {
 
 fn days(rng: &mut ThreadRng) -> Int32Array {
     let mut days = vec![];
-    for _ in 0..1000 {
+    for _ in 0..8192 {
         days.push(rng.random_range(1..29));
     }
 
     Int32Array::from(days)
 }
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("make_date_col_col_col_1000", |b| {
+    c.bench_function("make_date_col_col_col_8192", |b| {
         let mut rng = rand::rng();
         let years_array = Arc::new(years(&mut rng)) as ArrayRef;
         let batch_len = years_array.len();
@@ -85,7 +85,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("make_date_scalar_col_col_1000", |b| {
+    c.bench_function("make_date_scalar_col_col_8192", |b| {
         let mut rng = rand::rng();
         let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
         let months_arr = Arc::new(months(&mut rng)) as ArrayRef;
@@ -115,7 +115,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("make_date_scalar_scalar_col_1000", |b| {
+    c.bench_function("make_date_scalar_scalar_col_8192", |b| {
         let mut rng = rand::rng();
         let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
         let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(11)));

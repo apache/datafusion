@@ -691,23 +691,18 @@ physical_plan
 21)│       AND CURRENT ROW     │
 22)└─────────────┬─────────────┘
 23)┌─────────────┴─────────────┐
-24)│          SortExec         │
+24)│       ProjectionExec      │
 25)│    --------------------   │
-26)│    v1@0 ASC NULLS LAST    │
+26)│         v1: value         │
 27)└─────────────┬─────────────┘
 28)┌─────────────┴─────────────┐
-29)│       ProjectionExec      │
+29)│       LazyMemoryExec      │
 30)│    --------------------   │
-31)│         v1: value         │
-32)└─────────────┬─────────────┘
-33)┌─────────────┴─────────────┐
-34)│       LazyMemoryExec      │
-35)│    --------------------   │
-36)│     batch_generators:     │
-37)│ generate_series: start=1, │
-38)│    end=1000, batch_size   │
-39)│           =8192           │
-40)└───────────────────────────┘
+31)│     batch_generators:     │
+32)│ generate_series: start=1, │
+33)│    end=1000, batch_size   │
+34)│           =8192           │
+35)└───────────────────────────┘
 
 query TT
 explain select 
@@ -1104,6 +1099,31 @@ physical_plan
 23)-----------------------------│          files: 1         │
 24)-----------------------------│        format: csv        │
 25)-----------------------------└───────────────────────────┘
+
+# Query with null-aware anti join (NOT IN subquery).
+query TT
+explain select int_col from table1 where int_col not in (select int_col from table2);
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│        HashJoinExec       │
+03)│    --------------------   │
+04)│    join_type: LeftAnti    │
+05)│                           │
+06)│         null_aware        ├──────────────┐
+07)│                           │              │
+08)│            on:            │              │
+09)│    (int_col = int_col)    │              │
+10)└─────────────┬─────────────┘              │
+11)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+12)│       DataSourceExec      ││       DataSourceExec      │
+13)│    --------------------   ││    --------------------   │
+14)│          files: 1         ││          files: 1         │
+15)│        format: csv        ││      format: parquet      │
+16)│                           ││                           │
+17)│                           ││         predicate:        │
+18)│                           ││  DynamicFilter [ empty ]  │
+19)└───────────────────────────┘└───────────────────────────┘
 
 # Query with nested loop join.
 query TT
@@ -1582,7 +1602,7 @@ physical_plan
 04)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 05)│       ProjectionExec      ││   CoalescePartitionsExec  │
 06)│    --------------------   ││                           │
-07)│           id: 1           ││                           │
+07)│    id: CAST(1 AS Int64)   ││                           │
 08)└─────────────┬─────────────┘└─────────────┬─────────────┘
 09)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 10)│     PlaceholderRowExec    ││       ProjectionExec      │
@@ -1792,6 +1812,19 @@ physical_plan
 # Test explain tree for PlaceholderRowExec
 query TT
 EXPLAIN select count(*) from (values ('a', 'b'), ('c', 'd')) as t (c1, c2)
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        count(*): 2        │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│     PlaceholderRowExec    │
+08)└───────────────────────────┘
+
+query TT
+EXPLAIN select count(*) from (values ('a', 'b'), ('c', 'd')) as t (c1, c2) order by 1 limit 10
 ----
 physical_plan
 01)┌───────────────────────────┐

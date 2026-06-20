@@ -17,17 +17,19 @@
 
 use std::sync::Arc;
 
-use abi_stable::library::{LibraryError, RootModule};
-use abi_stable::prefix_type::PrefixTypeTrait;
-use abi_stable::sabi_types::VersionStrings;
-use abi_stable::{
-    StableAbi, declare_root_module_statics, export_root_module, package_version_strings,
-};
 use arrow::array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema};
 use async_provider::create_async_table_provider;
+use async_trait::async_trait;
 use catalog::create_catalog_provider;
+use datafusion_catalog::MemTable;
+use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::record_batch;
+use datafusion_common::stats::Precision;
+use datafusion_common::{ColumnStatistics, Statistics};
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{Expr, TableType};
+use datafusion_physical_plan::ExecutionPlan;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,
@@ -59,8 +61,6 @@ mod udf_udaf_udwf;
 pub mod utils;
 
 #[repr(C)]
-#[derive(StableAbi)]
-#[sabi(kind(Prefix(prefix_ref = ForeignLibraryModuleRef)))]
 /// This struct defines the module interfaces. It is to be shared by
 /// both the module loading program and library that implements the
 /// module.
@@ -90,6 +90,8 @@ pub struct ForeignLibraryModule {
 
     pub create_timezone_udf: extern "C" fn() -> FFI_ScalarUDF,
 
+    pub create_placement_udf: extern "C" fn() -> FFI_ScalarUDF,
+
     pub create_table_function:
         extern "C" fn(FFI_LogicalExtensionCodec) -> FFI_TableFunction,
 
@@ -106,20 +108,16 @@ pub struct ForeignLibraryModule {
 
     pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
 
+    pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
+
+    pub create_table_with_statistics:
+        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
+
     pub create_physical_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
+    pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
+
     pub version: extern "C" fn() -> u64,
-}
-
-impl RootModule for ForeignLibraryModuleRef {
-    declare_root_module_statics! {ForeignLibraryModuleRef}
-    const BASE_NAME: &'static str = "datafusion_ffi";
-    const NAME: &'static str = "datafusion_ffi";
-    const VERSION_STRINGS: VersionStrings = package_version_strings!();
-
-    fn initialization(self) -> Result<Self, LibraryError> {
-        Ok(self)
-    }
 }
 
 pub fn create_test_schema() -> Arc<Schema> {
@@ -164,9 +162,89 @@ pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
     FFI_ExecutionPlan::new(plan, None)
 }
 
-#[export_root_module]
+/// Returns canonical statistics used by both the producer and consumer sides of
+/// the integration tests so round-trips can be asserted without hard-coding
+/// the values in two places.
+pub fn make_test_statistics() -> Statistics {
+    Statistics {
+        num_rows: Precision::Exact(42),
+        total_byte_size: Precision::Exact(672),
+        column_statistics: vec![
+            ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(-10))),
+                sum_value: Precision::Exact(ScalarValue::Int64(Some(1890))),
+                distinct_count: Precision::Inexact(40),
+                byte_size: Precision::Exact(168),
+            },
+            ColumnStatistics {
+                null_count: Precision::Exact(1),
+                max_value: Precision::Exact(ScalarValue::Float64(Some(99.5))),
+                min_value: Precision::Exact(ScalarValue::Float64(Some(-1.5))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Exact(328),
+            },
+        ],
+    }
+}
+
+pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
+    let schema = create_test_schema();
+    let plan = Arc::new(EmptyExec::new(schema).with_statistics(make_test_statistics()));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
+/// Thin wrapper that attaches a fixed [`Statistics`] snapshot to any inner
+/// [`TableProvider`] without changing its scan behaviour.
+#[derive(Debug)]
+struct TableWithStats {
+    inner: Arc<dyn TableProvider>,
+    stats: Statistics,
+}
+
+#[async_trait]
+impl TableProvider for TableWithStats {
+    fn schema(&self) -> arrow_schema::SchemaRef {
+        self.inner.schema()
+    }
+
+    fn table_type(&self) -> TableType {
+        self.inner.table_type()
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        Some(self.stats.clone())
+    }
+
+    async fn scan(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.inner.scan(session, projection, filters, limit).await
+    }
+}
+
+pub(crate) extern "C" fn create_table_with_statistics(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_TableProvider {
+    let schema = create_test_schema();
+    let batch = create_record_batch(1, 5);
+    let inner = Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap());
+    let provider = Arc::new(TableWithStats {
+        inner,
+        stats: make_test_statistics(),
+    });
+    FFI_TableProvider::new_with_ffi_codec(provider, true, None, codec)
+}
+
 /// This defines the entry point for using the module.
-pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
     ForeignLibraryModule {
         create_catalog: create_catalog_provider,
         create_catalog_list: create_catalog_provider_list,
@@ -175,15 +253,19 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_scalar_udf: create_ffi_abs_func,
         create_nullary_udf: create_ffi_random_func,
         create_timezone_udf: udf_udaf_udwf::create_timezone_func,
+        create_placement_udf: udf_udaf_udwf::create_placement_func,
         create_table_function: create_ffi_table_func,
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
         create_rank_udwf: create_ffi_rank_func,
         create_extension_options: config::create_extension_options,
         create_empty_exec,
+        create_exec_with_statistics,
+        create_table_with_statistics,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
+        create_context_aware_optimizer_rule:
+            physical_optimizer::create_context_aware_optimizer_rule,
         version: super::version,
     }
-    .leak_into_prefix()
 }

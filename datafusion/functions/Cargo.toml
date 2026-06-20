@@ -78,10 +78,11 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-macros = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
-md-5 = { version = "^0.10.0", optional = true }
+md-5 = { version = "^0.11.0", optional = true }
 memchr = { workspace = true }
 num-traits = { workspace = true }
 rand = { workspace = true }
@@ -130,6 +131,11 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "gcd"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "lcm"
 required-features = ["math_expressions"]
 
 [[bench]]
@@ -183,6 +189,16 @@ required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
+name = "to_local_time"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "to_time"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
 name = "isnan"
 required-features = ["math_expressions"]
 
@@ -194,6 +210,11 @@ required-features = ["math_expressions"]
 [[bench]]
 harness = false
 name = "atan2"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "power"
 required-features = ["math_expressions"]
 
 [[bench]]
@@ -230,6 +251,10 @@ required-features = ["string_expressions"]
 harness = false
 name = "replace"
 required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "overlay"
 
 [[bench]]
 harness = false

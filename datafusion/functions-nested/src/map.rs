@@ -63,15 +63,33 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn expand_if_scalar(arg: &ColumnarValue, rows: usize) -> Result<ColumnarValue> {
+    match arg {
+        ColumnarValue::Scalar(s) => Ok(ColumnarValue::Array(s.to_array_of_size(rows)?)),
+        ColumnarValue::Array(a) => Ok(ColumnarValue::Array(Arc::clone(a))),
+    }
+}
+
+fn make_map_batch(args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
     let [keys_arg, values_arg] = take_function_args("make_map", args)?;
 
     let can_evaluate_to_const = can_evaluate_to_const(args);
 
-    let keys = get_first_array_ref(keys_arg)?;
+    // if we can't evaluate to const (inputs are not both scalar) then ensure they
+    // are expanded to arrays which following logic expects
+    let (keys_arg, values_arg) = if !can_evaluate_to_const {
+        (
+            expand_if_scalar(keys_arg, number_rows)?,
+            expand_if_scalar(values_arg, number_rows)?,
+        )
+    } else {
+        (keys_arg.clone(), values_arg.clone())
+    };
+
+    let keys = get_first_array_ref(&keys_arg)?;
     let key_array = keys.as_ref();
 
-    match keys_arg {
+    match &keys_arg {
         ColumnarValue::Array(_) => match key_array.data_type() {
             DataType::List(_) => keys
                 .as_list::<i32>()
@@ -101,7 +119,7 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     }
 
-    let values = get_first_array_ref(values_arg)?;
+    let values = get_first_array_ref(&values_arg)?;
 
     make_map_batch_internal(&keys, &values, can_evaluate_to_const, &keys_arg.data_type())
 }
@@ -399,7 +417,7 @@ impl ScalarUDFImpl for MapFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_map_batch(&args.args)
+        make_map_batch(&args.args, args.number_rows)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -716,10 +734,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            &[
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            3,
+        );
 
         assert!(result.is_ok(), "Should handle NULL maps correctly");
 
@@ -764,10 +785,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should fail
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            &[
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            1,
+        );
 
         assert!(result.is_err(), "Should reject null keys within maps");
 
@@ -812,10 +836,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            &[
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            2,
+        );
 
         assert!(
             result.is_ok(),
@@ -882,10 +909,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            &[
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            3,
+        );
 
         assert!(
             result.is_ok(),

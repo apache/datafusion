@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::ops::Range;
@@ -451,10 +450,6 @@ impl IndexedFile {
 /// so that we can query it as a table.
 #[async_trait]
 impl TableProvider for IndexTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.indexed_file.schema)
     }
@@ -481,7 +476,7 @@ impl TableProvider for IndexTableProvider {
             .partitioned_file()
             // provide the starting access plan to the DataSourceExec by
             // storing it as  "extensions" on PartitionedFile
-            .with_extensions(Arc::new(access_plan) as _);
+            .with_extension(access_plan);
 
         // Prepare for scanning
         let schema = self.schema();

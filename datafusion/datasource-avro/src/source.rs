@@ -17,13 +17,11 @@
 
 //! Execution plan for reading line-delimited Avro files
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -132,10 +130,6 @@ impl FileSource for AvroSource {
         Ok(opener)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
     }
@@ -173,20 +167,6 @@ impl FileSource for AvroSource {
     fn supports_repartitioning(&self) -> bool {
         // Avro OCF does not support safe byte-range splitting in this reader path.
         false
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion_physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit projection expressions
-        let mut tnr = TreeNodeRecursion::Continue;
-        for proj_expr in &self.projection.source {
-            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
     }
 }
 

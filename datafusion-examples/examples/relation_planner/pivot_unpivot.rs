@@ -217,6 +217,25 @@ async fn run_examples(ctx: &SessionContext) -> Result<()> {
     +--------+
     ");
 
+    // Example 7: PIVOT on a quoted mixed-case column
+    // Reuses the parsed column expression so quoted identifiers keep their case.
+    let results = run_example(
+        ctx,
+        "Example 7: PIVOT with quoted mixed-case column",
+        r#"SELECT * FROM point_stats
+           PIVOT (MAX(max_value) FOR "pointNumber" IN ('16951' AS p16951, '16952' AS p16952)) AS p
+           ORDER BY ts"#,
+    )
+    .await?;
+    assert_snapshot!(results, @r"
+    +----------------------+------+--------+--------+
+    | ts                   | port | p16951 | p16952 |
+    +----------------------+------+--------+--------+
+    | 2024-09-01T10:00:00Z | 2411 | 10     | 20     |
+    | 2024-09-01T10:01:00Z | 2411 | 30     | 40     |
+    +----------------------+------+--------+--------+
+    ");
+
     Ok(())
 }
 
@@ -285,6 +304,34 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
             ),
             ("q1", Arc::new(Int64Array::from(vec![1000, 1200]))),
             ("q2", Arc::new(Int64Array::from(vec![1500, 1300]))),
+        ])?,
+    )?;
+
+    // point_stats: grouped data with a quoted mixed-case pivot column.
+    ctx.register_batch(
+        "point_stats",
+        RecordBatch::try_from_iter(vec![
+            (
+                "ts",
+                Arc::new(StringArray::from(vec![
+                    "2024-09-01T10:00:00Z",
+                    "2024-09-01T10:00:00Z",
+                    "2024-09-01T10:01:00Z",
+                    "2024-09-01T10:01:00Z",
+                ])) as ArrayRef,
+            ),
+            (
+                "pointNumber",
+                Arc::new(StringArray::from(vec!["16951", "16952", "16951", "16952"])),
+            ),
+            (
+                "port",
+                Arc::new(StringArray::from(vec!["2411", "2411", "2411", "2411"])),
+            ),
+            (
+                "max_value",
+                Arc::new(Int64Array::from(vec![10, 20, 30, 40])),
+            ),
         ])?,
     )?;
 
@@ -415,11 +462,12 @@ fn plan_pivot(
         .collect();
 
     let group_by_cols: Vec<Expr> = schema
-        .fields()
         .iter()
-        .map(|f| f.name().as_str())
-        .filter(|name| *name != pivot_col_name.as_str() && !agg_input_cols.contains(name))
-        .map(col)
+        .filter(|(_, field)| {
+            let name = field.name();
+            name != pivot_col_name.as_str() && !agg_input_cols.contains(&name.as_str())
+        })
+        .map(Expr::from)
         .collect();
 
     // Build CASE expressions for each (aggregate, pivot_value) pair
@@ -434,7 +482,7 @@ fn plan_pivot(
 
         for (value_alias, pivot_value) in &pivot_values {
             // CASE pivot_col WHEN pivot_value THEN agg_input END
-            let case_expr = case(col(&pivot_col_name))
+            let case_expr = case(pivot_col.clone())
                 .when(pivot_value.clone(), agg_input.clone())
                 .end()?;
 

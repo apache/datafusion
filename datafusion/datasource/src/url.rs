@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, Result, TableReference};
-use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::CachedFileList;
+use datafusion_execution::cache::cache_manager::TableScopedPath;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
@@ -258,7 +258,7 @@ impl ListingTableUrl {
         let full_prefix = if let Some(ref p) = prefix {
             let mut parts = self.prefix.parts().collect::<Vec<_>>();
             parts.extend(p.parts());
-            Path::from_iter(parts.into_iter())
+            Path::from_iter(parts)
         } else {
             self.prefix.clone()
         };
@@ -518,7 +518,9 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::registry::ExtensionTypeRegistryRef;
-    use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+    use datafusion_expr::{
+        AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
+    };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
     use object_store::{
@@ -1205,6 +1207,10 @@ mod tests {
         }
 
         fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+            unimplemented!()
+        }
+
+        fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
             unimplemented!()
         }
 

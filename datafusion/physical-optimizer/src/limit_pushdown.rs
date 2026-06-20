@@ -67,11 +67,16 @@ use crate::PhysicalOptimizerRule;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::combine_limit;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
@@ -157,6 +162,25 @@ pub fn pushdown_limit_helper(
         global_state.fetch = fetch;
         global_state.preserve_order = limit_info.preserve_order;
         global_state.satisfied = false;
+
+        if let Some(fetch) = fetch
+            && limit_satisfied_by_input(&limit_info.input, skip, fetch)?
+        {
+            // The input already produces at most `fetch` rows, so no new limit
+            // node is needed. Mark satisfied so downstream won't re-add one,
+            // but preserve skip/fetch so any nested limit nodes (e.g. an inner
+            // GlobalLimitExec) can still be merged with the outer constraint.
+            global_state.satisfied = true;
+
+            return Ok((
+                Transformed {
+                    data: limit_info.input,
+                    transformed: true,
+                    tnr: TreeNodeRecursion::Stop,
+                },
+                global_state,
+            ));
+        }
 
         // Now the global state has the most recent information, we can remove
         // the limit node. We will decide later if we should add it again or
@@ -284,6 +308,61 @@ pub fn pushdown_limit_helper(
     }
 }
 
+/// Returns true if exact input statistics prove that applying the limit would
+/// not remove any rows.
+fn limit_satisfied_by_input(
+    plan: &Arc<dyn ExecutionPlan>,
+    skip: usize,
+    fetch: usize,
+) -> Result<bool> {
+    if skip > 0 {
+        return Ok(false);
+    }
+
+    if plan.output_partitioning().partition_count() != 1 {
+        return Ok(false);
+    }
+
+    let Some(num_rows) = limit_eliminable_exact_num_rows(plan)? else {
+        return Ok(false);
+    };
+
+    Ok(num_rows <= fetch)
+}
+
+/// Returns exact row counts only from a conservative whitelist of operators
+/// whose row-count guarantees are strong enough to remove a limit.
+fn limit_eliminable_exact_num_rows(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Result<Option<usize>> {
+    // Unwrap any wrapping ProjectionExec layers; projections preserve row count
+    // but may derive statistics in ways that are not trustworthy, so we peek
+    // through them to the underlying producer.
+    let mut current = plan;
+    while let Some(projection) = current.downcast_ref::<ProjectionExec>() {
+        current = projection.input();
+    }
+
+    if current.is::<EmptyExec>() {
+        return Ok(Some(0));
+    }
+
+    if current.is::<PlaceholderRowExec>() {
+        return Ok(Some(1));
+    }
+
+    if matches!(
+        current
+            .statistics_with_args(&StatisticsArgs::new())?
+            .num_rows,
+        Precision::Exact(0)
+    ) {
+        return Ok(Some(0));
+    }
+
+    Ok(None)
+}
+
 /// Pushes down the limit through the plan.
 pub(crate) fn pushdown_limits(
     pushdown_plan: Arc<dyn ExecutionPlan>,
@@ -297,6 +376,14 @@ pub(crate) fn pushdown_limits(
     // While limits exist, continue combining the global_state.
     while new_node.tnr == TreeNodeRecursion::Stop {
         (new_node, global_state) = pushdown_limit_helper(new_node.data, global_state)?;
+    }
+
+    // Once a limit has been materialized above the current node, child
+    // subtrees should not inherit its `skip`. Keep `fetch`, but clear
+    // `skip` before recursing so child-local limits are not merged with
+    // an `OFFSET` that has already been applied.
+    if global_state.satisfied {
+        global_state.skip = 0;
     }
 
     // Apply pushdown limits in children

@@ -121,7 +121,7 @@ async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String>
 }
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for tests
     let _ = env_logger::try_init();
@@ -173,6 +173,222 @@ fn cli_quick_test<'a>(
     assert_cmd_snapshot!(cmd);
 }
 
+/// Read data piped into the CLI via the `/dev/stdin` pseudo-path.
+///
+/// Unix-only: `/dev/stdin` does not exist on Windows. This drives the real
+/// binary through an actual pipe, exercising the stdin read that the in-process
+/// unit tests cannot.
+#[cfg(unix)]
+#[test]
+fn test_cli_read_from_stdin() {
+    let stdout = run_cli_with_stdin(
+        "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin' \
+         OPTIONS ('format.has_header' 'true'); \
+         SELECT b, count(*) AS c FROM t GROUP BY b ORDER BY b;",
+        b"a,b\n1,foo\n2,bar\n3,foo\n",
+    );
+
+    assert!(
+        stdout.contains("| foo | 2 |") && stdout.contains("| bar | 1 |"),
+        "unexpected output:\n{stdout}"
+    );
+}
+
+/// stdin is a one-shot stream, so a second `/dev/stdin` table in the same
+/// session must reuse the buffered input rather than re-reading (now-empty)
+/// stdin and silently emptying the first table.
+#[cfg(unix)]
+#[test]
+fn test_cli_read_from_stdin_twice_reuses_buffer() {
+    let stdout = run_cli_with_stdin(
+        "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin' \
+         OPTIONS ('format.has_header' 'true'); \
+         CREATE EXTERNAL TABLE t2 STORED AS CSV LOCATION '/dev/stdin' \
+         OPTIONS ('format.has_header' 'true'); \
+         SELECT count(*) AS t_count FROM t; \
+         SELECT count(*) AS t2_count FROM t2;",
+        b"a,b\n1,foo\n2,bar\n",
+    );
+
+    // Both tables must still see the two buffered rows.
+    let counts: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("| 2 "))
+        .collect();
+    assert_eq!(
+        counts.len(),
+        2,
+        "expected both stdin tables to report 2 rows, got:\n{stdout}"
+    );
+}
+
+/// A later `/dev/stdin` table declaring a different `STORED AS` format must be
+/// rejected with a clear error: stdin is one-shot, its bytes were already
+/// buffered under the first table's format, and silently reading them as
+/// another format would be wrong.
+#[cfg(unix)]
+#[test]
+fn test_cli_read_from_stdin_mixed_formats_rejected() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = cli()
+        .args([
+            "-q",
+            "--command",
+            "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin' \
+             OPTIONS ('format.has_header' 'true'); \
+             CREATE EXTERNAL TABLE t2 STORED AS JSON LOCATION '/dev/stdin';",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn datafusion-cli");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"a,b\n1,foo\n2,bar\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    // Fatal errors in `--command` mode are reported on stdout.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !output.status.success(),
+        "expected the mismatched format to fail, stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("must declare the same STORED AS format"),
+        "expected a clear mismatch error, got:\n{stdout}"
+    );
+}
+
+/// When the SQL itself arrives on stdin (the piped REPL, e.g. `cat script.sql
+/// | datafusion-cli`), stdin cannot double as a data source: the statement
+/// must fail with a clear error instead of silently consuming the rest of the
+/// script as table data, and the remaining statements must still run.
+#[cfg(unix)]
+#[test]
+fn test_cli_stdin_location_rejected_when_sql_comes_from_stdin() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = cli()
+        .arg("-q")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn datafusion-cli");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            b"CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin';\n\
+              SELECT 123 + 456;\n",
+        )
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("SQL commands"),
+        "expected a clear error about stdin carrying SQL.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // The statement after the failed CREATE must still execute rather than
+    // being consumed as table data.
+    assert!(
+        stdout.contains("579"),
+        "expected the following statement to still run.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// `-f /dev/stdin` reads the SQL script from stdin, exactly like the piped
+/// REPL, so stdin still cannot double as a `LOCATION '/dev/stdin'` data source.
+/// The offending statement must fail with the same clear error, and later
+/// statements in the script must still run.
+///
+/// `/dev/stdin` only passes the `-f` file check when stdin is a redirected
+/// regular file (a pipe is not `is_file()`), so the binary is driven with a
+/// temp script file as its stdin rather than a pipe.
+#[cfg(unix)]
+#[test]
+fn test_cli_dash_f_stdin_location_rejected() {
+    use std::process::Stdio;
+
+    let script = env::temp_dir().join(format!(
+        "datafusion_cli_dash_f_stdin_{}.sql",
+        std::process::id()
+    ));
+    fs::write(
+        &script,
+        b"CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/dev/stdin';\n\
+          SELECT 123 + 456;\n",
+    )
+    .unwrap();
+    let stdin = fs::File::open(&script).unwrap();
+
+    let output = cli()
+        .args(["-q", "-f", "/dev/stdin"])
+        .stdin(Stdio::from(stdin))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to spawn datafusion-cli");
+
+    let _ = fs::remove_file(&script);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("SQL commands"),
+        "expected a clear error about stdin carrying SQL.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // The statement after the failed CREATE must still execute rather than
+    // being consumed as table data.
+    assert!(
+        stdout.contains("579"),
+        "expected the following statement to still run.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// Spawns the real `datafusion-cli` binary, pipes `stdin` into it, and returns
+/// its stdout after asserting a successful exit.
+#[cfg(unix)]
+fn run_cli_with_stdin(command: &str, stdin: &[u8]) -> String {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = cli()
+        .args(["-q", "--command", command])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn datafusion-cli");
+
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "datafusion-cli failed.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    stdout
+}
+
 #[test]
 fn cli_explain_environment_overrides() {
     let mut settings = make_settings();
@@ -219,7 +435,7 @@ fn test_cli_top_memory_consumers<'a>(
     let _bound = bind_to_settings(snapshot_name);
 
     let mut cmd = cli();
-    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1 desc;";
     cmd.args(["--memory-limit", "10M", "--command", sql]);
     cmd.args(top_memory_consumers);
 
@@ -237,7 +453,7 @@ fn test_cli_top_memory_consumers_with_mem_pool_type<'a>(
     let _bound = bind_to_settings(snapshot_name);
 
     let mut cmd = cli();
-    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
+    let sql = "select * from generate_series(1,500000) as t1(v1) order by v1 desc;";
     cmd.args([
         "--memory-limit",
         "10M",
@@ -261,11 +477,11 @@ fn bind_to_settings(snapshot_name: &str) -> SettingsBindDropGuard {
         "Consumer(can spill: bool) consumed XB, peak XB",
     );
     settings.add_filter(
-        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        r"Error: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total memory pool: '.*?'",
         "Error: Failed to allocate ",
     );
     settings.add_filter(
-        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total pool",
+        r"Resources exhausted: Failed to allocate additional .*? for .*? with .*? already allocated for this reservation - .*? remain available for the total memory pool: '.*?'",
         "Resources exhausted: Failed to allocate",
     );
 
@@ -283,6 +499,23 @@ fn test_cli_with_unbounded_memory_pool() {
     let mut cmd = cli();
     let sql = "select * from generate_series(1,500000) as t1(v1) order by v1;";
     cmd.args(["--maxrows", "10", "--command", sql]);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[test]
+fn test_cli_wide_result_set_no_crash() {
+    let mut settings = make_settings();
+
+    settings.set_snapshot_suffix("wide_result_set");
+
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    let sql = "SELECT v1 as c0, v1+1 as c1, v1+2 as c2, v1+3 as c3, v1+4 as c4, \
+               v1+5 as c5, v1+6 as c6, v1+7 as c7, v1+8 as c8, v1+9 as c9 \
+               FROM generate_series(1, 100) as t1(v1);";
+    cmd.args(["--maxrows", "5", "--command", sql]);
 
     assert_cmd_snapshot!(cmd);
 }

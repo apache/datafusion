@@ -28,9 +28,18 @@ use log::{debug, warn};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
 use datafusion_common::{DFSchema, DataFusionError, HashSet, Result, internal_err};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::{
+    Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
+    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit, Projection,
+    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, Union, Unnest,
+    Window,
+};
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
@@ -56,6 +65,7 @@ use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
+use crate::unions_to_filter::UnionsToFilter;
 use crate::utils::log_plan;
 
 /// Transforms one [`LogicalPlan`] into another which computes the same results,
@@ -280,6 +290,7 @@ impl Optimizer {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
             Arc::new(RewriteSetComparison::new()),
             Arc::new(OptimizeUnions::new()),
+            Arc::new(UnionsToFilter::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
@@ -357,6 +368,213 @@ impl TreeNodeRewriter for Rewriter<'_> {
     }
 }
 
+/// Applies `f` to each child (input) of `plan` in place, using
+/// [`Arc::make_mut`] for copy-on-write semantics on `Arc<LogicalPlan>`
+/// children. When the `Arc` refcount is 1 (the common case here)
+/// `Arc::make_mut` hands out a `&mut` without cloning; when it is >1 the
+/// inner value is cloned first.
+///
+/// Returns `Ok(true)` if any child was modified by `f`.
+///
+/// This is deliberately private to the optimizer rather than a method on
+/// [`LogicalPlan`]: it is an implementation detail of in-place rewriting, and
+/// the `Arc::make_mut` approach does not generalize to the other tree types
+/// (`Expr` children are `Box`ed; `PhysicalExpr`/`ExecutionPlan` children are
+/// `Arc<dyn _>`, which `Arc::make_mut` cannot handle). If `TreeNode` ever
+/// grows an in-place traversal this logic can move there.
+///
+/// # Error semantics
+///
+/// If `f` returns `Err` for a child, that error is returned immediately;
+/// children visited earlier keep whatever modifications `f` already applied
+/// to them — they are **not** rolled back.
+fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
+    plan: &mut LogicalPlan,
+    mut f: F,
+) -> Result<bool> {
+    Ok(match plan {
+        LogicalPlan::Projection(Projection { input, .. })
+        | LogicalPlan::Filter(Filter { input, .. })
+        | LogicalPlan::Repartition(Repartition { input, .. })
+        | LogicalPlan::Window(Window { input, .. })
+        | LogicalPlan::Aggregate(Aggregate { input, .. })
+        | LogicalPlan::Sort(Sort { input, .. })
+        | LogicalPlan::Limit(Limit { input, .. })
+        | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. })
+        | LogicalPlan::Analyze(Analyze { input, .. })
+        | LogicalPlan::Dml(DmlStatement { input, .. })
+        | LogicalPlan::Copy(CopyTo { input, .. })
+        | LogicalPlan::Unnest(Unnest { input, .. }) => f(Arc::make_mut(input))?,
+        LogicalPlan::Subquery(Subquery { subquery, .. }) => f(Arc::make_mut(subquery))?,
+        LogicalPlan::Join(Join { left, right, .. }) => {
+            let l = f(Arc::make_mut(left))?;
+            let r = f(Arc::make_mut(right))?;
+            l || r
+        }
+        LogicalPlan::Union(Union { inputs, .. }) => {
+            let mut changed = false;
+            for input in inputs {
+                changed |= f(Arc::make_mut(input))?;
+            }
+            changed
+        }
+        LogicalPlan::Distinct(Distinct::All(input)) => f(Arc::make_mut(input))?,
+        LogicalPlan::Distinct(Distinct::On(DistinctOn { input, .. })) => {
+            f(Arc::make_mut(input))?
+        }
+        LogicalPlan::Explain(Explain { plan, .. }) => f(Arc::make_mut(plan))?,
+        LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+            input,
+            ..
+        }))
+        | LogicalPlan::Ddl(DdlStatement::CreateView(CreateView { input, .. })) => {
+            f(Arc::make_mut(input))?
+        }
+        LogicalPlan::RecursiveQuery(RecursiveQuery {
+            static_term,
+            recursive_term,
+            ..
+        }) => {
+            let s = f(Arc::make_mut(static_term))?;
+            let r = f(Arc::make_mut(recursive_term))?;
+            s || r
+        }
+        LogicalPlan::Statement(Statement::Prepare(p)) => f(Arc::make_mut(&mut p.input))?,
+        LogicalPlan::Extension(Extension { node }) => {
+            let inputs = node.inputs();
+            if inputs.is_empty() {
+                false
+            } else {
+                // Extension nodes don't expose mutable children,
+                // fall back to the ownership-based API
+                let mut changed = false;
+                let exprs = node.expressions();
+                let new_inputs: Vec<LogicalPlan> = inputs
+                    .into_iter()
+                    .map(|input| {
+                        let mut plan = input.clone();
+                        if f(&mut plan)? {
+                            changed = true;
+                        }
+                        Ok(plan)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if changed {
+                    *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
+                }
+                changed
+            }
+        }
+        // plans without inputs
+        LogicalPlan::TableScan { .. }
+        | LogicalPlan::EmptyRelation { .. }
+        | LogicalPlan::Values { .. }
+        | LogicalPlan::DescribeTable(_)
+        | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateIndex(_))
+        | LogicalPlan::Ddl(DdlStatement::DropTable(_))
+        | LogicalPlan::Ddl(DdlStatement::DropView(_))
+        | LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateFunction(_))
+        | LogicalPlan::Ddl(DdlStatement::DropFunction(_))
+        | LogicalPlan::Statement(_) => false,
+    })
+}
+
+/// Rewrites a plan tree in place using `Arc::make_mut` for
+/// copy-on-write semantics on `Arc<LogicalPlan>` children.
+///
+/// This avoids the `Arc::unwrap_or_clone` + `Arc::new` cycle that the
+/// ownership-based `TreeNode::rewrite` performs at every child node.
+///
+/// # Error semantics
+///
+/// On `Err`, `*plan` is left in an **unspecified** state and must not be used.
+/// Note this is different than consuming APIs such as [`TreeNode::rewrite`]
+/// where the original plan is freed and no longer available on error
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+fn rewrite_plan_in_place(
+    plan: &mut LogicalPlan,
+    apply_order: ApplyOrder,
+    rule: &dyn OptimizerRule,
+    config: &dyn OptimizerConfig,
+) -> Result<bool> {
+    // f_down phase
+    let mut changed = false;
+    if apply_order == ApplyOrder::TopDown {
+        // `rule.rewrite()` takes the plan by value, so bridge the `&mut` to an
+        // owned value with `std::mem::take`. `LogicalPlan::default()` is a cheap
+        // empty placeholder (shared empty schema, no allocation) and is
+        // overwritten with the rule's output on the next line.
+        let owned = std::mem::take(plan);
+        let result = rule.rewrite(owned, config)?;
+        *plan = result.data;
+        changed |= result.transformed;
+        // Respect TreeNodeRecursion::Stop/Jump from the rule
+        if result.tnr == TreeNodeRecursion::Stop {
+            return Ok(changed);
+        }
+    }
+
+    // Recurse into children using Arc::make_mut (zero-cost when refcount == 1)
+    changed |= map_children_mut(plan, |child| {
+        rewrite_plan_in_place(child, apply_order, rule, config)
+    })?;
+
+    // f_up phase
+    if apply_order == ApplyOrder::BottomUp {
+        let owned = std::mem::take(plan);
+        let result = rule.rewrite(owned, config)?;
+        *plan = result.data;
+        changed |= result.transformed;
+    }
+
+    Ok(changed)
+}
+
+/// Returns true if the plan contains any subquery expressions
+/// (EXISTS, IN subquery, scalar subquery, set comparison).
+///
+/// Used to determine whether the more expensive `rewrite_with_subqueries`
+/// traversal is needed. When the plan has no subqueries, the cheaper
+/// `rewrite` traversal is sufficient since all plan nodes are reachable
+/// via direct children.
+fn plan_has_subqueries(plan: &LogicalPlan) -> bool {
+    let mut found = false;
+    let _ = plan.apply(|node| {
+        if found {
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        node.apply_expressions(|expr| {
+            if found {
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            expr.apply(|e| {
+                if matches!(
+                    e,
+                    Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                        | Expr::ScalarSubquery(_)
+                ) {
+                    found = true;
+                    Ok(TreeNodeRecursion::Stop)
+                } else {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+            })
+        })?;
+        Ok(if found {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    });
+    found
+}
+
 impl Optimizer {
     /// Optimizes the logical plan by applying optimizer rules, and
     /// invoking observer function after each call
@@ -386,6 +604,14 @@ impl Optimizer {
         while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
+            // Check once per pass whether the plan contains subquery
+            // expressions. When there are no subqueries, we use the
+            // cheaper `rewrite` traversal instead of
+            // `rewrite_with_subqueries`, avoiding the per-node
+            // map_subqueries call that walks all expression trees
+            // via ownership-based transform_down.
+            let has_subqueries = plan_has_subqueries(&new_plan);
+
             for rule in &self.rules {
                 // If skipping failed rules, copy plan before attempting to rewrite
                 // as rewriting is destructive
@@ -398,9 +624,42 @@ impl Optimizer {
 
                 let result = match rule.apply_order() {
                     // optimizer handles recursion
-                    Some(apply_order) => new_plan.rewrite_with_subqueries(
-                        &mut Rewriter::new(apply_order, rule.as_ref(), config),
-                    ),
+                    Some(apply_order) => {
+                        if has_subqueries {
+                            // Plans with subqueries need the full
+                            // rewrite_with_subqueries traversal to
+                            // recurse into subquery plans.
+                            new_plan.rewrite_with_subqueries(
+                                &mut Rewriter::new(
+                                    apply_order,
+                                    rule.as_ref(),
+                                    config,
+                                ),
+                            )
+                        } else {
+                            // No subqueries: use in-place rewriting
+                            // with Arc::make_mut for zero-cost CoW on
+                            // children, avoiding Arc unwrap/rewrap.
+                            //
+                            // On error `new_plan` is left in an unspecified
+                            // state (see `rewrite_plan_in_place`); the result
+                            // handling below discards it, restoring `prev_plan`
+                            // when `skip_failed_rules` is set or propagating
+                            // the error otherwise.
+                            rewrite_plan_in_place(
+                                &mut new_plan,
+                                apply_order,
+                                rule.as_ref(),
+                                config,
+                            )
+                            .map(|transformed| {
+                                Transformed::new_transformed(
+                                    std::mem::take(&mut new_plan),
+                                    transformed,
+                                )
+                            })
+                        }
+                    }
                     // rule handles recursion itself
                     None => {
                         rule.rewrite(new_plan, config)
@@ -496,7 +755,7 @@ impl Optimizer {
 /// These are invariants which should hold true before and after [`LogicalPlan`] optimization.
 ///
 /// This differs from [`LogicalPlan::check_invariants`], which addresses if a singular
-/// LogicalPlan is valid. Instead this address if the optimization was valid based upon permitted changes.
+/// LogicalPlan is valid. Instead, this address if the optimization was valid based upon permitted changes.
 fn assert_valid_optimization(
     plan: &LogicalPlan,
     prev_schema: &Arc<DFSchema>,

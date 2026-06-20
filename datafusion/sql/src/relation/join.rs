@@ -122,6 +122,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             JoinConstraint::On(sql_expr) => {
                 let join_schema = left.schema().join(right.schema())?;
                 // parse ON expression
+                self.warn_on_null_equality_predicate(&sql_expr);
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
                 LogicalPlanBuilder::from(left)
                     .join_on(right, join_type, Some(expr))?
@@ -179,7 +180,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
-/// Return `true` iff the given [`TableFactor`] is lateral.
+/// Returns `true` if the given [`TableFactor`] is lateral.
 pub(crate) fn is_lateral(factor: &TableFactor) -> bool {
     match factor {
         TableFactor::Derived { lateral, .. } => *lateral,
@@ -189,7 +190,7 @@ pub(crate) fn is_lateral(factor: &TableFactor) -> bool {
     }
 }
 
-/// Return `true` iff the given [`Join`] is lateral.
+/// Returns `true` if the given [`Join`] is lateral.
 pub(crate) fn is_lateral_join(join: &Join) -> Result<bool> {
     let is_lateral_syntax = is_lateral(&join.relation);
     let is_apply_syntax = match join.join_operator {

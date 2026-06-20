@@ -162,7 +162,8 @@ impl RunOpt {
         let config = self.common.config()?;
         let rt = self.common.build_runtime()?;
         let state = SessionStateBuilder::new()
-            .with_config(config)
+            // Always collect statistics for sort pushdown
+            .with_config(config.with_collect_statistics(true))
             .with_runtime_env(rt)
             .with_default_features()
             .build();
@@ -255,9 +256,7 @@ impl RunOpt {
         );
         let extension = DEFAULT_PARQUET_EXTENSION;
 
-        let options = ListingOptions::new(format)
-            .with_file_extension(extension)
-            .with_collect_stat(true); // Always collect statistics for sort pushdown
+        let options = ListingOptions::new(format).with_file_extension(extension);
 
         let table_path = ListingTableUrl::parse(path)?;
         let schema = options.infer_schema(&state, &table_path).await?;
@@ -273,7 +272,9 @@ impl RunOpt {
             .with_listing_options(options)
             .with_schema(schema);
 
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        Ok(Arc::new(ListingTable::try_new(config)?.with_cache(
+            ctx.runtime_env().cache_manager.get_file_statistic_cache(),
+        )))
     }
 
     fn iterations(&self) -> usize {

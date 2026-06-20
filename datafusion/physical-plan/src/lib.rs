@@ -37,7 +37,7 @@ pub use datafusion_expr::{Accumulator, ColumnarValue};
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    Distribution, Partitioning, PhysicalExpr, expressions,
+    Distribution, Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, expressions,
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
@@ -49,6 +49,7 @@ pub use crate::execution_plan::{
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::sort_pushdown::SortOrderPushdownResult;
+pub use crate::statistics::StatisticsArgs;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
@@ -80,13 +81,16 @@ pub mod joins;
 pub mod limit;
 pub mod memory;
 pub mod metrics;
+pub mod operator_statistics;
 pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
+pub mod scalar_subquery;
 pub mod sort_pushdown;
 pub mod sorts;
 pub mod spill;
+pub mod statistics;
 pub mod stream;
 pub mod streaming;
 pub mod tree_node;

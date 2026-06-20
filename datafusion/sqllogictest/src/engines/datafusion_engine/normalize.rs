@@ -253,7 +253,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize, is_spark_path: bool) -> Result
     }
 }
 
-/// Converts columns to a result as expected by sqllogicteset.
+/// Converts columns to a result as expected by sqllogictest.
 pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
     columns
         .iter()
