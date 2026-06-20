@@ -305,6 +305,30 @@ mod tests {
     use datafusion_common::HashMap;
     use object_store::ObjectMeta;
     use object_store::path::Path;
+    use crate::cache::TableScopedPath;
+    use crate::cache::cache_manager::{
+        CachedFileMetadata, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+    };
+    use arrow::array::{Int32Array, ListArray, RecordBatch};
+    use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use chrono::DateTime;
+    use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
+    use datafusion_expr::ColumnarValue;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use crate::cache::cache_manager::{
+        CachedFileList, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, meta_heap_bytes,
+    };
+    use crate::cache::default_cache::TimeProvider;
+    use crate::cache::{CacheKey, CacheValue};
+    use datafusion_common::TableReference;
+    use datafusion_common::instant::Instant;
+    use std::sync::Mutex;
+    use std::thread;
+    use std::time::Duration;
 
     pub struct TestFileMetadata {
         metadata: String,
@@ -780,21 +804,6 @@ mod tests {
         assert_eq!(cache.list_entries(), HashMap::from([]));
     }
 
-    use crate::cache::TableScopedPath;
-    use crate::cache::cache_manager::{
-        CachedFileMetadata, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
-    };
-    use arrow::array::{Int32Array, ListArray, RecordBatch};
-    use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-    use chrono::DateTime;
-    use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
-    use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
-    use datafusion_expr::ColumnarValue;
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-
     fn create_test_meta(path: &str, size: u64) -> ObjectMeta {
         ObjectMeta {
             location: Path::from(path),
@@ -1268,17 +1277,6 @@ mod tests {
             CachedFileMetadata::new(object_meta.clone(), Arc::new(stats.clone()), None);
         (object_meta, value)
     }
-
-    use crate::cache::cache_manager::{
-        CachedFileList, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, meta_heap_bytes,
-    };
-    use crate::cache::default_cache::TimeProvider;
-    use crate::cache::{CacheKey, CacheValue};
-    use datafusion_common::TableReference;
-    use datafusion_common::instant::Instant;
-    use std::sync::Mutex;
-    use std::thread;
-    use std::time::Duration;
 
     struct MockTimeProvider {
         base: Instant,
