@@ -829,11 +829,14 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "force_hash_collisions"))]
     use arrow::array::{AsArray, Int64Array, StringViewArray};
     use std::hash::BuildHasher;
+    #[cfg(not(feature = "force_hash_collisions"))]
     use std::sync::Arc;
 
     // A string longer than the 12-byte inline limit
+    #[cfg(not(feature = "force_hash_collisions"))]
     const LONG: &str = "this string is definitely longer than twelve bytes";
 
     fn h(v: u64) -> u64 {
@@ -856,6 +859,7 @@ mod tests {
         buf
     }
 
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn distinct_count(acc: &mut HLLAccumulator) -> u64 {
         match acc.evaluate().unwrap() {
             ScalarValue::UInt64(Some(v)) => v,
@@ -984,6 +988,7 @@ mod tests {
     /// `approx_distinct(v) FILTER (WHERE nullable_bool)` — a NULL filter row
     /// must not be counted (null filter is treated the same as false).
     #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn update_batch_nullable_filter_excludes_null_filter_rows() {
         let values: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2, 3, 4, 5]));
         // row 0: filter=true, row 1: filter=NULL, row 2: filter=false,
@@ -1009,6 +1014,7 @@ mod tests {
     /// in an all-inline batch and in a mixed batch that also contains a long
     /// string (which forces a data buffer).
     #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn utf8view_groups_short_string_hashed_consistently_across_batches() {
         // Batch 1: all-inline (no data buffers) — "aaa" is hashed as u128 view.
         let batch1: ArrayRef = Arc::new(StringViewArray::from(vec!["aaa", "bbb"]));
@@ -1035,6 +1041,7 @@ mod tests {
     /// Regression: a short (≤ 12-byte) Utf8View string must hash identically
     /// regardless of which batch it appears in — all-inline or mixed.
     #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn utf8view_acc_split_batches_match_single_mixed_batch() {
         // Multiset: {"aaa" x2, "bbb", LONG}, so 3 distinct values.
         let mixed: ArrayRef =
