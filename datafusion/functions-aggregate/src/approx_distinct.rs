@@ -829,12 +829,7 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringViewArray};
     use std::hash::BuildHasher;
-    use std::sync::Arc;
-
-    // A string longer than the 12-byte inline limit
-    const LONG: &str = "this string is definitely longer than twelve bytes";
 
     #[cfg(not(feature = "force_hash_collisions"))]
     mod real_hash_test {
@@ -945,19 +940,6 @@ mod tests {
             hll.add_hashed(hash);
         }
         hll.count() as u64
-    }
-
-    fn distinct_count(acc: &mut HLLAccumulator) -> u64 {
-        match acc.evaluate().unwrap() {
-            ScalarValue::UInt64(Some(v)) => v,
-            other => panic!("unexpected evaluate result: {other:?}"),
-        }
-    }
-
-    fn array_hashes(array: &ArrayRef) -> Vec<u64> {
-        let mut hashes = vec![0; array.len()];
-        create_hashes([array.as_ref()], &HLL_HASH_STATE, &mut hashes).unwrap();
-        hashes
     }
 
     fn serialize(g: &mut GroupHll) -> Vec<u8> {
