@@ -1486,6 +1486,7 @@ mod tests {
         buffer::NullBuffer,
         datatypes::Int32Type,
     };
+    #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
 
     #[test]
