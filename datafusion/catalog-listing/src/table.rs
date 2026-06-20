@@ -264,6 +264,21 @@ impl ListingTable {
         self
     }
 
+    fn statistics_cache(
+        &self,
+        has_table_reference: bool,
+    ) -> Option<&Arc<dyn FileStatisticsCache>> {
+        let shared_cache = self.collected_statistics.as_ref()?;
+        if has_table_reference || self.schema_source == SchemaSource::Inferred {
+            Some(shared_cache)
+        } else {
+            // Anonymous specified-schema reads can use the same file path with
+            // different logical schemas. File statistics are schema-dependent,
+            // so avoid reusing stats computed for a different read schema.
+            None
+        }
+    }
+
     /// Specify the SQL definition for this table, if any
     pub fn with_definition(mut self, definition: Option<String>) -> Self {
         self.definition = definition;
@@ -806,7 +821,7 @@ impl ListingTable {
         let meta = &part_file.object_meta;
 
         // Check cache first - if we have valid cached statistics and ordering
-        if let Some(cache) = &self.collected_statistics
+        if let Some(cache) = self.statistics_cache(path.table.is_some())
             && let Some(cached) = cache.get(&path)
             && cached.is_valid_for(meta)
         {
@@ -824,7 +839,7 @@ impl ListingTable {
         let statistics = Arc::new(file_meta.statistics);
 
         // Store in cache
-        if let Some(cache) = &self.collected_statistics {
+        if let Some(cache) = self.statistics_cache(path.table.is_some()) {
             cache.put(
                 &path,
                 CachedFileMetadata::new(

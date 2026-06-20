@@ -64,6 +64,7 @@ use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
+use datafusion_catalog_listing::SchemaSource;
 use datafusion_common::config::{ConfigField, ConfigOptions};
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
@@ -1725,12 +1726,20 @@ impl SessionContext {
             }
         }
 
-        let resolved_schema = options
-            .get_resolved_schema(&session_config, self.state(), table_paths[0].clone())
-            .await?;
+        let schema_table_path = table_paths[0].clone();
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
+            .with_listing_options(listing_options);
+        let config = match options.schema_source() {
+            SchemaSource::Inferred | SchemaSource::Unset => {
+                config.infer_schema(&self.state()).await?
+            }
+            SchemaSource::Specified => {
+                let resolved_schema = options
+                    .get_resolved_schema(&session_config, self.state(), schema_table_path)
+                    .await?;
+                config.with_schema(resolved_schema)
+            }
+        };
         let provider = ListingTable::try_new(config)?
             .with_cache(self.runtime_env().cache_manager.get_file_statistic_cache());
         self.read_table(Arc::new(provider))

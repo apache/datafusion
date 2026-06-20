@@ -34,6 +34,7 @@ use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_catalog_listing::SchemaSource;
 use datafusion_common::config::{ConfigFileDecryptionProperties, TableOptions};
 use datafusion_common::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
@@ -595,6 +596,11 @@ pub trait ReadOptions<'a> {
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef>;
 
+    /// Returns whether the read schema was inferred or specified.
+    fn schema_source(&self) -> SchemaSource {
+        SchemaSource::Specified
+    }
+
     /// helper function to reduce repetitive code. Infers the schema from sources if not provided. Infinite data sources not supported through this function.
     async fn _get_resolved_schema(
         &'a self,
@@ -653,6 +659,10 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
         self._get_resolved_schema(config, state, table_path, self.schema)
             .await
     }
+
+    fn schema_source(&self) -> SchemaSource {
+        schema_source_from_option(self.schema)
+    }
 }
 
 #[cfg(feature = "parquet")]
@@ -697,6 +707,10 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
         self._get_resolved_schema(config, state, table_path, self.schema)
             .await
     }
+
+    fn schema_source(&self) -> SchemaSource {
+        schema_source_from_option(self.schema)
+    }
 }
 
 #[async_trait]
@@ -728,6 +742,10 @@ impl ReadOptions<'_> for JsonReadOptions<'_> {
         self._get_resolved_schema(config, state, table_path, self.schema)
             .await
     }
+
+    fn schema_source(&self) -> SchemaSource {
+        schema_source_from_option(self.schema)
+    }
 }
 
 #[cfg(feature = "avro")]
@@ -755,6 +773,10 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
         self._get_resolved_schema(config, state, table_path, self.schema)
             .await
     }
+
+    fn schema_source(&self) -> SchemaSource {
+        schema_source_from_option(self.schema)
+    }
 }
 
 #[async_trait]
@@ -780,5 +802,17 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
     ) -> Result<SchemaRef> {
         self._get_resolved_schema(config, state, table_path, self.schema)
             .await
+    }
+
+    fn schema_source(&self) -> SchemaSource {
+        schema_source_from_option(self.schema)
+    }
+}
+
+fn schema_source_from_option(schema: Option<&Schema>) -> SchemaSource {
+    if schema.is_some() {
+        SchemaSource::Specified
+    } else {
+        SchemaSource::Inferred
     }
 }
