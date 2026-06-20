@@ -131,7 +131,7 @@ pub(crate) struct PartialHashAggregateStream {
     group_values_soft_limit: Option<usize>,
 
     /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
-    /// state for materializing and slicing output batches.
+    /// state for emitting output batches.
     state: Option<PartialHashAggregateState>,
 }
 
@@ -203,7 +203,7 @@ pub(crate) struct FinalHashAggregateStream {
     group_values_soft_limit: Option<usize>,
 
     /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
-    /// state for materializing and slicing output batches.
+    /// state for emitting output batches.
     state: Option<FinalHashAggregateState>,
 }
 

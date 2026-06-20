@@ -46,7 +46,8 @@ pub(super) struct Final;
 /// Grouped hash table shared by the partial and final paths.
 ///
 /// While building, it consumes input batches and updates group / accumulator
-/// state. While outputting, it incrementally output the materialized batches.
+/// state. While outputting, it incrementally drains that state into output
+/// batches.
 ///
 /// # Marker Type
 /// `AggrMode` selects the aggregate semantics.
@@ -68,7 +69,7 @@ pub(super) struct AggregateHashTable<AggrMode> {
     /// Output schema: group columns followed by aggregate state or final values.
     output_schema: SchemaRef,
 
-    /// Maximum rows per emitted output batch.
+    /// Maximum rows per emitted output batch, from config `batch_size`.
     batch_size: usize,
 
     /// Lifecycle-specific state: building stage / outputting stage
@@ -144,10 +145,7 @@ struct BuildingHashTableState {
 
 enum AggregateHashTableState {
     Building(BuildingHashTableState),
-    Outputting {
-        output_batch: Option<RecordBatch>,
-        output_batch_offset: usize,
-    },
+    Outputting(BuildingHashTableState),
     Done,
 }
 
@@ -281,6 +279,10 @@ impl<Mode> AggregateHashTable<Mode> {
         batch_size: usize,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
+        if batch_size == 0 {
+            return internal_err!("AggregateHashTable requires config batch_size >= 1");
+        }
+
         let input_schema = agg.input().schema();
         let aggregate_arguments = aggregate_expressions(
             &agg.aggr_expr,
@@ -349,7 +351,8 @@ impl<Mode> AggregateHashTable<Mode> {
 
     pub(super) fn memory_size(&self) -> usize {
         match &self.state {
-            AggregateHashTableState::Building(state) => {
+            AggregateHashTableState::Building(state)
+            | AggregateHashTableState::Outputting(state) => {
                 let acc = state
                     .accumulators
                     .iter()
@@ -358,9 +361,6 @@ impl<Mode> AggregateHashTable<Mode> {
 
                 acc + state.group_values.size()
                     + state.batch_group_indices.allocated_size()
-            }
-            AggregateHashTableState::Outputting { output_batch, .. } => {
-                output_batch_memory_size(output_batch)
             }
             AggregateHashTableState::Done => 0,
         }
@@ -379,52 +379,24 @@ impl<Mode> AggregateHashTable<Mode> {
         matches!(self.state, AggregateHashTableState::Done)
     }
 
-    fn set_output_batch(&mut self, output_batch: Option<RecordBatch>) {
-        self.state = AggregateHashTableState::Outputting {
-            output_batch,
-            output_batch_offset: 0,
+    fn start_outputting(&mut self) {
+        let AggregateHashTableState::Building(mut state) =
+            std::mem::replace(&mut self.state, AggregateHashTableState::Done)
+        else {
+            unreachable!("hash aggregate table is not building")
         };
+
+        state.batch_group_indices = Vec::new();
+        self.state = AggregateHashTableState::Outputting(state);
     }
+}
 
-    pub(super) fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
-        match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
-            AggregateHashTableState::Outputting {
-                output_batch,
-                mut output_batch_offset,
-            } => {
-                let Some(batch) = output_batch.as_ref() else {
-                    return Ok(None);
-                };
-
-                let num_rows = batch.num_rows();
-                if output_batch_offset >= num_rows {
-                    return Ok(None);
-                }
-
-                debug_assert!(self.batch_size > 0);
-                let output_len =
-                    self.batch_size.max(1).min(num_rows - output_batch_offset);
-                let output = batch.slice(output_batch_offset, output_len);
-                output_batch_offset += output_len;
-
-                if output_batch_offset == num_rows {
-                    self.state = AggregateHashTableState::Done;
-                } else {
-                    self.state = AggregateHashTableState::Outputting {
-                        output_batch,
-                        output_batch_offset,
-                    };
-                }
-
-                debug_assert!(output.num_rows() > 0);
-                debug_assert!(output.num_rows() <= self.batch_size.max(1));
-                Ok(Some(output))
-            }
-            _ => {
-                self.state = AggregateHashTableState::Done;
-                internal_err!("next_output_batch must be called in the outputting state")
-            }
-        }
+fn emit_to_for_batch_size(batch_size: usize, group_count: usize) -> EmitTo {
+    debug_assert!(batch_size > 0);
+    if group_count <= batch_size {
+        EmitTo::All
+    } else {
+        EmitTo::First(batch_size)
     }
 }
 
@@ -442,6 +414,47 @@ impl AggregateHashTable<Partial> {
             batch_size,
             agg.filter_expr.iter().cloned().collect(),
         )
+    }
+
+    /// Emits the next batch of aggregated group keys and aggregate states.
+    ///
+    /// The output batch size is determined by `self.batch_size`.
+    ///
+    /// Returns `Some(batch)` for each emitted batch, `None` when output is
+    /// exhausted, and an internal error if polled in the `Building` state.
+    pub(super) fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let output_schema = Arc::clone(&self.output_schema);
+        let batch_size = self.batch_size;
+        match &mut self.state {
+            AggregateHashTableState::Outputting(state) => {
+                if state.group_values.is_empty() {
+                    self.state = AggregateHashTableState::Done;
+                    return Ok(None);
+                }
+
+                let emit_to =
+                    emit_to_for_batch_size(batch_size, state.group_values.len());
+                let timer = self.group_by_metrics.emitting_time.timer();
+                let mut output = state.group_values.emit(emit_to)?;
+
+                for acc in state.accumulators.iter_mut() {
+                    output.extend(acc.state(emit_to)?);
+                }
+                let done = state.group_values.is_empty();
+                drop(timer);
+
+                let batch = RecordBatch::try_new(output_schema, output)?;
+                debug_assert!(batch.num_rows() > 0);
+                if done {
+                    self.state = AggregateHashTableState::Done;
+                }
+                Ok(Some(batch))
+            }
+            AggregateHashTableState::Done => Ok(None),
+            AggregateHashTableState::Building(_) => {
+                internal_err!("next_output_batch must be called in the outputting state")
+            }
+        }
     }
 
     pub(super) fn can_skip_aggregation(&self) -> bool {
@@ -507,25 +520,7 @@ impl AggregateHashTable<Partial> {
 
     pub(super) fn start_output(&mut self) -> Result<()> {
         self.init_empty_grouping_sets()?;
-        let state = self.state.building_mut();
-
-        let output_batch = if state.group_values.is_empty() {
-            None
-        } else {
-            let timer = self.group_by_metrics.emitting_time.timer();
-            let mut output = state.group_values.emit(EmitTo::All)?;
-
-            for acc in state.accumulators.iter_mut() {
-                output.extend(acc.state(EmitTo::All)?);
-            }
-
-            let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
-            debug_assert!(batch.num_rows() > 0);
-            drop(timer);
-            Some(batch)
-        };
-
-        self.set_output_batch(output_batch);
+        self.start_outputting();
         Ok(())
     }
 
@@ -648,6 +643,47 @@ impl AggregateHashTable<Final> {
         )
     }
 
+    /// Emits the next batch of aggregated group keys and aggregate states.
+    ///
+    /// The output batch size is determined by `self.batch_size`.
+    ///
+    /// Returns `Some(batch)` for each emitted batch, `None` when output is
+    /// exhausted, and an internal error if polled in the `Building` state.
+    pub(super) fn next_output_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let output_schema = Arc::clone(&self.output_schema);
+        let batch_size = self.batch_size;
+        match &mut self.state {
+            AggregateHashTableState::Outputting(state) => {
+                if state.group_values.is_empty() {
+                    self.state = AggregateHashTableState::Done;
+                    return Ok(None);
+                }
+
+                let emit_to =
+                    emit_to_for_batch_size(batch_size, state.group_values.len());
+                let timer = self.group_by_metrics.emitting_time.timer();
+                let mut output = state.group_values.emit(emit_to)?;
+
+                for acc in state.accumulators.iter_mut() {
+                    output.push(acc.evaluate_final(emit_to)?);
+                }
+                let done = state.group_values.is_empty();
+                drop(timer);
+
+                let batch = RecordBatch::try_new(output_schema, output)?;
+                debug_assert!(batch.num_rows() > 0);
+                if done {
+                    self.state = AggregateHashTableState::Done;
+                }
+                Ok(Some(batch))
+            }
+            AggregateHashTableState::Done => Ok(None),
+            AggregateHashTableState::Building(_) => {
+                internal_err!("next_output_batch must be called in the outputting state")
+            }
+        }
+    }
+
     pub(super) fn aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
         let evaluated_batch = self.evaluate_batch(batch)?;
         let state = self.state.building_mut();
@@ -674,31 +710,7 @@ impl AggregateHashTable<Final> {
     }
 
     pub(super) fn start_output(&mut self) -> Result<()> {
-        let state = self.state.building_mut();
-        let output_batch = if state.group_values.is_empty() {
-            None
-        } else {
-            let timer = self.group_by_metrics.emitting_time.timer();
-            let mut output = state.group_values.emit(EmitTo::All)?;
-
-            for acc in state.accumulators.iter_mut() {
-                output.push(acc.evaluate_final(EmitTo::All)?);
-            }
-
-            let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
-            debug_assert!(batch.num_rows() > 0);
-            drop(timer);
-            Some(batch)
-        };
-
-        self.set_output_batch(output_batch);
+        self.start_outputting();
         Ok(())
     }
-}
-
-fn output_batch_memory_size(output_batch: &Option<RecordBatch>) -> usize {
-    output_batch
-        .as_ref()
-        .map(RecordBatch::get_array_memory_size)
-        .unwrap_or_default()
 }
