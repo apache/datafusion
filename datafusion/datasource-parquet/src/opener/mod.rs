@@ -183,10 +183,10 @@ impl Morselizer for ParquetMorselizer {
 ///  PrepareFilters
 ///        |
 ///        v
-///   LoadPageIndex
+/// PruneWithStatistics
 ///        |
 ///        v
-/// PruneWithStatistics
+///   LoadPageIndex?   (skipped when all surviving row groups are fully matched)
 ///        |
 ///        v
 ///  LoadBloomFilters
@@ -221,10 +221,10 @@ enum ParquetOpenState {
     /// Specialize any filters for the actual file schema (only known after
     /// metadata is loaded)
     PrepareFilters(Box<MetadataLoadedParquetOpen>),
-    /// Loading [Parquet Page Index](https://parquet.apache.org/docs/file-format/pageindex/)
-    LoadPageIndex(BoxFuture<'static, Result<FiltersPreparedParquetOpen>>),
     /// Pruning Row Groups
     PruneWithStatistics(Box<FiltersPreparedParquetOpen>),
+    /// Loading [Parquet Page Index](https://parquet.apache.org/docs/file-format/pageindex/)
+    LoadPageIndex(BoxFuture<'static, Result<RowGroupsPrunedParquetOpen>>),
     /// Loading bloom filters required for row-group pruning
     LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
     /// Pruning with preloaded Bloom Filters
@@ -384,18 +384,41 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PrepareFilters(loaded) => {
                 let prepared_filters = loaded.prepare_filters()?;
-                Ok(ParquetOpenState::LoadPageIndex(
-                    prepared_filters.load_page_index().boxed(),
-                ))
+                Ok(ParquetOpenState::PruneWithStatistics(Box::new(
+                    prepared_filters,
+                )))
+            }
+            ParquetOpenState::PruneWithStatistics(prepared) => {
+                let prepared_row_groups = (*prepared).prune_row_groups()?;
+                if should_load_page_index(
+                    prepared_row_groups.prepared.page_pruning_predicate.as_ref(),
+                    &prepared_row_groups.row_groups,
+                ) {
+                    Ok(ParquetOpenState::LoadPageIndex(
+                        prepared_row_groups.load_page_index().boxed(),
+                    ))
+                } else {
+                    if prepared_row_groups
+                        .prepared
+                        .page_pruning_predicate
+                        .is_some()
+                        && !prepared_row_groups.row_groups.is_empty()
+                    {
+                        let prepared = &prepared_row_groups.prepared.loaded.prepared;
+                        ParquetFileMetrics::add_page_index_load_skipped(
+                            &prepared.metrics,
+                            prepared.partition_index,
+                            &prepared.file_name,
+                            1,
+                        );
+                    }
+                    Ok(ParquetOpenState::LoadBloomFilters(
+                        prepared_row_groups.load_bloom_filters().boxed(),
+                    ))
+                }
             }
             ParquetOpenState::LoadPageIndex(future) => {
                 Ok(ParquetOpenState::LoadPageIndex(future))
-            }
-            ParquetOpenState::PruneWithStatistics(prepared) => {
-                let prepared_row_groups = prepared.prune_row_groups()?;
-                Ok(ParquetOpenState::LoadBloomFilters(
-                    prepared_row_groups.load_bloom_filters().boxed(),
-                ))
             }
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(ParquetOpenState::LoadBloomFilters(future))
@@ -510,9 +533,9 @@ impl MorselPlanner for ParquetMorselPlanner {
             }
             ParquetOpenState::LoadPageIndex(future) => {
                 Ok(Some(Self::schedule_io(async move {
-                    Ok(ParquetOpenState::PruneWithStatistics(Box::new(
-                        future.await?,
-                    )))
+                    Ok(ParquetOpenState::LoadBloomFilters(
+                        future.await?.load_bloom_filters().boxed(),
+                    ))
                 })))
             }
             ParquetOpenState::LoadBloomFilters(future) => {
@@ -863,27 +886,6 @@ impl MetadataLoadedParquetOpen {
 }
 
 impl FiltersPreparedParquetOpen {
-    /// Load the page index if pruning requires it and metadata did not include it.
-    async fn load_page_index(mut self) -> Result<Self> {
-        // The page index is not stored inline in the parquet footer so the
-        // metadata load above may not have read the page index structures yet.
-        // If we need them for reading and they aren't yet loaded, we need to
-        // load them now.
-        if self.page_pruning_predicate.is_some() {
-            self.loaded.reader_metadata = load_page_index(
-                self.loaded.reader_metadata,
-                &mut self.loaded.prepared.async_file_reader,
-                self.loaded
-                    .options
-                    .clone()
-                    .with_page_index_policy(PageIndexPolicy::Optional),
-            )
-            .await?;
-        }
-
-        Ok(self)
-    }
-
     /// Prune row groups using file ranges and parquet metadata.
     fn prune_row_groups(self) -> Result<RowGroupsPrunedParquetOpen> {
         let loaded = &self.loaded;
@@ -952,6 +954,22 @@ impl FiltersPreparedParquetOpen {
 }
 
 impl RowGroupsPrunedParquetOpen {
+    /// Load the page index if pruning requires it and metadata did not include it.
+    async fn load_page_index(mut self) -> Result<Self> {
+        self.prepared.loaded.reader_metadata = load_page_index(
+            self.prepared.loaded.reader_metadata.clone(),
+            &mut self.prepared.loaded.prepared.async_file_reader,
+            self.prepared
+                .loaded
+                .options
+                .clone()
+                .with_page_index_policy(PageIndexPolicy::Optional),
+        )
+        .await?;
+
+        Ok(self)
+    }
+
     /// Load bloom filters needed for pruning when enabled and a pruning predicate exists.
     async fn load_bloom_filters(mut self) -> Result<BloomFiltersLoadedParquetOpen> {
         let num_row_groups = self
@@ -1385,6 +1403,22 @@ pub(crate) fn build_pruning_predicates(
     )
 }
 
+/// Returns true if the page index must be loaded for page-level pruning.
+///
+/// The page index can only prune when at least one surviving row group is not
+/// fully matched by row-group statistics alone.
+fn should_load_page_index(
+    page_pruning_predicate: Option<&Arc<PagePruningAccessPlanFilter>>,
+    row_groups: &RowGroupAccessPlanFilter,
+) -> bool {
+    page_pruning_predicate.is_some_and(|_| {
+        let fully_matched = row_groups.is_fully_matched();
+        row_groups
+            .row_group_indexes()
+            .any(|idx| !fully_matched[idx])
+    })
+}
+
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
 /// it from the underlying `AsyncFileReader` if necessary.
 async fn load_page_index<T: AsyncFileReader>(
@@ -1420,7 +1454,10 @@ async fn load_page_index<T: AsyncFileReader>(
 mod test {
     use super::*;
     use super::{ConstantColumns, ParquetMorselizer, constant_columns_from_stats};
-    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess};
+    use crate::{
+        CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
+        ParquetFileReaderFactory, RowGroupAccess,
+    };
     use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
@@ -1430,6 +1467,10 @@ mod test {
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema};
+    use datafusion_execution::cache::cache_manager::{
+        CachedFileMetadataEntry, FileMetadataCache,
+    };
+    use datafusion_execution::cache::default_cache::DefaultCache;
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
@@ -1462,6 +1503,7 @@ mod test {
         predicate: Option<Arc<dyn PhysicalExpr>>,
         metadata_size_hint: Option<usize>,
         metrics: ExecutionPlanMetricsSet,
+        parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
         pushdown_filters: bool,
         reorder_filters: bool,
         force_filter_selections: bool,
@@ -1488,6 +1530,7 @@ mod test {
                 predicate: None,
                 metadata_size_hint: None,
                 metrics: ExecutionPlanMetricsSet::new(),
+                parquet_file_reader_factory: None,
                 pushdown_filters: false,
                 reorder_filters: false,
                 force_filter_selections: false,
@@ -1555,6 +1598,19 @@ mod test {
             self
         }
 
+        fn with_metrics(mut self, metrics: ExecutionPlanMetricsSet) -> Self {
+            self.metrics = metrics;
+            self
+        }
+
+        fn with_parquet_file_reader_factory(
+            mut self,
+            factory: Arc<dyn ParquetFileReaderFactory>,
+        ) -> Self {
+            self.parquet_file_reader_factory = Some(factory);
+            self
+        }
+
         /// Set a row limit.
         fn with_limit(mut self, limit: usize) -> Self {
             self.limit = Some(limit);
@@ -1601,9 +1657,11 @@ mod test {
                 table_schema,
                 metadata_size_hint: self.metadata_size_hint,
                 metrics: self.metrics,
-                parquet_file_reader_factory: Arc::new(
-                    DefaultParquetFileReaderFactory::new(store),
-                ),
+                parquet_file_reader_factory: self
+                    .parquet_file_reader_factory
+                    .unwrap_or_else(|| {
+                        Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
+                    }),
                 pushdown_filters: self.pushdown_filters,
                 reorder_filters: self.reorder_filters,
                 force_filter_selections: self.force_filter_selections,
@@ -1809,6 +1867,18 @@ mod test {
         let data_len = data.len();
         store.put(&Path::from(filename), data.into()).await.unwrap();
         data_len
+    }
+
+    fn counter_metric_value(metrics: &ExecutionPlanMetricsSet, name: &str) -> usize {
+        use datafusion_physical_plan::metrics::MetricValue;
+        metrics
+            .clone_inner()
+            .sum_by_name(name)
+            .map(|metric| match metric {
+                MetricValue::Count { count, .. } => count.value(),
+                _ => 0,
+            })
+            .unwrap_or(0)
     }
 
     fn make_dynamic_expr(expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
@@ -2526,6 +2596,197 @@ mod test {
             rows_without_page_index, 100,
             "without page index all rows are returned"
         );
+    }
+
+    #[test]
+    fn should_load_page_index_without_predicate() {
+        use crate::RowGroupAccessPlanFilter;
+        let row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
+        assert!(!should_load_page_index(None, &row_groups));
+    }
+
+    #[test]
+    fn should_load_page_index_when_surviving_row_groups_not_fully_matched() {
+        use crate::RowGroupAccessPlanFilter;
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let predicate = logical2physical(&col("a").gt(lit(50i32)), &schema);
+        let page_predicate = build_page_pruning_predicate(&predicate, &schema);
+        let row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
+        assert!(should_load_page_index(Some(&page_predicate), &row_groups));
+    }
+
+    #[test]
+    fn should_load_page_index_when_all_surviving_row_groups_fully_matched() {
+        use crate::RowGroupAccessPlanFilter;
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let predicate = logical2physical(&col("a").is_not_null(), &schema);
+        let page_predicate = build_page_pruning_predicate(&predicate, &schema);
+        let mut plan = ParquetAccessPlan::new_all(1);
+        plan.mark_fully_matched(0);
+        let row_groups = RowGroupAccessPlanFilter::new(plan);
+        assert!(!should_load_page_index(Some(&page_predicate), &row_groups));
+    }
+
+    #[tokio::test]
+    async fn test_page_index_skipped_when_row_groups_fully_matched() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let values: Vec<i32> = (1..=100).collect();
+        let batch = record_batch!((
+            "a",
+            Int32,
+            values.iter().map(|v| Some(*v)).collect::<Vec<_>>()
+        ))
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(10)
+            .set_write_batch_size(10)
+            .build();
+        let schema = batch.schema();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        let predicate = logical2physical(&col("a").gt(lit(0i32)), &schema);
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(Arc::clone(&predicate))
+            .with_enable_page_index(true)
+            .with_row_group_stats_pruning(true)
+            .with_pushdown_filters(false)
+            .with_metrics(metrics.clone())
+            .build();
+
+        let (_, rows) =
+            count_batches_and_rows(open_file(&morselizer, file).await.unwrap()).await;
+        assert_eq!(rows, 100);
+        assert_eq!(counter_metric_value(&metrics, "page_index_load_skipped"), 1);
+    }
+
+    #[tokio::test]
+    async fn test_page_index_skipped_with_cached_reader_factory() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let metadata_cache: Arc<FileMetadataCache> =
+            Arc::new(DefaultCache::<Path, CachedFileMetadataEntry>::new(
+                64 * 1024 * 1024,
+            ));
+        let values: Vec<i32> = (1..=100).collect();
+        let batch = record_batch!((
+            "a",
+            Int32,
+            values.iter().map(|v| Some(*v)).collect::<Vec<_>>()
+        ))
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(10)
+            .set_write_batch_size(10)
+            .build();
+        let schema = batch.schema();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        let predicate = logical2physical(&col("a").gt(lit(0i32)), &schema);
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(Arc::clone(&predicate))
+            .with_enable_page_index(true)
+            .with_row_group_stats_pruning(true)
+            .with_pushdown_filters(false)
+            .with_metrics(metrics.clone())
+            .with_parquet_file_reader_factory(Arc::new(
+                CachedParquetFileReaderFactory::new(
+                    Arc::clone(&store),
+                    Arc::clone(&metadata_cache),
+                ),
+            ))
+            .build();
+
+        let (_, rows) =
+            count_batches_and_rows(open_file(&morselizer, file).await.unwrap()).await;
+        assert_eq!(rows, 100);
+        assert_eq!(counter_metric_value(&metrics, "page_index_load_skipped"), 1);
+
+        let cached = metadata_cache
+            .get(&Path::from("test.parquet"))
+            .expect("metadata cache should contain the file");
+        let extra_info = cached.file_metadata.extra_info();
+        let page_index_cached = extra_info.get("page_index").map(String::as_str);
+        assert_eq!(
+            page_index_cached,
+            Some("false"),
+            "cached metadata should not include page index when opener skips it"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_page_index_loaded_when_not_fully_matched() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let values: Vec<i32> = (1..=100).collect();
+        let batch = record_batch!((
+            "a",
+            Int32,
+            values.iter().map(|v| Some(*v)).collect::<Vec<_>>()
+        ))
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(10)
+            .set_write_batch_size(10)
+            .build();
+        let schema = batch.schema();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        let predicate = logical2physical(&col("a").gt(lit(90i32)), &schema);
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(Arc::clone(&predicate))
+            .with_enable_page_index(true)
+            .with_pushdown_filters(false)
+            .with_row_group_stats_pruning(false)
+            .with_metrics(metrics.clone())
+            .build();
+
+        let (_, rows) =
+            count_batches_and_rows(open_file(&morselizer, file).await.unwrap()).await;
+        assert_eq!(rows, 10);
+        assert_eq!(counter_metric_value(&metrics, "page_index_load_skipped"), 0);
     }
 
     async fn fully_matched_split_test_file(

@@ -237,4 +237,23 @@ impl ParquetFileMetrics {
             .counter("page_index_pages_skipped_by_fully_matched", partition);
         count.add(n);
     }
+
+    /// Record that page index I/O was skipped because row-group statistics
+    /// already proved page index could not prune further.
+    pub(crate) fn add_page_index_load_skipped(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+        n: usize,
+    ) {
+        if n == 0 {
+            return;
+        }
+
+        let count = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .counter("page_index_load_skipped", partition);
+        count.add(n);
+    }
 }
