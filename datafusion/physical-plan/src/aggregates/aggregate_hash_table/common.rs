@@ -272,7 +272,8 @@ impl AggregateHashTableState {
     }
 }
 
-impl<Mode> AggregateHashTable<Mode> {
+/// Methods shared by all aggregate hash table modes.
+impl<AggrMode> AggregateHashTable<AggrMode> {
     pub(super) fn new_with_filters(
         agg: &AggregateExec,
         partition: usize,

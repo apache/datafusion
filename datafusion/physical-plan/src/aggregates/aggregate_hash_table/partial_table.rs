@@ -34,6 +34,7 @@ use super::common::{
     emit_to_for_batch_size,
 };
 
+/// Methods specific to the aggregate hash table used in the partial aggregation stage.
 impl AggregateHashTable<Partial> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,

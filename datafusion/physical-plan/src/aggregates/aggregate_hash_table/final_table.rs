@@ -27,6 +27,7 @@ use super::common::{
     AggregateHashTable, AggregateHashTableState, Final, emit_to_for_batch_size,
 };
 
+/// Methods specific to the aggregate hash table used in the final aggregation stage.
 impl AggregateHashTable<Final> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,
