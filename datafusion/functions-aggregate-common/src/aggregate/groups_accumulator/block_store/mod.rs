@@ -69,6 +69,11 @@ pub trait BlockStore<B: Block>:
     /// emission, blocks already returned by [`Self::pop_block`] are excluded.
     fn num_blocks(&self) -> usize;
 
+    /// Return the configured block size for blocked storage.
+    ///
+    /// Returns `None` for flat storage because it has no configured block size.
+    fn block_size(&self) -> Option<usize>;
+
     /// Return true when the store has no active blocks.
     ///
     /// This is equivalent to `self.num_blocks() == 0`, but implementations may

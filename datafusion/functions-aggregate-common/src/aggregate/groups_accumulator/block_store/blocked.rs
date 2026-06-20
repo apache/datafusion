@@ -159,6 +159,10 @@ impl<B: Block> BlockStore<B> for BlockedBlockStore<B> {
         }
     }
 
+    fn block_size(&self) -> Option<usize> {
+        Some(self.block_size)
+    }
+
     fn clear(&mut self) {
         self.inner.clear();
         self.emit_ctx = None;

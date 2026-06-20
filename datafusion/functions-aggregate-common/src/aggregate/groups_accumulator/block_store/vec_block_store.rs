@@ -74,6 +74,10 @@ where
         self.inner.num_blocks()
     }
 
+    pub fn block_size(&self) -> Option<usize> {
+        self.inner.block_size()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }

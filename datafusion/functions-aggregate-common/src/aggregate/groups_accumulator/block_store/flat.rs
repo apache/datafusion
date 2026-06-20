@@ -75,6 +75,10 @@ impl<B: Block> BlockStore<B> for FlatBlockStore<B> {
         1
     }
 
+    fn block_size(&self) -> Option<usize> {
+        None
+    }
+
     fn clear(&mut self) {
         self.0 = B::default();
     }

@@ -157,6 +157,10 @@ where
         self.inner.num_blocks()
     }
 
+    pub fn block_size(&self) -> Option<usize> {
+        self.inner.block_size()
+    }
+
     /// Emit seen-values according to `emit_to`, expressed only in terms of
     /// [`BlockStore::push_block`] / [`BlockStore::pop_block`].
     ///
@@ -218,6 +222,18 @@ impl<S> SeenValues<S>
 where
     S: BlockStore<BooleanBlock>,
 {
+    fn block_size(&self) -> Option<usize> {
+        match self {
+            SeenValues::All {
+                pending_builder, ..
+            } => pending_builder
+                .as_ref()
+                .expect("pending_builder must be Some while SeenValues is All")
+                .block_size(),
+            SeenValues::Some { builder } => builder.block_size(),
+        }
+    }
+
     /// Return a mutable reference to the `BooleanBufferBuilder` in `SeenValues::Some`.
     ///
     /// If `self` is `SeenValues::All`, it is transitioned to `SeenValues::Some`
@@ -300,9 +316,6 @@ where
     ///
     /// If `seen_values` is `SeenValues::All`, all groups have seen at least one non null value
     seen_values: SeenValues<S>,
-
-    /// Size of one seen values block, can be None if only desire single block
-    block_size: Option<usize>,
 
     /// phantom data for required type `<O>`
     _phantom: PhantomData<O>,
@@ -494,32 +507,31 @@ where
     }
 
     pub fn build(&mut self, emit_to: EmitTo) -> Option<NullBuffer> {
+        let block_size = self.seen_values.block_size();
+
         // If `self` is `SeenValues::All`, just modify `num_values`.
         // If `self` is `SeenValues::Some`, perform the emit logic of `builder`.
         match &mut self.seen_values {
             SeenValues::All { num_values, .. } => match emit_to {
                 EmitTo::All => {
                     assert!(
-                        self.block_size.is_none(),
+                        block_size.is_none(),
                         "emit_to::All should only be used with flat groups"
                     );
                     None
                 }
                 EmitTo::First(n) => {
                     assert!(
-                        self.block_size.is_none(),
+                        block_size.is_none(),
                         "emit_to::First should only be used with flat groups"
                     );
                     *num_values = num_values.saturating_sub(n);
                     None
                 }
                 EmitTo::NextBlock => {
-                    assert!(
-                        self.block_size.is_some(),
-                        "emit_to::NextBlock should only be used with blocked groups"
+                    let block_size = block_size.expect(
+                        "emit_to::NextBlock should only be used with blocked groups",
                     );
-                    // Safety: `block_size` is always set in blocked groups
-                    let block_size = self.block_size.unwrap();
                     *num_values = num_values.saturating_sub(block_size);
                     None
                 }
@@ -565,7 +577,7 @@ where
 
     #[cfg(test)]
     fn build_single_null_buffer(&mut self) -> Option<NullBuffer> {
-        if self.block_size.is_none() {
+        if self.seen_values.block_size().is_none() {
             return self.build(EmitTo::All);
         }
 
@@ -654,7 +666,6 @@ impl NullState<FlatGroupIndexOperations, FlatBlockStore<BooleanBlock>> {
                 num_values: 0,
                 pending_builder: Some(SeenValueStore::new(FlatBlockStore::new())),
             },
-            block_size: None,
             _phantom: PhantomData,
         }
     }
@@ -676,7 +687,6 @@ impl NullState<BlockedGroupIndexOperations, BlockedBlockStore<BooleanBlock>> {
                     block_size,
                 ))),
             },
-            block_size: Some(block_size),
             _phantom: PhantomData,
         }
     }
