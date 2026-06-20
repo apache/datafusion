@@ -37,7 +37,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::hash_table::{AggregateHashTable, Final, Partial, PartialSkip};
+use super::aggregate_hash_table::{AggregateHashTable, Final, Partial, PartialSkip};
 use super::skip_partial::SkipAggregationProbe;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
