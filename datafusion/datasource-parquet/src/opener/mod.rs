@@ -1467,10 +1467,8 @@ mod test {
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema};
-    use datafusion_execution::cache::cache_manager::{
-        CachedFileMetadataEntry, FileMetadataCache,
-    };
-    use datafusion_execution::cache::default_cache::DefaultCache;
+    use datafusion_execution::cache::DefaultFilesMetadataCache;
+    use datafusion_execution::cache::cache_manager::FileMetadataCache;
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         PhysicalExpr,
@@ -2679,10 +2677,8 @@ mod test {
         use parquet::file::properties::WriterProperties;
 
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        let metadata_cache: Arc<FileMetadataCache> =
-            Arc::new(DefaultCache::<Path, CachedFileMetadataEntry>::new(
-                64 * 1024 * 1024,
-            ));
+        let metadata_cache = Arc::new(DefaultFilesMetadataCache::new(64 * 1024 * 1024))
+            as Arc<dyn FileMetadataCache>;
         let values: Vec<i32> = (1..=100).collect();
         let batch = record_batch!((
             "a",
