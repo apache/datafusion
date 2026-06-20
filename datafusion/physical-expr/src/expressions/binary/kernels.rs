@@ -336,6 +336,8 @@ pub fn concat_elements_utf8view(
     left: &StringViewArray,
     right: &StringViewArray,
 ) -> std::result::Result<StringViewArray, ArrowError> {
+    // TODO Use the kernel for arrow-rs once https://github.com/apache/arrow-rs/pull/10161
+    // has been merged
     ConcatByteViewBuilder::concat_elements_view_array(left, right)
 }
 
@@ -349,6 +351,8 @@ pub fn concat_elements_binary_view_array(
     left: &BinaryViewArray,
     right: &BinaryViewArray,
 ) -> std::result::Result<BinaryViewArray, ArrowError> {
+    // TODO Use the kernel for arrow-rs once https://github.com/apache/arrow-rs/pull/10161
+    // has been merged
     ConcatByteViewBuilder::concat_elements_view_array(left, right)
 }
 
