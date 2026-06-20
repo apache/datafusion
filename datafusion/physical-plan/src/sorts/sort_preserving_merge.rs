@@ -468,7 +468,8 @@ mod tests {
             .with_memory_limit(20_000_000, 1.0)
             .build_arc()?;
         let mut config = SessionConfig::new();
-        config.options_mut().execution.batch_size = target_batch_size;
+        config.options_mut().execution.batch_size =
+            datafusion_common::config::ConfigNonZeroUsize::new(target_batch_size);
         let task_ctx = TaskContext::default()
             .with_runtime(runtime)
             .with_session_config(config);

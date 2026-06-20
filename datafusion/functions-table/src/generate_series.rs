@@ -484,7 +484,7 @@ impl TableProvider for GenerateSeriesTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let batch_size = state.config_options().execution.batch_size;
+        let batch_size = state.config_options().execution.batch_size.get();
         let generator = self.as_generator(batch_size)?;
         let mut exec = LazyMemoryExec::try_new(self.schema(), vec![generator])?
             .with_projection(projection.cloned());

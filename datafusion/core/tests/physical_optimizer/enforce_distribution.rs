@@ -570,7 +570,7 @@ fn test_suite_default_config_options() -> ConfigOptions {
     config.execution.target_partitions = 10;
 
     // Use a small batch size, to trigger RoundRobin in tests
-    config.execution.batch_size = 1;
+    config.execution.batch_size = datafusion_common::config::ConfigNonZeroUsize::new(1);
 
     config
 }

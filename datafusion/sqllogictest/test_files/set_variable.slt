@@ -104,12 +104,12 @@ statement ok
 set datafusion.catalog.information_schema = true
 
 statement ok
-SET datafusion.execution.batch_size to 0
+SET datafusion.execution.batch_size to 310104
 
 query TT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 0
+datafusion.execution.batch_size 310104
 
 statement ok
 SET datafusion.execution.batch_size to '1'
@@ -382,7 +382,7 @@ statement error DataFusion error: Invalid or Unsupported Configuration: Config v
 RESET datafusion.execution.batches_size
 
 # reset invalid variable - extra suffix on valid field
-statement error DataFusion error: Invalid or Unsupported Configuration: Config field is a scalar usize and does not have nested field "bar"
+statement error DataFusion error: Invalid or Unsupported Configuration: Config field is a scalar ConfigNonZeroUsize and does not have nested field "bar"
 RESET datafusion.execution.batch_size.bar
 
 #############################################
@@ -706,6 +706,10 @@ SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551555s'
 
 statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60 \+ secs' when setting 'datafusion\.runtime\.list_files_cache_ttl'
 SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551556s'
+
+# Set invalid value and ensures error
+statement error DataFusion error: Invalid or Unsupported Configuration: value must be greater than 0
+SET datafusion.execution.batch_size = 0
 
 # Config reset
 statement ok
