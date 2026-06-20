@@ -313,29 +313,6 @@ where
     O: GroupIndexOperations,
     S: BlockStore<BooleanBlock> + Send,
 {
-    /// Create a new `NullState` with the given empty seen-values builder.
-    ///
-    /// The builder must be empty; it is held until the first time the
-    /// accumulator needs to record a per-group null and is then resized in
-    /// place. Constructing it eagerly avoids leaking flat-vs-blocked
-    /// configuration into the [`BlockStore`] trait. `block_size` is `None` for
-    /// flat groups and `Some(_)` for blocked groups; it controls the emit
-    /// bookkeeping in [`Self::build`].
-    pub fn new(empty_builder: S, block_size: Option<usize>) -> Self {
-        debug_assert!(
-            empty_builder.is_empty(),
-            "NullState must be initialized with an empty seen-values builder"
-        );
-        Self {
-            seen_values: SeenValues::All {
-                num_values: 0,
-                pending_builder: Some(SeenValueStore::new(empty_builder)),
-            },
-            block_size,
-            _phantom: PhantomData,
-        }
-    }
-
     /// return the size of all buffers allocated by this null state, not including self
     pub fn size(&self) -> usize {
         match &self.seen_values {
@@ -668,6 +645,42 @@ pub type FlatNullState =
 ///
 pub type BlockedNullState =
     NullState<BlockedGroupIndexOperations, BlockedBlockStore<BooleanBlock>>;
+
+impl NullState<FlatGroupIndexOperations, FlatBlockStore<BooleanBlock>> {
+    /// Create a new [`FlatNullState`].
+    pub fn new() -> Self {
+        Self {
+            seen_values: SeenValues::All {
+                num_values: 0,
+                pending_builder: Some(SeenValueStore::new(FlatBlockStore::new())),
+            },
+            block_size: None,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl Default for NullState<FlatGroupIndexOperations, FlatBlockStore<BooleanBlock>> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NullState<BlockedGroupIndexOperations, BlockedBlockStore<BooleanBlock>> {
+    /// Create a new [`BlockedNullState`] with the given block size.
+    pub fn new(block_size: usize) -> Self {
+        Self {
+            seen_values: SeenValues::All {
+                num_values: 0,
+                pending_builder: Some(SeenValueStore::new(BlockedBlockStore::new(
+                    block_size,
+                ))),
+            },
+            block_size: Some(block_size),
+            _phantom: PhantomData,
+        }
+    }
+}
 
 /// Invokes `value_fn(group_index, value)` for each non null, non
 /// filtered value of `value`,
@@ -1492,19 +1505,13 @@ mod test {
                     }
 
                     (
-                        TestNullState::Blocked(BlockedNullState::new(
-                            BlockedBlockStore::new(blk_size),
-                            Some(blk_size),
-                        )),
+                        TestNullState::Blocked(BlockedNullState::new(blk_size)),
                         blk_size,
                         acc_group_indices_chunks,
                     )
                 } else {
                     (
-                        TestNullState::Flat(FlatNullState::new(
-                            FlatBlockStore::new(),
-                            None,
-                        )),
+                        TestNullState::Flat(FlatNullState::new()),
                         0,
                         group_indices_chunks,
                     )
@@ -1716,19 +1723,13 @@ mod test {
                     }
 
                     (
-                        TestNullState::Blocked(BlockedNullState::new(
-                            BlockedBlockStore::new(blk_size),
-                            Some(blk_size),
-                        )),
+                        TestNullState::Blocked(BlockedNullState::new(blk_size)),
                         blk_size,
                         acc_group_indices_chunks,
                     )
                 } else {
                     (
-                        TestNullState::Flat(FlatNullState::new(
-                            FlatBlockStore::new(),
-                            None,
-                        )),
+                        TestNullState::Flat(FlatNullState::new()),
                         0,
                         group_indices_chunks,
                     )

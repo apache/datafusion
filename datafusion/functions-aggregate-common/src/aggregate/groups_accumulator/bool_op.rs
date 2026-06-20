@@ -24,7 +24,6 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use super::accumulate::FlatNullState;
-use super::block_store::FlatBlockStore;
 
 /// An accumulator that implements a single operation over a
 /// [`BooleanArray`] where the accumulated state is also boolean (such
@@ -61,7 +60,7 @@ where
     pub fn new(bool_fn: F, identity: bool) -> Self {
         Self {
             values: BooleanBufferBuilder::new(0),
-            null_state: FlatNullState::new(FlatBlockStore::new(), None),
+            null_state: FlatNullState::new(),
             bool_fn,
             identity,
         }

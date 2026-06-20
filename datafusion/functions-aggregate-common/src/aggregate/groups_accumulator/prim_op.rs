@@ -75,7 +75,7 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            state: PrimitiveGroupsStateAdapter::new_flat(),
+            state: PrimitiveGroupsStateAdapter::new(None),
             data_type: data_type.clone(),
             starting_value: T::default_value(),
             prim_fn,
@@ -187,18 +187,17 @@ enum PrimitiveGroupsStateAdapter<V: Clone + Debug + Send> {
 }
 
 impl<V: Clone + Debug + Send> PrimitiveGroupsStateAdapter<V> {
-    fn new_flat() -> Self {
-        Self::Flat(PrimitiveGroupsState::new(
-            VecBlockStore::new(FlatBlockStore::new()),
-            FlatNullState::new(FlatBlockStore::new(), None),
-        ))
-    }
-
-    fn new_blocked(block_size: usize) -> Self {
-        Self::Blocked(PrimitiveGroupsState::new(
-            VecBlockStore::new(BlockedBlockStore::new(block_size)),
-            BlockedNullState::new(BlockedBlockStore::new(block_size), Some(block_size)),
-        ))
+    fn new(block_size: Option<usize>) -> Self {
+        match block_size {
+            Some(block_size) => Self::Blocked(PrimitiveGroupsState::new(
+                VecBlockStore::new(BlockedBlockStore::new(block_size)),
+                BlockedNullState::new(block_size),
+            )),
+            None => Self::Flat(PrimitiveGroupsState::new(
+                VecBlockStore::new(FlatBlockStore::new()),
+                FlatNullState::new(),
+            )),
+        }
     }
 
     fn update_batch<T, F>(
@@ -348,11 +347,7 @@ where
     }
 
     fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
-        self.state = if let Some(block_size) = block_size {
-            PrimitiveGroupsStateAdapter::new_blocked(block_size)
-        } else {
-            PrimitiveGroupsStateAdapter::new_flat()
-        };
+        self.state = PrimitiveGroupsStateAdapter::new(block_size);
 
         Ok(())
     }
