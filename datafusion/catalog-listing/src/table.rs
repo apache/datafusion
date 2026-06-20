@@ -34,8 +34,7 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchemaBuilder, compute_all_files_statistics,
 };
-use datafusion_execution::cache::cache_manager::FileStatisticsCache;
-use datafusion_execution::cache::cache_manager::TableScopedPath;
+use datafusion_execution::cache::cache_manager::{FileStatisticsCache, TableScopedPath};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
@@ -262,6 +261,21 @@ impl ListingTable {
     pub fn with_cache(mut self, cache: Option<Arc<FileStatisticsCache>>) -> Self {
         self.collected_statistics = cache;
         self
+    }
+
+    fn statistics_cache(
+        &self,
+        has_table_reference: bool,
+    ) -> Option<&Arc<FileStatisticsCache>> {
+        let shared_cache = self.collected_statistics.as_ref()?;
+        if has_table_reference || self.schema_source == SchemaSource::Inferred {
+            Some(shared_cache)
+        } else {
+            // Anonymous specified-schema reads can use the same file path with
+            // different logical schemas. File statistics are schema-dependent,
+            // so avoid reusing stats computed for a different read schema.
+            None
+        }
     }
 
     /// Specify the SQL definition for this table, if any
@@ -807,7 +821,7 @@ impl ListingTable {
         let meta = &part_file.object_meta;
 
         // Check cache first - if we have valid cached statistics and ordering
-        if let Some(cache) = &self.collected_statistics
+        if let Some(cache) = self.statistics_cache(path.table.is_some())
             && let Some(cached) = cache.get(&path)
             && cached.is_valid_for(meta)
         {
@@ -825,7 +839,7 @@ impl ListingTable {
         let statistics = Arc::new(file_meta.statistics);
 
         // Store in cache
-        if let Some(cache) = &self.collected_statistics {
+        if let Some(cache) = self.statistics_cache(path.table.is_some()) {
             cache.put(
                 &path,
                 CachedFileMetadata::new(
