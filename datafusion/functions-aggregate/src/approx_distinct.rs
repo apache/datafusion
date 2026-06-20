@@ -829,12 +829,109 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{AsArray, Int64Array, StringViewArray};
+    use arrow::array::{Int64Array, StringViewArray};
     use std::hash::BuildHasher;
     use std::sync::Arc;
 
     // A string longer than the 12-byte inline limit
     const LONG: &str = "this string is definitely longer than twelve bytes";
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    mod real_hash_test {
+        use super::*;
+        use arrow::array::{AsArray, Int64Array, StringViewArray};
+        use std::sync::Arc;
+        // A string longer than the 12-byte inline limit
+        const LONG: &str = "this string is definitely longer than twelve bytes";
+
+        fn distinct_count(acc: &mut HLLAccumulator) -> u64 {
+            match acc.evaluate().unwrap() {
+                ScalarValue::UInt64(Some(v)) => v,
+                other => panic!("unexpected evaluate result: {other:?}"),
+            }
+        }
+
+        /// `approx_distinct(v) FILTER (WHERE nullable_bool)` — a NULL filter row
+        /// must not be counted (null filter is treated the same as false).
+        #[test]
+        fn update_batch_nullable_filter_excludes_null_filter_rows() {
+            let values: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2, 3, 4, 5]));
+            // row 0: filter=true, row 1: filter=NULL, row 2: filter=false,
+            // row 3: filter=NULL, row 4: filter=true
+            let filter =
+                BooleanArray::from(vec![Some(true), None, Some(false), None, Some(true)]);
+
+            let mut acc = HllGroupsAccumulator::new();
+            // put all rows in group 0
+            let group_indices = vec![0usize; 5];
+            acc.update_batch(&[values], &group_indices, Some(&filter), 1)
+                .unwrap();
+
+            // Only rows 0 and 4 (values 1 and 5) should be counted.
+            let result = acc.evaluate(EmitTo::All).unwrap();
+            let counts = result.as_any().downcast_ref::<UInt64Array>().unwrap();
+            // reference: hash 1 and 5 into a dense sketch
+            let expected = reference_count(&[h(1), h(5)]);
+            assert_eq!(counts.value(0), expected);
+        }
+
+        /// Regression: a short (≤ 12-byte) Utf8View string must hash identically
+        /// in an all-inline batch and in a mixed batch that also contains a long
+        /// string (which forces a data buffer).
+        #[test]
+        fn utf8view_groups_short_string_hashed_consistently_across_batches() {
+            // Batch 1: all-inline (no data buffers) — "aaa" is hashed as u128 view.
+            let batch1: ArrayRef = Arc::new(StringViewArray::from(vec!["aaa", "bbb"]));
+            assert!(batch1.as_string_view().data_buffers().is_empty());
+
+            // Batch 2: mixed — LONG forces a data buffer; "aaa" must still be
+            // hashed as u128 view so it matches its appearance in batch 1.
+            let batch2: ArrayRef = Arc::new(StringViewArray::from(vec!["aaa", LONG]));
+            assert!(!batch2.as_string_view().data_buffers().is_empty());
+
+            let group_indices = vec![0usize, 0];
+            let mut acc = HllGroupsAccumulator::new();
+            acc.update_batch(&[batch1], &group_indices, None, 1)
+                .unwrap();
+            acc.update_batch(&[batch2], &group_indices, None, 1)
+                .unwrap();
+
+            // True distinct values: {"aaa", "bbb", LONG} == 3.
+            let result = acc.evaluate(EmitTo::All).unwrap();
+            let counts = result.as_any().downcast_ref::<UInt64Array>().unwrap();
+            assert_eq!(counts.value(0), 3);
+        }
+
+        /// Regression: a short (≤ 12-byte) Utf8View string must hash identically
+        /// regardless of which batch it appears in — all-inline or mixed.
+        #[test]
+        fn utf8view_acc_split_batches_match_single_mixed_batch() {
+            // Multiset: {"aaa" x2, "bbb", LONG}, so 3 distinct values.
+            let mixed: ArrayRef =
+                Arc::new(StringViewArray::from(vec!["aaa", "bbb", LONG, "aaa"]));
+            let mut acc_single = HLLAccumulator::new();
+            acc_single.update_batch(&[mixed]).unwrap();
+
+            // Same multiset, but split so "aaa" lands in both an all-inline batch
+            // and a batch with a data buffer (forced by LONG).
+            let inline_only: ArrayRef =
+                Arc::new(StringViewArray::from(vec!["aaa", "bbb"]));
+            let with_buffer: ArrayRef =
+                Arc::new(StringViewArray::from(vec!["aaa", LONG]));
+            assert!(inline_only.as_string_view().data_buffers().is_empty());
+            assert!(!with_buffer.as_string_view().data_buffers().is_empty());
+
+            let mut acc_split = HLLAccumulator::new();
+            acc_split.update_batch(&[inline_only]).unwrap();
+            acc_split.update_batch(&[with_buffer]).unwrap();
+
+            assert_eq!(
+                distinct_count(&mut acc_single),
+                distinct_count(&mut acc_split)
+            );
+            assert_eq!(distinct_count(&mut acc_single), 3);
+        }
+    }
 
     fn h(v: u64) -> u64 {
         HLL_HASH_STATE.hash_one(v)
@@ -850,6 +947,13 @@ mod tests {
         hll.count() as u64
     }
 
+    fn distinct_count(acc: &mut HLLAccumulator) -> u64 {
+        match acc.evaluate().unwrap() {
+            ScalarValue::UInt64(Some(v)) => v,
+            other => panic!("unexpected evaluate result: {other:?}"),
+        }
+    }
+
     fn array_hashes(array: &ArrayRef) -> Vec<u64> {
         let mut hashes = vec![0; array.len()];
         create_hashes([array.as_ref()], &HLL_HASH_STATE, &mut hashes).unwrap();
@@ -860,13 +964,6 @@ mod tests {
         let mut buf = Vec::new();
         g.serialize(&mut buf);
         buf
-    }
-
-    fn distinct_count(acc: &mut HLLAccumulator) -> u64 {
-        match acc.evaluate().unwrap() {
-            ScalarValue::UInt64(Some(v)) => v,
-            other => panic!("unexpected evaluate result: {other:?}"),
-        }
     }
 
     #[test]
@@ -985,93 +1082,5 @@ mod tests {
         let mut dst = GroupHll::default();
         dst.merge_serialized(&bytes).unwrap();
         assert_eq!(dst.count(), 0);
-    }
-
-    /// `approx_distinct(v) FILTER (WHERE nullable_bool)` — a NULL filter row
-    /// must not be counted (null filter is treated the same as false).
-    #[test]
-    fn update_batch_nullable_filter_excludes_null_filter_rows() {
-        let values: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2, 3, 4, 5]));
-        // row 0: filter=true, row 1: filter=NULL, row 2: filter=false,
-        // row 3: filter=NULL, row 4: filter=true
-        let filter =
-            BooleanArray::from(vec![Some(true), None, Some(false), None, Some(true)]);
-
-        let mut acc = HllGroupsAccumulator::new();
-        // Put true rows in group 0, and the null/false filter rows in group 1.
-        // The collision CI job forces every hash to 0, so group 1 is what proves
-        // filtered-out rows are not counted there.
-        let group_indices = vec![0usize, 1, 1, 1, 0];
-        let hashes = array_hashes(&values);
-        acc.update_batch(&[values], &group_indices, Some(&filter), 2)
-            .unwrap();
-
-        // Only rows 0 and 4 (values 1 and 5) should be counted.
-        let result = acc.evaluate(EmitTo::All).unwrap();
-        let counts = result.as_any().downcast_ref::<UInt64Array>().unwrap();
-        let expected = reference_count(&[hashes[0], hashes[4]]);
-        assert_eq!(counts.value(0), expected);
-        assert_eq!(counts.value(1), 0);
-    }
-
-    /// Regression: a short (≤ 12-byte) Utf8View string must hash identically
-    /// in an all-inline batch and in a mixed batch that also contains a long
-    /// string (which forces a data buffer).
-    #[test]
-    fn utf8view_groups_short_string_hashed_consistently_across_batches() {
-        // Batch 1: all-inline (no data buffers) — "aaa" is hashed as u128 view.
-        let batch1: ArrayRef = Arc::new(StringViewArray::from(vec!["aaa", "bbb"]));
-        assert!(batch1.as_string_view().data_buffers().is_empty());
-
-        // Batch 2: mixed — LONG forces a data buffer; "aaa" must still be
-        // hashed as u128 view so it matches its appearance in batch 1.
-        let batch2: ArrayRef = Arc::new(StringViewArray::from(vec!["aaa", LONG]));
-        assert!(!batch2.as_string_view().data_buffers().is_empty());
-
-        let group_indices = vec![0usize, 0];
-        let batch1_hashes = array_hashes(&batch1);
-        let batch2_hashes = array_hashes(&batch2);
-        let expected =
-            reference_count(&[batch1_hashes[0], batch1_hashes[1], batch2_hashes[1]]);
-        let mut acc = HllGroupsAccumulator::new();
-        acc.update_batch(&[batch1], &group_indices, None, 1)
-            .unwrap();
-        acc.update_batch(&[batch2], &group_indices, None, 1)
-            .unwrap();
-
-        // Under normal hashing the true distinct values are {"aaa", "bbb", LONG};
-        // under collision testing they intentionally collapse to fewer hashes.
-        let result = acc.evaluate(EmitTo::All).unwrap();
-        let counts = result.as_any().downcast_ref::<UInt64Array>().unwrap();
-        assert_eq!(counts.value(0), expected);
-    }
-
-    /// Regression: a short (≤ 12-byte) Utf8View string must hash identically
-    /// regardless of which batch it appears in — all-inline or mixed.
-    #[test]
-    fn utf8view_acc_split_batches_match_single_mixed_batch() {
-        // Multiset: {"aaa" x2, "bbb", LONG}, so 3 distinct values.
-        let mixed: ArrayRef =
-            Arc::new(StringViewArray::from(vec!["aaa", "bbb", LONG, "aaa"]));
-        let expected = reference_count(&array_hashes(&mixed)[0..3]);
-        let mut acc_single = HLLAccumulator::new();
-        acc_single.update_batch(&[mixed]).unwrap();
-
-        // Same multiset, but split so "aaa" lands in both an all-inline batch
-        // and a batch with a data buffer (forced by LONG).
-        let inline_only: ArrayRef = Arc::new(StringViewArray::from(vec!["aaa", "bbb"]));
-        let with_buffer: ArrayRef = Arc::new(StringViewArray::from(vec!["aaa", LONG]));
-        assert!(inline_only.as_string_view().data_buffers().is_empty());
-        assert!(!with_buffer.as_string_view().data_buffers().is_empty());
-
-        let mut acc_split = HLLAccumulator::new();
-        acc_split.update_batch(&[inline_only]).unwrap();
-        acc_split.update_batch(&[with_buffer]).unwrap();
-
-        assert_eq!(
-            distinct_count(&mut acc_single),
-            distinct_count(&mut acc_split)
-        );
-        assert_eq!(distinct_count(&mut acc_single), expected);
     }
 }
