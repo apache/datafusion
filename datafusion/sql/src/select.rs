@@ -32,10 +32,7 @@ use crate::utils::{
 use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, Result, get_target_functional_dependencies,
-    not_impl_err, plan_err,
-};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
@@ -48,8 +45,8 @@ use datafusion_expr::utils::{
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
-    SortExpr,
+    Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
+    LogicalPlanBuilderOptions, Partitioning, SortExpr,
 };
 
 use indexmap::IndexMap;
@@ -91,89 +88,6 @@ struct RewrittenUnnestExprGroups {
 
 fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
     expr_groups.into_iter().flatten().collect()
-}
-
-fn referenced_columns_outside_aggregates(
-    expr: &Expr,
-    accum: &mut HashSet<Column>,
-) -> Result<()> {
-    expr.apply(|nested_expr| match nested_expr {
-        Expr::Column(column) => {
-            accum.insert(column.clone());
-            Ok(TreeNodeRecursion::Continue)
-        }
-        Expr::AggregateFunction(_) => Ok(TreeNodeRecursion::Jump),
-        _ => Ok(TreeNodeRecursion::Continue),
-    })
-    .map(|_| ())
-}
-
-fn required_aggregate_output_columns(
-    schema: &DFSchemaRef,
-    select_exprs: &[Expr],
-    having_expr_opt: Option<&Expr>,
-    qualify_expr_opt: Option<&Expr>,
-    order_by_exprs: &[SortExpr],
-    on_exprs: &[Expr],
-) -> Result<HashSet<String>> {
-    let mut columns = HashSet::new();
-
-    for expr in select_exprs {
-        referenced_columns_outside_aggregates(expr, &mut columns)?;
-    }
-    if let Some(expr) = having_expr_opt {
-        referenced_columns_outside_aggregates(expr, &mut columns)?;
-    }
-    if let Some(expr) = qualify_expr_opt {
-        referenced_columns_outside_aggregates(expr, &mut columns)?;
-    }
-    for sort_expr in order_by_exprs {
-        referenced_columns_outside_aggregates(&sort_expr.expr, &mut columns)?;
-    }
-    for expr in on_exprs {
-        referenced_columns_outside_aggregates(expr, &mut columns)?;
-    }
-
-    let mut required_columns = HashSet::new();
-    for column in &columns {
-        if let Ok((qualifier, field)) = schema.qualified_field_from_column(column) {
-            required_columns.insert(
-                Expr::Column(Column::from((qualifier, field)))
-                    .schema_name()
-                    .to_string(),
-            );
-        }
-    }
-
-    Ok(required_columns)
-}
-
-fn add_required_group_by_exprs_from_dependencies(
-    mut group_expr: Vec<Expr>,
-    schema: &DFSchemaRef,
-    required_output_columns: &HashSet<String>,
-) -> Result<Vec<Expr>> {
-    let mut group_by_field_names = group_expr
-        .iter()
-        .map(|expr| expr.schema_name().to_string())
-        .collect::<Vec<_>>();
-
-    if let Some(target_indices) =
-        get_target_functional_dependencies(schema, &group_by_field_names)
-    {
-        for idx in target_indices {
-            let expr = Expr::Column(Column::from(schema.qualified_field(idx)));
-            let expr_name = expr.schema_name().to_string();
-            if required_output_columns.contains(&expr_name)
-                && !group_by_field_names.contains(&expr_name)
-            {
-                group_by_field_names.push(expr_name);
-                group_expr.push(expr);
-            }
-        }
-    }
-
-    Ok(group_expr)
 }
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -819,7 +733,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let agg_expr = agg.aggr_expr.clone();
                 let (new_input, new_group_by_exprs) =
                     self.try_process_group_by_unnest(agg)?;
+                let options = LogicalPlanBuilderOptions::new()
+                    .with_add_implicit_group_by_exprs(true);
                 LogicalPlanBuilder::from(new_input)
+                    .with_options(options)
                     .aggregate(new_group_by_exprs, agg_expr)?
                     .build()
             }
@@ -1262,21 +1179,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         aggr_exprs: &[Expr],
     ) -> Result<AggregatePlanResult> {
         // create the aggregate plan
-        let required_output_columns = required_aggregate_output_columns(
-            input.schema(),
-            select_exprs,
-            having_expr_opt,
-            qualify_expr_opt,
-            order_by_exprs,
-            on_exprs,
-        )?;
-        let group_by_exprs = add_required_group_by_exprs_from_dependencies(
-            group_by_exprs.to_vec(),
-            input.schema(),
-            &required_output_columns,
-        )?;
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
         let plan = LogicalPlanBuilder::from(input.clone())
-            .aggregate(group_by_exprs, aggr_exprs.to_vec())?
+            .with_options(options)
+            .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
         let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {
             &agg.group_expr
