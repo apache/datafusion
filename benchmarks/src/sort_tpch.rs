@@ -64,8 +64,8 @@ pub struct RunOpt {
     #[arg(short = 'm', long = "mem-table")]
     mem_table: bool,
 
-    /// Mark the first column of each table as sorted in ascending order.
-    /// The tables should have been created with the `--sort` option for this to have any effect.
+    /// Declare that the first column of the input table is already sorted in ascending order.
+    /// This flag only attaches ordering metadata; it does not sort the input files.
     #[arg(short = 't', long = "sorted")]
     sorted: bool,
 

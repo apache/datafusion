@@ -20,7 +20,7 @@
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics, common,
-    execution_plan::Boundedness,
+    execution_plan::Boundedness, statistics::StatisticsArgs,
 };
 use crate::{
     execution_plan::EmissionType,
@@ -249,8 +249,8 @@ impl ExecutionPlan for MockExec {
     }
 
     // Panics if one of the batches is an error
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_some() {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        if args.partition().is_some() {
             return Ok(Arc::new(Statistics::new_unknown(&self.schema)));
         }
         let data: Result<Vec<_>> = self
@@ -474,8 +474,8 @@ impl ExecutionPlan for BarrierExec {
         Ok(builder.build())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_some() {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        if args.partition().is_some() {
             return Ok(Arc::new(Statistics::new_unknown(&self.schema)));
         }
         Ok(Arc::new(common::compute_record_batch_statistics(
@@ -654,8 +654,8 @@ impl ExecutionPlan for StatisticsExec {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        Ok(Arc::new(if partition.is_some() {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(if args.partition().is_some() {
             Statistics::new_unknown(&self.schema)
         } else {
             self.stats.clone()

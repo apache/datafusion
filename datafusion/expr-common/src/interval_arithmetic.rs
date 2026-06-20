@@ -910,10 +910,16 @@ impl Interval {
         if data_type.is_integer()
             || matches!(
                 data_type,
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+                DataType::Date32
+                    | DataType::Date64
+                    | DataType::Timestamp(_, _)
+                    | DataType::Decimal32(_, _)
+                    | DataType::Decimal64(_, _)
+                    | DataType::Decimal128(_, _)
+                    | DataType::Decimal256(_, _)
             )
         {
-            self.upper.distance(&self.lower).map(|diff| diff as u64)
+            self.upper.distance_u64(&self.lower)
         } else if data_type.is_floating() {
             // Negative numbers are sorted in the reverse order. To
             // always have a positive difference after the subtraction,
@@ -4157,6 +4163,13 @@ mod tests {
             ScalarValue::TimestampNanosecond(Some(2_000_000_000), None),
         )?;
         assert_eq!(interval.cardinality().unwrap(), 1_000_000_001);
+
+        // Decimal types
+        let interval = Interval::try_new(
+            ScalarValue::Decimal128(Some(100), 10, 2),
+            ScalarValue::Decimal128(Some(110), 10, 2),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), 11);
         Ok(())
     }
 
