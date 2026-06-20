@@ -31,6 +31,7 @@ use std::vec;
 
 use super::Unparser;
 use super::dialect::{DistinctFromStyle, IntervalStyle};
+use crate::stack::StackGuard;
 use arrow::array::{
     ArrayRef, Date32Array, Date64Array, PrimitiveArray,
     types::{
@@ -94,6 +95,26 @@ const IS: &BinaryOperator = &BinaryOperator::BitwiseAnd;
 
 impl Unparser<'_> {
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
+        // Unparsing recurses once per nesting level. The function-argument and
+        // dialect scalar-function-override paths cost more per level than the
+        // default `recursive` red zone, so without raising the minimum stack
+        // size the stack-growing trampoline engages too late and the OS stack
+        // overflows on deeply nested expressions (issue #23056). The size
+        // mirrors the planner's `StackGuard` usage in `query.rs`.
+        let _guard = StackGuard::new(256 * 1024);
+        self.expr_to_sql_with_nesting(expr)
+    }
+
+    /// Recursive entry point shared by the public [`Self::expr_to_sql`] and the
+    /// internal recursion sites (scalar-function arguments, arrays, maps, and
+    /// dialect scalar-function overrides).
+    ///
+    /// This carries the `recursive` annotation so every nesting level becomes a
+    /// stack-growth checkpoint. Internal recursion must call this rather than
+    /// the public [`Self::expr_to_sql`]: the public entry point is not
+    /// annotated and would re-install the [`StackGuard`] on every level.
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    pub(crate) fn expr_to_sql_with_nesting(&self, expr: &Expr) -> Result<ast::Expr> {
         let mut root_expr = self.expr_to_sql_inner(expr)?;
         if self.pretty {
             root_expr = self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST);
@@ -681,7 +702,7 @@ impl Unparser<'_> {
     fn make_array_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
         let args = args
             .iter()
-            .map(|e| self.expr_to_sql(e))
+            .map(|e| self.expr_to_sql_with_nesting(e))
             .collect::<Result<Vec<_>>>()?;
         Ok(ast::Expr::Array(Array {
             elem: args,
@@ -708,8 +729,8 @@ impl Unparser<'_> {
             2,
             "array_element must have exactly 2 arguments"
         );
-        let array = self.expr_to_sql(&args[0])?;
-        let index = self.expr_to_sql(&args[1])?;
+        let array = self.expr_to_sql_with_nesting(&args[0])?;
+        let index = self.expr_to_sql_with_nesting(&args[1])?;
         Ok(ast::Expr::CompoundFieldAccess {
             root: Box::new(array),
             access_chain: vec![ast::AccessExpr::Subscript(Subscript::Index { index })],
@@ -732,7 +753,7 @@ impl Unparser<'_> {
 
                 Ok(ast::DictionaryField {
                     key,
-                    value: Box::new(self.expr_to_sql(&chunk[1])?),
+                    value: Box::new(self.expr_to_sql_with_nesting(&chunk[1])?),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -802,7 +823,8 @@ impl Unparser<'_> {
     fn map_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
         assert_eq_or_internal_err!(args.len(), 2, "map must have exactly 2 arguments");
 
-        let ast::Expr::Array(Array { elem: keys, .. }) = self.expr_to_sql(&args[0])?
+        let ast::Expr::Array(Array { elem: keys, .. }) =
+            self.expr_to_sql_with_nesting(&args[0])?
         else {
             return internal_err!(
                 "map expects first argument to be an array, but received: {:?}",
@@ -810,7 +832,8 @@ impl Unparser<'_> {
             );
         };
 
-        let ast::Expr::Array(Array { elem: values, .. }) = self.expr_to_sql(&args[1])?
+        let ast::Expr::Array(Array { elem: values, .. }) =
+            self.expr_to_sql_with_nesting(&args[1])?
         else {
             return internal_err!(
                 "map expects second argument to be an array, but received: {:?}",
@@ -944,7 +967,7 @@ impl Unparser<'_> {
                 ) {
                     Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
                 } else {
-                    self.expr_to_sql(e)
+                    self.expr_to_sql_with_nesting(e)
                         .map(|e| ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)))
                 }
             })
@@ -989,6 +1012,7 @@ impl Unparser<'_> {
     ///
     /// Also note that when fetching the precedence of a nested expression, we ignore other nested
     /// expressions, so precedence of expr `(a * (b + c))` equals `*` and not `+`.
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn remove_unnecessary_nesting(
         &self,
         expr: ast::Expr,
@@ -3313,7 +3337,7 @@ mod tests {
     /// function arguments and dialect scalar-function overrides used to
     /// overflow the OS stack even with `recursive_protection` enabled,
     /// because the per-level stack cost of those paths exceeds the default
-    /// `recursive` red zone and the unparser installed no `StackGuard`.
+    /// `recursive` red zone and the unparser installed no [`StackGuard`].
     ///
     /// This test only asserts the protected behavior, so it is gated on the
     /// `recursive_protection` feature. Without that feature the unparser is

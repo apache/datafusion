@@ -434,9 +434,11 @@ impl PostgreSqlDialect {
         };
 
         Ok(Some(ast::Expr::AnyOp {
-            left: Box::new(unparser.expr_to_sql(needle)?),
+            // Recurse through the annotated entry point so the stack-growth
+            // protection engages on nested arguments; see issue #23056.
+            left: Box::new(unparser.expr_to_sql_with_nesting(needle)?),
             compare_op: BinaryOperator::Eq,
-            right: Box::new(unparser.expr_to_sql(haystack)?),
+            right: Box::new(unparser.expr_to_sql_with_nesting(haystack)?),
             is_some: false,
         }))
     }
